@@ -5020,7 +5020,11 @@ shell = "mkdir -p out && printf '%s' '{config.api_token}' > out/{assembler}.txt"
         // The checkpoint is seeded with ordinary state — the real checkpoint
         // never carries the routed value, and this test must not manufacture a
         // leak the engine cannot produce.
-        let stale_dir = fx.run_dir.path().join("jobs/leak_probe");
+        // The predecessor dir uses a rule name the fresh plan does NOT touch.
+        // If both shared `jobs/leak_probe/`, the fresh run would overwrite this
+        // very path and its own settle would remove it, so the test would pass
+        // even with the startup sweep deleted — proving nothing.
+        let stale_dir = fx.run_dir.path().join("jobs/stale_leak_probe");
         std::fs::create_dir_all(&stale_dir).unwrap();
         std::fs::write(
             stale_dir.join(crate::backend::SENSITIVE_ENV_FILE_NAME),
@@ -5062,8 +5066,9 @@ shell = "mkdir -p out && printf '%s' '{config.api_token}' > out/{assembler}.txt"
         assert_eq!(records[0].status, JobStatus::Success);
 
         // Neither the predecessor's stale value nor the new value survives
-        // anywhere in the reused tree (the checkpoint file the test seeded is
-        // on the run's sweep path too).
+        // anywhere in the reused tree. The sweep removes only `secrets.env`
+        // files; the seeded checkpoint is never deleted, but it is value-free
+        // by construction, so the whole-tree walk finds nothing.
         assert_marker_absent(fx.run_dir.path(), stale_secret, "restarted run tree");
         assert_marker_absent(fx.run_dir.path(), fresh_secret, "restarted run tree");
         assert!(
