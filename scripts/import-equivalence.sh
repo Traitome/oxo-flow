@@ -42,8 +42,11 @@ echo
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
-python3 "$ROOT/scripts/import_equivalence_run.py" "$ROOT" "$BIN" "$tmp"
-rc=$?
+# Capture the runner's status without tripping `set -e`: a bare `python3 ...`
+# that exits non-zero would abort the script before the STRICT check below,
+# making the report-only (default) contract exit non-zero on drift.
+rc=0
+python3 "$ROOT/scripts/import_equivalence_run.py" "$ROOT" "$BIN" "$tmp" || rc=$?
 if [ "$STRICT" = 1 ] && [ "$rc" != 0 ]; then
   echo; echo "STRICT: drift detected (exit $rc)" >&2; exit "$rc"
 fi

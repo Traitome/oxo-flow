@@ -28,7 +28,7 @@ Concretely, per accepted workflow the comparison covers:
 - **declared inputs and outputs** — the wildcard-pattern path lists;
 - **declared shell** — the command verb and the placeholder tokens it carries.
 
-Corpus = **18 fixtures** (7 Nextflow `.nf`, 11 Snakemake `.smk`) under
+Corpus = **18 fixtures** (8 Nextflow `.nf`, 10 Snakemake `.smk`) under
 `tests/fixtures/import/`. Every fixture was read to learn its declared
 contract before the importer was run; the truth table is
 `scripts/import_equivalence_expectations.py` (with `cited` source line ranges).
@@ -42,7 +42,8 @@ contract before the importer was run; the truth table is
 | arch | `arm64` |
 | CPUs | 8 |
 | OS | macOS (Darwin 25.6.0) |
-| repo commit | `b7be10ba844df04b51299264184c207cca95286c` |
+| corpus baseline commit | `b7be10ba844df04b51299264184c207cca95286c` (contains all 18 fixtures; importer unchanged to this PR's head) |
+| harness + truth table | introduced in this PR's head `5e90bd05` (`scripts/import-equivalence.sh`, `scripts/import_equivalence_{expectations,run}.py`) |
 | branch | `research/1165-import-equivalence` |
 | oxo-flow | `0.32.0` (`target/debug/oxo-flow`) |
 | rustc / cargo | `1.98.0` / `1.98.0` |
@@ -60,8 +61,11 @@ scripts/import-equivalence.sh --bin ./target/debug/oxo-flow
 The harness runs the real binary over all 18 fixtures, parses each emitted
 TOML with `python3 -m tomllib`, compares against the truth table, prints the
 per-case table and the confusion matrix. It is **report-only by default
-(exit 0)**; `--strict` makes it exit non-zero if any supported fixture drifts
-or any rejected fixture unexpectedly imports. It cannot run vacuously: it
+(always exits 0, drift included)**; `--strict` makes it exit non-zero if any
+supported fixture drifts or any rejected fixture unexpectedly imports. (The
+harness captures the runner's status as `rc=0; python3 ... || rc=$?` so
+`set -euo pipefail` cannot abort before the `--strict` check.) It cannot run
+vacuously: it
 resolves a real `oxo-flow` binary (via `OXO_FLOW_BIN`, `--bin`, else
 `target/debug`, else `PATH`) and fails hard if none is found.
 
@@ -202,4 +206,5 @@ container host, and a second independent derivation of the truth table.
 | Corpus | `tests/fixtures/import/nextflow/*.nf`, `tests/fixtures/import/snakemake/*.smk` |
 | Importer | `crates/oxo-flow-core/src/transpile/{nextflow,snakemake,mod}.rs` |
 | Claimed boundary | `docs/guide/src/commands/import.md` |
-| Commit | `b7be10ba844df04b51299264184c207cca95286c` |
+| Corpus baseline commit | `b7be10ba844df04b51299264184c207cca95286c` — the fixtures under `tests/fixtures/import/**` and the importer are unchanged from this commit to the PR's head (verified with `git diff --stat b7be10ba 5e90bd05 -- tests/fixtures/import crates/oxo-flow-core/src/transpile`, empty) |
+| Harness + truth table commit | `5e90bd05` — this PR's head; `scripts/import-equivalence.sh` and the truth table were introduced here, not in the corpus baseline commit |
