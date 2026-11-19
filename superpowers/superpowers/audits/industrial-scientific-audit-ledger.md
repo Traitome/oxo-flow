@@ -79,11 +79,22 @@ This ledger combines static review, local tests, and command-level simulations. 
 
 **Severity**: P0
 
-**Maturity**: Prototype; unsafe for untrusted team or HPC tenants
+**Maturity**: Partial (2026-11-19) — the environment-exposure and unbounded-CPU/process dimensions are fixed on the web spawn path (issue #1129, RB-01a); no filesystem/network namespace, uid boundary, or per-run container exists yet, so cross-tenant path-guessing reads remain possible
 
-Normal users can submit arbitrary workflow shell commands executed under the server account. The executor inherits the server environment, so documented secrets such as `DATABASE_URL`, `OXO_FLOW_MASTER_KEY`, and provider credentials may be exposed. Directory confinement is not a process, filesystem, network, CPU, memory, or credential boundary.
+Normal users can submit arbitrary workflow shell commands executed under the server account. Before RB-01a the executor inherited the server environment, so documented secrets such as `DATABASE_URL`, `OXO_FLOW_MASTER_KEY`, and provider credentials reached every rule shell. Directory confinement is still not a process, filesystem, network, or credential boundary.
 
-Evidence:
+Fixed on the web spawn path (issue #1129, RB-01a):
+
+- The spawned CLI no longer inherits the server environment: `spawn_background_run_with_args` reuses the engine's own rule-shell policy (`oxo_flow_core::executor::apply_rule_env_allowlist`) plus a small operator-knob allowlist, so `DATABASE_URL`, `OXO_FLOW_MASTER_KEY`, provider credentials (`ANTHROPIC_*`/`OPENAI_*`/`OLLAMA_*`/`DEEPSEEK_*`), `OXO_FLOW_AI_API_KEY`, MCP tokens, and the sign-in passwords never reach a tenant-authored shell.
+- Operator-wide `RLIMIT_CPU` (`OXO_FLOW_WEB_RLIMIT_CPU_SECS`) and `RLIMIT_NPROC` (`OXO_FLOW_WEB_RLIMIT_NPROC`) ceilings are installed alongside the existing `RLIMIT_DATA` on the spawned process tree (Linux; a no-op elsewhere — Darwin rejects these `setrlimit` calls).
+- A two-tenant adversarial test (`crates/oxo-flow-web/tests/rb01_tenant_isolation.rs`) asserts the server secrets are ABSENT from a rule shell's environment and that a CPU-spinning rule is killed; removing the allowlist call fails the test (non-vacuity recorded in PR #1241).
+
+Still NOT enforced (residual — see the web API reference and the PR body):
+
+- No filesystem namespace, `unshare`/bubblewrap, uid separation, or per-run container: a malicious workflow that guesses another tenant's absolute path can still read and write it. The test asserts only that a run does not mutate tenant B's seeded file, never that B's files are unreachable.
+- No cgroup write for memory/CPU; the ceilings are rlimits on the spawned tree, not a scheduler-enforced container.
+
+Evidence (pre-fix):
 
 - `crates/oxo-flow-web/src/domains/execution/handlers.rs:72`
 - `crates/oxo-flow-web/src/domains/execution/handlers.rs:377`
@@ -92,9 +103,9 @@ Evidence:
 
 Required exit evidence:
 
-- A two-tenant adversarial test proves workflows cannot read another tenant's workspace, the server database, host credentials, or arbitrary host files.
-- The runner clears or allowlists the environment.
-- CPU, memory, process, filesystem, and network limits are enforced by an OS or container boundary.
+- A two-tenant adversarial test proves workflows cannot read another tenant's workspace, the server database, host credentials, or arbitrary host files. (Partially met: environment-secret isolation and resource ceilings are proven; filesystem reachability is not.)
+- The runner clears or allowlists the environment. (Met on the web spawn path — issue #1129.)
+- CPU, memory, process, filesystem, and network limits are enforced by an OS or container boundary. (Partially met: CPU/memory/process are rlimit-enforced on Linux; filesystem and network are not.)
 
 ### RB-02: Saved-pipeline runs do not have immutable artifact snapshots
 
@@ -502,11 +513,12 @@ Mechanism (issue #1133):
   `quota::release_and_complete`. Startup reconciliation
   (`quota::reconcile_stale`, wired into `init_database`) reclaims
   reservations whose run row is terminal or missing.
-- Enforcement: `executor::apply_memory_rlimit` installs `RLIMIT_DATA` on
+- Enforcement: `executor::apply_run_rlimits` installs `RLIMIT_DATA` on
   the spawned CLI process tree at the run's declared total memory
   (`[rules.resources] memory` sum, 512 MB floor for engine overhead) for
   local runs on Linux; exceeding it fails the allocation, the rule dies,
-  and the run fails. The budget is derived from the RESOLVED workflow
+  and the run fails. (The same helper also installs the operator-wide
+  `RLIMIT_CPU`/`RLIMIT_NPROC` ceilings of issue #1129 — see RB-01.) The budget is derived from the RESOLVED workflow
   (include expansion before derivation — AGENTS invariant) for create, and
   from the workdir's workflow file for retry/resume, so included modules'
   own declarations count. The in-memory `QuotaTracker` remains only as the
@@ -928,7 +940,7 @@ workflow-trust decision: do not run workflows you do not trust. Pinned by
 
 | ID | Severity | Finding | Current maturity | Evidence and remediation |
 | :--- | :---: | :--- | :--- | :--- |
-| WEB-01 | P0 | No OS-level tenant execution boundary. | Planned / blocked | RB-01. |
+| WEB-01 | P0 | No OS-level tenant execution boundary. | Partially fixed (#1129) | RB-01. The web spawn path now clears/allowlists the child environment (server secrets — `DATABASE_URL`, `OXO_FLOW_MASTER_KEY`, provider/MCP credentials — no longer reach a tenant-authored rule shell) and installs operator-wide `RLIMIT_CPU`/`RLIMIT_NPROC` alongside `RLIMIT_DATA` on Linux. Filesystem namespace, uid separation, per-run container, and network limits remain unenforced — cross-tenant path-guessing reads are still possible. |
 | WEB-02 | P0 | No immutable per-run artifact snapshot. | Fixed (#1130) | Every create-run executes in its own `runs/<run_id>/` workdir (never the persistent pipeline dir; retry/resume continue a lineage by design), allocated only after validation so rejected creates leave no orphan dir. Admission is `INSERT ... WHERE NOT EXISTS ... ON CONFLICT DO NOTHING` backed by partial unique indexes on live `pipeline_id`/`workdir` in both SQLite and PostgreSQL (409 on the loser; proven on live PostgreSQL by the CI smoke concurrency tests); the pipeline slot is global across readers. Tests: `sequential_runs_from_one_saved_pipeline_are_isolated`, `run_executes_the_snapshot_not_a_mutated_pipeline`, `concurrent_creates_from_one_saved_pipeline_admit_exactly_one`, `shared_pipeline_slot_is_global_across_identities`, `validation_rejected_create_leaves_no_run_directory`, `pipeline_guard_*`, `live_admission_indexes_*`, `test_concurrent_*admission*`. See RB-02. |
 | WEB-03 | P1 | Non-atomic create/stage/persist/spawn. | Planned / blocked | RB-03. |
 | WEB-04 | P1 | Lifecycle transitions can contradict process state. | Fixed (#1116) | Resume refuses a run with no live process group (`409 RUN_NOT_RESUMABLE`) and no longer fabricates `running`; pause/resume roll back the process freeze when the status write fails. See RB-07. |
