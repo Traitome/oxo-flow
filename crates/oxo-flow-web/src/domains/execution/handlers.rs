@@ -84,6 +84,22 @@ fn pre_spawn_stage_fault(stage: &str) -> bool {
         == Some(stage)
 }
 
+/// Deterministic fault-injection seam that simulates a concurrent finalize
+/// landing in the read-then-write window (RB-07 / #1256). An integration test
+/// sets `OXO_FLOW_TEST_FINALIZE_BEFORE_CAS=pause` (or `resume`) so the handler
+/// records a terminal `cancelled` on the row right after freezing/unfreezing
+/// the process and before the guarded compare-and-set. The real CAS then
+/// genuinely loses, proving the rollback (SIGCONT after a refused pause,
+/// SIGSTOP after a refused resume) runs and the terminal row is never
+/// resurrected. Only an exact match on a known site injects, so a stray value
+/// cannot alter production behavior.
+fn finalize_before_cas_fault(site: &str) -> bool {
+    std::env::var("OXO_FLOW_TEST_FINALIZE_BEFORE_CAS")
+        .ok()
+        .as_deref()
+        == Some(site)
+}
+
 /// Make parent directories for `path`, mapping a failure to the caller's
 /// structured `RUN_ERROR` with `what` (the workflow-relative file name)
 /// in the message. Shared by staging and materialization so both surfaces
@@ -2416,19 +2432,48 @@ pub async fn pause_run(
     }
 
     let now = now_iso();
-    if let Err(e) = backend
-        .update_run_status(&id, "paused", &format!("paused: {reason}"))
+    if finalize_before_cas_fault("pause") {
+        let _ = backend
+            .record_run_terminal(&id, "cancelled", "cancelled", &now)
+            .await;
+    }
+    // Compare-and-set the row: only a still-`running` row may become
+    // `paused`. The pre-flight `is_terminal_run_status` check above can race
+    // a concurrent cancel/finalize (read-then-write window, RB-07 / #1256),
+    // so the guarded transition is the authority. A `false` return means the
+    // row left `running` under us — a conflict, never a silent clobber.
+    match backend
+        .transition_run_status(&id, &["running"], "paused", &format!("paused: {reason}"))
         .await
     {
-        // The group is already SIGSTOPped but the DB still says 'running':
-        // the row would contradict process state (UI shows executing while
-        // the process is frozen, and nothing would ever unfreeze it). Roll
-        // the freeze back (best effort) so the two states agree again, then
-        // surface the failure instead of pretending the pause succeeded.
-        let _ = crate::process_control::signal_group(pgid, crate::process_control::SIGCONT);
-        return Err(db_err(format!(
-            "DB error pausing run {id}: {e} (process group unfrozen to keep DB and process state consistent)"
-        )));
+        Ok(true) => {}
+        Ok(false) => {
+            // The row moved under us (cancelled/finalized between the read
+            // and the write). The group is already SIGSTOPped but the row is
+            // terminal — unfreeze it so process and row agree, then report
+            // the conflict instead of resurrecting a settled run.
+            let _ = crate::process_control::signal_group(pgid, crate::process_control::SIGCONT);
+            return Err(err(
+                StatusCode::CONFLICT,
+                "RUN_STATE_CHANGED",
+                format!(
+                    "Run {id} changed state concurrently — it is no longer running, so it \
+                     was not paused"
+                ),
+            ));
+        }
+        Err(e) => {
+            // The group is already SIGSTOPped but the DB still says 'running':
+            // the row would contradict process state (UI shows executing
+            // while the process is frozen, and nothing would ever unfreeze
+            // it). Roll the freeze back (best effort) so the two states agree
+            // again, then surface the failure instead of pretending the pause
+            // succeeded.
+            let _ = crate::process_control::signal_group(pgid, crate::process_control::SIGCONT);
+            return Err(db_err(format!(
+                "DB error pausing run {id}: {e} (process group unfrozen to keep DB and process state consistent)"
+            )));
+        }
     }
 
     crate::broadcast_event_for(
@@ -2522,16 +2567,46 @@ pub async fn resume_run(
     }
 
     let _now = now_iso();
-    if let Err(e) = backend.update_run_status(&id, "running", "executing").await {
-        // Mirror of the pause path: the group is already SIGCONTinued but the
-        // DB still says 'paused', so the row would contradict process state
-        // (UI shows paused while the run is in fact executing). Re-freeze
-        // (best effort) so the two agree again, then surface the failure
-        // instead of pretending the resume succeeded.
-        let _ = crate::process_control::signal_group(pgid, crate::process_control::SIGSTOP);
-        return Err(db_err(format!(
-            "DB error resuming run {id}: {e} (process group re-frozen to keep DB and process state consistent)"
-        )));
+    if finalize_before_cas_fault("resume") {
+        let _ = backend
+            .record_run_terminal(&id, "cancelled", "cancelled", &_now)
+            .await;
+    }
+    // Compare-and-set: only a still-`paused` row may become `running`. The
+    // `run.status != "paused"` check above races a concurrent cancel/finalize
+    // (RB-07 / #1256); the guarded transition is the authority. `false` means
+    // the row left `paused` — conflict, not a fabricated live run.
+    match backend
+        .transition_run_status(&id, &["paused"], "running", "executing")
+        .await
+    {
+        Ok(true) => {}
+        Ok(false) => {
+            // The row moved under us (cancelled/finalized between the read
+            // and the write). The group is already SIGCONTinued but the row
+            // is terminal — re-freeze it so process and row agree, then
+            // report the conflict instead of resurrecting a settled run.
+            let _ = crate::process_control::signal_group(pgid, crate::process_control::SIGSTOP);
+            return Err(err(
+                StatusCode::CONFLICT,
+                "RUN_STATE_CHANGED",
+                format!(
+                    "Run {id} changed state concurrently — it is no longer paused, so it \
+                     was not resumed"
+                ),
+            ));
+        }
+        Err(e) => {
+            // Mirror of the pause path: the group is already SIGCONTinued but
+            // the DB still says 'paused', so the row would contradict process
+            // state (UI shows paused while the run is in fact executing).
+            // Re-freeze (best effort) so the two agree again, then surface the
+            // failure instead of pretending the resume succeeded.
+            let _ = crate::process_control::signal_group(pgid, crate::process_control::SIGSTOP);
+            return Err(db_err(format!(
+                "DB error resuming run {id}: {e} (process group re-frozen to keep DB and process state consistent)"
+            )));
+        }
     }
 
     crate::broadcast_event_for(

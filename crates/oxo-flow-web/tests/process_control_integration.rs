@@ -542,6 +542,143 @@ async fn pause_freezes_then_resume_continues() {
     process_control::unregister("pc-pause");
 }
 
+/// Serializes the `OXO_FLOW_TEST_FINALIZE_BEFORE_CAS`-dependent tests: env-var
+/// mutation is process-global and integration tests run on parallel threads.
+static FINALIZE_BEFORE_CAS_ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// RAII guard: set the run-handler finalize-before-CAS test seam, restore on
+/// drop. `site` is `"pause"` or `"resume"`.
+struct FinalizeBeforeCasEnv {
+    _guard: std::sync::MutexGuard<'static, ()>,
+}
+
+impl Drop for FinalizeBeforeCasEnv {
+    fn drop(&mut self) {
+        // Soundness: FINALIZE_BEFORE_CAS_ENV serializes every writer and
+        // reader of this variable inside the test binary.
+        unsafe {
+            std::env::remove_var("OXO_FLOW_TEST_FINALIZE_BEFORE_CAS");
+        }
+    }
+}
+
+fn set_finalize_before_cas(site: &str) -> FinalizeBeforeCasEnv {
+    let guard = FINALIZE_BEFORE_CAS_ENV
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    // Soundness: FINALIZE_BEFORE_CAS_ENV serializes every writer and reader
+    // of this variable inside the test binary.
+    unsafe {
+        std::env::set_var("OXO_FLOW_TEST_FINALIZE_BEFORE_CAS", site);
+    }
+    FinalizeBeforeCasEnv { _guard: guard }
+}
+
+/// True while process `pid` is in the kernel's stopped (job-control) state:
+/// the first field of `ps -o state=` is `T` for a SIGSTOPped task.
+fn process_is_stopped(pid: i32) -> bool {
+    std::process::Command::new("ps")
+        .args(["-o", "state=", "-p", &pid.to_string()])
+        .output()
+        .map(|out| {
+            String::from_utf8_lossy(&out.stdout)
+                .split_whitespace()
+                .next()
+                .is_some_and(|s| s.starts_with('T'))
+        })
+        .unwrap_or(false)
+}
+
+/// RB-07 / #1256: when the row goes terminal between the handler's read and
+/// its guarded write, a pause must lose the race — answer 409
+/// RUN_STATE_CHANGED, leave the terminal row exactly as it was, and unfreeze
+/// the process group it had already frozen so process and row agree.
+#[tokio::test]
+async fn pause_refused_when_row_went_terminal_unfreezes_process() {
+    common::ensure_db().await;
+    insert_run_row("pc-pause-cas", "running").await;
+    let mut child = spawn_and_register("pc-pause-cas");
+
+    let _seam = set_finalize_before_cas("pause");
+    let (status, body) = post_json("/api/runs/pc-pause-cas/pause", json!({})).await;
+    drop(_seam);
+
+    assert_eq!(status, StatusCode::CONFLICT, "pause response: {body:?}");
+    assert_eq!(body["code"], "RUN_STATE_CHANGED");
+    // The concurrent finalize's terminal status is authoritative: the refused
+    // pause must not resurrect a 'paused' row.
+    assert_eq!(
+        run_status("pc-pause-cas").await.as_deref(),
+        Some("cancelled")
+    );
+
+    // The process group was SIGSTOPped before the CAS lost; the rollback must
+    // have SIGCONTinued it so it is not left frozen against a terminal row.
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let mut running = false;
+    while std::time::Instant::now() < deadline {
+        if !process_is_stopped(child.id() as i32) {
+            running = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(
+        running,
+        "a refused pause must unfreeze the process group instead of leaving it stopped"
+    );
+
+    process_control::signal_group(child.id() as i32, process_control::SIGKILL)
+        .expect("cleanup kill");
+    child.wait().expect("wait after cleanup");
+    process_control::unregister("pc-pause-cas");
+}
+
+/// RB-07 / #1256, resume side: when the row goes terminal between the read
+/// and the guarded write, a resume must lose the race — answer 409
+/// RUN_STATE_CHANGED, leave the terminal row untouched, and re-freeze the
+/// process group it had already unfrozen so process and row agree.
+#[tokio::test]
+async fn resume_refused_when_row_went_terminal_refreezes_process() {
+    common::ensure_db().await;
+    insert_run_row("pc-resume-cas", "paused").await;
+    let mut child = spawn_and_register("pc-resume-cas");
+    // Freeze it first so the handler's SIGCONT has something to undo.
+    process_control::signal_group(child.id() as i32, process_control::SIGSTOP).expect("pre-freeze");
+
+    let _seam = set_finalize_before_cas("resume");
+    let (status, body) = post_json("/api/runs/pc-resume-cas/resume", json!({})).await;
+    drop(_seam);
+
+    assert_eq!(status, StatusCode::CONFLICT, "resume response: {body:?}");
+    assert_eq!(body["code"], "RUN_STATE_CHANGED");
+    assert_eq!(
+        run_status("pc-resume-cas").await.as_deref(),
+        Some("cancelled")
+    );
+
+    // The group was SIGCONTinued before the CAS lost; the rollback must have
+    // SIGSTOPped it again so it is not left running against a terminal row.
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let mut stopped = false;
+    while std::time::Instant::now() < deadline {
+        if process_is_stopped(child.id() as i32) {
+            stopped = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(
+        stopped,
+        "a refused resume must re-freeze the process group instead of leaving it running"
+    );
+
+    process_control::signal_group(child.id() as i32, process_control::SIGKILL)
+        .expect("cleanup kill");
+    child.wait().expect("wait after cleanup");
+    process_control::unregister("pc-resume-cas");
+}
+
 #[tokio::test]
 async fn cancel_unknown_run_is_404() {
     common::ensure_db().await;
