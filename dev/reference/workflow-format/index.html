@@ -10964,7 +10964,7 @@ contract, not a mismatch) as a warning and never fail a run.</p>
 <tr>
 <td><code>compression</code></td>
 <td><code>none</code>, <code>gzip</code>, <code>bgzip</code>, <code>zstd</code></td>
-<td>Block/stream compression of the file. BAM and CRAM are BGZF by specification, so a producer declaring a plain <code>bam</code>/<code>cram</code> already satisfies a consumer's <code>compression=bgzip</code> requirement; other formats must state compression explicitly</td>
+<td>Block/stream compression of the file. BAM is BGZF by specification, so a producer declaring a plain <code>bam</code> already satisfies a consumer's <code>compression=bgzip</code> requirement. CRAM is <em>not</em> BGZF (its container is its own block-level gzip/bzip2/LZMA framing, with no BGZF <code>BC</code> extra field), so a CRAM producer must state its compression explicitly; other formats do too</td>
 </tr>
 <tr>
 <td><code>read_groups</code></td>
