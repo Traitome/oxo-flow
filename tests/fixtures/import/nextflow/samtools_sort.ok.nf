@@ -3,8 +3,11 @@
 // retrieved 2026-11-20). Faithful derivation for a STATIC fixture: the dynamic
 // `conda "${moduleDir}/environment.yml"` was materialized to its literal spec and
 // the engine-ternary `container` collapsed to its docker branch (the runtime
-// default). Process name, resources and I/O are upstream; the `prefix` line and the
-// shell body are copied verbatim from upstream lines 30 and 66-74.
+// default). Process name is upstream; resources are materialized from the
+// `process_medium` label; I/O is reduced to the single pinned bam pair. Only the
+// `prefix` line is copied verbatim from upstream line 30 (it carries finding O12);
+// the shell body is adapted/trimmed from upstream lines 66-74 (dynamic
+// reconciliation dropped for a static fixture).
 process SAMTOOLS_SORT {
     tag "${meta.id}"
     label 'process_medium'
