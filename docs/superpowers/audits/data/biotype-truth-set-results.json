@@ -1,6 +1,6 @@
 {
-  "generated_at": "2026-11-19T18:18:11Z",
-  "commit": "1dd70d4f94e3e95a1c66b3ba1179932a8b7e61bb",
+  "generated_at": "2026-11-20T00:13:47Z",
+  "commit": "7ce1df5261e2a3740c6f83288f8d8eb65ef151ad",
   "binary": "target/debug/oxo-flow",
   "cases": [
     {"case": "tests/truthset/biotype/cases/t01_star_bam_to_featurecounts.oxoflow", "expected": "accept", "actual": "accept", "verdict_correct": "yes", "expected_codes": "-", "actual_codes": "-", "codes_correct": "yes", "note": "nextflow STAR->featureCounts edge"},
@@ -44,10 +44,11 @@
     {"case": "examples/gallery/07_wgs_germline.oxoflow", "expected": "accept", "actual": "accept", "verdict_correct": "yes", "expected_codes": "-", "actual_codes": "-", "codes_correct": "yes", "note": "real repo example, untyped"},
     {"case": "examples/gallery/08_multiomics_integration.oxoflow", "expected": "accept", "actual": "accept", "verdict_correct": "yes", "expected_codes": "-", "actual_codes": "-", "codes_correct": "yes", "note": "real repo example, untyped"},
     {"case": "examples/gallery/14_paired_experiment_control.oxoflow", "expected": "accept", "actual": "accept", "verdict_correct": "yes", "expected_codes": "-", "actual_codes": "-", "codes_correct": "yes", "note": "real repo example, untyped"},
-    {"case": "examples/gallery/16_16s_qiime2_amplicon.oxoflow", "expected": "accept", "actual": "accept", "verdict_correct": "yes", "expected_codes": "-", "actual_codes": "-", "codes_correct": "yes", "note": "real repo example, untyped"}
+    {"case": "examples/gallery/16_16s_qiime2_amplicon.oxoflow", "expected": "accept", "actual": "accept", "verdict_correct": "yes", "expected_codes": "-", "actual_codes": "-", "codes_correct": "yes", "note": "real repo example, untyped"},
+    {"case": "examples/gallery/17_typed_variant_calling.oxoflow", "expected": "accept", "actual": "accept", "verdict_correct": "yes", "expected_codes": "-", "actual_codes": "-", "codes_correct": "yes", "note": "real repo example, TYPED [types.*]/[rules.types] contracts (#1272)"}
   ],
-  "confusion_matrix": {"true_accept": 25, "false_accept": 0, "true_reject": 17, "false_reject": 0},
-  "codes_correct": 42,
+  "confusion_matrix": {"true_accept": 26, "false_accept": 0, "true_reject": 17, "false_reject": 0},
+  "codes_correct": 43,
   "codes_fail": 0,
-  "cases_total": 42
+  "cases_total": 43
 }

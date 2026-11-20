@@ -1,0 +1,266 @@
+# 17 — Germline Variant Calling with Biological Type Contracts
+#
+# This is gallery 13 (the simple per-sample germline chain) with a full
+# [types.*] / [rules.types] contract layer added. Every edge that crosses
+# between two rules carries a declared biological contract — format, sort
+# order, companion index, reference build, read groups, and compression —
+# so the static BioType checker verifies the whole dataflow before any
+# command runs. `oxo-flow validate 17_typed_variant_calling.oxoflow`
+# re-checks every edge; a producer that emitted a SAM where a BAM is
+# required, a queryname BAM where coordinate is required, a gzip VCF where
+# bgzip is required, or a BAM missing @RG tags would fail here in preflight
+# with a [TYPE-0xx] diagnostic instead of at run time.
+#
+# The contract types are NAMED (reusable [types.<name>] tables) and bound to
+# rule channels by name; the raw FastQC rule stays untyped because nothing
+# consumes its HTML output.
+
+[workflow]
+name = "typed-variant-calling"
+version = "1.0.0"
+description = "Germline variant calling with a [types.*] biological contract on every crossing edge"
+author = "Traitome"
+
+[config]
+reference = "/data/reference/GRCh38.fa"
+known_sites = "/data/reference/dbsnp_146.hg38.vcf.gz"
+
+[defaults]
+threads = 4
+memory = "8G"
+
+[report]
+# Section IDs are the built-in generator names (oxo-flow report --list-sections).
+sections = [
+    "universal",
+    "workflow-info",
+    "execution-status",
+    "metrics",
+    "provenance",
+]
+
+# --- Biological type contracts -------------------------------------------
+# Each name below is referenced by the rules via [rules.types]. The contract
+# records what the artefact *is* biologically, independent of its file path.
+
+# fastp emits gzip-compressed FASTQ (trimmed/{sample}_R{1,2}.fastq.gz).
+[types.trimmed_reads]
+format = "fastq"
+compression = "gzip"
+
+# bwa-mem2 | samtools sort + index: coordinate-sorted BAM on GRCh38, with a
+# .bai companion and the @RG header tags the aligner injected (-R).
+[types.sorted_bam]
+format = "bam"
+sort_order = "coordinate"
+index = "bai"
+reference_build = "GRCh38"
+read_groups = { required = true, fields = ["ID", "SM", "PL"] }
+
+# gatk MarkDuplicates --CREATE_INDEX true: coordinate BAM on GRCh38, indexed,
+# @RG carried through from alignment.
+[types.dedup_bam]
+format = "bam"
+sort_order = "coordinate"
+index = "bai"
+reference_build = "GRCh38"
+read_groups = { required = true, fields = ["ID", "SM", "PL"] }
+
+# gatk BaseRecalibrator output: a tab-separated recalibration table (no
+# alignment contract — it is not a read file).
+[types.recal_table]
+format = "tsv"
+
+# gatk ApplyBQSR output: coordinate BAM on GRCh38. This step does not write
+# a companion index, so the contract deliberately declares none.
+[types.recal_bam]
+format = "bam"
+sort_order = "coordinate"
+reference_build = "GRCh38"
+read_groups = { required = true, fields = ["ID", "SM", "PL"] }
+
+# gatk HaplotypeCaller -ERC GVCF: a bgzip-compressed VCF whose records carry
+# the germline variant attribute (the built-in `gvcf` alias in expanded form).
+[types.germline_gvcf]
+format = "vcf"
+compression = "bgzip"
+reference_build = "GRCh38"
+attributes = { variant_type = "germline" }
+
+# --- Rules ----------------------------------------------------------------
+
+# Raw-read QC. Standalone: nothing consumes its HTML report, so it carries
+# no contract (and produces no checker diagnostic).
+[[rules]]
+name = "fastqc"
+input = [
+    "raw/{sample}_R1.fastq.gz",
+    "raw/{sample}_R2.fastq.gz",
+]
+output = [
+    "qc/{sample}_R1_fastqc.html",
+    "qc/{sample}_R2_fastqc.html",
+]
+shell = "fastqc {input} -o qc/"
+description = "Quality control check on raw sequencing reads"
+
+[rules.resources]
+threads = 2
+
+[rules.environment]
+conda = "envs/qc.yaml"
+
+# Adapter trimming. Producer edge: emits gzip FASTQ bound to `trimmed_reads`.
+[[rules]]
+name = "fastp"
+input = [
+    "raw/{sample}_R1.fastq.gz",
+    "raw/{sample}_R2.fastq.gz",
+]
+output = [
+    "trimmed/{sample}_R1.fastq.gz",
+    "trimmed/{sample}_R2.fastq.gz",
+    "qc/{sample}_fastp.json",
+]
+shell = """
+fastp -i {input[0]} -I {input[1]} -o {output[0]} -O {output[1]} --json {output[2]} --thread {threads}
+"""
+description = "Adapter trimming and quality filtering"
+
+[rules.types]
+outputs = { trimmed = "trimmed_reads" }
+
+[rules.resources]
+threads = 8
+
+[rules.environment]
+conda = "envs/fastp.yaml"
+
+# Alignment. Consumer of fastp's trimmed reads; producer of a sorted BAM.
+[[rules]]
+name = "bwa_align"
+input = [
+    "trimmed/{sample}_R1.fastq.gz",
+    "trimmed/{sample}_R2.fastq.gz",
+]
+output = ["aligned/{sample}.sorted.bam"]
+shell = '''
+rg=$(printf '@RG\tID:%s\tSM:%s\tPL:ILLUMINA' '{sample}' '{sample}')
+bwa-mem2 mem -t {threads} -R "$rg" {config.reference} {input[0]} {input[1]} | samtools sort -@ 4 -o {output[0]}
+samtools index {output[0]}
+'''
+description = "Read alignment to reference genome"
+
+[rules.types]
+inputs = { trimmed = "trimmed_reads" }
+outputs = { aligned = "sorted_bam" }
+
+[rules.resources]
+threads = 16
+memory = "32G"
+
+# The pipe needs BOTH bwa-mem2 and samtools; the single-tool docker image
+# cannot run it — use a conda environment that ships the pair.
+[rules.environment]
+conda = "envs/alignment.yaml"
+
+# Duplicate marking. Consumer of the sorted BAM; producer of a dedup BAM.
+[[rules]]
+name = "mark_duplicates"
+input = ["aligned/{sample}.sorted.bam"]
+output = [
+    "dedup/{sample}.dedup.bam",
+    "dedup/{sample}.metrics.txt",
+]
+shell = """
+gatk MarkDuplicates --VALIDATION_STRINGENCY SILENT -I {input[0]} -O {output[0]} -M {output[1]} --CREATE_INDEX true
+"""
+description = "Mark PCR duplicate reads"
+
+[rules.types]
+inputs = { aligned = "sorted_bam" }
+outputs = { dedup = "dedup_bam" }
+
+[rules.resources]
+threads = 4
+memory = "16G"
+
+[rules.environment]
+singularity = "docker://broadinstitute/gatk:4.5.0.0"
+
+# Recalibration table build. Consumer of the dedup BAM; producer of a table.
+[[rules]]
+name = "base_recalibrator"
+input = ["dedup/{sample}.dedup.bam"]
+output = ["recal/{sample}.recal_data.table"]
+shell = """
+gatk BaseRecalibrator --read-validation-stringency SILENT -I {input[0]} -R {config.reference} --known-sites {config.known_sites} -O {output[0]}
+"""
+description = "Base quality score recalibration table"
+
+[rules.types]
+inputs = { dedup = "dedup_bam" }
+outputs = { table = "recal_table" }
+
+[rules.resources]
+threads = 4
+memory = "16G"
+
+[rules.environment]
+singularity = "docker://broadinstitute/gatk:4.5.0.0"
+
+# Recalibration application. Two input channels — the dedup BAM and the
+# recalibration table — each keyed to match its own producer.
+[[rules]]
+name = "apply_bqsr"
+input = [
+    "dedup/{sample}.dedup.bam",
+    "recal/{sample}.recal_data.table",
+]
+output = ["recal/{sample}.recal.bam"]
+shell = """
+gatk ApplyBQSR --read-validation-stringency SILENT -I {input[0]} -R {config.reference} --bqsr-recal-file {input[1]} -O {output[0]}
+"""
+description = "Apply base quality score recalibration"
+
+[rules.types]
+inputs = { dedup = "dedup_bam", table = "recal_table" }
+outputs = { recal = "recal_bam" }
+
+[rules.resources]
+threads = 4
+memory = "16G"
+
+[rules.environment]
+singularity = "docker://broadinstitute/gatk:4.5.0.0"
+
+# Germline calling. Consumer of the recalibrated BAM; producer of a gVCF.
+[[rules]]
+name = "haplotype_caller"
+input = ["recal/{sample}.recal.bam"]
+output = ["variants/{sample}.g.vcf.gz"]
+shell = """
+gatk HaplotypeCaller --read-validation-stringency SILENT -R {config.reference} -I {input[0]} -O {output[0]} -ERC GVCF --native-pair-hmm-threads {threads}
+"""
+description = "Germline variant calling"
+
+[rules.types]
+inputs = { recal = "recal_bam" }
+outputs = { gvcf = "germline_gvcf" }
+
+[rules.resources]
+threads = 4
+memory = "16G"
+
+[rules.environment]
+singularity = "docker://broadinstitute/gatk:4.5.0.0"
+
+[[sample_groups]]
+name = "samples"
+samples = [
+    "NA12878",
+    "NA12891",
+    "NA12892",
+]
+
+[sample_groups.metadata]

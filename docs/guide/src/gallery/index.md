@@ -28,6 +28,7 @@ For larger reference workflows — ports of popular nf-core & Snakemake pipeline
 | 14 | [Paired Experiment-Control](paired-experiment-control.md) | ⭐⭐⭐⭐⭐ | Single-pair somatic calling: Mutect2, FilterMutectCalls, VEP, report |
 | 15 | [Paired Experiment-Control (Pairs)](paired-experiment-control-pairs.md) | ⭐⭐⭐⭐⭐ | The `[[pairs]]`-driven scalable version of 14 |
 | 16 | [16S Amplicon (QIIME2)](16s-qiime2.md) | ⭐⭐⭐⭐ | QIIME2 artifact chaining, DADA2 denoising, phylogenetic diversity |
+| 17 | [Typed Germline Variant Calling](typed-variant-calling.md) | ⭐⭐⭐⭐ | BioType contracts: `[types.*]` / `[rules.types]` on every crossing edge |
 
 ---
 
@@ -69,8 +70,8 @@ Master wildcards for multi-sample processing, scatter-gather parallelism pattern
 ### Advanced (Workflows 06–10)
 Build reference-scale bioinformatics pipelines covering RNA-seq, whole-genome sequencing, multi-omics integration, and single-cell analysis with checkpoint-driven reporting and complex DAG topologies, plus the unified `transform` operator for scatter-gather parallelism.
 
-### Applied Patterns (Workflows 11–16)
-Reference pipelines for real study designs: condition-gated branches, population cohorts with cohort-level joint genotyping, per-sample germline calling, paired tumor/control somatic calling (single pair and `[[pairs]]`-scaled), and 16S amplicon analysis with QIIME2.
+### Applied Patterns (Workflows 11–17)
+Reference pipelines for real study designs: condition-gated branches, population cohorts with cohort-level joint genotyping, per-sample germline calling, paired tumor/control somatic calling (single pair and `[[pairs]]`-scaled), 16S amplicon analysis with QIIME2, and a fully typed pipeline whose biological contracts are checked at preflight.
 
 ---
 
