@@ -590,6 +590,78 @@ outputs = { default = "sam_unsorted" }
     assert!(body["run_id"].as_str().is_some(), "{body}");
 }
 
+/// RB-04 residual (issue #1289) arm (a): a workflow whose shell references an
+/// undefined `{config.<key>}` must be rejected with the same 400 RUN_ERROR
+/// shape the CLI's plan-time E005 gate produces, and must persist NO run row.
+/// Falsifiable: remove the admission gate in `handlers.rs` and this workflow
+/// is admitted exactly like `create_run_accepts_a_compatible_typed_workflow`.
+#[tokio::test]
+async fn create_run_rejects_undefined_config_ref_before_persistence() {
+    ensure_db().await;
+    let app = server::build_router("personal");
+    let toml = r#"
+[workflow]
+name = "web-e005-gate"
+
+[[rules]]
+name = "trim"
+output = ["{config.sample}.trimmed.fq"]
+shell = "touch {config.sample}.trimmed.fq"
+"#;
+
+    let (status, body) = post(
+        &app,
+        "/api/runs",
+        json!({"toml_content": toml, "dry_run": true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["code"], "RUN_ERROR", "{body}");
+    let message = body["message"].as_str().unwrap_or_default();
+    assert!(message.contains("undefined config variable"), "{body}");
+    assert!(message.contains("sample"), "{body}");
+
+    let persisted: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM runs WHERE workflow_name = 'web-e005-gate'")
+            .fetch_one(oxo_flow_web::infra::db::sqlite::pool())
+            .await
+            .unwrap();
+    assert_eq!(persisted, 0, "rejected workflow must not create a run row");
+}
+
+/// RB-04 residual (issue #1289) arm (b): the otherwise-identical workflow is
+/// admitted once the referenced key is supplied — here through
+/// `config_overrides`, the same forward path the spawned CLI receives as
+/// `--arg=sample=...`. Proves the gate runs on the RESOLVED config AFTER
+/// overrides, not on the host text alone.
+#[tokio::test]
+async fn create_run_admits_workflow_when_config_ref_is_overridden() {
+    ensure_db().await;
+    let app = server::build_router("personal");
+    let toml = r#"
+[workflow]
+name = "web-e005-override"
+
+[[rules]]
+name = "trim"
+output = ["{config.sample}.trimmed.fq"]
+shell = "touch {config.sample}.trimmed.fq"
+"#;
+
+    let (status, body) = post(
+        &app,
+        "/api/runs",
+        json!({
+            "toml_content": toml,
+            "dry_run": true,
+            "config_overrides": ["sample=tumor1"]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body["run_id"].as_str().is_some(), "{body}");
+}
+
 #[tokio::test]
 async fn create_run_accepts_inline_types_with_overrides() {
     ensure_db().await;

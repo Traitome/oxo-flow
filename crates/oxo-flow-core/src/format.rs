@@ -441,6 +441,30 @@ pub fn undefined_config_refs(rule: &Rule, config: &WorkflowConfig) -> Vec<Diagno
     diagnostics
 }
 
+/// Human-readable E005 findings for a whole workflow: every rule's
+/// [`undefined_config_refs`] rendered as `rule '<name>': <message> (<fix>)`.
+///
+/// Single source of truth shared by the CLI plan-time gate (`run`/`dry-run`)
+/// and the web run-admission path (issue #1289), so an undefined `{config.*}`
+/// reference is reported identically and can never be admitted by one surface
+/// after another has rejected it. Empty result means the workflow is clean.
+#[must_use]
+pub fn undefined_config_findings(config: &WorkflowConfig) -> Vec<String> {
+    config
+        .rules
+        .iter()
+        .flat_map(|rule| undefined_config_refs(rule, config))
+        .map(|d| {
+            format!(
+                "rule '{}': {} ({})",
+                d.rule.as_deref().unwrap_or("<unknown>"),
+                d.message,
+                d.suggestion.unwrap_or_default()
+            )
+        })
+        .collect()
+}
+
 /// Deterministic repair for the mechanical E005 class: the draft references
 /// `{config.X}` without declaring X. The model feedback loop CAN fix these,
 /// but a paid generation round is a wasteful way to add a line — this pass

@@ -434,21 +434,9 @@ pub(crate) fn canonicalize_override_key(
     key: &str,
     declared_config_keys: &std::collections::HashSet<String>,
 ) -> Option<String> {
-    if !key.contains('-') {
-        return None;
-    }
-    let normalized = key.replace('-', "_");
-    if declared_config_keys.contains(&normalized) {
-        return Some(normalized);
-    }
-    let matches: Vec<&String> = declared_config_keys
-        .iter()
-        .filter(|d| d.replace('-', "_") == normalized)
-        .collect();
-    match matches.as_slice() {
-        [only] => Some((*only).clone()),
-        _ => None,
-    }
+    // One definition, in core: the web run-admission E005 gate (issue #1289)
+    // canonicalizes overrides with the exact same rule (reuse, never retype).
+    oxo_flow_core::config::canonicalize_override_key(key, declared_config_keys)
 }
 
 /// Apply parsed overrides and the defaults of declarative config entries
@@ -497,12 +485,10 @@ pub(crate) fn apply_cli_overrides(
         }
     }
     // Inject undeclared KEY=VALUE values as {config.xxx} — a CLI override
-    // must win over the workflow's [config] table (issue #62).
-    for (k, v) in cli_arg_values {
-        config
-            .config
-            .insert(k.clone(), toml::Value::String(v.clone()));
-    }
+    // must win over the workflow's [config] table (issue #62). The canonical
+    // spelling / insertion rule is the shared core helper, so the web
+    // run-admission gate (issue #1289) sees the identical post-override config.
+    config.apply_config_overrides(cli_arg_values);
     warn_retired_cache_aging_key(config);
     Ok(())
 }

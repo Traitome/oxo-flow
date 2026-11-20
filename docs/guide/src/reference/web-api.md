@@ -565,6 +565,21 @@ sources the single-file parse is used, exactly as before. A BioType violation
 contributed by a staged include keeps the stable
 `400 TYPE_CONTRACT_VIOLATION` code.
 
+Admission also runs the CLI's plan-time E005 undefined-config gate (issue
+#1289 / audit RB-04 residual): a rule that references an undefined
+`{config.<key>}` — in its command, `script`, input/output/log paths,
+`output_pattern`, `benchmark`, a hook, or a `when` condition — is rejected
+before any run row is written, with the same
+`400 {"code":"RUN_ERROR","message":"workflow references undefined config variables …"}`
+the CLI `run`/`dry-run` preflight produces. The gate evaluates the
+**resolved** config (includes merged) **after** `config_overrides` are
+applied, so a key supplied through `config_overrides` (or declared in
+`[config]`, or defaulted by a module) satisfies the reference and the run is
+admitted — parity with the spawned CLI, which would otherwise refuse the run
+after the web had already persisted it. Like every other admission gate it
+fails closed: no ghost `queued` row and no orphan `runs/<uuid>/` directory
+(see the fail-closed note below).
+
 The effective workflow (includes merged, `extends` resolved) is also persisted
 in the run's working directory as `.oxo-flow/resolved-workflow.oxoflow`.
 Retry, checkpoint resume (quota budgeting), `/dag-status`, `/status`,
