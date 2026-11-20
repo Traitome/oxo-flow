@@ -840,6 +840,390 @@ fn resolve_includes_depth_limit() {
     );
 }
 
+/// Issue #1285 (RB-04) case 1: an `http://` include must fail closed AND
+/// make zero network connections. The refusal at parse.rs runs before any
+/// dial, so a bound listener sees no accept. The listener is the falsifier:
+/// if a future change were to fetch the URL, the accept count would rise.
+#[test]
+fn resolve_includes_remote_url_performs_zero_network_io() {
+    use std::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral listener");
+    listener
+        .set_nonblocking(true)
+        .expect("listener must be non-blocking for the accept probe");
+    let addr = listener.local_addr().expect("listener addr");
+
+    let toml = format!(
+        r#"
+        [workflow]
+        name = "remote_zero_io"
+
+        [[include]]
+        path = "http://{addr}/module.oxoflow"
+    "#
+    );
+    let mut config: WorkflowConfig = toml::from_str(&toml).unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let err = config
+        .resolve_includes(dir.path())
+        .expect_err("remote URL includes must fail closed");
+    assert!(
+        err.to_string()
+            .contains("remote URL includes are not supported"),
+        "{err}"
+    );
+
+    // Zero network I/O: nothing ever connected, so accept() is still empty.
+    match listener.accept() {
+        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+        Ok(_) => panic!("remote include must not open a connection"),
+        Err(e) => panic!("unexpected accept error: {e}"),
+    }
+}
+
+/// Issue #1285 (RB-04) case 2: a repo include WITHOUT a pinned `ref` is
+/// refused before any clone. No test covered this branch before.
+#[test]
+fn resolve_includes_repo_without_ref_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let content = r#"
+        [workflow]
+        name = "repo_without_ref"
+
+        [[include]]
+        path = "modules/qc.oxoflow"
+        repo = "https://example.com/workflows.git"
+    "#;
+    let mut config: WorkflowConfig = toml::from_str(content).unwrap();
+    let err = config
+        .resolve_includes(dir.path())
+        .expect_err("repo include without `ref` must fail closed");
+    let message = err.to_string();
+    assert!(message.contains("pin the module version"), "{message}");
+    assert!(message.contains("without `ref`"), "{message}");
+}
+
+/// Issue #1285 (RB-04) case 4: a local include whose path aliases outside
+/// the workflow directory (`..` or an absolute path) must be refused, never
+/// silently read. Before the containment gate this resolved the sibling
+/// file happily.
+#[test]
+fn resolve_includes_rejects_dotdot_path_escape() {
+    let root = tempfile::tempdir().unwrap();
+    let workdir = root.path().join("wf");
+    std::fs::create_dir_all(&workdir).unwrap();
+    // A real, readable module OUTSIDE the workflow directory.
+    std::fs::write(
+        root.path().join("outside.oxoflow"),
+        "[workflow]\nname = \"outside\"\n",
+    )
+    .unwrap();
+
+    let content = r#"
+        [workflow]
+        name = "escape"
+
+        [[include]]
+        path = "../outside.oxoflow"
+    "#;
+    let mut config: WorkflowConfig = toml::from_str(content).unwrap();
+    let err = config
+        .resolve_includes(&workdir)
+        .expect_err("a `..` alias must not read outside the include base");
+    assert!(
+        err.to_string().contains("escapes the workflow directory"),
+        "{err}"
+    );
+}
+
+#[test]
+fn resolve_includes_rejects_absolute_path_escape() {
+    let root = tempfile::tempdir().unwrap();
+    let workdir = root.path().join("wf");
+    std::fs::create_dir_all(&workdir).unwrap();
+    let outside = root.path().join("abs_outside.oxoflow");
+    std::fs::write(&outside, "[workflow]\nname = \"abs\"\n").unwrap();
+
+    let content = format!(
+        r#"
+        [workflow]
+        name = "abs_escape"
+
+        [[include]]
+        path = "{}"
+    "#,
+        outside.display()
+    );
+    let mut config: WorkflowConfig = toml::from_str(&content).unwrap();
+    let err = config
+        .resolve_includes(&workdir)
+        .expect_err("an absolute alias must not read outside the include base");
+    assert!(
+        err.to_string().contains("escapes the workflow directory"),
+        "{err}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn resolve_includes_rejects_symlink_escape() {
+    let root = tempfile::tempdir().unwrap();
+    let workdir = root.path().join("wf");
+    std::fs::create_dir_all(&workdir).unwrap();
+    let outside = root.path().join("link_target.oxoflow");
+    std::fs::write(&outside, "[workflow]\nname = \"link\"\n").unwrap();
+    // A symlink INSIDE the workflow dir pointing OUTSIDE it.
+    std::os::unix::fs::symlink(&outside, workdir.join("linked.oxoflow")).unwrap();
+
+    let content = r#"
+        [workflow]
+        name = "symlink_escape"
+
+        [[include]]
+        path = "linked.oxoflow"
+    "#;
+    let mut config: WorkflowConfig = toml::from_str(content).unwrap();
+    let err = config
+        .resolve_includes(&workdir)
+        .expect_err("a symlink alias must not read outside the include base");
+    assert!(
+        err.to_string().contains("escapes the workflow directory"),
+        "{err}"
+    );
+}
+
+/// Issue #1285 review P2-a: containment is against the WORKFLOW ROOT, not
+/// the including module's own directory. A module under a subdir including an
+/// in-tree file via `../` must be ACCEPTED (a regression on the first cut of
+/// the gate — legit nested `..` was refused), while one that escapes the
+/// workflow root must still be REFUSED.
+#[test]
+fn resolve_includes_nested_in_tree_parent_accepted_but_escape_refused() {
+    let workdir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(workdir.path().join("sub")).unwrap();
+    // A real module at the workflow root.
+    std::fs::write(
+        workdir.path().join("legit.oxoflow"),
+        r#"[workflow]
+name = "legit"
+version = "1.0.0"
+
+[[rules]]
+name = "legit_rule"
+output = ["legit.txt"]
+shell = "true"
+"#,
+    )
+    .unwrap();
+    // A module under `sub/` that includes the in-tree root module via `../`.
+    // Target IS inside the workflow tree, so this must resolve.
+    std::fs::write(
+        workdir.path().join("sub/mod2.oxoflow"),
+        r#"[workflow]
+name = "mod2"
+version = "1.0.0"
+
+[[include]]
+path = "../legit.oxoflow"
+
+[[rules]]
+name = "mod2_rule"
+output = ["mod2.txt"]
+shell = "true"
+"#,
+    )
+    .unwrap();
+
+    let host = r#"
+        [workflow]
+        name = "host"
+
+        [[include]]
+        path = "sub/mod2.oxoflow"
+    "#;
+    let mut config: WorkflowConfig = toml::from_str(host).unwrap();
+    config
+        .resolve_includes(workdir.path())
+        .expect("an in-tree nested `../` include must be accepted");
+    assert!(
+        config.rules.iter().any(|r| r.name == "legit_rule"),
+        "the in-tree parent module's rules must merge: {:?}",
+        config.rules.iter().map(|r| &r.name).collect::<Vec<_>>()
+    );
+
+    // Now the escape case: a nested module reaching ABOVE the workflow root.
+    let root = tempfile::tempdir().unwrap();
+    let workdir2 = root.path().join("wf");
+    std::fs::create_dir_all(workdir2.join("sub")).unwrap();
+    std::fs::write(
+        root.path().join("outside.oxoflow"),
+        "[workflow]\nname = \"outside\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        workdir2.join("sub/mod3.oxoflow"),
+        r#"[workflow]
+name = "mod3"
+version = "1.0.0"
+
+[[include]]
+path = "../../outside.oxoflow"
+"#,
+    )
+    .unwrap();
+    let host2 = r#"
+        [workflow]
+        name = "host2"
+
+        [[include]]
+        path = "sub/mod3.oxoflow"
+    "#;
+    let mut config2: WorkflowConfig = toml::from_str(host2).unwrap();
+    let err = config2
+        .resolve_includes(&workdir2)
+        .expect_err("a nested include escaping the workflow root must be refused");
+    assert!(
+        err.to_string().contains("escapes the workflow directory"),
+        "{err}"
+    );
+}
+
+/// Issue #1285 review P2-b: the path-alias containment applies to repo
+/// includes too. A pinned module whose `path` aliases out of the module
+/// cache must be REFUSED, never silently read. Uses a pinned local `file://`
+/// repo (network-free) whose `path` is an absolute alias to a real, readable
+/// file outside the checkout — join semantics replace the checkout base with
+/// the absolute path, so absent the gate the module silently reads and merges
+/// a file it must not reach.
+#[test]
+fn resolve_includes_repo_path_escaping_cache_is_refused() {
+    let outside = tempfile::tempdir().unwrap();
+    let escaped = outside.path().join("escaped.oxoflow");
+    std::fs::write(
+        &escaped,
+        r#"[workflow]
+name = "escaped"
+version = "1.0.0"
+
+[[rules]]
+name = "escaped_rule"
+output = ["escaped.txt"]
+shell = "true"
+"#,
+    )
+    .unwrap();
+
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo_src");
+    std::fs::create_dir_all(&repo).unwrap();
+    std::fs::write(
+        repo.join("real.oxoflow"),
+        r#"[workflow]
+name = "real"
+version = "1.0.0"
+
+[[rules]]
+name = "real_rule"
+output = ["real.txt"]
+shell = "true"
+"#,
+    )
+    .unwrap();
+    let git = |args: &[&str]| {
+        std::process::Command::new("git")
+            .args(args)
+            .current_dir(&repo)
+            .output()
+            .unwrap();
+    };
+    git(&["init"]);
+    git(&["config", "user.email", "t@t"]);
+    git(&["config", "user.name", "t"]);
+    git(&["add", "real.oxoflow"]);
+    git(&["commit", "-m", "real"]);
+    git(&["tag", "v1.0.0"]);
+
+    // `path` is an absolute alias — it must not read the out-of-cache file.
+    let host = format!(
+        r#"[workflow]
+name = "host_escape"
+version = "1.0.0"
+
+[[include]]
+repo = "file://{}"
+ref = "v1.0.0"
+path = "{}"
+
+[[rules]]
+name = "use_escape"
+output = ["u.txt"]
+shell = "true"
+"#,
+        repo.display(),
+        escaped.display()
+    );
+    let wf = dir.path().join("host_escape.oxoflow");
+    std::fs::write(&wf, host).unwrap();
+
+    let err = WorkflowConfig::from_file(&wf)
+        .expect_err("a repo `path` escaping the module cache must be refused");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("escapes the module cache"),
+        "expected the cache-escape refusal, got: {msg}"
+    );
+}
+
+/// Issue #1285 review P2: a pinned module's OWN nested LOCAL include must be
+/// containment-checked against the pinned checkout, not the host workflow
+/// root. The module file lives under the module cache, so a legitimate
+/// sibling local include inside the same checkout would otherwise be refused
+/// "escapes the workflow directory". The per-branch containment root must be
+/// the checkout for the repo branch while the local branch keeps host root.
+#[test]
+fn resolve_includes_repo_module_local_sibling_is_accepted() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo_src");
+    std::fs::create_dir_all(repo.join("sub")).unwrap();
+    let sibling = "[workflow]\nname = \"sibling\"\nversion = \"1.0.0\"\n\n\
+[[rules]]\nname = \"sibling_rule\"\noutput = [\"sibling.txt\"]\nshell = \"true\"\n";
+    std::fs::write(repo.join("sub/sibling.oxoflow"), sibling).unwrap();
+    let wrapper = "[workflow]\nname = \"wrapper\"\nversion = \"1.0.0\"\n\n\
+[[include]]\npath = \"sub/sibling.oxoflow\"\n\n\
+[[rules]]\nname = \"wrap\"\ninput = [\"sibling.txt\"]\noutput = [\"wrap.txt\"]\nshell = \"true\"\n";
+    std::fs::write(repo.join("wrapper.oxoflow"), wrapper).unwrap();
+    let git = |args: &[&str]| {
+        std::process::Command::new("git")
+            .args(args)
+            .current_dir(&repo)
+            .output()
+            .unwrap();
+    };
+    git(&["init"]);
+    git(&["config", "user.email", "t@t"]);
+    git(&["config", "user.name", "t"]);
+    git(&["add", "."]);
+    git(&["commit", "-m", "mod"]);
+    git(&["tag", "v1.0.0"]);
+
+    let host = format!(
+        "[workflow]\nname = \"host\"\nversion = \"1.0.0\"\n\n\
+[[include]]\nrepo = \"file://{}\"\nref = \"v1.0.0\"\npath = \"wrapper.oxoflow\"\n\n\
+[[rules]]\nname = \"use\"\ninput = [\"wrap.txt\"]\noutput = [\"use.txt\"]\nshell = \"true\"\n",
+        repo.display()
+    );
+    let wf = dir.path().join("host.oxoflow");
+    std::fs::write(&wf, host).unwrap();
+
+    let config = WorkflowConfig::from_file(&wf)
+        .expect("a pinned module's sibling local include must be accepted");
+    assert!(
+        config.rules.iter().any(|r| r.name == "sibling_rule"),
+        "the sibling local include inside the checkout must merge its rules"
+    );
+}
+
 #[test]
 fn resolve_includes_merge_sample_groups() {
     let dir = tempfile::tempdir().unwrap();

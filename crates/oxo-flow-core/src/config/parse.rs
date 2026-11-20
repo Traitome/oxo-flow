@@ -507,10 +507,19 @@ impl WorkflowConfig {
     /// Rules from included files are optionally prefixed with the namespace.
     #[must_use = "resolving includes returns a Result that must be checked"]
     pub fn resolve_includes(&mut self, base_dir: &Path) -> Result<()> {
-        self.resolve_includes_with_depth(base_dir, 0)
+        // `root_dir` is the workflow root (the top-level include base); it is
+        // threaded unchanged through the recursion so a nested include's
+        // local `path` is containment-checked against the workflow root, not
+        // the including module's own directory (issue #1285 review P2-a).
+        self.resolve_includes_with_depth(base_dir, base_dir, 0)
     }
 
-    fn resolve_includes_with_depth(&mut self, base_dir: &Path, depth: usize) -> Result<()> {
+    fn resolve_includes_with_depth(
+        &mut self,
+        base_dir: &Path,
+        root_dir: &Path,
+        depth: usize,
+    ) -> Result<()> {
         if depth >= MAX_INCLUDE_DEPTH {
             return Err(OxoFlowError::Config {
                 message: format!(
@@ -521,7 +530,7 @@ impl WorkflowConfig {
         }
         let includes = std::mem::take(&mut self.includes);
         for inc in &includes {
-            let (content, inc_base_dir) = if let Some(repo) = &inc.repo {
+            let (content, inc_base_dir, next_root) = if let Some(repo) = &inc.repo {
                 // Pinned git include (issue #112): clone into the module
                 // cache (keyed repo@ref), then resolve `path` inside the
                 // checkout. ensure_pinned clones on a cache miss (healing
@@ -549,6 +558,28 @@ impl WorkflowConfig {
                     }
                 })?;
                 let inc_path = cache_dir.join(&inc.path);
+                // Path-alias containment (issue #1285 review P2-b): the same
+                // escape fixed for local paths (below) also applies to a
+                // repo include. `path` is repository-relative, so a `..` (or
+                // absolute) alias must never let a module read a file outside
+                // the module cache — canonicalize both sides and require the
+                // joined path to stay under the canonicalized cache root.
+                // Un-canonicalizable paths fall through to the regular-file
+                // and read gates below.
+                if let (Ok(canon_inc), Ok(canon_cache)) = (
+                    std::fs::canonicalize(&inc_path),
+                    std::fs::canonicalize(&cache_dir),
+                ) && !canon_inc.starts_with(&canon_cache)
+                {
+                    return Err(OxoFlowError::Parse {
+                        path: inc_path.clone(),
+                        message: format!(
+                            "include '{}' from repo '{repo}' escapes the module cache — a \
+                             repository-relative `path` must stay inside the checkout",
+                            inc.path
+                        ),
+                    });
+                }
                 // Stat-first regular-file gate (issue #714, pattern from
                 // #695/#706): open on a writer-less FIFO blocks the thread.
                 if let Ok(meta) = std::fs::metadata(&inc_path)
@@ -589,7 +620,13 @@ impl WorkflowConfig {
                     );
                 }
                 let next_base = inc_path.parent().unwrap_or(&cache_dir).to_path_buf();
-                (text, next_base)
+                // Containment root for this module's OWN nested local
+                // includes is the pinned checkout (`cache_dir`), not the host
+                // workflow root: the module file lives under the module cache,
+                // so containment-checks against the host root would falsely
+                // refuse a legitimate sibling `path` inside the checkout
+                // (issue #1285 review P2).
+                (text, next_base, cache_dir.clone())
             } else if inc.path.starts_with("http://") || inc.path.starts_with("https://") {
                 return Err(OxoFlowError::Parse {
                     path: PathBuf::from(&inc.path),
@@ -599,6 +636,32 @@ impl WorkflowConfig {
                 });
             } else {
                 let inc_path = base_dir.join(&inc.path);
+                // Path-alias containment (issue #1285, RB-04): a local
+                // include must stay inside the WORKFLOW ROOT. `..`, absolute
+                // aliases, and symlinks must never let an include silently
+                // read a file outside the workflow tree. The check is against
+                // `root_dir` (the workflow root), not `base_dir` (the
+                // including module's own directory) so a legitimate in-tree
+                // nested `../` include is still accepted (review P2-a) — only
+                // an alias escaping the whole workflow root is refused. The
+                // joined path is canonicalized and required to remain under
+                // the canonicalized root; a path that cannot be canonicalized
+                // (missing file / dangling symlink) falls through to the
+                // regular-file and read gates below.
+                if let (Ok(canon_inc), Ok(canon_root)) = (
+                    std::fs::canonicalize(&inc_path),
+                    std::fs::canonicalize(root_dir),
+                ) && !canon_inc.starts_with(&canon_root)
+                {
+                    return Err(OxoFlowError::Parse {
+                        path: inc_path.clone(),
+                        message: format!(
+                            "include '{}' escapes the workflow directory — local includes must \
+                             stay inside the directory containing the workflow",
+                            inc.path
+                        ),
+                    });
+                }
                 // Stat-first regular-file gate (issue #714, pattern from
                 // #695/#706): open on a writer-less FIFO blocks the thread.
                 if let Ok(meta) = std::fs::metadata(&inc_path)
@@ -614,7 +677,7 @@ impl WorkflowConfig {
                     message: format!("failed to read include '{}': {}", inc.path, e),
                 })?;
                 let next_base = inc_path.parent().unwrap_or(base_dir).to_path_buf();
-                (text, next_base)
+                (text, next_base, root_dir.to_path_buf())
             };
 
             let inc_error = |message: String| OxoFlowError::Parse {
@@ -635,8 +698,12 @@ impl WorkflowConfig {
             // defaults merge below as plain values (issue #142 M3).
             inc_config.extract_declarative_config()?;
 
-            // Recursively resolve nested includes
-            inc_config.resolve_includes_with_depth(&inc_base_dir, depth + 1)?;
+            // Recursively resolve nested includes. `base_dir` is rebased to
+            // the including module's directory for path joining, while
+            // `next_root` is the per-branch containment root: the host
+            // workflow root for a local include, the pinned checkout for a
+            // repo include (issue #1285 review P2-a/P2).
+            inc_config.resolve_includes_with_depth(&inc_base_dir, &next_root, depth + 1)?;
             // Nested contracts merge first (their provenance indices shift
             // by the host's current contract count).
             let offset = self.include_contracts.len();
