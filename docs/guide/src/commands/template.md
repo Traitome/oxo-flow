@@ -75,6 +75,7 @@ oxo-flow template 07_wgs_germline -o projects/wgs/
 | `14_paired_experiment_control` | Somatic variant calling (single pair) |
 | `15_paired_experiment_control_pairs` | Somatic variant calling (multiple pairs) |
 | `16_16s_qiime2_amplicon` | 16S amplicon analysis with QIIME2 |
+| `17_typed_variant_calling` | Typed germline variant calling (`[types.*]` contracts on every edge) |
 
 ## See Also
 

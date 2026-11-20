@@ -301,6 +301,10 @@ const EMBEDDED_GALLERY: &[(&str, &str)] = &[
         "16_16s_qiime2_amplicon",
         include_str!("../../templates/16_16s_qiime2_amplicon.oxoflow"),
     ),
+    (
+        "17_typed_variant_calling",
+        include_str!("../../templates/17_typed_variant_calling.oxoflow"),
+    ),
 ];
 
 /// Auxiliary files (scripts, report templates) referenced by gallery
@@ -504,6 +508,10 @@ const TEMPLATE_AUX_FILES: &[(&str, &[&str])] = &[
             "envs/report.yaml",
             "envs/vep.yaml",
         ],
+    ),
+    (
+        "17_typed_variant_calling",
+        &["envs/alignment.yaml", "envs/fastp.yaml", "envs/qc.yaml"],
     ),
 ];
 
