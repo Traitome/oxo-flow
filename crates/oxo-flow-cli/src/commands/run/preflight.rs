@@ -9,6 +9,12 @@ use oxo_flow_core::dag::WorkflowDag;
 use oxo_flow_core::rule::Rule;
 use std::path::Path;
 
+/// Marker phrase identifying the BioType type-admission bail (issue
+/// #1265). The repair loop recognizes this bail by the marker and routes it
+/// through the verified-repair machinery; the eval harness greps the phrase
+/// too, so the wording is a contract: do not reword it.
+pub(crate) const TYPE_ADMISSION_MARKER: &str = "declared biological type contracts are violated";
+
 /// The shared pre-DAG gate `run` and `dry-run` both apply (issue #142 H1,
 /// #112): a typo'd `{config.*}` key or an unknown `--module` must abort
 /// before any file is touched, and the DAG builds with the same
@@ -39,9 +45,7 @@ pub(crate) fn build_dag_and_targets(
             .map(ToString::to_string)
             .collect::<Vec<_>>()
             .join("\n  ");
-        anyhow::bail!(
-            "declared biological type contracts are violated — fix before running:\n  {findings}"
-        );
+        anyhow::bail!("{TYPE_ADMISSION_MARKER} — fix before running:\n  {findings}");
     }
 
     // --module partial runs (issue #112 elasticity): each module name
@@ -363,6 +367,49 @@ mod tests {
         assert!(message.contains("biological type contracts"), "{message}");
         assert!(message.contains("TYPE-001"), "{message}");
         assert!(message.contains("TYPE-003"), "{message}");
+    }
+
+    /// Issue #1265: the type-admission bail carries the stable marker the
+    /// repair loop keys on, so the seam can recognize it without re-deriving
+    /// the gate. If the marker is reworded here the admission-repair path
+    /// silently stops engaging.
+    #[test]
+    fn type_admission_bail_carries_the_repair_marker() {
+        let config = WorkflowConfig::parse(
+            r#"
+            [workflow]
+            name = "type_gate_marker"
+
+            [types.raw_sam]
+            format = "sam"
+
+            [types.indexed_bam]
+            format = "bam"
+            index = "bai"
+
+            [[rules]]
+            name = "align"
+            output = ["out.sam"]
+            shell = "touch out.sam"
+            [rules.types]
+            outputs = { default = "raw_sam" }
+
+            [[rules]]
+            name = "call"
+            input = ["out.sam"]
+            output = ["calls.vcf"]
+            shell = "touch calls.vcf"
+            [rules.types]
+            inputs = { default = "indexed_bam" }
+            "#,
+        )
+        .unwrap();
+
+        let err = build_dag_and_targets(&config, Vec::new(), &[]).unwrap_err();
+        assert!(
+            err.to_string().contains(TYPE_ADMISSION_MARKER),
+            "the type-gate bail must carry the repair marker: {err}"
+        );
     }
 
     #[test]

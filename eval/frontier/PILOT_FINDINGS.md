@@ -351,9 +351,12 @@ carried no fence` → `REPAIR_APPLIED session_id=…` → `REPAIR_RERUN_SUCCEEDE
 failures of the loop** (per-case WHY in the JSON):
 
 - 4 BioTypes faults abort at the type-admission gate BEFORE any rule
-  executes, so the rule-failure recovery path is never reached
-  (`admission_abort`). Extending repair to the admission gate is future
-  work, tracked where the loop itself is.
+  executes (`admission_abort`). That gate was OUTSIDE the recovery loop
+  when these rounds ran; issue #1265 routes the type-admission bail
+  through the same verified-repair machinery (diagnose → authorized patch
+  → in-process re-admission), so the `admission_abort` class is now
+  repair-eligible. This campaign has not been re-measured against a
+  binary carrying #1265 — the numbers above are the pre-#1265 baseline.
 - 3 SCI preflight findings are advisory by design (warn, never abort):
   the seeded workflow runs successfully, so no runtime fault exists to
   repair.

@@ -667,6 +667,12 @@ When a workflow fails, the AI diagnoses the error and proposes a fix:
 oxo-flow run workflow.oxoflow --ai-recover
 ```
 
+The preflight BioType type-admission abort is covered as well (issue
+#1265): when the gate rejects a workflow before any rule runs, that bail is
+routed through the same loop — diagnose, authorized patch, then an
+in-process re-admission that clears only once the patched workflow passes
+the type gate (no subprocess rerun, because nothing has executed yet).
+
 **Recovery flow:**
 
 1. Rule fails → capture error signature
