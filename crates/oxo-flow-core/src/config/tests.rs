@@ -1175,6 +1175,55 @@ shell = "true"
     );
 }
 
+/// Issue #1285 review P2: a pinned module's OWN nested LOCAL include must be
+/// containment-checked against the pinned checkout, not the host workflow
+/// root. The module file lives under the module cache, so a legitimate
+/// sibling local include inside the same checkout would otherwise be refused
+/// "escapes the workflow directory". The per-branch containment root must be
+/// the checkout for the repo branch while the local branch keeps host root.
+#[test]
+fn resolve_includes_repo_module_local_sibling_is_accepted() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo_src");
+    std::fs::create_dir_all(repo.join("sub")).unwrap();
+    let sibling = "[workflow]\nname = \"sibling\"\nversion = \"1.0.0\"\n\n\
+[[rules]]\nname = \"sibling_rule\"\noutput = [\"sibling.txt\"]\nshell = \"true\"\n";
+    std::fs::write(repo.join("sub/sibling.oxoflow"), sibling).unwrap();
+    let wrapper = "[workflow]\nname = \"wrapper\"\nversion = \"1.0.0\"\n\n\
+[[include]]\npath = \"sub/sibling.oxoflow\"\n\n\
+[[rules]]\nname = \"wrap\"\ninput = [\"sibling.txt\"]\noutput = [\"wrap.txt\"]\nshell = \"true\"\n";
+    std::fs::write(repo.join("wrapper.oxoflow"), wrapper).unwrap();
+    let git = |args: &[&str]| {
+        std::process::Command::new("git")
+            .args(args)
+            .current_dir(&repo)
+            .output()
+            .unwrap();
+    };
+    git(&["init"]);
+    git(&["config", "user.email", "t@t"]);
+    git(&["config", "user.name", "t"]);
+    git(&["add", "."]);
+    git(&["commit", "-m", "mod"]);
+    git(&["tag", "v1.0.0"]);
+
+    let host = format!(
+        "[workflow]\nname = \"host\"\nversion = \"1.0.0\"\n\n\
+[[include]]\nrepo = \"file://{}\"\nref = \"v1.0.0\"\npath = \"wrapper.oxoflow\"\n\n\
+[[rules]]\nname = \"use\"\ninput = [\"wrap.txt\"]\noutput = [\"use.txt\"]\nshell = \"true\"\n",
+        repo.display()
+    );
+    let wf = dir.path().join("host.oxoflow");
+    std::fs::write(&wf, host).unwrap();
+
+    let config = WorkflowConfig::from_file(&wf)
+        .expect("a pinned module's sibling local include must be accepted");
+    assert!(
+        config.rules.iter().any(|r| r.name == "sibling_rule"),
+        "the sibling local include inside the checkout must merge its rules"
+    );
+}
+
 #[test]
 fn resolve_includes_merge_sample_groups() {
     let dir = tempfile::tempdir().unwrap();

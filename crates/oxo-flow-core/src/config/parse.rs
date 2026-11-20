@@ -530,7 +530,7 @@ impl WorkflowConfig {
         }
         let includes = std::mem::take(&mut self.includes);
         for inc in &includes {
-            let (content, inc_base_dir) = if let Some(repo) = &inc.repo {
+            let (content, inc_base_dir, next_root) = if let Some(repo) = &inc.repo {
                 // Pinned git include (issue #112): clone into the module
                 // cache (keyed repo@ref), then resolve `path` inside the
                 // checkout. ensure_pinned clones on a cache miss (healing
@@ -620,7 +620,13 @@ impl WorkflowConfig {
                     );
                 }
                 let next_base = inc_path.parent().unwrap_or(&cache_dir).to_path_buf();
-                (text, next_base)
+                // Containment root for this module's OWN nested local
+                // includes is the pinned checkout (`cache_dir`), not the host
+                // workflow root: the module file lives under the module cache,
+                // so containment-checks against the host root would falsely
+                // refuse a legitimate sibling `path` inside the checkout
+                // (issue #1285 review P2).
+                (text, next_base, cache_dir.clone())
             } else if inc.path.starts_with("http://") || inc.path.starts_with("https://") {
                 return Err(OxoFlowError::Parse {
                     path: PathBuf::from(&inc.path),
@@ -671,7 +677,7 @@ impl WorkflowConfig {
                     message: format!("failed to read include '{}': {}", inc.path, e),
                 })?;
                 let next_base = inc_path.parent().unwrap_or(base_dir).to_path_buf();
-                (text, next_base)
+                (text, next_base, root_dir.to_path_buf())
             };
 
             let inc_error = |message: String| OxoFlowError::Parse {
@@ -693,10 +699,11 @@ impl WorkflowConfig {
             inc_config.extract_declarative_config()?;
 
             // Recursively resolve nested includes. `base_dir` is rebased to
-            // the including module's directory for path joining, but
-            // `root_dir` stays the workflow root so containment is checked
-            // against the whole tree (issue #1285 review P2-a).
-            inc_config.resolve_includes_with_depth(&inc_base_dir, root_dir, depth + 1)?;
+            // the including module's directory for path joining, while
+            // `next_root` is the per-branch containment root: the host
+            // workflow root for a local include, the pinned checkout for a
+            // repo include (issue #1285 review P2-a/P2).
+            inc_config.resolve_includes_with_depth(&inc_base_dir, &next_root, depth + 1)?;
             // Nested contracts merge first (their provenance indices shift
             // by the host's current contract count).
             let offset = self.include_contracts.len();
