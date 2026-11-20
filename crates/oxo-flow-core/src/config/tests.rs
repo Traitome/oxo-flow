@@ -993,6 +993,188 @@ fn resolve_includes_rejects_symlink_escape() {
     );
 }
 
+/// Issue #1285 review P2-a: containment is against the WORKFLOW ROOT, not
+/// the including module's own directory. A module under a subdir including an
+/// in-tree file via `../` must be ACCEPTED (a regression on the first cut of
+/// the gate — legit nested `..` was refused), while one that escapes the
+/// workflow root must still be REFUSED.
+#[test]
+fn resolve_includes_nested_in_tree_parent_accepted_but_escape_refused() {
+    let workdir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(workdir.path().join("sub")).unwrap();
+    // A real module at the workflow root.
+    std::fs::write(
+        workdir.path().join("legit.oxoflow"),
+        r#"[workflow]
+name = "legit"
+version = "1.0.0"
+
+[[rules]]
+name = "legit_rule"
+output = ["legit.txt"]
+shell = "true"
+"#,
+    )
+    .unwrap();
+    // A module under `sub/` that includes the in-tree root module via `../`.
+    // Target IS inside the workflow tree, so this must resolve.
+    std::fs::write(
+        workdir.path().join("sub/mod2.oxoflow"),
+        r#"[workflow]
+name = "mod2"
+version = "1.0.0"
+
+[[include]]
+path = "../legit.oxoflow"
+
+[[rules]]
+name = "mod2_rule"
+output = ["mod2.txt"]
+shell = "true"
+"#,
+    )
+    .unwrap();
+
+    let host = r#"
+        [workflow]
+        name = "host"
+
+        [[include]]
+        path = "sub/mod2.oxoflow"
+    "#;
+    let mut config: WorkflowConfig = toml::from_str(host).unwrap();
+    config
+        .resolve_includes(workdir.path())
+        .expect("an in-tree nested `../` include must be accepted");
+    assert!(
+        config.rules.iter().any(|r| r.name == "legit_rule"),
+        "the in-tree parent module's rules must merge: {:?}",
+        config.rules.iter().map(|r| &r.name).collect::<Vec<_>>()
+    );
+
+    // Now the escape case: a nested module reaching ABOVE the workflow root.
+    let root = tempfile::tempdir().unwrap();
+    let workdir2 = root.path().join("wf");
+    std::fs::create_dir_all(workdir2.join("sub")).unwrap();
+    std::fs::write(
+        root.path().join("outside.oxoflow"),
+        "[workflow]\nname = \"outside\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        workdir2.join("sub/mod3.oxoflow"),
+        r#"[workflow]
+name = "mod3"
+version = "1.0.0"
+
+[[include]]
+path = "../../outside.oxoflow"
+"#,
+    )
+    .unwrap();
+    let host2 = r#"
+        [workflow]
+        name = "host2"
+
+        [[include]]
+        path = "sub/mod3.oxoflow"
+    "#;
+    let mut config2: WorkflowConfig = toml::from_str(host2).unwrap();
+    let err = config2
+        .resolve_includes(&workdir2)
+        .expect_err("a nested include escaping the workflow root must be refused");
+    assert!(
+        err.to_string().contains("escapes the workflow directory"),
+        "{err}"
+    );
+}
+
+/// Issue #1285 review P2-b: the path-alias containment applies to repo
+/// includes too. A pinned module whose `path` aliases out of the module
+/// cache must be REFUSED, never silently read. Uses a pinned local `file://`
+/// repo (network-free) whose `path` is an absolute alias to a real, readable
+/// file outside the checkout — join semantics replace the checkout base with
+/// the absolute path, so absent the gate the module silently reads and merges
+/// a file it must not reach.
+#[test]
+fn resolve_includes_repo_path_escaping_cache_is_refused() {
+    let outside = tempfile::tempdir().unwrap();
+    let escaped = outside.path().join("escaped.oxoflow");
+    std::fs::write(
+        &escaped,
+        r#"[workflow]
+name = "escaped"
+version = "1.0.0"
+
+[[rules]]
+name = "escaped_rule"
+output = ["escaped.txt"]
+shell = "true"
+"#,
+    )
+    .unwrap();
+
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo_src");
+    std::fs::create_dir_all(&repo).unwrap();
+    std::fs::write(
+        repo.join("real.oxoflow"),
+        r#"[workflow]
+name = "real"
+version = "1.0.0"
+
+[[rules]]
+name = "real_rule"
+output = ["real.txt"]
+shell = "true"
+"#,
+    )
+    .unwrap();
+    let git = |args: &[&str]| {
+        std::process::Command::new("git")
+            .args(args)
+            .current_dir(&repo)
+            .output()
+            .unwrap();
+    };
+    git(&["init"]);
+    git(&["config", "user.email", "t@t"]);
+    git(&["config", "user.name", "t"]);
+    git(&["add", "real.oxoflow"]);
+    git(&["commit", "-m", "real"]);
+    git(&["tag", "v1.0.0"]);
+
+    // `path` is an absolute alias — it must not read the out-of-cache file.
+    let host = format!(
+        r#"[workflow]
+name = "host_escape"
+version = "1.0.0"
+
+[[include]]
+repo = "file://{}"
+ref = "v1.0.0"
+path = "{}"
+
+[[rules]]
+name = "use_escape"
+output = ["u.txt"]
+shell = "true"
+"#,
+        repo.display(),
+        escaped.display()
+    );
+    let wf = dir.path().join("host_escape.oxoflow");
+    std::fs::write(&wf, host).unwrap();
+
+    let err = WorkflowConfig::from_file(&wf)
+        .expect_err("a repo `path` escaping the module cache must be refused");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("escapes the module cache"),
+        "expected the cache-escape refusal, got: {msg}"
+    );
+}
+
 #[test]
 fn resolve_includes_merge_sample_groups() {
     let dir = tempfile::tempdir().unwrap();

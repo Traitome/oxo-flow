@@ -96,10 +96,17 @@ Local path endpoints are **fail-closed**:
 - An include that declares `repo` but omits `ref` is refused ("pin the module
   version") — an unpinned module is mutable content, the same hazard as a raw
   URL.
-- A local `path` is canonicalized and required to stay inside the directory
-  containing the workflow. `..` segments, absolute paths, and symlinks that
-  point outside that directory are refused. A module file cannot silently read
-  a sibling tree (or the host's secrets) through a path alias.
+- A local `path` is canonicalized and required to stay inside the workflow
+  root (the directory containing the workflow — the include base of the host
+  file, not the including module's own subdirectory). `..` segments, absolute
+  paths, and symlinks that point outside that directory are refused. A
+  legitimate in-tree nested `../` include is still accepted; only an alias
+  that escapes the whole workflow root is refused. A module file cannot
+  silently read a sibling tree (or the host's secrets) through a path alias.
+- The same containment governs `repo` + `path` includes: the resolved
+  repository-relative `path` is canonicalized and required to stay inside the
+  pinned module cache checkout, so a `..` (or absolute) alias cannot read a
+  file outside the module cache.
 - A self-including or mutually-including cycle is refused at the include depth
   cap with a "circular includes" error.
 
