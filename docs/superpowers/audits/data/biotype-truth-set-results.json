@@ -55,10 +55,11 @@
     {"case": "examples/gallery/07_wgs_germline.oxoflow", "expected": "accept", "actual": "accept", "verdict_correct": "yes", "expected_codes": "-", "actual_codes": "-", "codes_correct": "yes", "note": "real repo example, untyped"},
     {"case": "examples/gallery/08_multiomics_integration.oxoflow", "expected": "accept", "actual": "accept", "verdict_correct": "yes", "expected_codes": "-", "actual_codes": "-", "codes_correct": "yes", "note": "real repo example, untyped"},
     {"case": "examples/gallery/14_paired_experiment_control.oxoflow", "expected": "accept", "actual": "accept", "verdict_correct": "yes", "expected_codes": "-", "actual_codes": "-", "codes_correct": "yes", "note": "real repo example, untyped"},
-    {"case": "examples/gallery/16_16s_qiime2_amplicon.oxoflow", "expected": "accept", "actual": "accept", "verdict_correct": "yes", "expected_codes": "-", "actual_codes": "-", "codes_correct": "yes", "note": "real repo example, untyped"}
+    {"case": "examples/gallery/16_16s_qiime2_amplicon.oxoflow", "expected": "accept", "actual": "accept", "verdict_correct": "yes", "expected_codes": "-", "actual_codes": "-", "codes_correct": "yes", "note": "real repo example, untyped"},
+    {"case": "examples/gallery/17_typed_variant_calling.oxoflow", "expected": "accept", "actual": "accept", "verdict_correct": "yes", "expected_codes": "-", "actual_codes": "-", "codes_correct": "yes", "note": "real repo example, TYPED [types.*]/[rules.types] contracts (#1272)"}
   ],
-  "confusion_matrix": {"true_accept": 31, "false_accept": 0, "true_reject": 22, "false_reject": 0},
-  "codes_correct": 53,
+  "confusion_matrix": {"true_accept": 32, "false_accept": 0, "true_reject": 22, "false_reject": 0},
+  "codes_correct": 54,
   "codes_fail": 0,
-  "cases_total": 53
+  "cases_total": 54
 }

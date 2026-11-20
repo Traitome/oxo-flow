@@ -365,8 +365,15 @@ Reported with its exclusions, as the exit gate requires:
   a type contributed across an `[[include]]` boundary (`b31`). Only `[ai]`
   remains undriven — it is orthogonal to the type checker and does not create
   typed edges.
-- **Still no `[types.*]` usage in the repo.** The typed-correctness evidence
-  rests entirely on hand-authored cases, not on real typed pipelines.
+- **~~Still no `[types.*]` usage in the repo.~~** **Closed (2026-11-20, #1272).**
+  A real, complete, runnable gallery pipeline now exists with a
+  `[types.*]` / `[rules.types]` contract on every crossing edge:
+  `examples/gallery/17_typed_variant_calling.oxoflow`. It was accepted by the
+  real admission surface and shown load-bearing (a one-sided edit fails
+  `TYPE-001`); see [`typed-pipeline-evidence-2026-11-20.md`](typed-pipeline-evidence-2026-11-20.md).
+  The full-case run *below* still rests on hand-authored cases for breadth; that
+  addendum closes only this "no real typed pipeline" clause, not the breadth
+  boundary.
 - **Single arm, single toolchain** (macOS arm64, rustc 1.98.0). No
   cross-platform or cross-version contrast intended or performed.
 - **Not the governed campaign.** `τ_FA` remains UNDECIDED (PR-06 §C1), so even

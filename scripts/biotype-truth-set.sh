@@ -3,7 +3,7 @@
 # validation surface and print a 2x2 confusion matrix plus a diagnostic-code
 # cross-check (#1262, broadened by #1163).
 #
-# Truth set (53 cases):
+# Truth set (54 cases):
 #   * 46 typed/adversarial cases under tests/truthset/biotype/cases/
 #     (t01..t06 hand-authored adversarial edges modelled on the Nextflow/
 #      Snakemake import-fixture format edges — only t01/t06 track edges
@@ -15,8 +15,9 @@
 #      parquet/tsv; b29..b30 drive a transform.* scatter/combine GENERATED typed
 #      edge; b31 drives a type contributed across an [[include]] boundary — its
 #      included fixture incmod_grch38.oxoflow has no EXPECT row of its own).
-#   * 7 real repository .oxoflow files under examples/gallery/ that were
-#     NOT written for the checker (all untyped, expected accept).
+#   * 8 real repository .oxoflow files under examples/gallery/ that were
+#     NOT written for the checker (7 untyped + 17_typed_variant_calling, the
+#     real typed pipeline added by #1272; all expected accept).
 #
 # Every typed case carries its pre-registered expected verdict in a header
 # comment; the EXPECT table below is the mechanical source of truth for the
@@ -116,6 +117,7 @@ examples/gallery/07_wgs_germline.oxoflow	accept	-	real repo example, untyped
 examples/gallery/08_multiomics_integration.oxoflow	accept	-	real repo example, untyped
 examples/gallery/14_paired_experiment_control.oxoflow	accept	-	real repo example, untyped
 examples/gallery/16_16s_qiime2_amplicon.oxoflow	accept	-	real repo example, untyped
+examples/gallery/17_typed_variant_calling.oxoflow	accept	-	real repo example, TYPED [types.*]/[rules.types] contracts (#1272)
 TABLE
 
 if [[ -n "$JSON_OUT" ]]; then

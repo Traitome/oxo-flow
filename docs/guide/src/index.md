@@ -115,7 +115,7 @@ Start with the **Tutorials** in order:
 
 ### If you want to learn by example
 
-Explore the **[Workflow Gallery](./gallery/index.md)** — 16 curated workflows from hello-world to multi-omics integration and applied study designs, each with validation output, DAG visualizations, and scientific context:
+Explore the **[Workflow Gallery](./gallery/index.md)** — 17 curated workflows from hello-world to multi-omics integration and applied study designs, each with validation output, DAG visualizations, and scientific context:
 
 1. [Hello World](./gallery/hello-world.md) ⭐ — Minimal rule structure
 2. [File Pipeline](./gallery/file-pipeline.md) ⭐⭐ — Multi-rule dependencies
@@ -133,6 +133,7 @@ Explore the **[Workflow Gallery](./gallery/index.md)** — 16 curated workflows 
 14. [Paired Experiment-Control](./gallery/paired-experiment-control.md) ⭐⭐⭐⭐⭐ — Single-pair somatic calling
 15. [Paired Experiment-Control (Pairs)](./gallery/paired-experiment-control-pairs.md) ⭐⭐⭐⭐⭐ — `[[pairs]]`-scaled somatic calling
 16. [16S Amplicon (QIIME2)](./gallery/16s-qiime2.md) ⭐⭐⭐⭐ — Amplicon denoising and diversity
+17. [Typed Variant Calling](./gallery/typed-variant-calling.md) ⭐⭐⭐⭐ — `[types.*]` contracts on every crossing edge
 
 ### If you need to accomplish a specific task
 
