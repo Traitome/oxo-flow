@@ -330,8 +330,12 @@ Required exit evidence:
 A typed consumer can be connected to an undeclared producer without a
 diagnostic. A required reference build is compared only when both sides
 declare one, so an absent producer build passes. Declared `attributes` are
-never compared. File-header introspection has a second compatibility
-implementation that has already diverged from DAG subtyping.
+never compared. File-header introspection once had a second compatibility
+implementation that had already diverged from DAG subtyping; that divergence is
+now removed — `IntrospectedBioType::satisfies_spec` projects the observed
+header onto a `BioTypeSpec` snapshot and delegates to
+`BioTypeSpec::is_subtype_of` (`crates/oxo-flow-core/src/types/inspect.rs:116-117`,
+issue #1118), so one lattice governs both call sites.
 
 Evidence:
 
@@ -368,9 +372,9 @@ Required exit evidence:
 
 **Severity**: P1
 
-**Maturity**: Partial (2026-11-18) — result-pull failure and archive extraction safety are fixed; post-pull declared-output verification and restart-safe cancellation remain open
+**Maturity**: Partial (2026-11-18) — result-pull failure, archive extraction safety, and restart-safe cancellation are fixed; post-pull declared-output verification remains open
 
-A failed result pull used to be logged while the remote exit code was still used to finalize the run. That is fixed (issue #1112): when the pull fails the run is failed through the shared non-success path (`mark_failed`) with the pull error as its reason, and the run row records the reason in `artifacts_incomplete` so downstream consumers can distinguish "ran and succeeded" from "raced a broken transfer". Archive extraction no longer trusts the stream: the remote pull and bundle verification both go through `oxo-flow-core::archive::extract_tar_requiring`, which rejects absolute/`..` member paths and link targets that are absolute or contain any `..` component (a `..` can escape through a symlinked segment, so lexical cancellation is not accepted), re-verifies every member on disk, and requires `execution.log` + `.exit-code` plus a run-id completion record that the wrapper tars **after** the result tree — a truncated stream cannot carry it (#1189). The pull does not re-derive the run's expanded output list locally, so declared-output existence after the pull still rests on the remote engine's exit-0 contract; that remains the open half of CL-04. Cancellation still relies on an in-memory registry and wrapper-only process targeting.
+A failed result pull used to be logged while the remote exit code was still used to finalize the run. That is fixed (issue #1112): when the pull fails the run is failed through the shared non-success path (`mark_failed`) with the pull error as its reason, and the run row records the reason in `artifacts_incomplete` so downstream consumers can distinguish "ran and succeeded" from "raced a broken transfer". Archive extraction no longer trusts the stream: the remote pull and bundle verification both go through `oxo-flow-core::archive::extract_tar_requiring`, which rejects absolute/`..` member paths and link targets that are absolute or contain any `..` component (a `..` can escape through a symlinked segment, so lexical cancellation is not accepted), re-verifies every member on disk, and requires `execution.log` + `.exit-code` plus a run-id completion record that the wrapper tars **after** the result tree — a truncated stream cannot carry it (#1189). The pull does not re-derive the run's expanded output list locally, so declared-output existence after the pull still rests on the remote engine's exit-0 contract; that remains the open half of CL-04. Cancellation resolves its target from the persisted `run.cluster_id` row first, so a restart with an empty in-memory registry still routes the cancel to the right cluster (`remote_cluster_for_cancel`, `crates/oxo-flow-web/src/domains/execution/handlers.rs`); the in-memory registry is consulted only as a fast path, and a job that cannot be confirmed dead is reported as an `unresolved_jobs` entry rather than dropped (issue #1257 / #1267).
 
 Evidence:
 
@@ -382,7 +386,7 @@ Required exit evidence:
 
 - Pull and extraction integrity checks must pass before a run can become `completed`. [PARTIAL — a failed pull cannot finalize as `completed` (#1112); extraction rejects traversal and a truncated stream (run-id completion record tarred after the tree, `execution.log`, `.exit-code`) before the finalize decision (#1189). Declared output paths are not re-derived locally: if the remote engine itself exits 0 without producing a declared output, the pull cannot detect it, so CL-04 stays Partial.]
 - Malicious path traversal in an archive is rejected. [DONE (#1189) — `../escape.txt`, absolute members, and link targets that are absolute or contain any `..` component (including the `x -> .` + `y -> x/..` symlink-chain escape and chained `a3 -> a2/..` variants) fail extraction with the member named; tests `archive::tests::parent_dir_member_is_rejected_and_nothing_is_written_outside`, `absolute_member_is_rejected_instead_of_rewritten`, `escaping_symlink_is_rejected_and_never_created`, `escaping_hard_link_is_rejected`, `symlink_chain_through_dotdot_is_rejected`, `chained_symlink_through_dotdot_is_rejected`, `link_target_with_dotdot_is_rejected_even_when_lexically_inside`, `result_extraction_rejects_parent_dir_members`, `bundle_with_parent_dir_member_is_rejected`, `bundle_with_absolute_member_is_rejected`, `bundle_with_escaping_symlink_is_rejected`.]
-- Restart-safe cancellation terminates the remote process tree or reports the exact unresolved jobs. [OPEN — not addressed by #1112 or #1189.]
+- Restart-safe cancellation terminates the remote process tree or reports the exact unresolved jobs. [DONE (#1257/#1267) — a restart with an empty in-memory registry routes cancel to the persisted `cluster_id`; a job that cannot be confirmed dead is returned as `unresolved_jobs` (`run_id`/`cluster_id`/`reason`) rather than dropped; test `process_control_integration::cancel_targets_persisted_cluster_after_registry_restart`.]
 
 ### RB-06: Scheduler and cluster outcomes are not scientifically reliable
 
@@ -431,7 +435,7 @@ Required exit evidence:
 
 **Severity**: P1
 
-**Maturity**: Partial (2026-11-18) - resume no longer fabricates `running` without a live process group and pause/resume roll back the freeze when persistence fails (issue #1111); monotonic compare-and-set transitions and cancel-versus-completion race testing remain open
+**Maturity**: Partial (2026-11-18) - resume no longer fabricates `running` without a live process group and pause/resume roll back the freeze when persistence fails (issue #1111); monotonic compare-and-set transitions and the cancel-versus-completion race are fixed and covered by compare-and-set tests (#1256/#1260).
 
 Cancel used to write a terminal row before signaling, risking an overwrite of a racing completion; pause sends `SIGSTOP` before a fallible database write; resume could write `running` when no process group existed.
 
@@ -661,7 +665,7 @@ Required exit evidence:
   field (AWS: job-definition `containerProperties.secrets`; GCP: submission-time
   `secretVariables` needs the operator's project), so the operator-side mapping is documented and
   the reference fails closed rather than leaking. Not yet proven by a live campaign.]
-- Artifact inspection, restart, and cancellation tests prove no secret is recoverable. [OPEN.]
+- Artifact inspection, restart, and cancellation tests prove no secret is recoverable. [DONE (#1266) — one whole-tree scanner reads every file (incl. binary) under the run dir; tests `inspected_run_tree_holds_no_recoverable_secret`, `restarted_run_tree_sweeps_seeded_secret_and_checkpoint`, `cancelled_run_tree_holds_no_recoverable_secret`. Note the docker literal-bind-mount caveat (#1177) and the live CL-05/#1158 campaign remain out of scope.]
 
 ### RB-13: AI tool and MCP trust boundaries fail open
 
