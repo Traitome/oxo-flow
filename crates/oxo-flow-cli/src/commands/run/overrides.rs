@@ -93,133 +93,6 @@ pub(crate) fn dry_run_shared_flags() -> &'static std::collections::BTreeSet<Stri
 /// still gets a migration hint.
 pub(crate) const REMOVED_RUN_FLAGS: &[(&str, &str)] = &[("sample", "--samples")];
 
-/// Validate a config value against its ConfigDef declaration.
-///
-/// `from_cli` distinguishes an EXPLICIT user-provided value from a
-/// workflow-declared default: an empty string from the CLI is a legitimate
-/// derive-if-empty override (issue #430) and skips the path checks, while
-/// defaults stay strict.
-pub(crate) fn validate_config_value(
-    name: &str,
-    value: &str,
-    def: &oxo_flow_core::config::ConfigDef,
-    from_cli: bool,
-) -> anyhow::Result<()> {
-    // ── choices ──
-    if let Some(ref choices) = def.choices
-        && !choices.iter().any(|c| c == value)
-    {
-        anyhow::bail!(
-            "invalid value '{}' for config '{}'. Allowed: [{}]\n  {}",
-            value,
-            name,
-            choices.join(", "),
-            def.help.as_deref().unwrap_or("")
-        );
-    }
-
-    // ── type validation ──
-    if let Some(ref type_) = def.type_ {
-        match type_.as_str() {
-            "int" => {
-                value.parse::<i64>().map_err(|_| {
-                    anyhow::anyhow!(
-                        "config '{}' expects an integer, got '{}'\n  {}",
-                        name,
-                        value,
-                        def.help.as_deref().unwrap_or("")
-                    )
-                })?;
-            }
-            "float" => {
-                value.parse::<f64>().map_err(|_| {
-                    anyhow::anyhow!(
-                        "config '{}' expects a float, got '{}'\n  {}",
-                        name,
-                        value,
-                        def.help.as_deref().unwrap_or("")
-                    )
-                })?;
-            }
-            "bool" => {
-                if value != "true" && value != "false" {
-                    anyhow::bail!(
-                        "config '{}' expects a boolean (true/false), got '{}'\n  {}",
-                        name,
-                        value,
-                        def.help.as_deref().unwrap_or("")
-                    );
-                }
-            }
-            "path" => {
-                // issue #430: an explicitly-passed EMPTY value is a
-                // legitimate override — pipelines branch on
-                // `[ -n "{config.x}" ]` for derive-if-empty behavior, so
-                // `--gene_bed ""` selects "derive from fasta+gtf" and must
-                // bypass both the empty-path check and `must_exist` (there
-                // is no file to exist yet). Only DEFAULTS keep the strict
-                // check: a workflow author's default must point at a real
-                // file.
-                if value.is_empty() && from_cli {
-                    return Ok(());
-                }
-                if value.is_empty() {
-                    anyhow::bail!(
-                        "config '{}' expects a path, got empty string\n  {}",
-                        name,
-                        def.help.as_deref().unwrap_or("")
-                    );
-                }
-                // must_exist check
-                if def.must_exist {
-                    let p = std::path::Path::new(value);
-                    if !p.exists() {
-                        anyhow::bail!(
-                            "config '{}' path does not exist: '{}'\n  {}",
-                            name,
-                            value,
-                            def.help.as_deref().unwrap_or("")
-                        );
-                    }
-                }
-            }
-            _ => { /* "string" or unknown — no validation */ }
-        }
-    }
-
-    // ── range validation (requires type = int or float) ──
-    if let Some(ref range) = def.range
-        && let Some((min_str, max_str)) = range.split_once("..")
-    {
-        let min: f64 = min_str.trim().parse().map_err(|_| {
-            anyhow::anyhow!("invalid range min '{}' for config '{}'", min_str, name)
-        })?;
-        let max: f64 = max_str.trim().parse().map_err(|_| {
-            anyhow::anyhow!("invalid range max '{}' for config '{}'", max_str, name)
-        })?;
-        let val: f64 = value.parse().map_err(|_| {
-            anyhow::anyhow!(
-                "config '{}' has range '{range}' but value '{}' is not numeric\n  {}",
-                name,
-                value,
-                def.help.as_deref().unwrap_or("")
-            )
-        })?;
-        if val < min || val > max {
-            anyhow::bail!(
-                "config '{}' value {} is outside range {}..{}\n  {}",
-                name,
-                val,
-                min,
-                max,
-                def.help.as_deref().unwrap_or("")
-            );
-        }
-    }
-
-    Ok(())
-}
-
 /// Attempt count for a single-shot AI operation in `run`/`dry-run`.
 ///
 /// `--ai-max-retries N` bounds how many times a FAILED AI call is attempted
@@ -434,21 +307,9 @@ pub(crate) fn canonicalize_override_key(
     key: &str,
     declared_config_keys: &std::collections::HashSet<String>,
 ) -> Option<String> {
-    if !key.contains('-') {
-        return None;
-    }
-    let normalized = key.replace('-', "_");
-    if declared_config_keys.contains(&normalized) {
-        return Some(normalized);
-    }
-    let matches: Vec<&String> = declared_config_keys
-        .iter()
-        .filter(|d| d.replace('-', "_") == normalized)
-        .collect();
-    match matches.as_slice() {
-        [only] => Some((*only).clone()),
-        _ => None,
-    }
+    // One implementation, shared with the web admission path (issue #1277,
+    // RB-04) so both resolve a hyphen-spelled override identically.
+    oxo_flow_core::config::canonicalize_override_key(key, declared_config_keys)
 }
 
 /// Apply parsed overrides and the defaults of declarative config entries
@@ -458,51 +319,12 @@ pub(crate) fn apply_cli_overrides(
     config: &mut WorkflowConfig,
     cli_arg_values: &std::collections::HashMap<String, String>,
 ) -> anyhow::Result<()> {
-    for (name, cfg_def) in &config.config_meta {
-        let effective_value = if let Some(val) = cli_arg_values.get(name) {
-            validate_config_value(name, val, cfg_def, true)?;
-            config
-                .config
-                .insert(name.clone(), toml::Value::String(val.clone()));
-            val.clone()
-        } else if let Some(ref default) = cfg_def.default {
-            validate_config_value(name, default, cfg_def, false)?;
-            config
-                .config
-                .entry(name.clone())
-                .or_insert_with(|| toml::Value::String(default.clone()));
-            default.clone()
-        } else if cfg_def.required {
-            let help_suffix = cfg_def
-                .help
-                .as_deref()
-                .map(|h| format!("\n  {h}"))
-                .unwrap_or_default();
-            let display_name = if cfg_def.sensitive {
-                format!("{name} (sensitive)")
-            } else {
-                name.clone()
-            };
-            anyhow::bail!(
-                "required config '{display_name}' not set. Use --{name} <value>{help_suffix}"
-            );
-        } else {
-            continue;
-        };
-        // Mask sensitive values in all non-execution output
-        if cfg_def.sensitive {
-            tracing::info!("config '{}' = **** (sensitive)", name);
-        } else {
-            tracing::debug!("config '{}' = '{}'", name, effective_value);
-        }
-    }
-    // Inject undeclared KEY=VALUE values as {config.xxx} — a CLI override
-    // must win over the workflow's [config] table (issue #62).
-    for (k, v) in cli_arg_values {
-        config
-            .config
-            .insert(k.clone(), toml::Value::String(v.clone()));
-    }
+    // Delegates to the shared core implementation (issue #1277, RB-04) so the
+    // CLI and the web admission path resolve overrides through the SAME code
+    // and build an identical resolved DAG; the retired-key warning stays a
+    // CLI-only, non-fatal diagnostic.
+    oxo_flow_core::config::apply_config_overrides(config, cli_arg_values)
+        .map_err(anyhow::Error::msg)?;
     warn_retired_cache_aging_key(config);
     Ok(())
 }

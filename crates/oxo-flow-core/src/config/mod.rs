@@ -4,6 +4,7 @@
 mod expand;
 mod known_keys;
 mod model;
+mod overrides;
 mod parse;
 mod references;
 mod samples;
@@ -18,6 +19,10 @@ pub use known_keys::edit_distance;
 pub use model::*;
 pub(crate) use model::{
     expand_command_text_fields, expand_rule_patterns, expand_rule_shell, value_instance_suffix,
+};
+pub use overrides::{
+    apply_config_overrides, canonicalize_override_key, parse_config_override_pairs,
+    validate_config_value,
 };
 pub use parse::resolve_rule_templates;
 

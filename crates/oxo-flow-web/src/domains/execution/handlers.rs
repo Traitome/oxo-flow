@@ -305,6 +305,27 @@ fn validate_config_overrides(
     Ok(overrides)
 }
 
+/// Apply the shape-validated `config_overrides` to a workflow BEFORE the plan
+/// and admission graph are derived from it (issue #1277, audit ledger RB-04).
+///
+/// The CLI's preflight applies overrides BEFORE `validate_workflow_types` and
+/// the DAG build (`crates/oxo-flow-cli/src/commands/run/preflight.rs`); the
+/// web must feed the canonical checker the SAME resolved workflow, or the
+/// same workflow + overrides get evaluated on two different graphs. Parsing
+/// and application go through the shared `oxo-flow-core` helpers
+/// (`parse_config_override_pairs` / `apply_config_overrides`), so a
+/// hyphen-spelled key canonicalizes and a declared key validates exactly as
+/// the CLI does — never a retyped copy.
+fn apply_web_config_overrides(
+    wf: &mut oxo_flow_core::config::WorkflowConfig,
+    entries: &[String],
+) -> Result<(), (StatusCode, Json<ApiError>)> {
+    let declared: std::collections::HashSet<String> = wf.config.keys().cloned().collect();
+    let overrides = oxo_flow_core::config::parse_config_override_pairs(entries, &declared);
+    oxo_flow_core::config::apply_config_overrides(wf, &overrides)
+        .map_err(|e| err(StatusCode::BAD_REQUEST, "RUN_ERROR", e))
+}
+
 #[cfg(test)]
 mod quota_tests {
     use super::*;
@@ -975,12 +996,20 @@ pub async fn create_run(
         })?;
         Some(resolved)
     };
+    // RB-04 (#1277): resolve `config_overrides` HERE, BEFORE the plan (and,
+    // below, the admission graph) is derived — the CLI applies overrides in
+    // its preflight before `validate_workflow_types` and the DAG build, so
+    // web admission must see the identical resolved workflow. `resolved_config`
+    // is cloned so the un-overridden copy is never mutated; the override map
+    // always targets its `[config]` keys.
     let resp = match &resolved_config {
         // Keep the stable TYPE_CONTRACT_VIOLATION code for biological
         // contract violations on the resolved path; everything else is
         // RUN_ERROR (issue #1152 review, LOW).
         Some(resolved) => {
-            service::create_run_from_config(resolved, &config).map_err(|e| match e {
+            let mut resolved = resolved.clone();
+            apply_web_config_overrides(&mut resolved, &validated_overrides)?;
+            service::create_run_from_config(&resolved, &config).map_err(|e| match e {
                 service::CreateRunError::TypeContract(message) => {
                     err(StatusCode::BAD_REQUEST, "TYPE_CONTRACT_VIOLATION", message)
                 }
@@ -989,8 +1018,24 @@ pub async fn create_run(
                 }
             })?
         }
-        None => service::create_run(toml, &config, None)
-            .map_err(|e| err(StatusCode::BAD_REQUEST, "RUN_ERROR", e))?,
+        None => {
+            // Single-file path: keep the legacy string entry point's error
+            // contract — every parse/DAG/type failure collapses to RUN_ERROR
+            // (the resolved-includes path above is the one that distinguishes
+            // TYPE_CONTRACT_VIOLATION; issue #1152 review, LOW). Overrides are
+            // still applied to the parsed workflow BEFORE the plan + checker,
+            // so the un-staged path resolves identically to the CLI too.
+            let mut wf = oxo_flow_core::config::WorkflowConfig::parse(toml)
+                .map_err(|e| err(StatusCode::BAD_REQUEST, "RUN_ERROR", format!("Parse: {e}")))?;
+            apply_web_config_overrides(&mut wf, &validated_overrides)?;
+            service::create_run_from_config(&wf, &config).map_err(|e| {
+                let message = match e {
+                    service::CreateRunError::TypeContract(message)
+                    | service::CreateRunError::Other(message) => message,
+                };
+                err(StatusCode::BAD_REQUEST, "RUN_ERROR", message)
+            })?
+        }
     };
 
     // Serialize the effective workflow (includes merged, extends resolved) so
@@ -1045,7 +1090,7 @@ pub async fn create_run(
         // the single per-request staging above (claim-then-stage: they are
         // copied into the workdir only after the admission claim wins) are
         // what this load resolves.
-        let admission_config = match resolved_config {
+        let mut admission_config = match resolved_config {
             Some(resolved) => Some(resolved),
             None => {
                 let host_config =
@@ -1083,6 +1128,14 @@ pub async fn create_run(
                 }
             }
         };
+        // RB-04 (#1277): the admission graph must be the OVERRIDE-APPLIED
+        // one — the CLI's preflight applies `config_overrides` BEFORE the
+        // DAG build + `validate_workflow_types`, so a typed workflow whose
+        // routing depends on an overridden `{config.*}` value is checked on
+        // the same resolved graph here as it is by the CLI.
+        if let Some(resolved) = admission_config.as_mut() {
+            apply_web_config_overrides(resolved, &validated_overrides)?;
+        }
         // Expand before deriving (AGENTS invariant): included modules may
         // declare their own resources, so the quota charge and the enforced
         // memory ceiling must cover the RESOLVED rule set, not just the host
