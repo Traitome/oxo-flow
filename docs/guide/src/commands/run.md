@@ -1186,6 +1186,31 @@ records nothing, never failing the run). The run report's Provenance
 section lists one row per include. See
 [Workflow Versioning](../reference/versioning.md) for the full model.
 
+### Environment-lock identity in the checkpoint
+
+Every run records a per-rule **environment-lock identity** in the checkpoint
+(`env_lock_identity`, keyed by rule name; issue #1274). It is a self-describing
+`"<kind>|<value>"` string a caller can compare across hosts:
+
+- container backends (`docker`/`singularity`) record the resolved image
+  **digest** (`repo@sha256:…`), never just the tag;
+- env backends (`pixi`/`conda`/`mamba`/`venv`) record a deterministic,
+  key-ordered SHA-256 **lock hash** over the resolved spec files (including the
+  sibling `pixi.lock`) — stable across hosts;
+- the `system` backend (or a rule with no lockable environment) records the
+  explicit sentinel `system|unavailable`.
+
+When a value cannot be resolved offline (e.g. a container digest the runtime
+cannot report without a pull) it records the explicit sentinel `…|unresolved`
+rather than a fabricated digest. Use
+`oxo_flow_core::env_lock::env_lock_is_resolved(value)` — or read the
+`env_lock_identity` object from `provenance verify --json` — to tell a resolved
+lock from either sentinel. The field is absent when no rule needs it
+(legacy-skip convention). It exists so a cross-architecture comparison can
+**prove or deny** environment-lock equality instead of assuming it; the
+measurement protocol lives in
+`docs/superpowers/audits/cross-arch-provenance-2026-11-19.md` (§7a).
+
 ### Run logs
 
 Every run — and `resume`, which re-enters the same path — archives its own

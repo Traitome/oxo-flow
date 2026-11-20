@@ -3127,6 +3127,15 @@ impl ReportSectionGenerator for ProvenanceGenerator {
                 pairs.push((format!("Include {key}"), sha.clone()));
             }
         }
+        // Environment-lock identity (issue #1274, design bet 4): one row per
+        // rule — the resolved container digest / env lock hash / explicit
+        // sentinel recorded at run start. Two arms of a cross-arch comparison
+        // must share these before any architecture claim can be made.
+        if let Some(identity) = ctx.checkpoint.map(|c| &c.env_lock_identity) {
+            for (rule, value) in identity {
+                pairs.push((format!("Env lock {rule}"), value.clone()));
+            }
+        }
         vec![ReportSection {
             title: "Provenance".into(),
             id: "provenance".into(),
