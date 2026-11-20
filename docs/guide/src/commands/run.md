@@ -1745,7 +1745,13 @@ the config surface.
 ## AI error recovery (`--ai-recover`)
 
 `--ai-recover` turns a rule failure into a bounded diagnose → apply →
-verify loop. AI can also activate implicitly: a workflow with
+verify loop. The BioType type-admission abort is covered too (issue #1265):
+when the preflight gate rejects a workflow (`declared biological type
+contracts are violated …`) before any rule runs, the bail is routed through
+the same loop — diagnose, authorized patch, then an **in-process**
+re-admission that only "clears" once the patched workflow passes the type
+gate (no subprocess rerun, since no rule has executed yet). AI can also
+activate implicitly: a workflow with
 `[ai] enabled = true` runs recovery on failure without the flag. The write
 authorization comes from `[ai] auto_fix` (see
 [workflow-format](../reference/workflow-format.md#ai-ai-companion-settings));

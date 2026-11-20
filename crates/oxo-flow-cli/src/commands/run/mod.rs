@@ -441,14 +441,50 @@ async fn run_command_inner(
     // Runs AFTER expansion so engine-generated rules are covered too, and
     // before any file is touched — a typo'd key must fail the run, never
     // produce literal-placeholder outputs with exit 0.
+    // Clone the plan inputs before the match consumes `target`; the type-gate
+    // repair path (issue #1265) re-derives them in-process after a patch.
+    let target_for_repair = target.clone();
+    let module_for_repair = module.clone();
     let (mut dag, target) = match build_dag_and_targets(&config, target, &module) {
         Ok(pair) => pair,
         // Pre-execution abort: nothing ran, but the summary contract still
-        // holds for --json (issue #142 H6).
-        Err(e) => {
-            json_summary.emit("failed", &RunCounts::default(), vec![]);
-            return Err(e);
-        }
+        // holds for --json (issue #142 H6). The BioType type-admission bail
+        // is the ONE abort routed through the verified-repair loop
+        // (issue #1265); every other bail fails fast byte-for-byte.
+        Err(e) => match repair_admission_abort(
+            &workflow,
+            &e,
+            target_for_repair,
+            module_for_repair,
+            rerun_config_args.clone(),
+            workdir.as_deref(),
+            discovery_fallback,
+            profile.as_deref(),
+            &checkpoint_path,
+            &samples_filter,
+            workdir.as_deref().unwrap_or(&workdir_default),
+            ai_recover,
+            no_ai_recover,
+        )
+        .await
+        {
+            AdmissionRepair::Cleared {
+                config: repaired_config,
+                dag: repaired_dag,
+                target: repaired_target,
+            } => {
+                config = *repaired_config;
+                (*repaired_dag, repaired_target)
+            }
+            AdmissionRepair::NotCleared(err) => {
+                json_summary.emit("failed", &RunCounts::default(), vec![]);
+                return Err(err);
+            }
+            AdmissionRepair::NotApplicable => {
+                json_summary.emit("failed", &RunCounts::default(), vec![]);
+                return Err(e);
+            }
+        },
     };
     // ── Run log + workflow provenance (issue #115 pillar 1) ────────────
     // Every run (and `resume`, which re-enters this function) archives its
