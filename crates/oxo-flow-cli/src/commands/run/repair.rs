@@ -374,6 +374,226 @@ async fn persist_repair_record(
     checkpoint.lock().await.record_repair(record);
 }
 
+/// Outcome of routing the BioType type-admission bail through the repair
+/// loop (issue #1265).
+pub(crate) enum AdmissionRepair {
+    /// The error is not the type-admission bail, no AI provider resolved, or
+    /// no patch was written — the caller keeps the historical fail-fast path
+    /// byte-for-byte.
+    NotApplicable,
+    /// A patch was written but could not be verified (diagnosis /
+    /// authorization / validation failed, or the patched workflow still fails
+    /// the gate). The caller fails the run with this error.
+    NotCleared(anyhow::Error),
+    /// A patch was written and the patched workflow clears the type gate; the
+    /// caller continues the run with the re-derived plan.
+    Cleared {
+        config: Box<WorkflowConfig>,
+        dag: Box<WorkflowDag>,
+        target: Vec<String>,
+    },
+}
+
+/// Pure eligibility gate for [admission repair] (issue #1265): the error must
+/// be the type-admission bail AND AI recovery must be enabled. Extracted so
+/// the "recovery off → unchanged" contract is unit-testable without a live
+/// provider.
+pub(crate) fn admission_repair_enabled(
+    error_message: &str,
+    ai_recover: bool,
+    no_ai_recover: bool,
+    workflow_ai_enabled: bool,
+) -> bool {
+    error_message.contains(TYPE_ADMISSION_MARKER)
+        && !no_ai_recover
+        && (ai_recover || workflow_ai_enabled)
+}
+
+/// Route a BioType type-admission abort (issue #1265) through the SAME
+/// verified-repair machinery the rule-failure path uses (`failure.rs`): the
+/// gate aborts in preflight BEFORE any rule runs, so without this the
+/// `admission_abort` residual is structurally unrecoverable. Only the
+/// `TYPE_ADMISSION_MARKER` bail is eligible.
+///
+/// Unlike the rule-failure path there is no `RerunContext` and no run log yet
+/// (both materialize after this seam), so verification is IN-PROCESS: after a
+/// written patch the workflow is re-parsed and re-entered through
+/// [`build_dag_and_targets`] AT MOST ONCE, and the patch only "clears" when the
+/// patched workflow passes `validate_workflow_types`. Nothing is spawned.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn repair_admission_abort(
+    workflow: &Path,
+    error: &anyhow::Error,
+    target: Vec<String>,
+    module: Vec<String>,
+    config_args: Vec<String>,
+    workdir_flag: Option<&Path>,
+    discovery_fallback: Option<&Path>,
+    profile: Option<&str>,
+    checkpoint_path: &Path,
+    ai_recover: bool,
+    no_ai_recover: bool,
+) -> AdmissionRepair {
+    // Eligibility: only the type-admission bail, and only when AI recovery is
+    // on. With recovery off the caller's fail-fast stays byte-for-byte.
+    let message = error.to_string();
+    if !admission_repair_enabled(
+        &message,
+        ai_recover,
+        no_ai_recover,
+        crate::commands::ai_template::should_use_ai(Some(workflow), false),
+    ) {
+        return AdmissionRepair::NotApplicable;
+    }
+    // No `RerunContext` exists this early, so narrate without a run log; the
+    // repair record persists into a local checkpoint baseline (persist writes
+    // the file, matching the rule-failure path).
+    let checkpoint: Mutex<CheckpointState> = Mutex::new(CheckpointState::default());
+    let run_log: Option<&SharedRunLog> = None;
+
+    let Some(provider) = crate::commands::ai_template::try_resolve_ai(Some(workflow), true) else {
+        return AdmissionRepair::NotApplicable;
+    };
+    // The gate aborts before any rule is named; a stable synthetic sentinel
+    // identifies the abort, and the full diagnostic text is the stderr signal
+    // the diagnosis model reasons over.
+    let rule = "type-admission-gate";
+    let diag =
+        match crate::commands::ai_recover::diagnose_failure(workflow, rule, 1, &message, &provider)
+            .await
+        {
+            Ok(d) => d,
+            Err(e) => return AdmissionRepair::NotCleared(e),
+        };
+    let Some(toml) = diag.modified_toml.as_deref() else {
+        narrate_console_line(format_args!(
+            "  AI fix not auto-applied: the proposal carried no corrected workflow. Review the suggestion manually."
+        ));
+        return AdmissionRepair::NotApplicable;
+    };
+    // Authorization — same layered decision as the rule-failure path.
+    let mode = crate::commands::ai_recover::resolve_auto_fix_mode(workflow);
+    let decision = crate::commands::ai_recover::auto_fix_decision(mode, diag.safe_to_auto_apply);
+    let apply_ready = match decision {
+        crate::commands::ai_recover::AutoFixDecision::ShowOnly(reason) => {
+            narrate_console_line(format_args!(
+                "  AI fix not auto-applied ({reason}): review the suggestion manually."
+            ));
+            false
+        }
+        crate::commands::ai_recover::AutoFixDecision::Prompt => {
+            let interactive = {
+                use std::io::IsTerminal as _;
+                std::io::stdin().is_terminal() && std::io::stderr().is_terminal()
+            };
+            if !interactive {
+                narrate_console_line(format_args!(
+                    "  AI fix not auto-applied: auto_fix = \"ask\" needs confirmation, but this session is not interactive. Review the suggestion manually or set [ai] auto_fix = \"always\" in the workflow file."
+                ));
+                false
+            } else {
+                crate::commands::ai_recover::confirm_auto_fix_blocking()
+            }
+        }
+        crate::commands::ai_recover::AutoFixDecision::Apply => true,
+    };
+    if !apply_ready {
+        return AdmissionRepair::NotApplicable;
+    }
+    // Validation gate: the generated TOML must parse before it is written.
+    if let Err(e) = oxo_flow_core::WorkflowConfig::parse(toml) {
+        narrate_console_line(format_args!(
+            "  AI fix not auto-applied: generated TOML failed validation ({e}). Review the suggestion manually."
+        ));
+        return AdmissionRepair::NotApplicable;
+    }
+    if let Err(e) = crate::commands::ai_recover::apply_fix(workflow, toml, &diag.session_id) {
+        narrate_console_line(format_args!("  Failed to apply AI fix: {e}"));
+        return AdmissionRepair::NotApplicable;
+    }
+    // A patch is now written: emit the repair contract and persist it.
+    narrate_repair_line(&applied_narration(&diag.session_id), run_log);
+    record_repair_applied(&checkpoint, checkpoint_path, &diag.session_id).await;
+
+    // Re-enter AT MOST ONCE, in-process: re-parse the patched workflow and
+    // rebuild the plan. `build_dag_and_targets` re-runs the type gate itself,
+    // so clearing it here IS the verification that `validate_workflow_types`
+    // passes on the patched workflow.
+    let rerun = match rebuild_and_clear(
+        workflow,
+        target,
+        module,
+        config_args,
+        workdir_flag,
+        discovery_fallback,
+        profile,
+    ) {
+        Ok((config, dag, target)) => {
+            let rerun = VerificationRerun {
+                attempted: true,
+                succeeded: true,
+                detail: "patched workflow clears the type-admission gate".into(),
+            };
+            narrate_repair_line(&rerun_narration(&rerun), run_log);
+            record_repair_rerun(&checkpoint, checkpoint_path, &diag.session_id, &rerun).await;
+            narrate_console_line(format_args!(
+                "{} repair verified — patched workflow clears the type gate",
+                "✓".green()
+            ));
+            return AdmissionRepair::Cleared {
+                config: Box::new(config),
+                dag: Box::new(dag),
+                target,
+            };
+        }
+        Err(e) => VerificationRerun {
+            attempted: true,
+            succeeded: false,
+            detail: format!("patched workflow still fails the gate: {e}"),
+        },
+    };
+    narrate_repair_line(&rerun_narration(&rerun), run_log);
+    record_repair_rerun(&checkpoint, checkpoint_path, &diag.session_id, &rerun).await;
+    AdmissionRepair::NotCleared(anyhow::anyhow!(
+        "AI repair wrote a patch but the workflow still fails the type-admission gate:\n  {}",
+        rerun.detail
+    ))
+}
+
+/// Re-derive the plan from a just-patched workflow (issue #1265), mirroring
+/// the pre-seam prep block in `mod.rs`. Returns the rebuilt config, DAG, and
+/// resolved target list, or the gate error when the patch did not clear it.
+#[allow(clippy::too_many_arguments)]
+fn rebuild_and_clear(
+    workflow: &Path,
+    target: Vec<String>,
+    module: Vec<String>,
+    config_args: Vec<String>,
+    workdir_flag: Option<&Path>,
+    discovery_fallback: Option<&Path>,
+    profile: Option<&str>,
+) -> Result<(WorkflowConfig, WorkflowDag, Vec<String>)> {
+    let mut config =
+        WorkflowConfig::from_file_with_discovery_fallback(workflow, discovery_fallback)
+            .with_context(|| format!("failed to parse patched {}", workflow.display()))?;
+    apply_cli_override_phase(&mut config, workflow, config_args, "run")?;
+    if let Some(profile_name) = profile {
+        let workflow_dir = normalize_dots(absolutize(oxo_flow_core::parent_dir(workflow))?);
+        crate::commands::run_preview::merge_profile(&mut config, profile_name, &workflow_dir)?;
+    }
+    config.apply_defaults();
+    // Mirror mod.rs: leaf shells run with cwd = workdir, so an explicit
+    // --workdir makes expansion emit workflow-absolute input paths.
+    if let Some(effective_workdir) = workdir_flag {
+        config.runtime_workdir = Some(normalize_dots(absolutize(effective_workdir)?));
+    }
+    config
+        .expand_wildcards()
+        .context("failed to expand wildcard rules")?;
+    let (dag, target) = build_dag_and_targets(&config, target, &module)?;
+    Ok((config, dag, target))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -715,5 +935,25 @@ mod tests {
         let record = loaded.repair_record.expect("repair record persisted");
         assert_eq!(record.session_id, "sess-b2");
         assert!(record.rerun_succeeded);
+    }
+
+    /// Issue #1265: the type-admission bail is the ONLY abort routed through
+    /// the repair loop, and only when AI recovery is enabled. With recovery
+    /// off the fail-fast is byte-for-byte unchanged.
+    #[test]
+    fn admission_repair_eligibility_matches_the_gate_and_the_recovery_flags() {
+        let gate = format!("{TYPE_ADMISSION_MARKER} — fix before running:\n  TYPE-001 …");
+        // Reachable: type-gate bail + --ai-recover.
+        assert!(admission_repair_enabled(&gate, true, false, false));
+        // Reachable: type-gate bail + `[ai] enabled = true`.
+        assert!(admission_repair_enabled(&gate, false, false, true));
+        // Recovery off (no flag, no [ai]) → unchanged fail-fast.
+        assert!(!admission_repair_enabled(&gate, false, false, false));
+        // --no-ai-recover always wins, even with recovery requested.
+        assert!(!admission_repair_enabled(&gate, true, true, true));
+        // A non-type bail (E005 undefined config var, unknown module, DAG
+        // build) is never routed through repair.
+        let other = "workflow references undefined config variables — fix before running:\n  x";
+        assert!(!admission_repair_enabled(other, true, false, true));
     }
 }
