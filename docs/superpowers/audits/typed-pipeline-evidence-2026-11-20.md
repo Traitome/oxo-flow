@@ -36,7 +36,7 @@ It is a new file. No existing gallery example was mutated, so the
 | arch | `arm64` (Apple silicon) |
 | rustc | `1.98.0 (88d9e12ae 2026-08-18)` |
 | oxo-flow | `0.32.0`, built from the branch worktree |
-| commit (branch HEAD at run) | `e855fa6a71631237d5973041caf95664af23590d` |
+| commit (branch HEAD at run) | `7ce1df5261e2a3740c6f83288f8d8eb65ef151ad` |
 | branch | `research/1272-typed-pipeline` |
 | binary | `target/debug/oxo-flow` (debug build) |
 
@@ -121,11 +121,22 @@ satisfied):
 examples/gallery/17_typed_variant_calling.oxoflow  accept  -  real repo example, TYPED [types.*]/[rules.types] contracts (#1272)
 ```
 
-Re-run at HEAD `e855fa6a`: **26 true-accept / 0 false-accept / 17 true-reject /
+Re-run at HEAD `7ce1df52` (the commit that adds this typed example): **26
+true-accept / 0 false-accept / 17 true-reject /
 0 false-reject**, codes cross-check **43/43**. The only change vs the 42-case
 run is `true-accept 25 → 26` and `cases 42 → 43` — the new typed example, which
 passes on the real admission surface. Machine-readable results regenerated at
 `docs/superpowers/audits/data/biotype-truth-set-results.json`.
+
+Provenance correction (2026-11-20): an earlier draft recorded this run identity
+as `e855fa6a`; that was wrong. The harness stamps its commit field from
+`git rev-parse HEAD`, and at the original measurement the typed example was
+still uncommitted (working-tree only), so `e855fa6a` does not contain
+`examples/gallery/17_typed_variant_calling.oxoflow` and cannot reproduce the
+43-case result. This addendum and the results JSON now pin `7ce1df52`, the
+commit that adds the file, at which the harness was re-run. This is a
+provenance/identity correction only: it changes no verdict and decides no
+threshold, and `tau_FA` remains UNDECIDED.
 
 Because the harness is a *measurement* (exit 0 always), this does not gate CI;
 the example is independently covered by the auto-discovering gallery gates
