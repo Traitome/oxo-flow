@@ -277,3 +277,67 @@ execution path is instrumented and falsifiable, and it reports zero executed.
 | Execution runner (python) | `scripts/import_execution_equivalence_run.py` |
 | Hermetic verdict test | `eval/scripts/test_import_execution_equivalence.py` |
 | Fixtures | enumerated from `scripts/import_equivalence_expectations.py` (`supported`) |
+---
+
+## Addendum — real-world corpus expansion (2026-11-20, issue #1273)
+
+§7 named the exact gap: *"4 supported fixtures is the entire current corpus,
+not a sample of real-world Nextflow/Snakefile code … no nf-core pipeline, no
+large community workflow is in it."* This addendum narrows it by adding **7
+fixtures derived faithfully from published community workflows** (upstream
+cited in each file's header, retrieved 2026-11-20) — not from the repo's own
+hand-written fixtures.
+
+**Mass balance: corpus 18 → 25 fixtures** (2 new accepted, 5 new rejected).
+
+| new fixture | source (upstream) | arm | verdict |
+| :--- | :--- | :--- | :--- |
+| `nextflow/samtools_sort.ok.nf` | nf-core/modules `modules/nf-core/samtools/sort/main.nf` (master) | supported | matched |
+| `snakemake/rseqc_stat.ok.smk` | snakemake-workflows/rna-seq-star-deseq2 `workflow/rules/qc.smk` rule `rseqc_stat` | supported | matched |
+| `nextflow/nfcore_dynamic_conda.err.nf` | nf-core/modules `samtools/faidx/main.nf` (dynamic `conda`) | rejected | importer-rejected |
+| `nextflow/rnaseq_nf_interpolation.err.nf` | nextflow-io/rnaseq-nf `modules/fastqc/main.nf` (bare `id`) | rejected | importer-rejected |
+| `snakemake/unpack_input.err.smk` | rna-seq-star-deseq2 `rules/align.smk` rule `star_align` (`unpack(get_fq)`) | rejected | importer-rejected |
+| `snakemake/script_directive.err.smk` | rna-seq-star-deseq2 `rules/qc.smk` rule `rseqc_gtf2bed` (`script:`) | rejected | importer-rejected |
+| `snakemake/multiext_output.err.smk` | rna-seq-star-deseq2 `rules/ref.smk` rule `bwa_index` (`multiext(...)`) | rejected | importer-rejected |
+
+**Re-run (real CLI, `target/debug/oxo-flow` 0.32.0, 2026-11-20T01:47Z):**
+
+**MATCHED 6 / DRIFTED 0 / IMPORTER-REJECTED 19 / NOT-ATTEMPTED 0** over corpus
+25. `scripts/import-equivalence.sh --strict` exits 0.
+
+**What the real-world arms actually show (no tuning).**
+
+- Both accepted real-world modules import *cleanly on the declared-artifact
+  criterion* — an nf-core DSL2 module and a community-Snakefile rule are
+  inside the documented subset. This is the first evidence that the boundary
+  is not an artifact of the repo's own fixtures.
+- The two lambda-free stalwarts of nf-core (the per-module `conda "${
+  moduleDir}/environment.yml"` and modules that bind a bare `id` instead of
+  `meta.id`) are **rejected**, so the importer does not silently mistranslate
+  them. Both are extremely common in the ecosystem, which bounds how much of
+  nf-core is reachable today.
+
+**Two honest off-criterion findings (recorded, NOT fixed — out of scope).**
+
+- **O12 — bare (non-`def`) Nextflow prelude leaks.** Upstream
+  `samtools/sort/main.nf` writes `prefix = task.ext.prefix ?: "${meta.id}"`
+  *without* `def`. The importer strips only `def X = …` preludes
+  (`nextflow.rs:1917`, `strip_prefix("def ")`), so the emitted `shell` **begins
+  with the literal Scala line** `prefix = task.ext.prefix ?: "{sample}"` before
+  the real `samtools sort …`. The workflow still validates/lints (the leaked
+  line is inert bash text, not a placeholder), but it is a genuine translation
+  defect on a shape real upstream code uses. The fixture is kept faithful (bare
+  assignment preserved); this audit does not fix the importer.
+- **O13 — multi-line Snakemake `log:` trailing-quote artifact.** The upstream
+  `rseqc_stat` rule's `log:` spans lines; the importer emits
+  `log = "logs/rseqc/rseqc_stat/{sample}-{unit}.log\","` — a stray `",` glued
+  onto the value. Same below-threshold class as O5 (the shell's `2> {log}`
+  still compiles); a single-instance fixture cannot distinguish it from a
+  formatting quirk.
+
+**Honesty boundary (unchanged, restated).** This addendum is *still* declared-
+artifact equivalence, *still* no execution, and *still* a small hand-picked
+sample: 7 community-derived fixtures is a floor, not coverage. It does **not**
+close #1165 — execution equivalence on a container host and a second
+independent derivation of the truth table remain outstanding.
+

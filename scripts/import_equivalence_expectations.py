@@ -124,6 +124,50 @@ EXPECTED = {
             },
         },
     },
+    # Real-world addendum (issue #1273): derived from nf-core/modules master,
+    # not from any repo fixture. See the audit doc 2026-11-20 addendum.
+    "nextflow/samtools_sort.ok.nf": {
+        "status": "supported",
+        "cited": "nf-core/modules modules/nf-core/samtools/sort/main.nf (master, retrieved 2026-11-20): "
+                 "process SAMTOOLS_SORT; input tuple L34; output L37; prelude+script L40-51; workflow wiring",
+        "workflow_name_advisory": "samtools_sort_pipeline",
+        "rules": ["samtools_sort"],
+        "edges": [],
+        "rule_specs": {
+            "samtools_sort": {
+                "threads": 2, "memory": "8G", "time_limit": "4h",
+                # upstream declares both container and conda; Nextflow runs the
+                # container, so only the container is emitted.
+                "environment": {"docker": "community.wave.seqera.io/library/htslib_samtools:1.25--704fb80d75745bd4"},
+                "input": ["data/{sample}.bam"],
+                "output": ["{sample}.bam"],
+                # HONEST FINDING (not tuned away): upstream's BARE (non-`def`)
+                # `prefix = task.ext.prefix ?: "${meta.id}"` prelude is NOT
+                # stripped by the importer (nextflow.rs only strips `def `
+                # preludes), so the emitted shell BEGINS with that leaked line.
+                "shell_verb": "prefix",
+                "shell_tokens": ["config.ext_args", "threads", "input"],
+            },
+        },
+    },
+    "snakemake/rseqc_stat.ok.smk": {
+        "status": "supported",
+        "cited": "snakemake-workflows/rna-seq-star-deseq2 workflow/rules/qc.smk rule rseqc_stat "
+                 "(upstream L56-67, retrieved 2026-11-20); copied verbatim",
+        "workflow_name_advisory": "rseqc_stat_pipeline",
+        "rules": ["rseqc_stat"],
+        "edges": [],
+        "rule_specs": {
+            "rseqc_stat": {
+                "threads": None, "memory": None, "time_limit": None,
+                "environment": {"conda": "../envs/rseqc.yaml"},
+                "input": ["results/star/{sample}-{unit}/Aligned.sortedByCoord.out.bam"],
+                "output": ["results/qc/rseqc/{sample}-{unit}.stats.txt"],
+                "shell_verb": "bam_stat.py",
+                "shell_tokens": ["input", "output", "log"],
+            },
+        },
+    },
 }
 
 # Every rejected fixture and the out-of-subset construct it trips on, as
@@ -143,4 +187,12 @@ REJECTED = {
     "snakemake/params.err.smk": "`params:` block",
     "snakemake/rules_output_fan_in.err.smk": "mixed wildcard/constant outputs (fan-in collision)",
     "snakemake/run_body.err.smk": "`run:` body",
+    # Real-world addendum (issue #1273): out-of-subset constructs found in
+    # published community workflows (nf-core/modules, nextflow-io/rnaseq-nf,
+    # snakemake-workflows/rna-seq-star-deseq2), retrieved 2026-11-20.
+    "nextflow/nfcore_dynamic_conda.err.nf": "dynamic conda spec referencing the nf-core per-module environment.yml",
+    "nextflow/rnaseq_nf_interpolation.err.nf": "unresolved Nextflow interpolation for a bare-valued metadata field",
+    "snakemake/unpack_input.err.smk": "dynamic input/output `unpack(get_fq)`",
+    "snakemake/script_directive.err.smk": "Snakemake `script:` is not supported by the importer",
+    "snakemake/multiext_output.err.smk": "cannot parse input/output declaration `multiext(...)`",
 }
