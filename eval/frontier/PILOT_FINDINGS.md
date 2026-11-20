@@ -361,3 +361,72 @@ failures of the loop** (per-case WHY in the JSON):
 Cost: one diagnosis round + at most one corrective round per case
 (10 cases, `--ai-max-retries 1`). Summary JSONs: campaign round 1/2
 exported alongside the raw logs.
+
+## Held-out repairable-class expansion — MEASURED (GLM via school proxy, 2026-11-20, #1278)
+
+The 10-case campaign above seeded the repairable class with three infra
+chaos primitives (OOM, timeout, disk). Issue #1278 adds **three genuinely
+distinct repairable classes** — not re-spellings — each a different engine
+diagnostic pattern with a different exit/errno footprint and a different
+`[config]`-keyed ground-truth repair:
+
+| fault_id | diagnostic code | exit | stderr signature | ground-truth repair |
+|---|---|---|---|---|
+| `infra_cpu_thread_starvation` | `cpu_limit` | 1 | CPU time limit / EAGAIN | `[config] cpu_threads` 2 -> 8 (+ `[rules.resources] threads`) |
+| `infra_open_file_limit` | `ulimit` | 1 | too many open files (EMFILE) | `[config] fd_limit` 1024 -> 4096 |
+| `infra_missing_shared_library` | `shared_library` | 127 | error while loading shared libraries | `[config] abi_level` 3 -> 7 |
+
+Each seed is parameterized by its own `[config]` key against a stub workload
+that needs more than the declared budget; the stub fails below the budget
+and succeeds at or above it, so a genuine resource/config change (not a
+gameable shell edit or a hardcoded one-off) is the only repair that flips
+the rerun to success. The `simtool` stub gained three modes
+(`cpushare`/`fdpool`/`libload`) over the shared `--need-*`/`--have-*`
+argument parser; unit tests cover the success and failure sides of each.
+
+Full 13-case campaign (GLM via school proxy, `--ai-max-retries 1`):
+
+| case | static | attributed | proposed | executability | fault manifested | applied | rerun ok |
+|---|---|---|---|---|---|---|---|
+| bio_sort_order_mismatch | ✓ | ✓ | ✓ | ✓ | ✓ | ✗ | ✗ |
+| bio_missing_companion_index | ✓ | ✓ | ✓ | ✓ | ✓ | ✗ | ✗ |
+| bio_reference_build_conflict | ✓ | ✓ | ✓ | ✓ | ✓ | ✗ | ✗ |
+| bio_compression_mismatch | ✓ | ✓ | ✓ | ✓ | ✓ | ✗ | ✗ |
+| sci_vqsr_small_cohort | ✓ | ✗ | ✗ | ✓ | ✗ | ✗ | ✗ |
+| sci_featurecounts_no_strand | ✓ | ✗ | ✗ | ✓ | ✗ | ✗ | ✗ |
+| sci_mutect2_tumor_only | ✓ | ✗ | ✗ | ✓ | ✗ | ✗ | ✗ |
+| infra_oom_failure | ✗ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| infra_timeout_failure | ✗ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| infra_disk_pressure_enospc | ✗ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| infra_cpu_thread_starvation | ✗ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| infra_open_file_limit | ✗ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| infra_missing_shared_library | ✗ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+
+**Measured (honest, no target tuning): static detection 7/13;
+executability 13/13; repair applied 6/13; verified rerun 6/13 — i.e. 6/6 of
+the repairable class closes the full loop over the enlarged denominator
+(the 3 original infra seeds plus the 3 added here).** The remaining 7/13
+are blocked upstream of the loop by design and unchanged from the 10-case
+baseline: 4 BioType faults abort at the type-admission gate before any rule
+executes (`admission_abort`; repair at that gate is tracked separately), and
+3 SCI preflight findings are advisory (warn, never abort) so the seeded run
+exits 0 with no runtime fault to repair.
+
+Evidence per new case: the applied TOML edit is the config change named in
+the table — `diff seeded_workflow.oxoflow workflow_ai.oxoflow.post_run`
+shows `cpu_threads` 2 -> 8 (plus `threads` 2 -> 8), `fd_limit` 1024 -> 4096,
+and `abi_level` 3 -> 7 respectively, each confirmed by
+`REPAIR_RERUN_SUCCEEDED` → exit 0 → checkpoint `repair_record.applied` /
+`.verified` (raw logs under
+`eval/frontier/results/fault_repair_logs/<fault_id>/`, summary JSON
+`live_summary_1278.json`).
+
+Cost: one diagnosis round + at most one corrective round per case (13 cases,
+`--ai-max-retries 1`).
+
+Note on reproducibility: the ambient saved `~/.oxo-flow/ai_config.json`
+pins `model = "claude-sonnet-4-20250514"`, which the school proxy rejects
+(HTTP 503 "no available channel for model claude-sonnet-4-20250514"). The
+campaign pinning `OXO_FLOW_AI_MODEL=GLM` closes 6/6; a run without that
+pin measures 0/13 with every infra `why` = the proxy 503, an
+infrastructure artifact of the endpoint, not a loop regression.
