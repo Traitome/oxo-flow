@@ -91,6 +91,18 @@ URLs in `path` are rejected without making a network request; mutable remote
 content would bypass both module pinning and the engine's network safety
 boundary.
 
+Local path endpoints are **fail-closed**:
+
+- An include that declares `repo` but omits `ref` is refused ("pin the module
+  version") — an unpinned module is mutable content, the same hazard as a raw
+  URL.
+- A local `path` is canonicalized and required to stay inside the directory
+  containing the workflow. `..` segments, absolute paths, and symlinks that
+  point outside that directory are refused. A module file cannot silently read
+  a sibling tree (or the host's secrets) through a path alias.
+- A self-including or mutually-including cycle is refused at the include depth
+  cap with a "circular includes" error.
+
 ### Namespace Behavior
 
 When a `namespace` is specified:

@@ -599,6 +599,28 @@ impl WorkflowConfig {
                 });
             } else {
                 let inc_path = base_dir.join(&inc.path);
+                // Path-alias containment (issue #1285, RB-04): a local
+                // include must stay inside the workflow directory. `..`,
+                // absolute aliases, and symlinks must never let an include
+                // silently read a file outside `base_dir` — the joined path
+                // is canonicalized and required to remain under the
+                // canonicalized base. A path that cannot be canonicalized
+                // (missing file / dangling symlink) falls through to the
+                // regular-file and read gates below, which report it.
+                if let (Ok(canon_inc), Ok(canon_base)) = (
+                    std::fs::canonicalize(&inc_path),
+                    std::fs::canonicalize(base_dir),
+                ) && !canon_inc.starts_with(&canon_base)
+                {
+                    return Err(OxoFlowError::Parse {
+                        path: inc_path.clone(),
+                        message: format!(
+                            "include '{}' escapes the workflow directory — local includes must \
+                             stay inside the directory containing the workflow",
+                            inc.path
+                        ),
+                    });
+                }
                 // Stat-first regular-file gate (issue #714, pattern from
                 // #695/#706): open on a writer-less FIFO blocks the thread.
                 if let Ok(meta) = std::fs::metadata(&inc_path)

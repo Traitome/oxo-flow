@@ -840,6 +840,159 @@ fn resolve_includes_depth_limit() {
     );
 }
 
+/// Issue #1285 (RB-04) case 1: an `http://` include must fail closed AND
+/// make zero network connections. The refusal at parse.rs runs before any
+/// dial, so a bound listener sees no accept. The listener is the falsifier:
+/// if a future change were to fetch the URL, the accept count would rise.
+#[test]
+fn resolve_includes_remote_url_performs_zero_network_io() {
+    use std::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral listener");
+    listener
+        .set_nonblocking(true)
+        .expect("listener must be non-blocking for the accept probe");
+    let addr = listener.local_addr().expect("listener addr");
+
+    let toml = format!(
+        r#"
+        [workflow]
+        name = "remote_zero_io"
+
+        [[include]]
+        path = "http://{addr}/module.oxoflow"
+    "#
+    );
+    let mut config: WorkflowConfig = toml::from_str(&toml).unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let err = config
+        .resolve_includes(dir.path())
+        .expect_err("remote URL includes must fail closed");
+    assert!(
+        err.to_string()
+            .contains("remote URL includes are not supported"),
+        "{err}"
+    );
+
+    // Zero network I/O: nothing ever connected, so accept() is still empty.
+    match listener.accept() {
+        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+        Ok(_) => panic!("remote include must not open a connection"),
+        Err(e) => panic!("unexpected accept error: {e}"),
+    }
+}
+
+/// Issue #1285 (RB-04) case 2: a repo include WITHOUT a pinned `ref` is
+/// refused before any clone. No test covered this branch before.
+#[test]
+fn resolve_includes_repo_without_ref_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let content = r#"
+        [workflow]
+        name = "repo_without_ref"
+
+        [[include]]
+        path = "modules/qc.oxoflow"
+        repo = "https://example.com/workflows.git"
+    "#;
+    let mut config: WorkflowConfig = toml::from_str(content).unwrap();
+    let err = config
+        .resolve_includes(dir.path())
+        .expect_err("repo include without `ref` must fail closed");
+    let message = err.to_string();
+    assert!(message.contains("pin the module version"), "{message}");
+    assert!(message.contains("without `ref`"), "{message}");
+}
+
+/// Issue #1285 (RB-04) case 4: a local include whose path aliases outside
+/// the workflow directory (`..` or an absolute path) must be refused, never
+/// silently read. Before the containment gate this resolved the sibling
+/// file happily.
+#[test]
+fn resolve_includes_rejects_dotdot_path_escape() {
+    let root = tempfile::tempdir().unwrap();
+    let workdir = root.path().join("wf");
+    std::fs::create_dir_all(&workdir).unwrap();
+    // A real, readable module OUTSIDE the workflow directory.
+    std::fs::write(
+        root.path().join("outside.oxoflow"),
+        "[workflow]\nname = \"outside\"\n",
+    )
+    .unwrap();
+
+    let content = r#"
+        [workflow]
+        name = "escape"
+
+        [[include]]
+        path = "../outside.oxoflow"
+    "#;
+    let mut config: WorkflowConfig = toml::from_str(content).unwrap();
+    let err = config
+        .resolve_includes(&workdir)
+        .expect_err("a `..` alias must not read outside the include base");
+    assert!(
+        err.to_string().contains("escapes the workflow directory"),
+        "{err}"
+    );
+}
+
+#[test]
+fn resolve_includes_rejects_absolute_path_escape() {
+    let root = tempfile::tempdir().unwrap();
+    let workdir = root.path().join("wf");
+    std::fs::create_dir_all(&workdir).unwrap();
+    let outside = root.path().join("abs_outside.oxoflow");
+    std::fs::write(&outside, "[workflow]\nname = \"abs\"\n").unwrap();
+
+    let content = format!(
+        r#"
+        [workflow]
+        name = "abs_escape"
+
+        [[include]]
+        path = "{}"
+    "#,
+        outside.display()
+    );
+    let mut config: WorkflowConfig = toml::from_str(&content).unwrap();
+    let err = config
+        .resolve_includes(&workdir)
+        .expect_err("an absolute alias must not read outside the include base");
+    assert!(
+        err.to_string().contains("escapes the workflow directory"),
+        "{err}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn resolve_includes_rejects_symlink_escape() {
+    let root = tempfile::tempdir().unwrap();
+    let workdir = root.path().join("wf");
+    std::fs::create_dir_all(&workdir).unwrap();
+    let outside = root.path().join("link_target.oxoflow");
+    std::fs::write(&outside, "[workflow]\nname = \"link\"\n").unwrap();
+    // A symlink INSIDE the workflow dir pointing OUTSIDE it.
+    std::os::unix::fs::symlink(&outside, workdir.join("linked.oxoflow")).unwrap();
+
+    let content = r#"
+        [workflow]
+        name = "symlink_escape"
+
+        [[include]]
+        path = "linked.oxoflow"
+    "#;
+    let mut config: WorkflowConfig = toml::from_str(content).unwrap();
+    let err = config
+        .resolve_includes(&workdir)
+        .expect_err("a symlink alias must not read outside the include base");
+    assert!(
+        err.to_string().contains("escapes the workflow directory"),
+        "{err}"
+    );
+}
+
 #[test]
 fn resolve_includes_merge_sample_groups() {
     let dir = tempfile::tempdir().unwrap();
