@@ -49,6 +49,7 @@ pub mod container;
 pub mod dag;
 pub mod deep_check;
 pub mod diagnostics;
+pub mod env_lock;
 pub mod environment;
 pub mod error;
 pub mod executor;

@@ -364,7 +364,7 @@ type EnvTagCache = HashMap<PathBuf, String>;
 /// file it belongs to. The pixi entry also carries the sibling `pixi.lock`:
 /// pixi resolves exact versions from the lockfile, so an in-place lock edit
 /// changes the environment just as much as a manifest edit.
-fn environment_spec_files(
+pub(crate) fn environment_spec_files(
     env: &crate::rule::EnvironmentSpec,
     base: &Path,
 ) -> Vec<(String, PathBuf)> {

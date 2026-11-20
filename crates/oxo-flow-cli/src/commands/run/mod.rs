@@ -749,6 +749,15 @@ async fn run_command_inner(
         // workflows without repo includes — a no-op in that case.
         ck.set_include_resolutions(&config.include_provenance);
         ck.set_workdir(&absolutize(workdir.as_deref().unwrap_or(&workdir_default))?);
+        // Record the per-rule environment-lock identity (issue #1274, design
+        // bet 4): the resolved container digest / env lock hash / explicit
+        // sentinel for each rule's environment. Persisted in the checkpoint so
+        // a cross-arch re-run can prove or deny environment-lock equality
+        // rather than assume it. Best-effort — never fails the run.
+        ck.set_env_lock_identity(oxo_flow_core::env_lock::compute_env_lock_identity(
+            &config,
+            Some(&workflow_abs),
+        ));
     }
     // Same absolutized run workdir, reused by the config-change replay below
     // (issue #282): runtime file functions in `when` resolve their relative

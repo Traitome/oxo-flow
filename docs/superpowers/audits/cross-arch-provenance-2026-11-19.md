@@ -152,8 +152,49 @@ architecture-stability claim is made.
   illustration that "same command, different host" breaks bitwise output for
   derived text even when the engine is deterministic.
 
+## 7a. Environment-lock identity field (issue #1274) — the unblocking prerequisite
+
+The reason the contrast above is invalid *by construction* is that neither arm
+recorded any environment-lock identity: the `system` backend supplies neither a
+lock hash nor a container digest, so nothing was held constant across hosts.
+
+Issue #1274 adds the in-repo recording layer that a future two-arm re-run needs.
+It claims **no** two-arm measurement — it only makes environment-lock equality
+assertable instead of assumed.
+
+- **New checkpoint field:** `env_lock_identity` — a `BTreeMap<rule name,
+  identity string>` in `.oxo-flow/checkpoint.json` (`CheckpointState`), persisted
+  when a run records its checkpoint. It is surfaced verbatim by
+  `oxo-flow provenance verify <checkpoint> --json` (under
+  `verify.env_lock_identity`) and echoed in the human report.
+- **Identity, per backend** (a self-describing `"<kind>|<value>"` string):
+  - container (`docker`/`singularity`) → the resolved image *digest*
+    (`repo@sha256:...`), never a tag; when the runtime cannot report one offline
+    (no pull), the explicit sentinel `docker|unresolved`.
+  - env backends (`pixi`/`conda`/`mamba`/`venv`) → a deterministic, key-ordered
+    SHA-256 *lock hash* over the resolved spec files (including the sibling
+    `pixi.lock`): `pixi|sha256:...`.
+  - `system` (or any rule with no lockable content) → the explicit sentinel
+    `system|unavailable`.
+- **Detection:** `oxo_flow_core::env_lock::env_lock_is_resolved(value)` returns
+  `false` for either sentinel, so a caller can tell "no lock" / "not resolved"
+  from real lock content. A digest is **never fabricated**; a component that
+  fails to resolve does not get hashed into a value that could read as a false
+  match.
+- **Harness:** `scripts/cross-arch-provenance.sh` now emits `env_lock.txt`
+  (`rule<TAB>identity<TAB>resolved`) read from the checkpoint, so two arms'
+  files can be diffed.
+
+**Protocol to make two arms identical except architecture** (for the future
+re-run): pin the fixture to a lockable backend (e.g. a `pixi` rule with a
+committed `pixi.lock`, or a container rule), run the harness on both hosts, then
+require every rule's identity in both `env_lock.txt` files to be byte-identical
+**and** resolved (`resolved=yes`). Only then does an architecture contrast carry
+weight. The two-arm measurement itself is **still pending hosts** (#1169 is the
+container-substrate blocker); this field is the prerequisite, not the result.
+
 ## 8. Raw-data lineage
 
-- Arm A: `/tmp/armA3/{identity.txt,checkpoint.json,verify.json,artifacts.sha256,rows.tsv}` (run `/tmp/armA3/work`); determinism baseline `/tmp/armA`, `/tmp/armA2`.
+- Arm A: `/tmp/armA3/{identity.txt,checkpoint.json,verify.json,artifacts.sha256,rows.tsv}` (run `/tmp/armA3/work`); determinism baseline `/tmp/armA`, `/tmp/armA2`. (The `env_lock.txt` artifact and the `env_lock_identity` checkpoint field post-date this observation — see §7a.)
 - Arm B: `tx-ubuntu:/home/ubuntu/armB/…` (run `/home/ubuntu/armB/work`), copied to `/tmp/armB/`.
-- Fixture + harness: `scripts/cross-arch-provenance.oxoflow`, `scripts/cross-arch-provenance.sh`.
+- Fixture + harness: `scripts/cross-arch-provenance.oxoflow`, `scripts/cross-arch-provenance.sh` (the harness now also emits `env_lock.txt`).
