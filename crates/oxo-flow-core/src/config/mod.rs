@@ -4,6 +4,7 @@
 mod expand;
 mod known_keys;
 mod model;
+mod overrides;
 mod parse;
 mod references;
 mod samples;
@@ -18,6 +19,10 @@ pub use known_keys::edit_distance;
 pub use model::*;
 pub(crate) use model::{
     expand_command_text_fields, expand_rule_patterns, expand_rule_shell, value_instance_suffix,
+};
+pub use overrides::{
+    apply_config_overrides, canonicalize_override_key, parse_config_override_pairs,
+    validate_config_value,
 };
 pub use parse::resolve_rule_templates;
 
@@ -987,38 +992,6 @@ impl WorkflowConfig {
         })
     }
 }
-
-/// Resolve a config-override key that does not exactly match a declared
-/// `[config]` key by normalizing hyphens to underscores (issue #794). Returns
-/// the declared key only when the normalization is unambiguous — a normalized
-/// form that maps to two declared keys is left alone (the caller then applies
-/// issue #62/#71 semantics to the literal spelling). The single source of
-/// truth shared by the CLI override parser and
-/// [`WorkflowConfig::apply_config_overrides`] (web admission, issue #1289).
-/// Callers invoke this only after an exact-match check, so a key reaching here
-/// always contains a hyphen and the result never equals the input.
-#[must_use]
-pub fn canonicalize_override_key(
-    key: &str,
-    declared_config_keys: &std::collections::HashSet<String>,
-) -> Option<String> {
-    if !key.contains('-') {
-        return None;
-    }
-    let normalized = key.replace('-', "_");
-    if declared_config_keys.contains(&normalized) {
-        return Some(normalized);
-    }
-    let matches: Vec<&String> = declared_config_keys
-        .iter()
-        .filter(|d| d.replace('-', "_") == normalized)
-        .collect();
-    match matches.as_slice() {
-        [only] => Some((*only).clone()),
-        _ => None,
-    }
-}
-
 /// `true` when `a` is strictly less than `b` under major.minor.patch
 /// semantics. Missing components default to 0 ("0.21" == "0.21.0").
 /// Non-numeric tails (`-beta1`) are ignored — engine versions here are
