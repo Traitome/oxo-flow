@@ -482,6 +482,8 @@ async fn run_command_inner(
             discovery_fallback,
             profile.as_deref(),
             &checkpoint_path,
+            &samples_filter,
+            workdir.as_deref().unwrap_or(&workdir_default),
             ai_recover,
             no_ai_recover,
         )
