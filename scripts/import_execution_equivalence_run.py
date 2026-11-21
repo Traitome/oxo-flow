@@ -18,7 +18,9 @@ derived from the fixture extension and its imported environment block, so this
 file does not restate the truth table.
 
 Usage:  import_execution_equivalence_run.py <ROOT> <BIN> <TMP>
-Exit 0 always; the bash wrapper owns --strict.
+Exit 0 when nothing executed (or every executed fixture matched); exit 1 when
+any executed fixture drifted. The bash wrapper turns that 1 into a --strict
+failure and is report-only otherwise.
 """
 import hashlib
 import importlib.util
@@ -131,6 +133,15 @@ def classify(arms):
     return "DRIFTED", "; ".join(detail)
 
 
+# The workflow file seeded into each arm is NOT a produced artifact. Each arm
+# keeps its natural seed name (the source arm needs the real fixture basename
+# for its engine; the imported arm runs W.oxoflow), and BOTH seed paths are
+# excluded from the artifact set by measure() before classifying. Without this a
+# real wrapper that leaves its own input seed behind would show a spurious
+# one-sided artifact and a genuinely-equivalent run would be misreported DRIFTED.
+IMPORTED_SEED = "W.oxoflow"
+
+
 def plant(root):
     for rel, body in PLANTED.items():
         path = os.path.join(root, rel)
@@ -211,12 +222,21 @@ def measure(rel, expect, bin_, tmp, have, timeout):
     for d in (src_dir, run_dir):
         os.makedirs(d, exist_ok=True)
         plant(d)
-    shutil.copy(src, os.path.join(src_dir, os.path.basename(rel)))
-    shutil.copy(imported_wf, os.path.join(run_dir, "W.oxoflow"))
+    # Seed each arm with the workflow file it must run. Each arm keeps its NATURAL
+    # seed name (the source engine needs the real fixture basename; the imported
+    # arm runs W.oxoflow), and BOTH seed relpaths are dropped from the collected
+    # artifact set. That makes the two arms structurally comparable: a wrapper
+    # that leaves its own input seed behind cannot masquerade as a one-sided
+    # artifact, so a genuinely-equivalent run reports MATCHED, not DRIFTED.
+    src_seed = os.path.basename(rel)
+    shutil.copy(src, os.path.join(src_dir, src_seed))
+    shutil.copy(imported_wf, os.path.join(run_dir, IMPORTED_SEED))
     s_ran, s_reason, s_art = run_arm(
-        [a.format(src=os.path.basename(rel)) for a in template], src_dir, timeout)
+        [a.format(src=src_seed) for a in template], src_dir, timeout)
     i_ran, i_reason, i_art = run_arm(
-        [bin_, "run", "W.oxoflow", "-d", run_dir], run_dir, timeout)
+        [bin_, "run", IMPORTED_SEED, "-d", run_dir], run_dir, timeout)
+    for art, seed in ((s_art, src_seed), (i_art, IMPORTED_SEED)):
+        art.pop(seed, None)
     return classify({
         "source": {"ran": s_ran, "reason": "source arm: " + s_reason, "artifacts": s_art},
         "imported": {"ran": i_ran, "reason": "imported arm: " + i_reason, "artifacts": i_art},
@@ -256,7 +276,9 @@ def main(argv):
     print("  drifted  : %d" % tally["DRIFTED"])
     print()
     print(json.dumps(tally))
-    return 0
+    # Exit non-zero iff an executed fixture drifted, so the wrapper --strict
+    # branch is falsifiable; an all-SKIPPED (or all-MATCHED) run stays 0.
+    return 1 if tally["DRIFTED"] else 0
 
 
 if __name__ == "__main__":
