@@ -9,7 +9,7 @@ use oxo_flow_core::config::WorkflowConfig;
 use oxo_flow_core::dag::{MetroGranularity, WorkflowDag};
 use oxo_flow_core::executor::CheckpointState;
 use oxo_flow_core::report::{Report, ReportContent, ReportSection, TemplateEngine};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 /// Output format for the `graph` subcommand.
@@ -1646,7 +1646,7 @@ fn wkhtmltopdf_available() -> bool {
         .unwrap_or(false)
 }
 
-pub fn handle_diff(workflow_a: PathBuf, workflow_b: PathBuf) -> Result<()> {
+pub fn handle_diff(workflow_a: PathBuf, workflow_b: PathBuf, json: bool) -> Result<()> {
     print_banner();
     let config_a = WorkflowConfig::from_file(&workflow_a)
         .with_context(|| format!("failed to parse {}", workflow_a.display()))?;
@@ -1654,6 +1654,18 @@ pub fn handle_diff(workflow_a: PathBuf, workflow_b: PathBuf) -> Result<()> {
         .with_context(|| format!("failed to parse {}", workflow_b.display()))?;
 
     let diffs = oxo_flow_core::format::diff_workflows(&config_a, &config_b);
+
+    // `--json` (issue #1330): emit ONE machine-readable diff document on
+    // stdout so CI and tooling can consume it, and still exit 1 when the
+    // workflows differ (like `diff(1)`). The human/colored path is skipped
+    // entirely so stdout stays pure JSON.
+    if json {
+        emit_diff_json(&workflow_a, &workflow_b, &diffs)?;
+        if diffs.is_empty() {
+            return Ok(());
+        }
+        std::process::exit(1);
+    }
 
     // The diff IS the command's result, so it goes to stdout (audit finding:
     // everything went to stderr, leaving stdout empty), and a diff with
@@ -1684,6 +1696,52 @@ pub fn handle_diff(workflow_a: PathBuf, workflow_b: PathBuf) -> Result<()> {
         );
     }
     std::process::exit(1);
+}
+
+/// Emit the machine-readable diff document (`diff --json`, issue #1330).
+///
+/// The shape is stable and order-independent (AGENTS.md):
+///
+/// ```json
+/// {
+///   "tool": "oxo-flow diff",
+///   "workflow_a": "a.oxoflow",
+///   "workflow_b": "b.oxoflow",
+///   "equal": false,
+///   "difference_count": 2,
+///   "differences": { "config": ["..."], "rules": ["..."] }
+/// }
+/// ```
+///
+/// `differences` is a `BTreeMap` keyed by the diff category so key order is
+/// deterministic; the descriptions within each category are sorted, so two
+/// runs on the same pair of workflows emit byte-identical JSON.
+fn emit_diff_json(
+    workflow_a: &Path,
+    workflow_b: &Path,
+    diffs: &[oxo_flow_core::format::WorkflowDiff],
+) -> Result<()> {
+    let mut by_category: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for diff in diffs {
+        by_category
+            .entry(diff.category.clone())
+            .or_default()
+            .push(diff.description.clone());
+    }
+    for descriptions in by_category.values_mut() {
+        descriptions.sort();
+    }
+
+    let document = serde_json::json!({
+        "tool": "oxo-flow diff",
+        "workflow_a": workflow_a.display().to_string(),
+        "workflow_b": workflow_b.display().to_string(),
+        "equal": diffs.is_empty(),
+        "difference_count": diffs.len(),
+        "differences": by_category,
+    });
+    println!("{}", serde_json::to_string_pretty(&document)?);
+    Ok(())
 }
 
 pub fn handle_export(workflow: PathBuf, format: String, output: Option<PathBuf>) -> Result<()> {
