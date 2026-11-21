@@ -1389,7 +1389,10 @@ pub fn analyze_scientific_constraints(config: &WorkflowConfig) -> Vec<Scientific
     // pair, or a typed pair whose channels do not line up — and surface
     // here as advisory warnings, not failures).
     if (!config.types.is_empty() || config.rules.iter().any(|r| r.types.is_some()))
-        && let Ok(dag) = crate::dag::WorkflowDag::from_rules(&config.rules)
+        && let Ok(dag) = crate::dag::WorkflowDag::from_rules_with_config(
+            &config.rules,
+            &config.config_placeholder_values(),
+        )
     {
         let type_diags = crate::types::check_workflow_types(config, &dag);
         for td in type_diags {
@@ -2377,6 +2380,76 @@ name = \"t\"\nversion = \"1.0\"\n\n[[rules]]\nname = \"r1\"\nwhen = 'file_exists
         assert!(
             codes.contains(&"TYPE-003"),
             "must detect missing index: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn preflight_type_check_agrees_with_validate_on_config_routed_edge() {
+        // Issue #1291 (audit AI-06): the preflight type surface used to
+        // build a config-BLIND DAG while `validate` built a config-AWARE
+        // one, so a typed producer→consumer edge that only exists after a
+        // `{config.*}` placeholder expands was seen by `validate` but
+        // invisible to preflight. The producer routes its output through
+        // `{config.outdir}` and the consumer names the concrete path, so
+        // the edge (and its TYPE-001 mismatch) exists ONLY when the config
+        // map is applied. Falsifiable: reverting the one-line change in
+        // `analyze_scientific_constraints` (back to `from_rules`) makes the
+        // preflight assertion below fail while the validate assertion still
+        // passes.
+        let toml = r#"
+            [workflow]
+            name = "cfg_routed_edge"
+            version = "1.0"
+
+            [config]
+            outdir = "results"
+
+            [types.raw_sam]
+            format = "sam"
+            sort_order = "unsorted"
+
+            [types.sorted_bam]
+            format = "bam"
+            sort_order = "coordinate"
+            index = "bai"
+
+            [[rules]]
+            name = "align"
+            output = ["{config.outdir}/sample.sam"]
+            shell = "bwa mem ref.fa reads.fq > {config.outdir}/sample.sam"
+            [rules.types]
+            outputs = { default = "raw_sam" }
+
+            [[rules]]
+            name = "call_variants"
+            input = ["results/sample.sam"]
+            output = ["calls.vcf"]
+            shell = "gatk HaplotypeCaller -I results/sample.sam -O calls.vcf"
+            [rules.types]
+            inputs = { default = "sorted_bam" }
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+
+        // Preflight surface: must infer the config-routed edge and report
+        // the same biological-contract violation.
+        let preflight = analyze_scientific_constraints(&config);
+        let preflight_codes: Vec<&str> = preflight.iter().map(|w| w.code.as_str()).collect();
+        assert!(
+            preflight_codes.contains(&"TYPE-001"),
+            "preflight must see the config-routed typed edge: {preflight:?}"
+        );
+
+        // Validate surface: the two type-check surfaces must AGREE.
+        let validation = crate::format::validate_format(&config);
+        let validate_codes: Vec<&str> = validation
+            .diagnostics
+            .iter()
+            .map(|d| d.code.as_str())
+            .collect();
+        assert!(
+            validate_codes.contains(&"TYPE-001"),
+            "validate must agree with preflight: {:?}",
+            validation.diagnostics
         );
     }
 
