@@ -115,6 +115,7 @@ safe**.
 | **truncated checkpoint (read-only preview)** | same corrupt file, `dry-run` | degrades with a warning ("corrupt … planning as if every rule never completed") | plan is the full set (nothing silently treated as done) | **PASS** |
 | **unknown / older engine-version field** | inject `engine_version = "0.0.1-ancient"`, `schema_version = 1` | checkpoint loads (schema-additive; unknown JSON keys ignored); a genuinely-completed rule still skips ("already completed") | resume **skips** completed rules — correct, nothing was lost | **PASS** |
 | **checkpoint missing a required field** | remove `benchmarks` | treated as **corrupt** → Execute refuses ("refusing to start") | — (fail-closed; never silently re-runs or silently skips) | **PASS** |
+| **NEWER checkpoint format version** (issue #1309) | set `checkpoint_format_version = 9999` (past this engine's own) | Execute refuses: names the newer build and prints **"refusing to start"** | — (fail-closed by design); `dry-run` degrades with a warning and plans everything | **PASS** |
 
 Key invariant confirmed: a checkpoint is only **skipped** when it genuinely
 completed; every uncertain state (truncated, missing required field, stale
@@ -137,6 +138,16 @@ with the reason (also recorded as a comment block at the bottom of
   required `benchmarks` field, which proves the fail-closed path; a real
   cross-version binary matrix is out of scope for this campaign. Conversely, a
   checkpoint with *extra/unknown* fields is proven harmless (§5.2).
+- **The reader-newer-than-writer direction of the format gate** (issue #1309).
+  The `checkpoint_format_version` marker plus the `compat()` gate now covers the
+  direction the additive-serde model cannot guard itself — an engine reading a
+  checkpoint written by a *newer* build (§5.2 row above). What is still
+  **NOT_VALIDATED** is a genuine two-binary matrix (cold-run on build A, resume
+  on a real older/newer build B): the CI test injects the version marker into a
+  checkpoint rather than shipping two pinned binaries. A third boundary follows
+  from the gate's own design: a build that *predates* the marker has no gate to
+  fire, so an old binary reading a new checkpoint is unguarded — the marker only
+  protects readers built at or after the version that introduced it.
 - **SIGTERM/SIGKILL arriving in the narrow window before signal handlers are
   installed** (between `exec` and `run`'s select loop). Covered in spirit by the
   SIGKILL case (which needs no handler) but not separately pinned.
@@ -150,9 +161,12 @@ with the reason (also recorded as a comment block at the bottom of
 - **"Crash/interruption tests"** — also listed exit evidence — are now
   **implemented and passing** for the CI-exercisable classes (SIGTERM, SIGKILL,
   truncated checkpoint, unknown/older engine-version, missing required field),
-  each demonstrated **fail-safe**.
-- The two remaining boundaries (real mid-rename power cut; a real cross-version
-  binary matrix) are **explicitly NOT_VALIDATED** (§5.3) and are not claimed.
+  each demonstrated **fail-safe**. A **checkpoint format-version gate** (issue
+  #1309) additionally fails safe when the recorded format version is *newer* than
+  the running engine's.
+- The remaining boundaries (real mid-rename power cut; a real two-binary
+  cross-version matrix; a pre-marker old binary reading a new checkpoint) are
+  **explicitly NOT_VALIDATED** (§5.3) and are not claimed.
 
 ## 7. Honesty boundary
 
@@ -170,7 +184,9 @@ through the real CLI binary on the host in §3.
   fixture, not a sample of real pipelines; it bounds the harness, not the
   ecosystem.
 - **Some crash classes are NOT_VALIDATED** (§5.3): real power-cut mid-rename
-  and a genuine cross-version binary matrix. Do not read "crash matrix PASS" as
-  "every crash class proven".
-- **No production re-entry change.** No fail-unsafe bug was found, so the
-  production path is untouched; this PR adds tests + a harness + this doc only.
+  and a genuine two-binary cross-version matrix. Do not read "crash matrix PASS"
+  as "every crash class proven".
+- **No production re-entry change.** This campaign adds tests + a harness + this
+  doc; the one production change is the additive `checkpoint_format_version`
+  marker + fail-safe gate added later for issue #1309 (§5.2 NEWER row), which
+  never alters the completed-rule merge logic.
