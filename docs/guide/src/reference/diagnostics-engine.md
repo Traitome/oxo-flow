@@ -200,6 +200,42 @@ Every new pattern must ship with two test rows in the module's tests:
 - and, when near-miss words exist, a benign line in `BENIGN_LOG_LINES`
   that mentions the vocabulary without being a real error.
 
+### Measured FP/FN baseline
+
+`crates/oxo-flow-core/tests/diagnostic_corpus.rs` (issue #1316) runs the real
+`DiagnosticsEngine` pattern table over a small corpus of multi-line tool
+stderr/stdout tails under `crates/oxo-flow-core/tests/fixtures/diag_corpus/`
+and asserts a documented baseline:
+
+- **True positives:** every positive block (a realistic multi-line failure
+  tail from STAR/BWA/samtools/GATK/conda/docker/etc.) fires its intended
+  pattern. The blocks are genuinely multi-line: each pattern's text appears
+  inside surrounding tool output (a prelude plus scheduler/shell context),
+  never as a bare canonical-trigger line — for the few signals whose real
+  signature is a single kernel/shell line, that decisive line is still wrapped
+  in the output that really surrounds it. The corpus covers all 31 patterns
+  exactly once; a drift gate keeps the corpus in sync with the ids declared in
+  `diagnostics.rs`.
+- **False positives:** benign handshake/banner blocks and mention-only blocks
+  fire no pattern at realistic non-zero exit codes. Both negative sets are
+  parsed and asserted by the harness — the report's `benign_fp` / `mention_fp`
+  counts are measurements, not documentation claims.
+
+This is **report-only**: the harness measures the existing table and changes no
+regex or engine behavior. It is a baseline, **not** a proof that the engine is
+correct — real-world breadth (large logs, unusual tool dialects, subtle
+multi-pattern collisions) remains unmeasured. The harness excludes the generic
+`unknown_error` fallback from counts; the content-independent `oom_killed` /
+`timeout` injections are retained, since exit code 137/152 is by design the
+only evidence for a cgroup OOM or CPU-time kill.
+
+Known collateral (measured, not a failure): a line matching two patterns fires
+both. In the current corpus the `bam_truncated` block also fires
+`truncated_file` (both match the word truncated) and the `shared_library` block
+also fires `command_not_found` (exit 127 is shared). Downstream self-healing
+ranks the listed patterns; this measurement records the overlap rather than
+asserting it away.
+
 ## Scientific Preflight & Biological Contract Catalog
 
 While runtime diagnostics analyze failed executions, the **Scientific Preflight Engine** (`crates/oxo-flow-core/src/scientific_preflight.rs`) and **Biological Semantic Subtyping System** (`crates/oxo-flow-core/src/types/`) inspect workflow DAGs *prior to execution*. They catch scientifically unsound configurations (e.g. training VQSR on single samples, unstranded quantification on stranded libraries, or uncompressed tabix inputs) before compute resources are wasted.
