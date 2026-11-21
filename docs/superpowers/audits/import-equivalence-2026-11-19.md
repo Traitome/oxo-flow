@@ -222,11 +222,22 @@ drifts from the declared-artifact corpus above.
 **The honesty rule this harness enforces.** A fixture is `MATCHED` only when
 BOTH arms genuinely executed (exit 0) and their artifact sets agree. Any missing
 runtime / container / conda backend, any non-zero arm, or any missing arm makes
-the verdict `SKIPPED` with the reason — never `MATCHED`. `--strict` fails on
-drift for fixtures that actually executed, and is a no-op otherwise. A green
-tally therefore means runs happened; an all-`SKIPPED` tally means they did not.
-The rule is unit-tested in `eval/scripts/test_import_execution_equivalence.py`
-(`test_absent_runtime_is_skipped_never_matched`).
+the verdict `SKIPPED` with the reason — never `MATCHED`. The two arms are made
+comparable by seeding each with its own workflow file (source arm: the fixture
+basename; imported arm: `W.oxoflow`) and dropping BOTH seed paths from the
+collected artifact set, so a wrapper that leaves its input seed behind cannot
+masquerade as a one-sided artifact and a genuinely-equivalent run reports
+`MATCHED`, not `DRIFTED`.
+
+`--strict` is falsifiable, not a no-op: the runner exits non-zero iff an
+**executed** fixture drifted (`DRIFTED > 0`) and 0 when nothing executed, so
+`--strict` fails on drift for fixtures that actually executed and stays 0 on an
+all-`SKIPPED` run. A green tally therefore means runs happened and agreed; an
+all-`SKIPPED` tally means no run happened. The rule is exercised end-to-end by
+`eval/scripts/test_import_execution_equivalence.py`: `MeasureEndToEndStubTests`
+drives `measure()`/`collect_artifacts` with two stub arms (identical output →
+`MATCHED`; differing output → `DRIFTED`) and `StrictExitCodeTests` proves the
+exit code is 1 on drift and 0 when nothing executed.
 
 **Measured result (2026-11-21).** `executed = 0`, `skipped = 4`, `matched = 0`,
 `drifted = 0`. **Nothing was executed to a matched comparison — execution

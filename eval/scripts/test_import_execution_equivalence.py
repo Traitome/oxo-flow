@@ -10,6 +10,9 @@ without any network or real runtime:
 No network, no container, no nextflow/snakemake: every dependency is faked.
 """
 import importlib.util
+import subprocess
+import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -133,6 +136,101 @@ class ClassifyVerdictTests(unittest.TestCase):
             "imported": self._arm(False, reason="imported arm: conda missing"),
         })
         self.assertEqual(verdict, "SKIPPED")
+
+
+class MeasureEndToEndStubTests(unittest.TestCase):
+    """Drive measure()/collect_artifacts end-to-end with stub arms (no real
+    toolchain). This is the falsifiable regression for the P1 finding: the two
+    arms must be comparable, so two genuinely-running arms that emit an
+    identical output set report MATCHED -- not DRIFTED from a one-sided seed."""
+
+    def _write_stub(self, path, out_content):
+        # argv[1] == 'import' -> write a minimal (rule-less) TOML document;
+        # otherwise (a 'run' invocation) -> write out.txt with out_content.
+        path.write_text(
+            "#!/usr/bin/env python3\n"
+            "import sys\n"
+            "a = sys.argv[1:]\n"
+            "if a and a[0] == 'import':\n"
+            "    open(a[a.index('-o') + 1], 'w').write('# imported\\n')\n"
+            "else:\n"
+            "    open('out.txt', 'w').write(%r)\n" % out_content
+        )
+        path.chmod(0o755)
+
+    def _measure(self, src_content, imp_content):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            fx = tmp / "ROOT" / "tests" / "fixtures" / "import" / "nextflow"
+            fx.mkdir(parents=True)
+            (fx / "x.nf").write_text("process STUB {}\n")
+            bindir = tmp / "bin"
+            bindir.mkdir()
+            src_stub = bindir / "nextflow"
+            self._write_stub(src_stub, src_content)
+            oxo_stub = bindir / "oxo-flow"
+            self._write_stub(oxo_stub, imp_content)
+            expect = mock.Mock()
+            expect.ROOT = str(tmp / "ROOT")
+            with mock.patch.dict(
+                runner.SOURCE_RUNNERS,
+                {".nf": ("nextflow", [str(src_stub), "run", "{src}"])},
+            ):
+                return runner.measure("nextflow/x.nf", expect, str(oxo_stub),
+                                      str(tmp / "work"), lambda n: True, 30)
+
+    def test_identical_stub_output_is_matched(self):
+        # Both arms exit 0 and emit the SAME out.txt (their seeds differ in name
+        # but are excluded), so the verdict must be MATCHED.
+        verdict, _ = self._measure(src_content="hello\n", imp_content="hello\n")
+        self.assertEqual(verdict, "MATCHED")
+
+    def test_differing_stub_output_is_drifted(self):
+        verdict, detail = self._measure(src_content="hello\n", imp_content="bye\n")
+        self.assertEqual(verdict, "DRIFTED")
+        self.assertIn("checksum-differs", detail)
+
+    def test_seed_files_are_not_counted_as_artifacts(self):
+        # collect_artifacts sees the natural seeds (x.nf / W.oxoflow); measure()
+        # must drop both, so identical OUT artifacts still MATCH.
+        verdict, _ = self._measure(src_content="same\n", imp_content="same\n")
+        self.assertEqual(verdict, "MATCHED")
+
+
+class StrictExitCodeTests(unittest.TestCase):
+    """The P2 finding: main() must return non-zero on drift so the wrapper's
+    --strict branch can actually fire, and 0 when nothing executed."""
+
+    def test_main_returns_nonzero_when_drifted(self):
+        import contextlib
+        import io
+        buf = io.StringIO()
+        with mock.patch.object(runner, "measure", return_value=("DRIFTED", "x")), \
+                contextlib.redirect_stdout(buf):
+            rc = runner.main(["prog", "/tmp/ROOT", "/bin/true", "/tmp/t"])
+        self.assertEqual(rc, 1)
+
+    def test_main_returns_zero_when_all_skipped(self):
+        import contextlib
+        import io
+        buf = io.StringIO()
+        with mock.patch.object(runner, "measure",
+                               return_value=("SKIPPED", "no runtime")), \
+                contextlib.redirect_stdout(buf):
+            rc = runner.main(["prog", "/tmp/ROOT", "/bin/true", "/tmp/t"])
+        self.assertEqual(rc, 0)
+
+    def test_runner_process_exits_zero_when_nothing_executed(self):
+        # End-to-end on this host: a stub binary that fails every import leaves
+        # all fixtures SKIPPED, so the real runner must exit 0.
+        with tempfile.TemporaryDirectory() as d:
+            stub = Path(d) / "oxo-flow-stub"
+            stub.write_text("#!/bin/sh\nexit 1\n")
+            stub.chmod(0o755)
+            p = subprocess.run(
+                [sys.executable, str(RUNNER), str(ROOT), str(stub), d],
+                capture_output=True, text=True)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
 
 
 if __name__ == "__main__":
