@@ -11,6 +11,7 @@
 
 use crate::config::WorkflowConfig;
 use crate::rule::Rule;
+use crate::scientific_catalog::sci_codes;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::sync::LazyLock;
@@ -401,7 +402,7 @@ fn detect_aggregation_races(config: &WorkflowConfig) -> Vec<ScientificWarning> {
         let dims = unrepresented.join("; ");
         warnings.push(ScientificWarning {
             coercion_rule: None,
-            code: "SCI-AGG-RACE".into(),
+            code: sci_codes::AGG_RACE.into(),
             rule: rule.name.clone(),
             message: format!(
                 "rule fans out per {dims}, but its declared outputs are not keyed by that \
@@ -437,7 +438,7 @@ fn check_variant_calling_rules(
     if shell_lower.contains("variantrecalibrator") && sample_count < MIN_VQSR_SAMPLES {
         warnings.push(ScientificWarning {
             coercion_rule: None,
-            code: "SCI-VQSR-COHORT".into(),
+            code: sci_codes::VQSR_COHORT.into(),
             rule: rule.name.clone(),
             message: format!(
                 "VariantRecalibrator trains on the cohort, but only {} \
@@ -456,7 +457,7 @@ fn check_variant_calling_rules(
     if shell_lower.contains("baserecalibrator") && !shell_lower.contains("--known-sites") {
         warnings.push(ScientificWarning {
             coercion_rule: None,
-            code: "SCI-BQSR-NO-KNOWN-SITES".into(),
+            code: sci_codes::BQSR_NO_KNOWN_SITES.into(),
             rule: rule.name.clone(),
             message: "BaseRecalibrator has no --known-sites resources — without them \
                       recalibration cannot model known variation."
@@ -474,7 +475,7 @@ fn check_variant_calling_rules(
             // SCI-MUTECT2-TUMOR-ONLY
             warnings.push(ScientificWarning {
                 coercion_rule: None,
-                code: "SCI-MUTECT2-TUMOR-ONLY".into(),
+                code: sci_codes::MUTECT2_TUMOR_ONLY.into(),
                 rule: rule.name.clone(),
                 message: "Mutect2 runs without a matched normal. Tumor-only mode is supported, \
                           but GATK's documentation stresses that a matched normal helps not \
@@ -499,7 +500,7 @@ fn check_variant_calling_rules(
             {
                 warnings.push(ScientificWarning {
                     coercion_rule: None,
-                    code: "SCI-MUTECT2-NO-PON".into(),
+                    code: sci_codes::MUTECT2_NO_PON.into(),
                     rule: rule.name.clone(),
                     message: "Mutect2 in tumor-only mode is missing a Panel of Normals (PoN). \
                               Without a PoN, recurrent sequencing artifacts will be falsely called as somatic."
@@ -516,7 +517,7 @@ fn check_variant_calling_rules(
             {
                 warnings.push(ScientificWarning {
                     coercion_rule: None,
-                    code: "SCI-MUTECT2-NO-GERMLINE".into(),
+                    code: sci_codes::MUTECT2_NO_GERMLINE.into(),
                     rule: rule.name.clone(),
                     message: "Mutect2 in tumor-only mode is missing --germline-resource. \
                               Without population allele frequencies, common germline variants cannot be filtered."
@@ -540,7 +541,7 @@ fn check_variant_calling_rules(
         if produces_gvcf && !has_erc {
             warnings.push(ScientificWarning {
                 coercion_rule: None,
-                code: "SCI-HAPLOTYPECALLER-GVCF-ERC".into(),
+                code: sci_codes::HAPLOTYPECALLER_GVCF_ERC.into(),
                 rule: rule.name.clone(),
                 message: "HaplotypeCaller targets a gVCF output path but lacks -ERC GVCF / --emit-ref-confidence GVCF. \
                           Standard VCF output will be emitted without reference confidence blocks needed for joint genotyping."
@@ -559,7 +560,7 @@ fn check_variant_calling_rules(
     {
         warnings.push(ScientificWarning {
             coercion_rule: None,
-            code: "SCI-GENOTYPEGVCFS-NO-NEW-QUAL".into(),
+            code: sci_codes::GENOTYPEGVCFS_NO_NEW_QUAL.into(),
             rule: rule.name.clone(),
             message: "GenotypeGVCFs is executed without explicit quality scoring model flag (--new-qual). \
                       Legacy Phred score calculation inflates QUAL values on large cohorts."
@@ -576,7 +577,7 @@ fn check_variant_calling_rules(
     {
         warnings.push(ScientificWarning {
             coercion_rule: None,
-            code: "SCI-DEEPVARIANT-MODEL-TYPE".into(),
+            code: sci_codes::DEEPVARIANT_MODEL_TYPE.into(),
             rule: rule.name.clone(),
             message: "DeepVariant invocation lacks the required --model_type argument. \
                       DeepVariant must know the sequencing modality to load appropriate convolutional weights."
@@ -593,7 +594,7 @@ fn check_variant_calling_rules(
     {
         warnings.push(ScientificWarning {
             coercion_rule: None,
-            code: "SCI-MANTA-NO-CONFIG".into(),
+            code: sci_codes::MANTA_NO_CONFIG.into(),
             rule: rule.name.clone(),
             message:
                 "Manta structural variant configuration lacks reference genome FASTA specification."
@@ -609,7 +610,7 @@ fn check_variant_calling_rules(
     {
         warnings.push(ScientificWarning {
             coercion_rule: None,
-            code: "SCI-STRELKA-NO-MANTA".into(),
+            code: sci_codes::STRELKA_NO_MANTA.into(),
             rule: rule.name.clone(),
             message: "Strelka somatic workflow is executed without Manta candidate indels (--indelCandidates). \
                       Small somatic indel calling sensitivity will be significantly degraded."
@@ -631,7 +632,7 @@ fn check_variant_calling_rules(
         if has_uncompressed {
             warnings.push(ScientificWarning {
                 coercion_rule: None,
-                code: "SCI-STRELKA-TARGETS-UNCOMPRESSED".into(),
+                code: sci_codes::STRELKA_TARGETS_UNCOMPRESSED.into(),
                 rule: rule.name.clone(),
                 message: "Strelka target region BED file is uncompressed; Strelka requires bgzip-compressed and tabix-indexed target regions."
                     .into(),
@@ -650,7 +651,7 @@ fn check_variant_calling_rules(
     {
         warnings.push(ScientificWarning {
             coercion_rule: None,
-            code: "SCI-VEP-OFFLINE-CACHE".into(),
+            code: sci_codes::VEP_OFFLINE_CACHE.into(),
             rule: rule.name.clone(),
             message: "Variant Effect Predictor (VEP) runs without local --cache or --offline flags. \
                       Querying online Ensembl REST endpoints causes extreme latency and breaks offline reproducibility."
@@ -676,7 +677,7 @@ fn check_alignment_rules(
     {
         warnings.push(ScientificWarning {
             coercion_rule: None,
-            code: "SCI-BWA-MEM-NO-RG".into(),
+            code: sci_codes::BWA_MEM_NO_RG.into(),
             rule: rule.name.clone(),
             message: "bwa mem is invoked without read group declaration (-R). \
                       Downstream GATK and Picard tools will fail when @RG headers and SM tags are absent."
@@ -692,7 +693,7 @@ fn check_alignment_rules(
         if !has_rg && !shell_lower.contains("--version") && !shell_lower.contains("--help") {
             warnings.push(ScientificWarning {
                 coercion_rule: None,
-                code: "SCI-BOWTIE2-NO-RG".into(),
+                code: sci_codes::BOWTIE2_NO_RG.into(),
                 rule: rule.name.clone(),
                 message: "bowtie2 alignment is missing read group specification (--rg-id / --rg). \
                           Alignments without @RG metadata cannot be processed by variant calling pipelines."
@@ -712,7 +713,7 @@ fn check_alignment_rules(
     {
         warnings.push(ScientificWarning {
             coercion_rule: None,
-            code: "SCI-MINIMAP2-PRESET".into(),
+            code: sci_codes::MINIMAP2_PRESET.into(),
             rule: rule.name.clone(),
             message: "minimap2 is invoked without an explicit preset flag (-x). \
                       Default heuristic parameters may severely degrade mapping quality on PacBio, ONT, or short reads."
@@ -756,7 +757,7 @@ fn check_alignment_rules(
             if total_sort_mem > rule_mem_mb {
                 warnings.push(ScientificWarning {
                     coercion_rule: None,
-                    code: "SCI-SORT-THREADS-MEM-PRODUCT".into(),
+                    code: sci_codes::SORT_THREADS_MEM_PRODUCT.into(),
                     rule: rule.name.clone(),
                     message: format!(
                         "samtools sort memory specification (-m {m_mb} MB * {threads} threads = {total_sort_mem} MB) \
@@ -777,7 +778,7 @@ fn check_alignment_rules(
         if has_sam_input {
             warnings.push(ScientificWarning {
                 coercion_rule: None,
-                code: "SCI-SAMTOOLS-INDEX-UNSORTED".into(),
+                code: sci_codes::SAMTOOLS_INDEX_UNSORTED.into(),
                 rule: rule.name.clone(),
                 message: "samtools index invoked on a SAM file; samtools index strictly requires coordinate-sorted BAM or CRAM."
                     .into(),
@@ -794,7 +795,7 @@ fn check_alignment_rules(
     {
         warnings.push(ScientificWarning {
             coercion_rule: None,
-            code: "SCI-MARKDUPLICATES-REMOVE-DUPS".into(),
+            code: sci_codes::MARKDUPLICATES_REMOVE_DUPS.into(),
             rule: rule.name.clone(),
             message: "MarkDuplicates is configured with REMOVE_DUPLICATES=true. \
                       Discarding duplicated alignments permanently removes read evidence needed for structural variant and CNV calling."
@@ -812,7 +813,7 @@ fn check_alignment_rules(
     {
         warnings.push(ScientificWarning {
             coercion_rule: None,
-            code: "SCI-HISAT2-NO-SPLICE-SITES".into(),
+            code: sci_codes::HISAT2_NO_SPLICE_SITES.into(),
             rule: rule.name.clone(),
             message: "hisat2 RNA-seq alignment executed without --known-splicesite-infile. \
                       Splice junction discovery and mapping accuracy across annotated exons will be reduced."
@@ -829,7 +830,7 @@ fn check_alignment_rules(
     {
         warnings.push(ScientificWarning {
             coercion_rule: None,
-            code: "SCI-FASTP-DEDUPLICATION".into(),
+            code: sci_codes::FASTP_DEDUPLICATION.into(),
             rule: rule.name.clone(),
             message: "fastp deduplication (--dedup) enabled without UMI tagging on potential RNA-seq data. \
                       Sequence-based deduplication without molecular barcodes eliminates biological dynamic range for highly expressed genes."
@@ -860,7 +861,7 @@ fn check_rnaseq_rules(
     {
         warnings.push(ScientificWarning {
             coercion_rule: None,
-            code: "SCI-FEATURECOUNTS-STRAND".into(),
+            code: sci_codes::FEATURECOUNTS_STRAND.into(),
             rule: rule.name.clone(),
             message: "featureCounts runs without an explicit strandness flag — the default \
                       is unstranded (-s 0), which miscounts stranded libraries."
@@ -878,7 +879,7 @@ fn check_rnaseq_rules(
     if shell_lower.contains("featurecounts") && featurecounts_has_multi_overlap(shell) {
         warnings.push(ScientificWarning {
             coercion_rule: None,
-            code: "SCI-FEATURECOUNTS-MULTI-OVERLAP".into(),
+            code: sci_codes::FEATURECOUNTS_MULTI_OVERLAP.into(),
             rule: rule.name.clone(),
             message: "featureCounts runs with -O (assign reads to all overlapping meta-features). \
                       This causes double-counting for genes with overlapping genomic coordinates on opposite strands."
@@ -896,7 +897,7 @@ fn check_rnaseq_rules(
     {
         warnings.push(ScientificWarning {
             coercion_rule: None,
-            code: "SCI-STAR-SJDB-OVERHANG".into(),
+            code: sci_codes::STAR_SJDB_OVERHANG.into(),
             rule: rule.name.clone(),
             message: "STAR index generation includes annotation (--sjdbGTFfile) but omits --sjdbOverhang. \
                       The default value 100 may degrade junction mapping for 150bp or 75bp sequencing reads."
@@ -910,7 +911,7 @@ fn check_rnaseq_rules(
     if shell_lower.contains("star ") && shell_lower.contains("--genomeload loadandkeep") {
         warnings.push(ScientificWarning {
             coercion_rule: None,
-            code: "SCI-STAR-GENOME-LOAD".into(),
+            code: sci_codes::STAR_GENOME_LOAD.into(),
             rule: rule.name.clone(),
             message: "STAR uses --genomeLoad LoadAndKeep. In batch and cluster environments, \
                       retaining the shared genome segment in RAM can lead to memory leakage and node eviction."
@@ -926,7 +927,7 @@ fn check_rnaseq_rules(
     {
         warnings.push(ScientificWarning {
             coercion_rule: None,
-            code: "SCI-SALMON-LIBTYPE".into(),
+            code: sci_codes::SALMON_LIBTYPE.into(),
             rule: rule.name.clone(),
             message: "salmon quant uses automatic library type detection (-l A). \
                       Automatic inference on shallow-coverage samples can select inconsistent strandedness models."
@@ -940,7 +941,7 @@ fn check_rnaseq_rules(
     if shell_lower.contains("salmon quant") && !shell_lower.contains("--gcbias") {
         warnings.push(ScientificWarning {
             coercion_rule: None,
-            code: "SCI-SALMON-NO-GC-BIAS".into(),
+            code: sci_codes::SALMON_NO_GC_BIAS.into(),
             rule: rule.name.clone(),
             message: "salmon quant is executed without --gcBias correction. \
                       Illumina RNA-seq exhibits systemic sequence-specific GC biases that skew transcript quantification."
@@ -957,7 +958,7 @@ fn check_rnaseq_rules(
     {
         warnings.push(ScientificWarning {
             coercion_rule: None,
-            code: "SCI-KALLISTO-SINGLE-END-FRAG".into(),
+            code: sci_codes::KALLISTO_SINGLE_END_FRAG.into(),
             rule: rule.name.clone(),
             message: "kallisto quant in single-end mode requires mean fragment length (-l / --fragment-length). \
                       kallisto will abort execution without this parameter."
@@ -973,7 +974,7 @@ fn check_rnaseq_rules(
     {
         warnings.push(ScientificWarning {
             coercion_rule: None,
-            code: "SCI-RSEM-NO-STRAND".into(),
+            code: sci_codes::RSEM_NO_STRAND.into(),
             rule: rule.name.clone(),
             message: "rsem-calculate-expression lacks --strand-specific configuration. \
                       Strand-specific libraries will be estimated using unstranded expectations."
@@ -991,7 +992,7 @@ fn check_rnaseq_rules(
     {
         warnings.push(ScientificWarning {
             coercion_rule: None,
-            code: "SCI-STRINGTIE-NO-GUIDE".into(),
+            code: sci_codes::STRINGTIE_NO_GUIDE.into(),
             rule: rule.name.clone(),
             message: "stringtie transcript assembly is running without a reference annotation guide (-G). \
                       De novo assembly without reference guidance results in fragmented gene models."
@@ -1008,7 +1009,7 @@ fn check_rnaseq_rules(
     {
         warnings.push(ScientificWarning {
             coercion_rule: None,
-            code: "SCI-DESEQ2-MIN-REPLICATES".into(),
+            code: sci_codes::DESEQ2_MIN_REPLICATES.into(),
             rule: rule.name.clone(),
             message: format!(
                 "Differential expression analysis configured with only {sample_count} sample(s). \
@@ -1028,7 +1029,7 @@ fn check_rnaseq_rules(
     {
         warnings.push(ScientificWarning {
             coercion_rule: None,
-            code: "SCI-CELLRANGER-INTRONS".into(),
+            code: sci_codes::CELLRANGER_INTRONS.into(),
             rule: rule.name.clone(),
             message: "cellranger count on single-nucleus RNA-seq (snRNA-seq) lacks --include-introns. \
                       Nuclear pre-mRNA accounts for up to 50% of reads; omitting introns causes high dropout."
@@ -1048,7 +1049,7 @@ fn check_rnaseq_rules(
     {
         warnings.push(ScientificWarning {
             coercion_rule: None,
-            code: "SCI-SEURAT-NO-NORMALIZATION".into(),
+            code: sci_codes::SEURAT_NO_NORMALIZATION.into(),
             rule: rule.name.clone(),
             message: "Single-cell clustering/dimensionality reduction executed without apparent prior normalization. \
                       Cell-to-cell differences in sequencing depth will dominate clustering over biological variation."
@@ -1071,7 +1072,7 @@ fn check_epigenomics_rules(
         if !shell_lower.contains("-g ") && !shell_lower.contains("--gsize") {
             warnings.push(ScientificWarning {
                 coercion_rule: None,
-                code: "SCI-MACS2-GENOME-SIZE".into(),
+                code: sci_codes::MACS2_GENOME_SIZE.into(),
                 rule: rule.name.clone(),
                 message: "macs2 callpeak is missing explicit effective genome size (-g / --gsize). \
                           Defaulting to human ('hs') will invalidate FDR and peak significance on other model organisms."
@@ -1089,7 +1090,7 @@ fn check_epigenomics_rules(
         if mentions_broad_mark && !shell_lower.contains("--broad") {
             warnings.push(ScientificWarning {
                 coercion_rule: None,
-                code: "SCI-MACS2-BROAD-PEAKS".into(),
+                code: sci_codes::MACS2_BROAD_PEAKS.into(),
                 rule: rule.name.clone(),
                 message: "macs2 callpeak is targeting broad histone marks without the --broad flag. \
                           Diffuse chromatin enrichment will be fragmented into spurious narrow peaks."
@@ -1108,7 +1109,7 @@ fn check_epigenomics_rules(
         if mentions_pe && shell_lower.contains("-f bam") && !shell_lower.contains("-f bampe") {
             warnings.push(ScientificWarning {
                 coercion_rule: None,
-                code: "SCI-MACS2-PAIRED-END-FORMAT".into(),
+                code: sci_codes::MACS2_PAIRED_END_FORMAT.into(),
                 rule: rule.name.clone(),
                 message:
                     "macs2 callpeak specifies single-end format '-f BAM' for paired-end library. \
@@ -1125,7 +1126,7 @@ fn check_epigenomics_rules(
         {
             warnings.push(ScientificWarning {
                 coercion_rule: None,
-                code: "SCI-CHIP-NO-CONTROL".into(),
+                code: sci_codes::CHIP_NO_CONTROL.into(),
                 rule: rule.name.clone(),
                 message: "macs2 callpeak is running without a matched control / input BAM (-c / --control). \
                           ChIP-seq peak calling without control suffers high false-positive rates due to local chromatin copy number and GC bias."
@@ -1144,7 +1145,7 @@ fn check_epigenomics_rules(
     {
         warnings.push(ScientificWarning {
             coercion_rule: None,
-            code: "SCI-ATAC-SHIFT-COORDINATES".into(),
+            code: sci_codes::ATAC_SHIFT_COORDINATES.into(),
             rule: rule.name.clone(),
             message: "ATAC-seq peak calling performed without Tn5 transposase coordinate shifting. \
                       Cut sites must be shifted (+4 bp on +, -5 bp on - strand) to center on open chromatin events."
@@ -1162,7 +1163,7 @@ fn check_epigenomics_rules(
     {
         warnings.push(ScientificWarning {
             coercion_rule: None,
-            code: "SCI-BISMARK-NON-DIRECTIONAL".into(),
+            code: sci_codes::BISMARK_NON_DIRECTIONAL.into(),
             rule: rule.name.clone(),
             message: "Bismark alignment on PBAT / non-directional bisulfite library lacks --non_directional. \
                       Reads from the other strands will fail to align, losing over 50% of sequencing data."
@@ -1179,7 +1180,7 @@ fn check_epigenomics_rules(
     {
         warnings.push(ScientificWarning {
             coercion_rule: None,
-            code: "SCI-BOWTIE-BISULFITE-MISMATCH".into(),
+            code: sci_codes::BOWTIE_BISULFITE_MISMATCH.into(),
             rule: rule.name.clone(),
             message:
                 "Bisulfite alignment uses excessively strict mismatch score (--score-min L,0,0). \
@@ -1197,7 +1198,7 @@ fn check_epigenomics_rules(
     {
         warnings.push(ScientificWarning {
             coercion_rule: None,
-            code: "SCI-BEDTOOLS-GENOME-FILE".into(),
+            code: sci_codes::BEDTOOLS_GENOME_FILE.into(),
             rule: rule.name.clone(),
             message: "bedtools slop/flank is executed without chromosome length definitions (-g). \
                       Features extended beyond chromosome ends will create invalid coordinates."
@@ -1222,7 +1223,7 @@ fn check_metagenomics_rules(
     {
         warnings.push(ScientificWarning {
             coercion_rule: None,
-            code: "SCI-KRAKEN2-CONFIDENCE".into(),
+            code: sci_codes::KRAKEN2_CONFIDENCE.into(),
             rule: rule.name.clone(),
             message: "kraken2 runs with default confidence threshold of 0.0. \
                       Shared k-mers between related species cause substantial false-positive genus and species assignments."
@@ -1238,7 +1239,7 @@ fn check_metagenomics_rules(
     {
         warnings.push(ScientificWarning {
             coercion_rule: None,
-            code: "SCI-BRACKEN-READ-LEN".into(),
+            code: sci_codes::BRACKEN_READ_LEN.into(),
             rule: rule.name.clone(),
             message: "bracken abundance estimation lacks read length parameter (-r). \
                       Bracken relies on precomputed database distributions for specific read lengths (e.g. 100, 150)."
@@ -1254,7 +1255,7 @@ fn check_metagenomics_rules(
     {
         warnings.push(ScientificWarning {
             coercion_rule: None,
-            code: "SCI-QIIME2-DENOISE-TRIM".into(),
+            code: sci_codes::QIIME2_DENOISE_TRIM.into(),
             rule: rule.name.clone(),
             message: "QIIME2 DADA2 denoising is configured without 3' quality truncation (--p-trunc-len 0). \
                       Degraded quality tails at read ends will dramatically increase error-rate estimates and inflate spurious ASVs."
@@ -1270,7 +1271,7 @@ fn check_metagenomics_rules(
     {
         warnings.push(ScientificWarning {
             coercion_rule: None,
-            code: "SCI-HUMANN-NUCLEOTIDE-DB".into(),
+            code: sci_codes::HUMANN_NUCLEOTIDE_DB.into(),
             rule: rule.name.clone(),
             message: "HUMAnN functional profiling is running without explicit --nucleotide-database. \
                       HUMAnN will skip ChocoPhlAn pangenome alignment and fall back directly to translated diamond search."
@@ -1287,7 +1288,7 @@ fn check_metagenomics_rules(
     {
         warnings.push(ScientificWarning {
             coercion_rule: None,
-            code: "SCI-METAPHLAN-UNKNOWN-ESTIMATION".into(),
+            code: sci_codes::METAPHLAN_UNKNOWN_ESTIMATION.into(),
             rule: rule.name.clone(),
             message: "MetaPhlAn --unknown_estimation requires explicit marker database index path (--bowtie2db)."
                 .into(),
@@ -1300,7 +1301,7 @@ fn check_metagenomics_rules(
     if shell_lower.contains("checkm lineage_wf") && !shell_lower.contains("-x ") {
         warnings.push(ScientificWarning {
             coercion_rule: None,
-            code: "SCI-CHECKM-NO-LINEAGE".into(),
+            code: sci_codes::CHECKM_NO_LINEAGE.into(),
             rule: rule.name.clone(),
             message: "checkm lineage_wf is missing genome fasta extension flag (-x). \
                       CheckM will fail to detect FASTA bins in the input folder."
@@ -1329,7 +1330,7 @@ fn check_concurrency_hardware_rules(
     if heavy_tool && hardcoded_tmp {
         warnings.push(ScientificWarning {
             coercion_rule: None,
-            code: "SCI-TMPDIR-NOT-SCRATCH".into(),
+            code: sci_codes::TMPDIR_NOT_SCRATCH.into(),
             rule: rule.name.clone(),
             message: "Heavy bioinformatic tool writes temporary files to hardcoded '/tmp' instead of engine scratch space. \
                       Spilling large intermediate files into root /tmp can exhaust OS root volume."
@@ -1352,7 +1353,7 @@ fn check_concurrency_hardware_rules(
     if actual_pipes >= 2 && !has_pipefail {
         warnings.push(ScientificWarning {
             coercion_rule: None,
-            code: "SCI-PIPE-FAIL-DISABLED".into(),
+            code: sci_codes::PIPE_FAIL_DISABLED.into(),
             rule: rule.name.clone(),
             message: "Shell pipeline contains pipe commands ('|') without 'set -o pipefail'. \
                       Failures in upstream commands (e.g. samtools view) will be masked if the downstream tool exits 0."
@@ -1374,7 +1375,7 @@ fn check_concurrency_hardware_rules(
     if outputs_binary && masks_failure_with_touch {
         warnings.push(ScientificWarning {
             coercion_rule: None,
-            code: "SCI-ZERO-BYTE-COMPLETION".into(),
+            code: sci_codes::ZERO_BYTE_COMPLETION.into(),
             rule: rule.name.clone(),
             message: "Rule masks failure or creates empty zero-byte binary biological artifacts (.bam / .vcf.gz). \
                       Downstream tools expecting indexed binary headers will fail with corrupted stream errors."
@@ -1394,7 +1395,7 @@ fn check_concurrency_hardware_rules(
     {
         warnings.push(ScientificWarning {
             coercion_rule: None,
-            code: "SCI-MULTI-TENANT-PORT-COLLISION".into(),
+            code: sci_codes::MULTI_TENANT_PORT_COLLISION.into(),
             rule: rule.name.clone(),
             message: "Interactive server rule uses a hardcoded port. In multi-tenant HPC or cloud environments, concurrent runs will fail with port conflicts."
                 .into(),
