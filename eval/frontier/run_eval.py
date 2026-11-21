@@ -8,27 +8,35 @@ against the engine's three deterministic static gates:
     oxo-flow dry-run  --json   (expansion preview, resource audit)
     oxo-flow lint     --json   (best practices)
 
-Variants
-    cli           full CLI path: `oxo-flow template --ai` (rich prompt +
-                  knowledge tools + tool-calling loop) — the "strong" path.
-    naive-prompt  single-shot naive prompt (7 generic rules, no tools, no
-                  knowledge injection) — a prompt-axis floor, not a product
-                  path. Named `minimal` before #948 P2-4: it claimed to
-                  replicate the web chat prompt, but since the #342
-                  unification every surface (web chat included) routes
-                  through the shared PipelineGenAgent, so the arm now
-                  measures a bare prompt baseline and is named for it.
+Variants (pre-registered matched three-arm ablation, plan:109-111)
+    unconstrained   Arm A: direct single-shot LLM generation, no compiler or
+                    contract feedback - the prompt-axis floor, not a product
+                    path. Named `minimal` before #948 P2-4 and `naive-prompt`
+                    before #1315; it is a bare prompt baseline.
+    syntax-only     Arm B: PipelineGenAgent (rich prompt + knowledge tools +
+                    tool-calling loop) with TOML/DAG syntax + structural
+                    feedback only. BioTypes (`TYPE-*`), scientific preflight
+                    (`SCI-*`) and deep-check (`D00*`) feedback are DISABLED
+                    (the engine's `--ai-contract-feedback` flag is omitted).
+    full-contract   Arm C: PipelineGenAgent with BioTypes (`TYPE-*`) +
+                    scientific_preflight (`SCI-*`) + deep_check (`D00*`)
+                    feedback ENABLED (the engine is invoked with
+                    `--ai-contract-feedback`).
+
+Arms B and C share the same engine path (`oxo-flow template --ai`); they differ
+by an actual feedback toggle (`--ai-contract-feedback`), never by a label.
 
 Success is judged ONLY by the deterministic gates (never by an LLM judge),
-so the numbers are cheap and the judging is deterministic; the naive-prompt
+so the numbers are cheap and the judging is deterministic; the unconstrained
 arm is pinned to temperature 0 where the provider honors it but is not
-fully reproducible across providers/runs (the cli arm inherits the engine's
-[ai] temperature config, unset = provider default). Token usage comes from
-the AI session archives (cli) or the provider response (naive-prompt); cost
-is derived from a configurable price table.
+fully reproducible across providers/runs (the syntax-only / full-contract arms
+inherit the engine's [ai] temperature config, unset = provider default). Token
+usage comes from the AI session archives (syntax-only / full-contract) or the
+provider response (unconstrained); cost is derived from a configurable price
+table.
 
 Usage
-    # pilot: all intents, both variants, the model configured in the env
+    # pilot: all intents, all three arms, the model configured in the env
     python3 run_eval.py
 
     # subset, specific models, custom output dir
@@ -152,7 +160,7 @@ def anthropic_chat(creds: dict, model: str, system: str, user: str,
                    temperature: float | None = 0.0) -> tuple[str | None, dict, str | None]:
     """One Anthropic-messages call. Returns (text, usage, error).
 
-    temperature defaults to 0 so naive-prompt draws are as deterministic as
+    temperature defaults to 0 so unconstrained-arm draws are as deterministic as
     the provider allows; the Anthropic Messages API has no seed field, so
     providers behind an Anthropic-compatible endpoint may still vary (#948
     P3-12 — only the *judging* is deterministic, never the sampling).
@@ -190,6 +198,9 @@ def anthropic_chat(creds: dict, model: str, system: str, user: str,
     return text or None, {"input": usage_in, "output": usage_out}, None
 
 
+ARMS = ("unconstrained", "syntax-only", "full-contract")
+
+
 def run_generation(variant: str, intent: str, model: str, run_dir: Path,
                    creds: dict, binary: str, args) -> dict:
     """Generate a workflow. Returns usage/meta dict; writes workflow.oxoflow."""
@@ -198,7 +209,7 @@ def run_generation(variant: str, intent: str, model: str, run_dir: Path,
     started = time.time()
     meta["wall_s"] = None
 
-    if variant == "naive-prompt":
+    if variant == "unconstrained":
         text, usage, err = anthropic_chat(
             creds, model, NAIVE_SYSTEM.format(intent=intent),
             f"## User Request\nGenerate a .oxoflow pipeline for: {intent}\n\n"
@@ -218,7 +229,7 @@ def run_generation(variant: str, intent: str, model: str, run_dir: Path,
         (run_dir / "workflow.oxoflow").write_text(toml)
         meta["generated"] = True
 
-    elif variant == "cli":
+    elif variant in ("syntax-only", "full-contract"):
         env = dict(os.environ)
         env["OXO_FLOW_AI_PROVIDER"] = "claude"
         env["ANTHROPIC_MODEL"] = model
@@ -233,6 +244,12 @@ def run_generation(variant: str, intent: str, model: str, run_dir: Path,
             cmd += ["--ai-team-profile", args.profile]
         if args.attempts != 1:
             cmd += ["--ai-attempts", str(args.attempts)]
+        # The ONLY difference between Arm B and Arm C: whether the engine's
+        # generation validator runs the BioTypes / scientific-preflight /
+        # deep-check contract feedback loop (--ai-contract-feedback). Arm B
+        # omits it (syntax + structural feedback only); Arm C enables it.
+        if variant == "full-contract":
+            cmd += ["--ai-contract-feedback"]
         try:
             proc = subprocess.run(cmd, cwd=run_dir, env=env, timeout=args.timeout,
                                   capture_output=True, text=True)
@@ -275,7 +292,7 @@ def run_generation(variant: str, intent: str, model: str, run_dir: Path,
         elif not meta["error"]:
             meta["error"] = "no .oxoflow file produced"
     else:
-        sys.exit(f"unknown variant: {variant}")
+        sys.exit(f"unknown variant: {variant} (expected one of {', '.join(ARMS)})")
 
     meta["wall_s"] = round(time.time() - started, 1)
     return meta
@@ -394,7 +411,7 @@ def main() -> None:
                     help="rebuild report.md from an existing results.json "
                          "without calling any provider (reuses the campaign "
                          "aggregation; nothing else runs)")
-    ap.add_argument("--variants", default="naive-prompt,cli")
+    ap.add_argument("--variants", default="unconstrained,syntax-only,full-contract")
     ap.add_argument("--models", default="", help="comma list; default: env ANTHROPIC_MODEL")
     ap.add_argument("--filter", default="", help="comma list of intent ids to include")
     ap.add_argument("--max-retries", type=int, default=None,
@@ -439,6 +456,10 @@ def main() -> None:
     default_model = creds["ANTHROPIC_MODEL"]
     models = [m for m in args.models.split(",") if m] or [default_model]
     variants = [v for v in args.variants.split(",") if v]
+    unknown = [v for v in variants if v not in ARMS]
+    if unknown:
+        sys.exit(f"unknown variant(s): {', '.join(unknown)} "
+                 f"(expected one of {', '.join(ARMS)})")
 
     intents = json.loads(Path(args.intents).read_text())["intents"]
     if args.filter:

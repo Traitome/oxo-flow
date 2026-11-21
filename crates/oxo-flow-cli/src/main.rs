@@ -522,6 +522,14 @@ pub enum Commands {
         /// wins, so later attempts are only paid when earlier ones fail).
         #[arg(long = "ai-attempts", value_name = "N", default_value_t = 1)]
         ai_attempts: u32,
+        /// Arm C contract feedback for the AI generation loop (issue #1315):
+        /// feed BioTypes (`TYPE-*`), scientific preflight (`SCI-*`), and deep
+        /// check (`D00*`) findings back to the model, so the generation
+        /// enforces the same biological/scientific contracts the run gate
+        /// does. Off by default (syntax/structural feedback only) — a
+        /// harness-scoped opt-in for the pre-registered matched ablation.
+        #[arg(long = "ai-contract-feedback")]
+        ai_contract_feedback: bool,
     },
     /// AI status, test, setup, and workflow explanation.
     ///
@@ -1894,6 +1902,7 @@ async fn main() -> Result<()> {
             ai_max_retries,
             ai_team_profile,
             ai_attempts,
+            ai_contract_feedback,
         } => {
             // CLI flag wins over `[ai] team_profile` — the resolved-config
             // value is merged inside generate_workflow from the config chain.
@@ -1915,6 +1924,7 @@ async fn main() -> Result<()> {
                     max_retries: ai_max_retries,
                     team_profile,
                     attempts: ai_attempts,
+                    contract_feedback: ai_contract_feedback,
                 },
             )
             .await?

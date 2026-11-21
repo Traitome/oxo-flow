@@ -14,6 +14,8 @@ import unittest
 from collections import Counter
 from pathlib import Path
 
+import run_eval
+
 HERE = Path(__file__).resolve().parent
 INTENTS = HERE / "intents.json"
 README = HERE / "README.md"
@@ -47,7 +49,8 @@ class IntentsContractTests(unittest.TestCase):
         vague = sum(1 for row in intents if row.get("vague"))
         readme = README.read_text()
 
-        self.assertIn(f"all {len(intents)} intents x naive-prompt,cli", readme)
+        variants = ",".join(run_eval.ARMS)
+        self.assertIn(f"all {len(intents)} intents x {variants}", readme)
         self.assertIn(f"spans {len(domains)} domains", readme)
         self.assertIn(f"Intent set is {len(intents)}", readme)
         self.assertIn(f"{vague} of them deliberately vague", readme)

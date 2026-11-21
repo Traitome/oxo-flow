@@ -200,7 +200,7 @@ outputs = { default = "GVCF[compression=bgzip]" }
 
 **Hypothesis**: compiler feedback and biological contracts improve valid first-run synthesis and reduce silent errors relative to unconstrained generation.
 
-The current evaluation harness can compare unconstrained prompting, syntax-only feedback, and full validation feedback. Existing fixtures exercise the plumbing, but they do not establish an effect:
+The harness now exposes the pre-registered three-arm taxonomy and can run it: `run_eval.py --variants` accepts `unconstrained` (Arm A), `syntax-only` (Arm B), and `full-contract` (Arm C), where B and C go through the same `template --ai` path and differ by the actual engine feedback toggle `--ai-contract-feedback` (issue #1315). Existing fixtures exercise the plumbing, but the ablation has **not been run** — no matched A/B/C data exists yet, so no effect is established (see §3.2 required evidence below):
 
 1. **Structured Task Contract & Curation**: Building on `TeamProfile` (`crates/oxo-flow-ai/src/agent/team.rs`), the deterministic Curator grounds candidate tools and versions against the embedded knowledge base (`bioconda_tools.jsonl`, `biotools_overlay.jsonl`, `nfcore_modules.jsonl`, `edam_terms.jsonl`).
 2. **Compiler-in-the-Loop Checks**: Candidate `.oxoflow` artifacts pass schema validation, DAG analysis, `deep_check`, `scientific_preflight`, and `BioTypes` checks inside the orchestrator loop.
@@ -210,7 +210,7 @@ The current evaluation harness can compare unconstrained prompting, syntax-only 
 
 - Pre-registered held-out intents across modalities and workflow complexity.
 - Fixed models, prompts, tool availability, budgets, and seeds.
-- Matched Arms A/B/C with per-item raw results.
+- Matched Arms A/B/C with per-item raw results. (The harness and analysis now emit/pair exactly these three arms — issue #1315 — but no matched run has been collected; this line is NOT yet satisfied.)
 - McNemar and effect-size analysis only after matched data exists.
 - Prompt-injection, tool-poisoning, leakage, and unsupported-claim tests.
 
