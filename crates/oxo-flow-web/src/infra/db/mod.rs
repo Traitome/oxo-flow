@@ -199,9 +199,11 @@ pub enum PipelineWriteOutcome {
 /// Scope — users, auth sessions, API keys, OAuth CSRF state, pipelines and
 /// revisions, templates, shares, run-record metadata, clusters, chat history,
 /// audit logging, webhook configuration, and AI provider configuration all
-/// consume this trait. Actual run execution remains SQLite-only and gates
-/// `/api/runs*` with `RUNS_REQUIRE_STORAGE_BACKEND`; PostgreSQL deployments
-/// advertise that split through `PG_CAPABILITY_MATRIX`. A new domain handler
+/// consume this trait. The `/api/runs*` domain gates on an initialized
+/// backend of either kind with `RUNS_REQUIRE_STORAGE_BACKEND` — the check
+/// passes for SQLite or PostgreSQL and fires only when NO backend is
+/// initialized; PostgreSQL deployments advertise the served/gated split
+/// through `PG_CAPABILITY_MATRIX`. A new domain handler
 /// must call the trait, not add another raw-SQL path.
 #[async_trait]
 pub trait StorageBackend: Send + Sync {
