@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
+use super::type_codes;
 use super::{
     BioFormat, BioTypeSpec, CompressionKind, SortOrder, TypeViolation,
     coercion_rule_for_compression, coercion_rule_for_index, normalize_reference_build,
@@ -21,7 +22,11 @@ use crate::dag::WorkflowDag;
 /// advisory codes non-fatal — see `crate::format` and
 /// `crate::scientific_preflight`. This is the single source of truth so the
 /// two bridges cannot drift.
-pub const ADVISORY_TYPE_CODES: [&str; 3] = ["TYPE-008", "TYPE-009", "TYPE-010"];
+pub const ADVISORY_TYPE_CODES: [&str; 3] = [
+    type_codes::TYPE_008,
+    type_codes::TYPE_009,
+    type_codes::TYPE_010,
+];
 
 /// Returns true when `code` is an advisory (non-fatal) BioType diagnostic.
 pub fn is_advisory_type_code(code: &str) -> bool {
@@ -103,7 +108,7 @@ impl BioTypeSpec {
             };
 
             violations.push(TypeViolation {
-                code: "TYPE-001".to_string(),
+                code: type_codes::TYPE_001.to_string(),
                 message: format!(
                     "biological format mismatch: producer emits {}, but consumer requires {}",
                     self.format, expected.format
@@ -121,7 +126,7 @@ impl BioTypeSpec {
             let current_order = self.sort_order.unwrap_or(SortOrder::Unsorted);
             if !current_order.satisfies(expected_order) {
                 violations.push(TypeViolation {
-                    code: "TYPE-002".to_string(),
+                    code: type_codes::TYPE_002.to_string(),
                     message: format!(
                         "sort order mismatch: producer output is {}, but consumer requires {}",
                         current_order, expected_order
@@ -142,7 +147,7 @@ impl BioTypeSpec {
             let coercion_rule = coercion_rule_for_index(expected_index).map(str::to_string);
 
             violations.push(TypeViolation {
-                code: "TYPE-003".to_string(),
+                code: type_codes::TYPE_003.to_string(),
                 message: format!(
                     "missing companion index: consumer requires {} index, but producer does not declare it",
                     expected_index
@@ -163,7 +168,7 @@ impl BioTypeSpec {
             let norm_expected = normalize_reference_build(expected_build);
             if norm_my != norm_expected {
                 violations.push(TypeViolation {
-                    code: "TYPE-004".to_string(),
+                    code: type_codes::TYPE_004.to_string(),
                     message: format!(
                         "reference build conflict: producer aligned against '{}' ({}), but consumer requires '{}' ({})",
                         my_build, norm_my, expected_build, norm_expected
@@ -202,7 +207,7 @@ impl BioTypeSpec {
                     format!("missing fields: {}", missing_fields.join(", "))
                 };
                 violations.push(TypeViolation {
-                    code: "TYPE-005".to_string(),
+                    code: type_codes::TYPE_005.to_string(),
                     message: format!(
                         "read group contract mismatch: consumer requires valid @RG header tags ({missing_detail})"
                     ),
@@ -241,7 +246,7 @@ impl BioTypeSpec {
                 };
 
                 violations.push(TypeViolation {
-                    code: "TYPE-006".to_string(),
+                    code: type_codes::TYPE_006.to_string(),
                     message: format!(
                         "block compression mismatch: consumer requires {}, but producer provides {}",
                         expected_comp, current_comp
@@ -263,7 +268,7 @@ impl BioTypeSpec {
                 .collect();
             if !unmet.is_empty() {
                 violations.push(TypeViolation {
-                    code: "TYPE-007".to_string(),
+                    code: type_codes::TYPE_007.to_string(),
                     message: format!(
                         "attribute contract mismatch: consumer requires {} that the producer does not declare",
                         unmet
@@ -348,7 +353,7 @@ pub fn check_workflow_types(config: &WorkflowConfig, dag: &WorkflowDag) -> Vec<T
                             .join(", ")
                     },
                     violation: TypeViolation {
-                        code: "TYPE-008".to_string(),
+                        code: type_codes::TYPE_008.to_string(),
                         message: "unverifiable biological contract: consumer declares types but the upstream producer declares none, so this dataflow edge cannot be checked".to_string(),
                         suggestion: Some(
                             "declare the producer's output type under [rules.types].outputs (or [types.<name>]) so its biological output can be verified against the consumer contract"
@@ -398,7 +403,7 @@ pub fn check_workflow_types(config: &WorkflowConfig, dag: &WorkflowDag) -> Vec<T
                                     producer_channel: out_ch.clone(),
                                     consumer_channel: in_ch.clone(),
                                     violation: TypeViolation {
-                                        code: "TYPE-UNKNOWN".to_string(),
+                                        code: type_codes::TYPE_UNKNOWN.to_string(),
                                         message: format!(
                                             "{role} type for channel '{channel}' cannot be resolved: {message}"
                                         ),
@@ -443,7 +448,7 @@ pub fn check_workflow_types(config: &WorkflowConfig, dag: &WorkflowDag) -> Vec<T
                                 producer_channel: out_ch.clone(),
                                 consumer_channel: in_ch.clone(),
                                 violation: TypeViolation {
-                                    code: "TYPE-009".to_string(),
+                                    code: type_codes::TYPE_009.to_string(),
                                     message: format!(
                                         "reference build unverifiable: consumer requires build '{}', but the upstream producer declares no reference build, so alignment compatibility cannot be checked",
                                         expected_build
@@ -484,7 +489,7 @@ pub fn check_workflow_types(config: &WorkflowConfig, dag: &WorkflowDag) -> Vec<T
                         .collect::<Vec<_>>()
                         .join(", "),
                     violation: TypeViolation {
-                        code: "TYPE-010".to_string(),
+                        code: type_codes::TYPE_010.to_string(),
                         message: "unpairable biological contract: both rules declare types, but no output channel name matches an input channel name, so this dataflow edge cannot be checked".to_string(),
                         suggestion: Some(
                             "key the producer's [rules.types].outputs and the consumer's [rules.types].inputs with the same channel names (or align them with the rules' input/output paths) so the contracts can be paired"
