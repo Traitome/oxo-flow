@@ -48,7 +48,7 @@ each environment YAML, ensuring exact reproducibility across time.
 | `--quiet` | | Suppress informational output — the version banner is omitted; the `✓ Published to …` report, errors, and warnings are unaffected (verified: output is byte-identical with `--quiet`) |
 | `--no-color` | | Disable colored output |
 
-> The global `--json` flag is **not supported** by this command — passing it fails fast instead of being silently ignored. Machine-readable output is available from: `run`, `dry-run`, `validate`, `lint`, `test`, `status`, `wait`, `batch`, `info`, `knowledge`, `schema`, `verify-data`, `license`, `ai`, `graph`, `provenance verify`, `diff`, `runs gc`, `import`, `env list`/`check`, and `cluster status`/`cancel`/`logs` (see [`init`](init.md#options) for the canonical note).
+> The global `--json` flag is **not supported** by this command — passing it fails fast instead of being silently ignored. Machine-readable output is available from: `run`, `dry-run`, `validate`, `lint`, `test`, `status`, `wait`, `batch`, `resume`, `info`, `knowledge`, `schema`, `verify-data`, `license`, `ai`, `graph`, `provenance verify`, `diff`, `runs gc`, `import`, `env list`/`check`, and `cluster status`/`cancel`/`logs` (see [`init`](init.md#options) for the canonical note).
 
 ## Examples
 
