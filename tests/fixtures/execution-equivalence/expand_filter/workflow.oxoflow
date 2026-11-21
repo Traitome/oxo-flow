@@ -1,0 +1,43 @@
+# Execution-equivalence fixture: expand_filter (oxo-flow arm).
+# Expand over samples -> per-sample score -> fan-in threshold filter.
+# Same pinned container digest and same relative output paths as other arms.
+
+[workflow]
+name = "expand_filter"
+
+[[sample_groups]]
+name = "all"
+samples = ["s1", "s2", "s3"]
+
+# score: reads weighted by GC content
+[[rules]]
+name = "score"
+input = ["data/{sample}.fastq"]
+output = ["quant/{sample}.sf"]
+shell = """
+export LC_ALL=C
+mkdir -p quant
+reads=$(grep -c '^@' {input[0]})
+bases=$(awk 'NR%4==2 {n+=length($0)} END {print n+0}' {input[0]})
+gc=$(awk 'NR%4==2 {g+=gsub(/[GCgc]/,"")} END {print g+0}' {input[0]})
+score=$((gc * 10 / bases + reads))
+printf 'sample: {sample}\n' > {output[0]}
+printf 'score: %s\n' "$score" >> {output[0]}
+"""
+
+[rules.environment]
+docker = "python@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b"
+
+# filter: keep samples at/above threshold, deterministic order
+[[rules]]
+name = "filter"
+input = ["quant/s1.sf", "quant/s2.sf", "quant/s3.sf"]
+output = ["results/kept.tsv"]
+shell = """
+export LC_ALL=C
+mkdir -p results
+awk -F': ' '/^sample:/ {s=$2} /^score:/ {if ($2+0 >= 7) print s}' {input[0]} {input[1]} {input[2]} | sort > {output[0]}
+"""
+
+[rules.environment]
+docker = "python@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b"

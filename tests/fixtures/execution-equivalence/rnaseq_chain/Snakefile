@@ -1,0 +1,53 @@
+# Execution-equivalence fixture: rnaseq_chain (Snakemake arm).
+# Same intent as workflow.oxoflow: trim -> per-sample count -> fan-in summary.
+# Same pinned container digest, same relative output paths.
+#
+# The container is a config knob: a host with registry access uses the pinned
+# digest docker:// URL (default); an air-gapped host passes a locally built
+# SIF built FROM the same digest:
+#   snakemake --use-singularity --config container=/path/to/python.sif
+SAMPLES = ["s1", "s2", "s3"]
+IMAGE = config.get(
+    "container",
+    "docker://python@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+)
+
+rule all:
+    input:
+        "report/summary.tsv"
+
+rule trim:
+    input:
+        "data/{sample}.fastq"
+    output:
+        "trimmed/{sample}.fastq"
+    container:
+        IMAGE
+    shell:
+        "export LC_ALL=C; mkdir -p trimmed; grep -v '^$' {input} > {output}"
+
+rule count:
+    input:
+        "trimmed/{sample}.fastq"
+    output:
+        "counts/{sample}.tsv"
+    container:
+        IMAGE
+    shell:
+        r"""
+        export LC_ALL=C
+        mkdir -p counts
+        echo "sample: {wildcards.sample}" > {output}
+        echo "reads: $(grep -c '^@' {input})" >> {output}
+        echo "bases: $(awk 'NR%4==2 {{n+=length($0)}} END {{print n+0}}' {input})" >> {output}
+        """
+
+rule aggregate:
+    input:
+        expand("counts/{sample}.tsv", sample=SAMPLES)
+    output:
+        "report/summary.tsv"
+    container:
+        IMAGE
+    shell:
+        "export LC_ALL=C; mkdir -p report; cat {input} > {output}"

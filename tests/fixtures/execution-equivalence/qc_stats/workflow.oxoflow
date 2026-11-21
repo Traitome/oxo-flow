@@ -1,0 +1,29 @@
+# Execution-equivalence fixture: qc_stats (oxo-flow arm).
+# One stage: per-sample QC statistics (reads, bases, GC).
+# Same pinned container digest and same relative output paths as the other arms.
+
+[workflow]
+name = "qc_stats"
+
+[[sample_groups]]
+name = "all"
+samples = ["s1", "s2", "s3"]
+
+[[rules]]
+name = "qc"
+input = ["data/{sample}.fastq"]
+output = ["qc/{sample}.stats.txt"]
+shell = """
+export LC_ALL=C
+mkdir -p qc
+reads=$(grep -c '^@' {input[0]})
+bases=$(awk 'NR%4==2 {n+=length($0)} END {print n+0}' {input[0]})
+gc=$(awk 'NR%4==2 {g+=gsub(/[GCgc]/,"")} END {print g+0}' {input[0]})
+printf 'sample: {sample}\n' > {output[0]}
+printf 'reads: %s\n' "$reads" >> {output[0]}
+printf 'bases: %s\n' "$bases" >> {output[0]}
+printf 'gc: %s\n' "$gc" >> {output[0]}
+"""
+
+[rules.environment]
+docker = "python@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b"

@@ -1,0 +1,33 @@
+# Execution-equivalence fixture: qc_stats (Snakemake arm).
+# One stage: per-sample QC statistics (reads, bases, GC).
+# Same pinned container digest, same relative output paths.
+#
+# Container is a config knob: registry host uses the pinned dockER URL
+# (default); air-gapped host passes a SIF built FROM the same digest:
+#   snakemake --use-singularity --config container=/path/to/python.sif
+SAMPLES = ["s1", "s2", "s3"]
+IMAGE = config.get(
+    "container",
+    "docker://python@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+)
+
+rule all:
+    input:
+        expand("qc/{sample}.stats.txt", sample=SAMPLES)
+
+rule qc:
+    input:
+        "data/{sample}.fastq"
+    output:
+        "qc/{sample}.stats.txt"
+    container:
+        IMAGE
+    shell:
+        r"""
+        export LC_ALL=C
+        mkdir -p qc
+        echo "sample: {wildcards.sample}" > {output}
+        echo "reads: $(grep -c '^@' {input})" >> {output}
+        echo "bases: $(awk 'NR%4==2 {{n+=length($0)}} END {{print n+0}}' {input})" >> {output}
+        echo "gc: $(awk 'NR%4==2 {{g+=gsub(/[GCgc]/,"")}} END {{print g+0}}' {input})" >> {output}
+        """

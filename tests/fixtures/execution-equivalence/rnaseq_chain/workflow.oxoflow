@@ -1,0 +1,57 @@
+# Execution-equivalence fixture: rnaseq_chain (oxo-flow arm).
+# Three samples, a trim -> count chain, then a fan-in summary.
+# Every arm pins the SAME container digest and writes the SAME relative output
+# paths, so the declared-output SHA-256 sets compare directly.
+
+[workflow]
+name = "rnaseq_chain"
+
+[[sample_groups]]
+name = "all"
+samples = ["s1", "s2", "s3"]
+
+# trim: drop blank lines from each sample's FASTQ
+[[rules]]
+name = "trim"
+input = ["data/{sample}.fastq"]
+output = ["trimmed/{sample}.fastq"]
+shell = """
+export LC_ALL=C
+mkdir -p trimmed
+grep -v '^$' {input[0]} > {output[0]}
+"""
+
+[rules.environment]
+docker = "python@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b"
+
+# count: reads (@ lines) and bases (sum of sequence-line lengths)
+[[rules]]
+name = "count"
+input = ["trimmed/{sample}.fastq"]
+output = ["counts/{sample}.tsv"]
+shell = """
+export LC_ALL=C
+mkdir -p counts
+reads=$(grep -c '^@' {input[0]})
+bases=$(awk 'NR%4==2 {n+=length($0)} END {print n+0}' {input[0]})
+printf 'sample: {sample}\n' > {output[0]}
+printf 'reads: %s\n' "$reads" >> {output[0]}
+printf 'bases: %s\n' "$bases" >> {output[0]}
+"""
+
+[rules.environment]
+docker = "python@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b"
+
+# aggregate: fan-in in declared (sample-sorted) order
+[[rules]]
+name = "aggregate"
+input = ["counts/s1.tsv", "counts/s2.tsv", "counts/s3.tsv"]
+output = ["report/summary.tsv"]
+shell = """
+export LC_ALL=C
+mkdir -p report
+cat {input[0]} {input[1]} {input[2]} > {output[0]}
+"""
+
+[rules.environment]
+docker = "python@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b"
