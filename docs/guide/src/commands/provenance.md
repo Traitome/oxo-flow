@@ -1,11 +1,13 @@
 # oxo-flow provenance
 
-Verify output file integrity using stored checksums.
+Verify output file integrity using stored checksums, and compare the
+recorded output checksums of two checkpoints.
 
 ## Usage
 
 ```
 oxo-flow provenance verify [OPTIONS] <CHECKPOINT_PATH>
+oxo-flow provenance diff [OPTIONS] <LEFT_CHECKPOINT> <RIGHT_CHECKPOINT>
 ```
 
 ## Description
@@ -133,6 +135,85 @@ carries nothing else):
 cleaned files in sorted path order. When the checkpoint has no stored
 checksums, the document is still emitted with a `note` field describing
 the degradation.
+
+## Comparing two checkpoints (`provenance diff`)
+
+`provenance verify` checks **one** checkpoint against the files on disk.
+`provenance diff` compares the **recorded** output checksums of **two**
+checkpoints — e.g. two runs of the same workflow, or the same workflow on two
+hosts. It is the machine-readable primitive for asking whether two runs agree
+on every recorded artifact hash, without hand-comparing JSON.
+
+### Usage
+
+```
+oxo-flow provenance diff [OPTIONS] <LEFT_CHECKPOINT> <RIGHT_CHECKPOINT>
+```
+
+`diff` accepts the same global options as `verify` (`-v/--verbose`,
+`--quiet`, `--no-color`, `--json`).
+
+### Output
+
+```
+Provenance Diff left/checkpoint.json right/checkpoint.json
+
+  ✓ output/sample1.vcf sha256:abc123...
+  ✗ output/report.html (left: sha256:xxx, right: sha256:yyy)
+  - output/only_here.txt (only in left)
+  + output/new_in_b.txt (only in right)
+
+Summary: 1 matched, 1 differing, 1 only left, 1 only right
+```
+
+Each checkpoint's `checksums` and `cleaned_checksums` maps are merged before
+comparison via the **same shared merge** (`merge_recorded_checksums`) that
+`report --diff` uses, so the two surfaces can never classify the same input
+pair differently — a chunk moved into the cleaned bucket is a bookkeeping
+change, not a file change, and its merged value carries the `(cleaned by
+design)` annotation, so a mixed pair (recorded under `checksums` on one side,
+`cleaned_checksums` on the other) reads as `differing`, not a spurious
+`matched`. When a checkpoint has no embedded `checksums` object, `diff` falls
+back to the same legacy companion `checkpoint.checksums.json` file
+`provenance verify` reads. Artifacts are partitioned into four classes:
+
+- `matched` — present in both, identical checksums.
+- `differing` — present in both, different checksums.
+- `only_left` / `only_right` — recorded on one side only.
+
+### Exit code
+
+`diff` exits **0** when every recorded artifact agrees, and **nonzero** when any
+artifact differs or is recorded on only one side — so CI can gate on artifact
+agreement directly.
+
+### JSON output
+
+With `--json`, the document is written to stdout (stdout carries nothing else;
+the human table stays on stderr):
+
+```
+{
+  "command": "provenance",
+  "diff": {
+    "left": "/path/to/left/checkpoint.json",
+    "right": "/path/to/right/checkpoint.json",
+    "matched": 1,
+    "differing": 1,
+    "only_left": 1,
+    "only_right": 1,
+    "entries": [
+      {"artifact": "output/sample1.vcf", "status": "matched", "left": "sha256:abc...", "right": "sha256:abc..."},
+      {"artifact": "output/report.html", "status": "differing", "left": "sha256:xxx", "right": "sha256:yyy"},
+      {"artifact": "output/only_here.txt", "status": "only_left", "left": "sha256:zzz"},
+      {"artifact": "output/new_in_b.txt", "status": "only_right", "right": "sha256:www"}
+    ]
+  }
+}
+```
+
+`entries` is byte-stable (sorted artifact path order). A missing or malformed
+checkpoint is a clear error (nonzero exit), never a panic.
 
 ## See Also
 

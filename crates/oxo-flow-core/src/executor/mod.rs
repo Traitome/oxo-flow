@@ -77,7 +77,9 @@ pub(crate) fn expand_to_fixed_point(
 }
 
 // Re-export common items for backward compatibility and convenience
-pub use checkpoint::{BenchmarkRecord, CheckpointState, output_tail_bytes_from_env};
+pub use checkpoint::{
+    BenchmarkRecord, CheckpointState, merge_recorded_checksums, output_tail_bytes_from_env,
+};
 pub use process::{
     CONTAINER_DAEMON_ENV_VARS, ExecutionEvent, ExecutorConfig, JobRecord, JobStatus, LocalExecutor,
     RuleEnvCommand, apply_rule_env_allowlist, insert_tmpdir_vars, parse_env_passthrough,
