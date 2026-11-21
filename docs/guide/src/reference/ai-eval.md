@@ -110,22 +110,27 @@ Capture manifests record git SHA, gold/knowledge hashes, provider/model identity
 `eval/frontier/` is a complementary, self-contained benchmark that measures
 the **quality/cost frontier across generation paths** rather than
 gold-set coverage on a single path. It runs a tiered intent set (easy /
-medium / hard) through two variants — the full CLI path
-(`template --ai`: rich prompt, knowledge tools, tool loop) and a
-single-shot naive prompt (no tools, no knowledge injection; a
-bare-prompt baseline, not a product path) — and judges every artifact
-with the three deterministic static gates (`validate`, `dry-run`,
-`lint`; exit code only, no LLM judge).
+medium / hard) through three variants matching the pre-registered
+matched three-arm ablation — `unconstrained` (Arm A: a single-shot naive
+prompt, no tools, no knowledge injection; a bare-prompt baseline, not a
+product path), `syntax-only` (Arm B: the full CLI path `template --ai`
+with TOML/DAG syntax + structural feedback only), and `full-contract`
+(Arm C: the same path plus the engine's BioTypes + scientific-preflight
++ deep-check feedback loop, `--ai-contract-feedback`) — and judges every
+artifact with the three deterministic static gates (`validate`,
+`dry-run`, `lint`; exit code only, no LLM judge). Arm B and Arm C differ
+by the engine feedback toggle, not a label.
 
-Per-run token usage comes from the AI session archives (CLI variant) or
-the provider response (naive-prompt variant), so each cell of the
-{path × model} matrix reports gate pass@1 alongside tokens, estimated
-cost, and wall time. This is the evidence base for the unified
-generation harness (see [Architecture → AI Subsystem](architecture.md))
-and for sizing its cost tiers.
+Per-run token usage comes from the AI session archives (the
+`syntax-only`/`full-contract` variants) or the provider response (the
+`unconstrained` variant), so each cell of the {arm × model} matrix
+reports gate pass@1 alongside tokens, estimated cost, and wall time.
+This is the evidence base for the unified generation harness (see
+[Architecture → AI Subsystem](architecture.md)) and for sizing its cost
+tiers.
 
 ```bash
-python3 eval/frontier/run_eval.py --variants naive-prompt,cli
+python3 eval/frontier/run_eval.py --variants unconstrained,syntax-only,full-contract
 ```
 
 See `eval/frontier/README.md` for the full method, price-table

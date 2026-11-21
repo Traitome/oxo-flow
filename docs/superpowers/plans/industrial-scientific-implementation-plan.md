@@ -109,6 +109,7 @@ Every code change, diagnostic rule, hardware interface, visual component, and be
     - **Arm A (Baseline — Unconstrained)**: Direct LLM generation in Nextflow DSL2 / Snakemake / naive `.oxoflow` without compiler feedback.
     - **Arm B (Syntax/Schema Loop Only)**: `PipelineGenAgent` with TOML syntax and DAG topological validation, but `BioTypes` and `SCI-*` disabled.
     - **Arm C (Full Contract-Checked Compiler Loop)**: `PipelineGenAgent` + `BioTypes` (`TYPE-*`) + `scientific_preflight` (`SCI-*`) + `deep_check` (`D00*`).
+  - Harness wiring (issue #1315): `eval/frontier/run_eval.py --variants` emits exactly these three arms as `unconstrained` (A), `syntax-only` (B), and `full-contract` (C); B and C run the same `template --ai` path and differ only by the engine `--ai-contract-feedback` toggle. This is the instrument; the ablation run itself is still pending.
 - **Statistical Reporting Requirements**:
   - All benchmark claims must report per-item mean, standard deviation, `pass@k` ($k \in \{1, 3, 5\}$), 95% non-parametric bootstrap confidence intervals, and paired two-sided significance tests (McNemar's test for binary pass/fail outcomes; Wilcoxon signed-rank test for token cost, latency, and peak memory) across multiple fixed random seeds.
 - **Strict Hold-Out & Anti-Leakage Hygiene**:
@@ -602,7 +603,7 @@ binding: `62d9161b2992` (v1.0.0 freeze commit) and `0a18b07afb54`
 
 - [ ] **Step 1**: Expand `eval/frontier/intents.json` across major omics modalities (WGS/WES germline & somatic, bulk RNA-seq, scRNA-seq/scATAC-seq, ChIP-seq/ATAC-seq, spatial transcriptomics, metagenomics, long-read ONT/PacBio).
 - [ ] **Step 2**: Implement `fault_injection.py` to seed controlled biological and infrastructure faults (queryname-sorted BAMs, mismatched `chr` prefixes, unindexed VCFs, truncated BGZF blocks, under-provisioned memory limits, small cohort VQSR) and measure pre-execution detection vs. runtime self-healing rates.
-- [ ] **Step 3**: Implement `statistical_report.py` to compute `pass@k`, bootstrap 95% confidence intervals, McNemar's test $p$-values, and token/compute cost breakdowns across Arms A, B, and C.
+- [x] **Step 3**: `statistical_report.py` computes `pass@k`, bootstrap 95% confidence intervals, McNemar's test $p$-values, and token/compute cost breakdowns across Arms A, B, and C. The three-arm taxonomy is now wired (issue #1315): `run_eval.py --variants` emits `unconstrained` (Arm A), `syntax-only` (Arm B), and `full-contract` (Arm C), B and C differing by the engine `--ai-contract-feedback` toggle; the loader maps these to `arm_a`/`arm_b`/`arm_c` and fails loudly on an unknown or empty arm. This is the INSTRUMENT only — Step 4 (the run) is still open.
 - [ ] **Step 4**: Run the pre-registered campaign and retain raw per-item outputs for independent reanalysis.
 
 ---

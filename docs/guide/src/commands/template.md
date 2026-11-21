@@ -38,6 +38,7 @@ definitions referenced by `conda = "envs/..."` in templates 04-15.
 | `--ai-max-retries <N>` | Maximum AI correction rounds for the generation orchestrator — knowledge lookups and correction passes share this budget (default: 10, overridable via `[ai] max_retries` in the config). This bounds **generation** rounds; the recovery-side `--ai-max-retries` on [`run`](run.md#options)/[`dry-run`](dry-run.md#options)/[`resume`](resume.md#options) (default 1, failed-call recovery attempts) is a separate knob |
 | `--ai-team-profile <PROFILE>` | Generation team profile: `compact` (one agent + engine gates, default) or `full` (adds the task contract, the deterministic Curator brief, and an independent review pass with a bounded fix). Overrides `[ai] team_profile` in the config |
 | `--ai-attempts <N>` | Fresh-draw attempts for the whole generation (best-of-N: up to N independent tries; the first one passing the deterministic gates wins, so later attempts are only paid when earlier ones fail) [default: 1] |
+| `--ai-contract-feedback` | Harness-scoped (issue #1315): also run the engine's BioTypes (`TYPE-*`), scientific-preflight (`SCI-*`), and `deep_check` (`D00*`) contract checks inside the generation loop and feed their findings back as correction rounds. Off by default (normal users get syntax + structural feedback only, unchanged); the ablation harness enables it for Arm C (`full-contract`) and omits it for Arm B (`syntax-only`) |
 
 ## Examples
 

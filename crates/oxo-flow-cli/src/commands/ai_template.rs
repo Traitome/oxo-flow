@@ -301,6 +301,7 @@ pub async fn generate_workflow(
     ai_max_retries: Option<u32>,
     team_profile: Option<oxo_flow_ai::agent::team::TeamProfile>,
     ai_attempts: u32,
+    contract_feedback: bool,
 ) -> Result<()> {
     // Resolve and prepare the destination BEFORE anything is sent to the
     // provider: a bad `-o` must fail cheaply, not after a paid generation.
@@ -445,12 +446,20 @@ pub async fn generate_workflow(
         None
     };
 
-    let validator: OutputValidator = Arc::new(|toml: &str| {
+    let validator: OutputValidator = Arc::new(move |toml: &str| {
         if let Err(e) = validate_basic_structure(toml) {
             return ValidationResult::failed(vec![e.to_string()]);
         }
         match toml::from_str::<oxo_flow_core::config::WorkflowConfig>(toml) {
-            Ok(_) => ValidationResult::passed(),
+            Ok(_) => {
+                if contract_feedback {
+                    let contract_errors = contract_feedback_errors(toml);
+                    if !contract_errors.is_empty() {
+                        return ValidationResult::failed(contract_errors);
+                    }
+                }
+                ValidationResult::passed()
+            }
             Err(e) => ValidationResult::failed(vec![format!("engine schema: {e}")]),
         }
     });
@@ -885,6 +894,78 @@ fn validate_basic_structure(toml: &str) -> Result<()> {
     }
 }
 
+/// Contract-level feedback for the Arm C generation loop (issue #1315).
+///
+/// The matched three-arm ablation (plan:109-111) needs a real engine toggle
+/// between Arm B (syntax/structural feedback only) and Arm C (BioTypes
+/// `TYPE-*` + `scientific_preflight` `SCI-*` + `deep_check` `D00*`). This is
+/// that Arm C path: the same three checks the run-time admission gate uses,
+/// reusing their existing entry points (reuse, never retype), rendered into
+/// the orchestrator's correction channel.
+///
+/// The findings are returned as `ValidationResult::failed` ERRORS, not
+/// warnings: the orchestrator only feeds `validation.errors` back to the
+/// model (`agent/orchestrator.rs`), so a warning-only finding would never
+/// change a generation round and the arm would not differ from Arm B. The
+/// caller gates this behind an explicit opt-in flag, so normal
+/// `template --ai` behavior is unchanged.
+fn contract_feedback_errors(toml: &str) -> Vec<String> {
+    let config: oxo_flow_core::config::WorkflowConfig = match toml::from_str(toml) {
+        Ok(config) => config,
+        // The structural + engine-schema floors already reject a config that
+        // cannot parse; a parse failure here is not a contract finding.
+        Err(_) => return Vec::new(),
+    };
+
+    let mut findings: Vec<String> = Vec::new();
+
+    // BioTypes (TYPE-*): the DAG edge type verification the run gate applies.
+    // Build the DAG with the same placeholder expansion, then surface every
+    // fatal type diagnostic. A DAG-build failure is already an engine-schema
+    // class, not a contract finding, so it is not reported here.
+    let placeholder_values = crate::commands::run::config_placeholder_values(&config.config);
+    if let Ok(dag) =
+        oxo_flow_core::dag::WorkflowDag::from_rules_with_config(&config.rules, &placeholder_values)
+    {
+        for d in oxo_flow_core::types::check_workflow_types(&config, &dag) {
+            findings.push(d.to_string());
+        }
+    }
+
+    // Scientific preflight (SCI-*): cohort/parameter sanity warnings.
+    for w in oxo_flow_core::scientific_preflight::analyze_scientific_constraints(&config) {
+        findings.push(format!(
+            "[{}] {}: {}{}",
+            w.code,
+            w.rule,
+            w.message,
+            if w.suggestion.is_empty() {
+                String::new()
+            } else {
+                format!("; hint: {}", w.suggestion)
+            }
+        ));
+    }
+
+    // Deep check (D00*): script/env/command/reference probes against the
+    // current directory (generation has no workflow file yet).
+    let base_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    for f in oxo_flow_core::deep_check::compute_deep_check(&config, &base_dir).findings {
+        let rule = f.rule.as_deref().unwrap_or("-");
+        let hint = f
+            .suggestion
+            .as_deref()
+            .map(|s| format!("; hint: {s}"))
+            .unwrap_or_default();
+        findings.push(format!(
+            "[{}] {} ({}, {}): {}{}",
+            f.code, f.message, f.severity, rule, f.path, hint
+        ));
+    }
+
+    findings
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1195,5 +1276,98 @@ mod tests {
                 "expected an SSRF rejection for {url}, got: {err}"
             );
         }
+    }
+
+    // --- Arm B / Arm C generation-feedback toggle (issue #1315) --------------
+    //
+    // The matched three-arm ablation (plan:109-111) needs Arm B (syntax and
+    // structural feedback ONLY) to differ from Arm C (the same loop plus
+    // BioTypes/TYPE-*, scientific_preflight/SCI-*, and deep_check/D00*
+    // feedback). `contract_feedback_errors` is the Arm C path; when the flag
+    // is off the generation loop never calls it, so Arm B provably sees none
+    // of these codes. These tests pin the code presence/absence directly, with
+    // no provider round.
+
+    /// A typed edge whose formats disagree (producer SAM, consumer BAM) — the
+    /// canonical TYPE-001 violation shape from `types/negative_tests.rs`.
+    const TYPED_VIOLATION: &str = "\
+[workflow]
+name = \"typed\"
+
+[[rules]]
+name = \"producer\"
+output = [\"stage.bam\"]
+shell = \"echo\"
+[rules.types]
+outputs = { default = \"SAM\" }
+
+[[rules]]
+name = \"consumer\"
+input = [\"stage.bam\"]
+output = [\"final.vcf\"]
+shell = \"echo\"
+[rules.types]
+inputs = { default = \"BAM\" }
+";
+
+    /// A rule invoking `bwa mem` with no read group — triggers SCI-BWA-MEM-NO-RG.
+    const BWA_NO_RG: &str = "\
+[workflow]
+name = \"bwa\"
+
+[[rules]]
+name = \"align\"
+input = [\"reads.fq\"]
+output = [\"aligned.bam\"]
+shell = \"bwa mem ref.fa reads.fq > aligned.bam\"
+";
+
+    /// A clean, contract-free workflow: no typed edges, no scientific slips.
+    const CLEAN_WORKFLOW: &str = "\
+[workflow]
+name = \"clean\"
+
+[[rules]]
+name = \"r\"
+output = [\"a.txt\"]
+shell = \"echo hi\"
+";
+
+    fn has_code(findings: &[String], prefix: &str) -> bool {
+        findings.iter().any(|f| f.contains(prefix))
+    }
+
+    #[test]
+    fn arm_c_contract_feedback_reports_type_violation() {
+        // Arm C must surface the BioTypes (TYPE-*) finding.
+        let findings = contract_feedback_errors(TYPED_VIOLATION);
+        assert!(
+            has_code(&findings, "TYPE-001"),
+            "Arm C must report the TYPE-001 format violation, got: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn arm_c_contract_feedback_reports_scientific_warning() {
+        // Arm C must surface the scientific_preflight (SCI-*) finding.
+        let findings = contract_feedback_errors(BWA_NO_RG);
+        assert!(
+            has_code(&findings, "SCI-BWA-MEM-NO-RG"),
+            "Arm C must report SCI-BWA-MEM-NO-RG, got: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn arm_b_baseline_emits_no_contract_codes() {
+        // Arm B never calls `contract_feedback_errors`; this asserts the
+        // function is the ONLY source of these codes and that a clean workflow
+        // contributes none, so an Arm B run's feedback cannot carry them.
+        let findings = contract_feedback_errors(CLEAN_WORKFLOW);
+        assert!(
+            !has_code(&findings, "TYPE-")
+                && !has_code(&findings, "SCI-")
+                && !has_code(&findings, "[D"),
+            "a clean workflow must yield no TYPE-/SCI-/D00* contract codes, got: {findings:?}"
+        );
     }
 }
