@@ -118,6 +118,20 @@ _DOTTED_CONTEXT_KEYWORDS = frozenset(
         "article", "p", "pp", "wcag", "snakemake", "nextflow", "§",
     }
 )
+# Units that, sitting immediately after a reference-like number, cancel the
+# "this is a section/figure reference" suppression: "1.4 ms" is a measurement,
+# not "section 1.4". Used only to refine the dotted-keyword guard, never to
+# widen the real-decimal patterns.
+_DECIMAL_UNITS = frozenset(
+    {
+        "s", "ms", "us", "ns", "sec", "secs", "second", "seconds",
+        "min", "mins", "minute", "minutes", "h", "hr", "hrs", "hour",
+        "hours", "day", "days", "kb", "mb", "gb", "tb", "kib", "mib",
+        "gib", "byte", "bytes", "b", "px", "x", "rps", "qps", "tps",
+        "fps", "node", "nodes", "core", "cores", "cpu", "cpus",
+        "percent", "pct",
+    }
+)
 # Fenced code (```...```) and inline code (`...`) are stripped before scanning.
 _FENCE_RE = re.compile(r"```.*?```", re.DOTALL)
 _INLINE_CODE_RE = re.compile(r"`[^`]*`")
@@ -128,14 +142,50 @@ def _strip_code(text: str) -> str:
     return _INLINE_CODE_RE.sub(" ", _FENCE_RE.sub(" ", text))
 
 
-def _preceded_by_dotted_keyword(line: str, start: int) -> bool:
-    """True when ``line[:start]`` ends in a version/section/standard keyword.
+def _preceded_by_dotted_keyword(line: str, start: int, end: int) -> bool:
+    """True when ``line[start:end]`` IS a version/section/standard reference.
+
+    The suppression is deliberately narrow (review P3-2, PR #1307). It fires only
+    when the number *is* the reference itself, signalled by all of:
+
+      * the number's integer part is non-zero -- a "0.x" value ("0.05", "0.5")
+        is always a decimal measurement, never a section/version number;
+      * nothing but whitespace separates the number from the keyword, so a
+        keyword followed by another number then this one ("table 3, 118.69")
+        does NOT count; and
+      * the number is not immediately followed by a comma or a unit ("1.4 ms"
+        is a duration, not "section 1.4").
 
     Allows "#", "##", "###" markdown heading markers as section context so that
     headings like "### Task 1.1" / "### 1.1 Title" are not read as decimals.
     """
-    prefix = line[max(0, start - 16) : start].rstrip(" \t-–—~/,:.;0123456789")
-    match = re.search(r"([A-Za-z§#]+)\s*$", prefix)
+    matched = line[start:end]
+    integer_match = re.match(r"-?\d+", matched)
+    # "0.x" is a decimal measurement, never a section/figure reference.
+    if integer_match and integer_match.group(0).lstrip("-") == "0":
+        return False
+    after = line[end : end + 8]
+    if after.startswith(","):
+        return False
+    unit_match = re.match(r"\s*([A-Za-z]+)", after)
+    if unit_match and unit_match.group(1).lower() in _DECIMAL_UNITS:
+        return False
+    prefix = line[max(0, start - 24) : start]
+    # A section RANGE ("3.1-3.7" / "3.1–3.7") continues the same reference,
+    # so walk back over a dash-joined preceding number before looking for the
+    # keyword. A comma/space-separated separate number ("table 3, 118.69") is
+    # NOT a range and is deliberately not crossed here.
+    while True:
+        head = prefix.rstrip(" \t")
+        stripped = head.rstrip("-–—~")
+        if stripped == head:
+            break
+        range_match = re.search(r"\d+(?:\.\d+)*$", stripped)
+        if not range_match:
+            break
+        prefix = stripped[: range_match.start()]
+    head = prefix.rstrip(" \t")
+    match = re.search(r"([A-Za-z§#]+)$", head)
     if not match:
         return False
     token = match.group(1).lower()
@@ -153,10 +203,10 @@ def _has_measured_number(text: str) -> bool:
     ):
         return True
     for match in _FRACTION_RE.finditer(text):
-        if not _preceded_by_dotted_keyword(text, match.start()):
+        if not _preceded_by_dotted_keyword(text, match.start(), match.end()):
             return True
     for match in _DECIMAL_RE.finditer(text):
-        if not _preceded_by_dotted_keyword(text, match.start()):
+        if not _preceded_by_dotted_keyword(text, match.start(), match.end()):
             return True
     return False
 

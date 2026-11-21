@@ -3,6 +3,7 @@ import unittest
 from pathlib import Path
 
 from provenance_manifest import (
+    DESIGN_DOC_OPTOUT,
     build_manifest,
     check_provenance,
     discover_report_paths,
@@ -231,6 +232,49 @@ class ProvenanceManifestTests(unittest.TestCase):
         manifest = build_manifest()
         keys = list(manifest["artifacts"].keys())
         self.assertEqual(keys, sorted(keys))
+
+    def test_design_doc_optout_is_exactly_the_one_protocol_doc(self):
+        # P3-1 (review PR #1307): DESIGN_DOC_OPTOUT is a narrow allow-list, not a
+        # category. Pin its membership AND count so appending a second measured
+        # doc silently un-gating it fails this test. A second opt-out entry must
+        # be a deliberate, reviewed change to THIS test, never a quiet append.
+        self.assertEqual(len(DESIGN_DOC_OPTOUT), 1)
+        self.assertEqual(
+            DESIGN_DOC_OPTOUT,
+            frozenset(
+                {"docs/superpowers/plans/linux-server-validation-protocol.md"}
+            ),
+        )
+        self.assertIn(
+            "docs/superpowers/plans/linux-server-validation-protocol.md",
+            DESIGN_DOC_OPTOUT,
+        )
+
+    def test_context_guard_does_not_suppress_following_measurement(self):
+        # P3-2 (review PR #1307): the dotted-keyword context guard must only
+        # suppress when the number IS the reference itself. A measurement that
+        # follows a section/figure/table/step/phase/p keyword via a comma or a
+        # unit is a genuine measurement and must be detected (was a false
+        # negative: rstrip() ate intervening digits+punctuation).
+        for text in (
+            "see table 3, 118.69 ms latency",
+            "p 0.05 threshold",
+            "phase 3, 3.12 us",
+        ):
+            self.assertTrue(report_has_measured_number(text), text)
+
+    def test_context_guard_still_clean_for_real_references(self):
+        # ...while true version/section/identifier strings stay clean (False).
+        for text in (
+            "section 1.4",
+            "v1.2",
+            "### Task 2.1",
+            "127.0.0.1",
+            "3.12.4",
+            "version 2.0",
+            "P1 section 3.1-3.7",
+        ):
+            self.assertFalse(report_has_measured_number(text), text)
 
 
 if __name__ == "__main__":
