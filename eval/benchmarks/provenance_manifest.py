@@ -96,8 +96,11 @@ _SEPARATOR_CELL_RE = re.compile(r"^:?-{3,}:?$")
 #      trailing dot and slash, so the inner "10.6" / "12.4" fragments of a
 #      multi-segment string never match; and
 #   2. a real two-segment decimal still needs to be told from "v1.2" / "1.4"
-#      context, so a candidate is ignored when the token immediately before it
-#      is a version / section / figure keyword (see _DOTTED_CONTEXT_KEYWORDS).
+#      context, so a candidate is ignored when a version / section / figure
+#      keyword (including abbreviated forms with or without a trailing period,
+#      e.g. "Fig.", "Sec.", "pp.", "v.") immediately precedes it and the token
+#      itself is short on both sides (see _DOTTED_CONTEXT_KEYWORDS and
+#      _preceded_by_dotted_keyword).
 # Numbers inside fenced code blocks and inline `code` spans are stripped first:
 # design docs quote snippets ($k \in \{1, 3, 5\}$, `wall_time_secs 1.5`) that
 # are not measurements.
@@ -112,10 +115,11 @@ _INTEGER_RE = re.compile(r"^-?\d+$")
 # identifier/version/section/standard token rather than a measurement.
 _DOTTED_CONTEXT_KEYWORDS = frozenset(
     {
-        "v", "ver", "version", "sec", "section", "ch", "chapter", "fig",
-        "figure", "tab", "table", "step", "task", "phase", "milestone", "part",
-        "appendix", "annex", "edition", "clause", "rfc", "iso", "iec", "no",
-        "article", "p", "pp", "wcag", "snakemake", "nextflow", "§",
+        "v", "ver", "version", "sec", "secs", "section", "ch", "chapter",
+        "fig", "figs", "figure", "tab", "table", "step", "task", "phase",
+        "milestone", "part", "appendix", "annex", "edition", "clause", "rfc",
+        "iso", "iec", "no", "article", "p", "pp", "eq", "ref", "wcag",
+        "snakemake", "nextflow", "§",
     }
 )
 # Units that, sitting immediately after a reference-like number, cancel the
@@ -145,28 +149,62 @@ def _strip_code(text: str) -> str:
 def _preceded_by_dotted_keyword(line: str, start: int, end: int) -> bool:
     """True when ``line[start:end]`` IS a version/section/standard reference.
 
-    The suppression is deliberately narrow (review P3-2, PR #1307). It fires only
-    when the number *is* the reference itself, signalled by all of:
+    A *reference* is a two-segment dotted id ("X.Y") that sits immediately after
+    a section / figure / version keyword -- the full word or an abbreviated form
+    with a trailing period ("Fig. 4.2", "Sec. 2.1", "pp. 12.3", "Ch. 5.1",
+    "v. 2.0", "No. 3.1"). Such tokens name a location or a version and are never
+    measurements, so the caller ignores them *even when a comma or a following
+    clause is present* ("see section 1.4, which describes it"). The round-4
+    guard only suppressed whitespace-separated, non-zero-major, no-comma forms,
+    so "Fig. 4.2", "v0.8", "version 0.2" and "see section 1.4, ..." leaked into
+    the measured set (round-5 P3 regression, PR #1307).
 
-      * the number's integer part is non-zero -- a "0.x" value ("0.05", "0.5")
-        is always a decimal measurement, never a section/version number;
-      * nothing but whitespace separates the number from the keyword, so a
-        keyword followed by another number then this one ("table 3, 118.69")
-        does NOT count; and
-      * the number is not immediately followed by a comma or a unit ("1.4 ms"
-        is a duration, not "section 1.4").
+    The suppression stays narrow (review P3-2, PR #1307) so it cannot re-hide a
+    real measurement:
+
+      * the token must be a plain two-segment "X.Y" id for the decimal case --
+        a 3+ segment dotted string ("3.12.4") is already rejected by
+        ``_DECIMAL_RE`` before the guard runs; a fraction candidate ("4/5") is
+        a reference only for the traditional "Step 4/5" spelling, while a real
+        fraction measurement ("7/10 proposals") stays detected;
+      * its fraction must be a short 1-2 digit suffix -- "118.69" (2 digits with
+        a unit) and "3.125" (3 digits) are measurements, and a trailing unit
+        token ("3.1 ms", "3.12 us") always cancels the reference reading;
+      * a zero-major id ("0.x") counts as a reference only when its fraction is
+        a single digit -- the version/section forms ("v 0.8", "version 0.2",
+        "section 0.1") are refs, but a two-digit leading-zero fraction is the
+        conventional probability/measurement spelling ("p 0.05"); and
+      * only whitespace may separate the number from the keyword, so
+        "table 3, 118.69" and "phase 3, 3.12" do NOT count.
 
     Allows "#", "##", "###" markdown heading markers as section context so that
     headings like "### Task 1.1" / "### 1.1 Title" are not read as decimals.
     """
     matched = line[start:end]
-    integer_match = re.match(r"-?\d+", matched)
-    # "0.x" is a decimal measurement, never a section/figure reference.
-    if integer_match and integer_match.group(0).lstrip("-") == "0":
-        return False
     after = line[end : end + 8]
-    if after.startswith(","):
-        return False
+    if _DECIMAL_RE.fullmatch(matched):
+        # A dotted decimal candidate: it is a reference only when it is a plain
+        # two-segment "X.Y" id. A long fraction ("3.125", "118.69") is not a
+        # reference sub-part, and a zero-major id ("0.x") is a reference only
+        # for a single-digit fraction (a two-digit leading-zero fraction such
+        # as "0.05" is the conventional measurement spelling).
+        major, frac = matched.split(".", 1)
+        if len(frac) > 2:
+            return False
+        if major.lstrip("-") == "0" and len(frac) != 1:
+            return False
+        # A reference may be followed by a comma or a clause ("see section 1.4,
+        # which describes it"); that does not make it a measurement, so the
+        # comma gate is deliberately NOT applied here.
+    else:
+        # A fraction ("4/5", "7/10") or any other match shape. Keep the round-4
+        # rule so a step / part reference ("Step 4/5") stays suppressed while a
+        # real fraction measurement ("7/10 proposals") is detected.
+        integer_match = re.match(r"-?\d+", matched)
+        if integer_match and integer_match.group(0).lstrip("-") == "0":
+            return False
+        if after.startswith(","):
+            return False
     unit_match = re.match(r"\s*([A-Za-z]+)", after)
     if unit_match and unit_match.group(1).lower() in _DECIMAL_UNITS:
         return False
@@ -185,7 +223,8 @@ def _preceded_by_dotted_keyword(line: str, start: int, end: int) -> bool:
             break
         prefix = stripped[: range_match.start()]
     head = prefix.rstrip(" \t")
-    match = re.search(r"([A-Za-z§#]+)$", head)
+    # The keyword may carry a trailing period ("Fig.", "Sec.", "pp.", "v.").
+    match = re.search(r"([A-Za-z§#]+)\.?$", head)
     if not match:
         return False
     token = match.group(1).lower()

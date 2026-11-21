@@ -260,6 +260,12 @@ class ProvenanceManifestTests(unittest.TestCase):
             "see table 3, 118.69 ms latency",
             "p 0.05 threshold",
             "phase 3, 3.12 us",
+            # Round-5 P3: a reference AND a measurement in the same line -- the
+            # measurement ("118.69 ms") must still be flagged even though the
+            # line also carries a dotted version reference ("2.0").
+            "version 2.0 took 118.69 ms",
+            # A bare decimal with no keyword at all is always a measurement.
+            "latency 118.69 ms",
         ):
             self.assertTrue(report_has_measured_number(text), text)
 
@@ -273,6 +279,27 @@ class ProvenanceManifestTests(unittest.TestCase):
             "3.12.4",
             "version 2.0",
             "P1 section 3.1-3.7",
+        ):
+            self.assertFalse(report_has_measured_number(text), text)
+
+    def test_abbreviated_and_zero_major_references_are_not_measurements(self):
+        # Round-5 P3 regression (review PR #1307): the narrowed round-4 guard
+        # leaked abbreviated keyword forms (trailing period), zero-major ids,
+        # and comma-followed references into the measured set. All of these are
+        # location / version references and must read as NO measurement.
+        for text in (
+            "Fig. 4.2",
+            "Sec. 2.1",
+            "No. 3.1",
+            "Ch. 5.1",
+            "pp. 12.3",
+            "Tab. 3.1",
+            "v. 2.0",
+            "v0.8",
+            "version 0.2",
+            "section 0.1",
+            "see section 1.4, which describes it",
+            "Per section 2.1, apply the filter",
         ):
             self.assertFalse(report_has_measured_number(text), text)
 
