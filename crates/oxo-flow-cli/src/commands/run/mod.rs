@@ -183,6 +183,13 @@ pub struct RunRequest {
     /// Issue #1011 P2 (`--strict-envs`): keep the historical hard-fail on a
     /// stale pixi.lock install failure instead of the graceful re-solve.
     pub strict_envs: bool,
+    /// Issue #1302 (`--apply-patch <FILE>`): a reviewed, whole-workflow
+    /// repair document the caller wants applied through the SAME
+    /// verified-repair path the AI-decided fix uses. Surface-agnostic
+    /// remediation — a human or another tool can hand the engine a patch.
+    /// `None` = no reviewed patch. Mutually exclusive with `ai_recover`
+    /// (enforced at the top of `run_command_inner`).
+    pub apply_patch: Option<PathBuf>,
 }
 
 pub async fn run_command(request: RunRequest) -> Result<()> {
@@ -227,10 +234,23 @@ async fn run_command_inner(
         allow_protected_drift,
         from_rule,
         strict_envs,
+        apply_patch,
     }: RunRequest,
     status: &crate::run_status::RunStatusHandle,
 ) -> Result<()> {
     print_banner();
+
+    // Issue #1302: `--apply-patch` supplies a reviewed repair via the same
+    // verified-repair path `--ai-recover` uses. The two are contradictory
+    // authorizations (one reviewed by a human, one auto-decided by the
+    // model), so fail closed rather than guess which wins.
+    if apply_patch.is_some() && ai_recover {
+        anyhow::bail!(
+            "--apply-patch cannot be combined with --ai-recover: \
+             --apply-patch applies a reviewed repair file, --ai-recover lets \
+             the AI decide and apply its own fix. Pick one."
+        );
+    }
 
     // `--json` consumers get the summary document on every exit path — the
     // guard emits it from `Drop` when a path returns before the explicit
@@ -1467,6 +1487,7 @@ async fn run_command_inner(
         wildcard_values: &wildcard_values,
         samples_filter: &samples_filter,
         workflow: &workflow,
+        apply_patch: apply_patch.as_deref(),
         json_summary: &mut json_summary,
     })
     .await

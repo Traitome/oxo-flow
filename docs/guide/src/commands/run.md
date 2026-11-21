@@ -65,6 +65,7 @@ keys matching nothing declared keep the literal spelling.
 | `--ai-recover` | — | — | Enable AI error recovery on rule failure (see [AI error recovery](#ai-error-recovery-ai-recover)) |
 | `--no-ai-recover` | — | — | Disable AI error recovery for this invocation, including the workflow's `[ai] enabled` auto-detect. The verified-repair loop passes this flag to its verification rerun so a fixed run can never start another repair cycle (see [AI error recovery](#ai-error-recovery-ai-recover)) |
 | `--ai-max-retries` | — | `1` | Maximum AI recovery attempts when a `--ai-recover` call fails (only a failed call is retried). This bounds **recovery** attempts; the generation-side `--ai-max-retries` on [`template`](template.md) (default 10, bounding orchestrator rounds) is a separate knob |
+| `--apply-patch` | `FILE` | — | Apply a **reviewed** repaired workflow from `FILE` when a required rule fails, instead of letting the AI decide the fix. `FILE` is a complete `.oxoflow` document (not a diff); it is written through the same apply/validate/archive path as the AI-decided repair and gets the same one-shot verification rerun and `REPAIR_*` contract. Mutually exclusive with `--ai-recover` (fail-closed) and suppressed by `--no-ai-recover` (see [Reviewed-patch repair](#reviewed-patch-repair-apply-patch)) |
 | `--samples` | — | all discovered samples | Sample selection: `@path` **replaces** the workflow's samples from a samplesheet, `+@path` **appends** (same-name groups merge, new groups added); names **filter** (or **declare** when the workflow ships no samples), `first:N` (pilot) and `ready` (samples whose entry inputs are complete) **filter**. Repeatable, comma-separated |
 | `--rerun` | — | — | Force re-execution of this run's rules (ignore up-to-date checks). Checkpoint records for rules outside this run are kept |
 | `--no-report-snapshot` | — | — | Skip the automatic report snapshot written after the run (see [Report snapshots](#report-snapshots)); `resume` has the same flag |
@@ -1791,6 +1792,48 @@ never diagnoses, never rewrites the workflow, and never starts another
 rerun — it only verifies the fix that was already authorized. `--no-ai-recover`
 also disables recovery for a normal invocation (including the `[ai] enabled`
 auto-detect).
+
+## Reviewed-patch repair (`--apply-patch`)
+
+`--apply-patch <FILE>` is the **surface-agnostic** half of the repair loop
+(issue #1302). Where `--ai-recover` lets the model diagnose and propose a fix,
+`--apply-patch` supplies the fix directly: `FILE` is a complete, already-repaired
+`.oxoflow` document (typically reviewed by a human or produced by another tool
+such as the web UI or an editor), and the CLI applies it verbatim. There is no
+diff/patch grammar — the file IS the repaired workflow, which is what the
+shared apply path validates and writes.
+
+When a required rule fails and `--apply-patch` is set, the engine:
+
+1. Reads `FILE` and parses it as a complete workflow. A missing or unparseable
+   file is reported and the patch is **not** applied (the run keeps its normal
+   failure path).
+2. Applies it through the **same** internal path the AI-decided repair uses
+   (`apply_fix`): the current workflow is validated for shape, the pre-edit
+   original is archived, a `.bak` sibling is written, and the new document is
+   written atomically. Because it is the same path, `FILE` must keep every rule
+   name, include, `[config]` key, and top-level table the original had — a patch
+   that would delete structure is refused.
+3. Narrates `REPAIR_APPLIED session_id=reviewed-patch` (the reviewed path uses
+   the fixed session label `reviewed-patch`).
+4. Runs the **same** one-shot verification rerun described above, narrating
+   `REPAIR_RERUN_SUCCEEDED` / `REPAIR_RERUN_FAILED` / `REPAIR_RERUN_SKIPPED`, and
+   records the identical `repair_record` in the checkpoint.
+
+The verified-repair contract is therefore the same whether the fix came from the
+model or from a reviewed file: one apply, one bounded rerun, one `repair_record`.
+Automation can produce a fix anywhere, hand it to `run --apply-patch`, and read
+back the same outcome it would get from AI recovery.
+
+### Interaction with `--ai-recover`
+
+The two flags are mutually exclusive and **fail closed**: passing both is a
+contradiction (a reviewed file pins the fix, `--ai-recover` lets the model pick
+one) and `run` exits with a clear error before starting, rather than guessing
+which wins. `--apply-patch` is also suppressed by `--no-ai-recover`, which the
+verification rerun child receives — so a rerun never applies a patch and never
+starts another repair cycle. `resume` does not accept `--apply-patch`:
+reviewed-patch repair is a `run`-time decision.
 
 ## Exit codes
 

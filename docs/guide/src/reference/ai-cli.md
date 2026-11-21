@@ -705,6 +705,22 @@ oxo-flow run workflow.oxoflow --ai-recover
    `--no-ai-recover`, so it can never start another repair cycle — the
    `REPAIR_*` prefixes are a machine-readable contract, never reworded
 
+### Reviewed-patch repair (`run --apply-patch`, issue #1302)
+
+The applied/verified/audited contract above is **surface-agnostic**: the fix
+does not have to come from the model. `oxo-flow run workflow.oxoflow
+--apply-patch reviewed.oxoflow` supplies a complete, already-repaired workflow
+document (not a diff) and routes it through the *same* apply path — the same
+`validate_fix` shape gate, the same archive + `.bak`, the same atomic write,
+the same ONE bounded verification rerun, and the same checkpoint
+`repair_record`. The only difference is the session label: the reviewed path
+narrates `REPAIR_APPLIED session_id=reviewed-patch`. This lets the web UI, an
+editor, or a human hand a fix to the CLI and get back the identical
+`REPAIR_RERUN_*` outcome the AI-decided path would produce for the same fault.
+`--apply-patch` and `--ai-recover` are mutually exclusive (fail-closed), and
+`--no-ai-recover` suppresses the patch so a verification rerun never applies
+one.
+
 See the CLI/AI blockers in
 `docs/superpowers/audits/industrial-scientific-audit-ledger.md`.
 

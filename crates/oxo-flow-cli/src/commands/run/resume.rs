@@ -194,6 +194,9 @@ pub async fn resume_command(
         from_rule: None,
         // resume re-solves degraded environments like a fresh run would
         strict_envs: false,
+        // resume carries no reviewed repair file: `--apply-patch` is a `run`
+        // flag (issue #1302), not a `resume` one.
+        apply_patch: None,
     })
     .await
 }

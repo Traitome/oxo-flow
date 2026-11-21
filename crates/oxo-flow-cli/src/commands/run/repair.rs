@@ -374,6 +374,84 @@ async fn persist_repair_record(
     checkpoint.lock().await.record_repair(record);
 }
 
+/// A stable session id for a reviewed-patch apply (issue #1302): the
+/// file-only path has no AI session, but the REPAIR_* contract and the
+/// checkpoint `repair_record` both carry a `session_id`, so the caller-side
+/// reviewed patch uses this fixed label.
+pub(crate) const REVIEWED_PATCH_SESSION_ID: &str = "reviewed-patch";
+
+/// Outcome of the shared apply+verify path (issues #1164 / #1302).
+pub(crate) enum RepairApplyOutcome {
+    /// `apply_fix` rejected or failed; the workflow is left unchanged.
+    Failed(String),
+    /// The fix landed but the verification rerun did not complete the
+    /// workflow (skipped, or exited non-zero) — the caller keeps its
+    /// failure path.
+    AppliedNotVerified,
+    /// The fix landed AND the verification rerun completed the workflow.
+    Verified,
+}
+
+/// Apply a repair document through the SAME verified-repair path the
+/// AI-decided fix uses, reused verbatim by `--apply-patch` (issue #1302) so
+/// the two surfaces can never drift: `apply_fix` (validate -> archive ->
+/// atomic write), the `REPAIR_APPLIED` line, ONE bounded verification rerun,
+/// the `REPAIR_RERUN_*` line, and the persisted `repair_record` — nothing is
+/// retyped. On a verified completion the caller's `json_summary` receives the
+/// `completed` + `repair` document.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn apply_and_verify_repair(
+    workflow: &Path,
+    checkpoint: &Mutex<CheckpointState>,
+    checkpoint_path: &Path,
+    modified_toml: &str,
+    session_id: &str,
+    run_log: &SharedRunLog,
+    rerun_ctx: &RerunContext,
+    json_summary: &mut RunJsonSummary,
+    skipped_count: &std::sync::atomic::AtomicUsize,
+) -> RepairApplyOutcome {
+    use colored::Colorize as _;
+    if let Err(e) = crate::commands::ai_recover::apply_fix(workflow, modified_toml, session_id) {
+        return RepairApplyOutcome::Failed(e.to_string());
+    }
+    narrate_repair_line(&applied_narration(session_id), Some(run_log));
+    record_repair_applied(checkpoint, checkpoint_path, session_id).await;
+    let rerun = verification_rerun(workflow, checkpoint_path, rerun_ctx).await;
+    narrate_repair_line(&rerun_narration(&rerun), Some(run_log));
+    record_repair_rerun(checkpoint, checkpoint_path, session_id, &rerun).await;
+    if rerun.attempted && rerun.succeeded {
+        progress_narrate(
+            format_args!("{} repair verified — rerun succeeded", "✓".green()),
+            run_log,
+        );
+        let final_ck = match CheckpointState::load_from_file(checkpoint_path) {
+            Ok(ck) => ck,
+            Err(_) => checkpoint.lock().await.clone(),
+        };
+        json_summary.set_repair(RunRepairSummary {
+            applied: true,
+            session_id: session_id.to_string(),
+            rerun_attempted: true,
+            rerun_succeeded: true,
+        });
+        json_summary.emit(
+            "completed",
+            &RunCounts {
+                succeeded: final_ck.completed_rules.len(),
+                skipped: skipped_count.load(std::sync::atomic::Ordering::Relaxed),
+                failed: 0,
+                non_required_failed: final_ck.failed_rules.len(),
+                blocked: 0,
+            },
+            rule_resource_rows(&final_ck),
+        );
+        RepairApplyOutcome::Verified
+    } else {
+        RepairApplyOutcome::AppliedNotVerified
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
