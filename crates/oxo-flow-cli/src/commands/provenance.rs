@@ -243,55 +243,84 @@ fn diff_recorded_checksums(
 /// Parse a `<key>: {path: checksum}` object into a key-ordered map.
 ///
 /// A missing key yields an empty map (a checkpoint with no recorded checksums
-/// is legitimate); a non-string value is a hard error rather than being
-/// coerced to `""`, which would falsify the audit trail without a diagnostic
-/// (same stance as `provenance verify`).
+/// is legitimate); a present-but-non-object value is a hard, named error
+/// (same stance as `provenance verify`), never a silent empty map — coercing
+/// `"checksums": "x"` to `{}` would report FALSE agreement (exit 0) between
+/// two checkpoints whose hashes were never actually read. A non-string value
+/// inside the object is likewise a hard error rather than being coerced to
+/// `""`, which would falsify the audit trail without a diagnostic.
 fn parse_checksum_map(
     checkpoint: &serde_json::Value,
     key: &str,
 ) -> Result<BTreeMap<String, String>> {
     let mut map = BTreeMap::new();
-    if let Some(obj) = checkpoint.get(key).and_then(|v| v.as_object()) {
-        for (k, v) in obj {
-            let s = v
-                .as_str()
-                .with_context(|| format!("checkpoint {key} value for '{k}' is not a string"))?;
-            map.insert(k.clone(), s.to_string());
-        }
+    let Some(value) = checkpoint.get(key) else {
+        return Ok(map);
+    };
+    let obj = value
+        .as_object()
+        .with_context(|| format!("checkpoint {key} is present but not a JSON object"))?;
+    for (k, v) in obj {
+        let s = v
+            .as_str()
+            .with_context(|| format!("checkpoint {key} value for '{k}' is not a string"))?;
+        map.insert(k.clone(), s.to_string());
     }
     Ok(map)
 }
 
-/// Merge a checkpoint's `checksums` and `cleaned_checksums` maps into one
-/// `{path: checksum}` map, cleaned entries winning on collision.
+/// Read one checkpoint file into its merged recorded-checksum map, with a
+/// clear error (never a panic) on an absent or malformed file.
 ///
-/// Mirrors the merge `print_checkpoint_diff` performs (issue #315 F2): a
-/// chunk moved into the cleaned bucket is a bookkeeping change, not a file
-/// change, so it must not read as a spurious add/remove when diffed against a
-/// checkpoint whose chunks still sit under `checksums`.
-fn merge_recorded_checksums(
-    checksums: &BTreeMap<String, String>,
-    cleaned_checksums: &BTreeMap<String, String>,
-) -> BTreeMap<String, String> {
-    let mut merged = checksums.clone();
-    for (path, sha) in cleaned_checksums {
-        merged.insert(path.clone(), sha.clone());
-    }
-    merged
-}
-
-/// Read one checkpoint file into its two recorded-checksum maps, with a clear
-/// error (never a panic) on an absent or malformed file.
-fn load_checkpoint_checksums(
-    path: &Path,
-) -> Result<(BTreeMap<String, String>, BTreeMap<String, String>)> {
+/// The merge is the SHARED `oxo_flow_core::executor::merge_recorded_checksums`
+/// (issue #315 F2 / #1320) — the same call `report --diff` makes — so the two
+/// surfaces can never classify the same input pair differently.
+///
+/// When the checkpoint carries neither an embedded `checksums` object nor a
+/// malformed one, fall back to the legacy companion `checkpoint.checksums.json`
+/// file, exactly as `provenance verify` does (issue #1320). Without this
+/// fallback `diff` would report FALSE agreement (exit 0) against a checkpoint
+/// whose hashes live only in the companion file.
+fn load_checkpoint_checksums(path: &Path) -> Result<BTreeMap<String, String>> {
     let content = std::fs::read_to_string(path)
         .with_context(|| format!("failed to read checkpoint {}", path.display()))?;
     let checkpoint: serde_json::Value = serde_json::from_str(&content)
         .with_context(|| format!("failed to parse checkpoint JSON: {}", path.display()))?;
-    let checksums = parse_checksum_map(&checkpoint, "checksums")?;
+
+    // Embedded checksums first. A missing key falls back to the companion
+    // file; a present-but-non-object key is a hard error (see
+    // `parse_checksum_map`) and must NOT fall through to the companion.
+    let checksums = match checkpoint.get("checksums") {
+        Some(_) => parse_checksum_map(&checkpoint, "checksums")?,
+        None => load_companion_checksums(path)?,
+    };
     let cleaned = parse_checksum_map(&checkpoint, "cleaned_checksums")?;
-    Ok((checksums, cleaned))
+    Ok(oxo_flow_core::executor::merge_recorded_checksums(
+        &checksums, &cleaned,
+    ))
+}
+
+/// Read the legacy companion `<checkpoint>.checksums.json` file if present,
+/// mirroring `provenance verify`'s fallback exactly. Absent file → empty map
+/// (a checkpoint with no recorded checksums is legitimate); a present but
+/// unreadable/malformed companion is a hard error naming the file.
+fn load_companion_checksums(checkpoint_path: &Path) -> Result<BTreeMap<String, String>> {
+    let companion = checkpoint_path.with_extension("checksums.json");
+    if !companion.exists() {
+        return Ok(BTreeMap::new());
+    }
+    let content = std::fs::read_to_string(&companion).with_context(|| {
+        format!(
+            "failed to read companion checksums file {}",
+            companion.display()
+        )
+    })?;
+    serde_json::from_str(&content).with_context(|| {
+        format!(
+            "failed to parse companion checksums file {}",
+            companion.display()
+        )
+    })
 }
 
 /// Compare the recorded output checksums of two checkpoints (bet-4 measuring
@@ -306,11 +335,8 @@ pub fn provenance_diff_command(left: PathBuf, right: PathBuf, json: bool) -> Res
     let left = std::path::absolute(&left).context("failed to resolve left checkpoint path")?;
     let right = std::path::absolute(&right).context("failed to resolve right checkpoint path")?;
 
-    let (left_checksums, left_cleaned) = load_checkpoint_checksums(&left)?;
-    let (right_checksums, right_cleaned) = load_checkpoint_checksums(&right)?;
-
-    let left_merged = merge_recorded_checksums(&left_checksums, &left_cleaned);
-    let right_merged = merge_recorded_checksums(&right_checksums, &right_cleaned);
+    let left_merged = load_checkpoint_checksums(&left)?;
+    let right_merged = load_checkpoint_checksums(&right)?;
     let summary = diff_recorded_checksums(&left_merged, &right_merged);
 
     if !json {
@@ -754,11 +780,68 @@ mod tests {
     fn merge_recorded_checksums_cleaned_wins_on_collision() {
         // A chunk recorded under both buckets (legacy vs cleaned checkpoint)
         // must diff equal: the merged map is what `provenance diff` compares,
-        // mirroring `print_checkpoint_diff` (issue #315 F2).
+        // sharing `merge_recorded_checksums` with `print_checkpoint_diff`
+        // (issue #315 F2 / #1320).
         let checksums = map(&[("chunk", "sha256:1"), ("out.txt", "sha256:2")]);
         let cleaned = map(&[("chunk", "sha256:1")]);
-        let merged = merge_recorded_checksums(&checksums, &cleaned);
-        assert_eq!(merged.get("chunk").map(String::as_str), Some("sha256:1"));
+        let merged = oxo_flow_core::executor::merge_recorded_checksums(&checksums, &cleaned);
+        // Cleaned entries carry the shared "(cleaned by design)" annotation, so
+        // the merged value is not the raw sha.
+        assert_eq!(
+            merged.get("chunk").map(String::as_str),
+            Some("sha256:1 (cleaned by design)")
+        );
+        assert_eq!(merged.get("out.txt").map(String::as_str), Some("sha256:2"));
         assert_eq!(merged.len(), 2);
+    }
+
+    #[test]
+    fn mixed_bucket_pair_classifies_as_differing() {
+        // P1 regression (issue #1320): an artifact recorded under `checksums`
+        // on one side and `cleaned_checksums` on the other is a BOOKKEEPING
+        // change, not a hash agreement. Both surfaces must classify it as
+        // changed/differing (the shared merge annotates the cleaned value),
+        // never as a spurious `matched`.
+        let left = oxo_flow_core::executor::merge_recorded_checksums(
+            &map(&[("chunk", "sha256:1")]),
+            &map(&[]),
+        );
+        let right = oxo_flow_core::executor::merge_recorded_checksums(
+            &map(&[]),
+            &map(&[("chunk", "sha256:1")]),
+        );
+        let summary = diff_recorded_checksums(&left, &right);
+        assert_eq!(summary.differing, 1);
+        assert_eq!(summary.matched, 0);
+        assert!(summary.has_divergence());
+        assert_eq!(summary.entries[0].status, "differing");
+        // The two surfaces agree by construction: the merged values differ.
+        assert_ne!(left.get("chunk"), right.get("chunk"));
+    }
+
+    #[test]
+    fn non_object_checksums_is_a_hard_error() {
+        // P3b regression (issue #1320): `"checksums": "x"` must fail loudly,
+        // never coerce to an empty map (which would report false agreement).
+        let checkpoint: serde_json::Value = serde_json::from_str(r#"{"checksums":"x"}"#).unwrap();
+        let err = parse_checksum_map(&checkpoint, "checksums").unwrap_err();
+        assert!(
+            err.to_string().contains("not a JSON object"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn companion_checksums_file_is_read_when_embedded_absent() {
+        // P3a regression (issue #1320): hashes living only in the legacy
+        // companion file must NOT read as an empty map (false agreement).
+        let dir = tempfile::tempdir().unwrap();
+        let cp = dir.path().join("checkpoint.json");
+        fs::write(&cp, r#"{"completed_rules":["a"]}"#).unwrap();
+        let companion = dir.path().join("checkpoint.checksums.json");
+        fs::write(&companion, r#"{"a.txt":"sha256:aa"}"#).unwrap();
+
+        let merged = load_checkpoint_checksums(&cp).unwrap();
+        assert_eq!(merged.get("a.txt").map(String::as_str), Some("sha256:aa"));
     }
 }
