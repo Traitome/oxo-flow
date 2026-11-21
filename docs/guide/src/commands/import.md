@@ -170,6 +170,7 @@ through content inspection.
 | `<SOURCE>` | Path to the Nextflow (`.nf`) or Snakemake (`Snakefile`, `.smk`) source file |
 | `--from <FORMAT>` | Explicit source format: `nextflow` or `snakemake` (auto-detected if omitted) |
 | `-o, --output <OUTPUT>` | Output `.oxoflow` file (prints to stdout if omitted). Existing files are never overwritten |
+| `--json` | Emit one machine-readable JSON document on stdout (see [JSON output](#json-output)) instead of raw TOML |
 
 ## Examples
 
@@ -189,6 +190,45 @@ Transpile with an explicit format:
 
 ```bash
 oxo-flow import custom_pipeline.txt --from nextflow -o pipeline.oxoflow
+```
+
+Emit a machine-readable translation verdict instead of raw TOML:
+
+```bash
+oxo-flow import Snakefile --json
+```
+
+## JSON output
+
+`--json` emits one JSON document on stdout describing the translation, so CI and
+tooling can assert what was accepted and what was lost without parsing colored
+stderr. The colored human warnings and the raw TOML echo are suppressed — stdout
+stays a single JSON document. The exit code is unchanged (a translation warning
+is a report, not a failure). With `-o`, the file is still written and the
+document is still emitted.
+
+| Field | Description |
+|-------|-------------|
+| `tool` | Always `"oxo-flow import"` |
+| `source` | The source path that was transpiled |
+| `format` | Detected or requested source format: `nextflow` or `snakemake` |
+| `accepted` | `true` when no translation warnings were produced; `false` when a source construct was not mapped faithfully |
+| `warnings` | Ordered array of `{ "message": "..." }` objects, one per translation loss (empty when `accepted` is `true`) |
+| `toml` | The generated oxo-flow TOML workflow |
+
+```json
+{
+  "tool": "oxo-flow import",
+  "source": "Snakefile",
+  "format": "snakemake",
+  "accepted": false,
+  "warnings": [
+    {
+      "message": "line 7: `benchmark:` becomes a declared path, but oxo-flow does not auto-populate benchmark files — the rule's command must write it"
+    }
+  ],
+  "toml": "[workflow]\nname = \"bwa_mem_pipeline\"\n..."
+}
 ```
 
 > **Next:** [Migrating a whole pipeline from Nextflow or Snakemake](../how-to/migrate-from-nextflow-snakemake.md)
