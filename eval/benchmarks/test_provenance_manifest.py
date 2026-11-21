@@ -48,12 +48,52 @@ Residual error fell to 1.2e-3 after normalization.
 
 # A design doc that carries dotted version / section strings but no real
 # measurement must NOT be flagged (these are the false positives the broadened
-# rule must avoid: "26.10.6", "1.98.0", "3.12.4", "127.0.0.1").
+# rule must avoid: "26.10.6", "1.98.0", "3.12.4", "127.0.0.1", "WCAG 2.1",
+# "section 1.4", "v1.2", "### Task 2.1").
 NO_MEASUREMENT_DOC = """# Plan
 
 Built with rustc 1.98.0 and python3 3.12.4 on glibc 26.10.6.
 
 See section 2 and step 4; bind to 127.0.0.1.
+
+All components must meet WCAG 2.1 AA contrast.
+
+### Task 2.1: Data Model
+
+Pinned the spec at version 1.2 of the design.
+"""
+
+# Review P2 residual: the plan doc row with fraction form must fail closed.
+FRACTION_REPORT = """# Plan
+
+Seeded fault-injection campaign: 7/10 proposals, 3/10 applied, 3/10 verified.
+"""
+
+# Word-percent form must also fail closed.
+WORD_PERCENT_REPORT = """# Plan
+
+Coverage reached 49 percent of the target matrix.
+"""
+
+# A genuine decimal (a measurement, not a dotted identifier) must still trip.
+GENUINE_DECIMAL_DOC = """# Report
+
+Median latency was 118.69 ms across the cohort.
+"""
+
+# Two-segment dotted identifiers in section/version context must NOT trip.
+DOTTED_IDENTIFIER_DOC = """# Plan
+
+See section 1.4 for the rationale and released as v1.2 of the design.
+"""
+
+# The bare-integer table rule is fail-closed on success criteria in the
+# validation protocol, which is why that doc is an explicit DESIGN_DOC_OPTOUT.
+BARE_INTEGER_ROW = """# Protocol
+
+| Pillar | Criterion |
+| :--- | :--- |
+| Software | `make ci` exits 0 with providers disabled |
 """
 
 
@@ -68,29 +108,66 @@ class ProvenanceManifestTests(unittest.TestCase):
         # ...but dotted version / section / IP strings are not measurements.
         self.assertFalse(report_has_measured_number(NO_MEASUREMENT_DOC))
 
-    def test_discovery_finds_new_report_and_gate_fails_closed(self):
-        # Review P2-1 repro: a NEW report added under the plans directory that
-        # carries a measured number and no manifest entry must FAIL the gate.
+    def test_discovery_scans_every_md_and_gate_fails_closed(self):
+        # Review P2 residual: discovery is no longer suffix-gated. A NEW *.md
+        # doc under the plans directory (not named "*-report.md") that carries
+        # a measured number and no manifest entry must FAIL the gate.
         with tempfile.TemporaryDirectory() as tmp:
             d = Path(tmp)
             _write(d, "cohort-scaling-report.md", MEASURED_REPORT)
-            _write(d, "NEW-report.md", MEASURED_REPORT)
-            # A non-report plan doc with a big numeric table must be ignored.
-            _write(
-                d,
-                "design-plan.md",
-                "| Col | N |\n| :--- | :--- |\n| x | 100 |\n",
-            )
+            _write(d, "NEW-implementation-plan.md", MEASURED_REPORT)
             paths = discover_report_paths(d)
             names = sorted(Path(abs_).name for _, abs_ in paths)
-            self.assertEqual(names, ["NEW-report.md", "cohort-scaling-report.md"])
+            self.assertEqual(
+                names, ["NEW-implementation-plan.md", "cohort-scaling-report.md"]
+            )
             manifest = build_manifest()
             errors = check_provenance(manifest, paths)
         self.assertTrue(errors)
         self.assertTrue(
-            any("NEW-report.md" in e and "no provenance entry" in e for e in errors),
+            any(
+                "NEW-implementation-plan.md" in e and "no provenance entry" in e
+                for e in errors
+            ),
             errors,
         )
+
+    def test_fraction_and_word_percent_fail_closed(self):
+        # Review P2 residual: fraction form (7/10) and word percent (49 percent)
+        # are real measured forms and must trip the detector.
+        self.assertTrue(report_has_measured_number(FRACTION_REPORT))
+        self.assertTrue(report_has_measured_number(WORD_PERCENT_REPORT))
+        # And when the doc has no provenance entry the gate fails closed.
+        with tempfile.TemporaryDirectory() as tmp:
+            fraction = _write(Path(tmp), "fraction-plan.md", FRACTION_REPORT)
+            manifest = build_manifest()
+            manifest["artifacts"] = {}
+            errors = check_provenance(manifest, [("fraction-plan.md", fraction)])
+        self.assertTrue(errors)
+        self.assertIn("no provenance entry", errors[0])
+
+    def test_implementation_plan_row_is_gated(self):
+        # The plan doc carrying measured fractions must have a manifest entry,
+        # so the real repo gate passes for it (not silently skipped).
+        manifest = build_manifest()
+        self.assertIn(
+            "docs/superpowers/plans/industrial-scientific-implementation-plan.md",
+            manifest["artifacts"],
+        )
+
+    def test_dotted_identifiers_not_flagged_genuine_decimal_is(self):
+        # P3 regression: two-segment dotted identifiers (vX.Y, section N.M,
+        # "### Task 2.1", "WCAG 2.1") are NOT measurements...
+        self.assertFalse(report_has_measured_number(DOTTED_IDENTIFIER_DOC))
+        self.assertFalse(report_has_measured_number(NO_MEASUREMENT_DOC))
+        # ...while a genuine decimal still is.
+        self.assertTrue(report_has_measured_number(GENUINE_DECIMAL_DOC))
+
+    def test_bare_integer_row_is_why_protocol_is_opted_out(self):
+        # The fail-closed bare-integer table rule fires on success criteria,
+        # which is the documented reason the validation protocol is an explicit
+        # DESIGN_DOC_OPTOUT entry rather than a scanned doc.
+        self.assertTrue(report_has_measured_number(BARE_INTEGER_ROW))
 
     def test_prose_amount_report_fails_closed(self):
         with tempfile.TemporaryDirectory() as tmp:

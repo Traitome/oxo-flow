@@ -21,8 +21,28 @@
         "python3": "3.12.4",
         "rustc": "1.98.0 (88d9e12ae 2026-08-18)"
       }
+    },
+    "docs/superpowers/plans/industrial-scientific-implementation-plan.md": {
+      "generator_command": "OXO_FLOW_AI_PROVIDER=openai OPENAI_BASE_URL=<provider-endpoint> OPENAI_API_KEY=<provider-key> OPENAI_MODEL=<model> python3 eval/frontier/fault_injection.py --binary target/release/oxo-flow --out-json eval/frontier/results/fault_repair_logs/live_summary.json",
+      "host": {
+        "cpu": "school-proxy GLM endpoint (model round-trips remote)",
+        "note": "GLM via school proxy, campaign date 2026-11-18",
+        "os": "Linux"
+      },
+      "inputs": [
+        {
+          "path": "eval/frontier/intents.json",
+          "sha256": "76136532e308464bed29827e001b6d894840c5d2e7bdd8925f24361bde75bd51"
+        }
+      ],
+      "note": "Pins the Round-2 seeded fault-injection row (7/10 proposals, 3/10 applied, 3/10 verified, 3/10 reruns). Attribution provenance only: the campaign numbers and their raw logs live in eval/frontier/PILOT_FINDINGS.md and are not re-derived here.",
+      "source_commit": "c72cb7e467ce8e106bbab4f029efb373bdb46e20",
+      "tool_versions": {
+        "oxo-flow": "0.32.0 (v0.32.0 + verified-repair loop, #1185/#1186/#1187)",
+        "python3": "3.12.4"
+      }
     }
   },
-  "description": "Provenance manifest for publication-facing status reports (#1305). Key-ordered; reports without measured numbers need no entry.",
+  "description": "Provenance manifest for publication-facing artifacts under docs/superpowers/plans (#1305). Key-ordered; every scanned *.md document (minus the explicit DESIGN_DOC_OPTOUT list) that carries a measured number must have an entry here.",
   "version": 1
 }

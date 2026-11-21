@@ -29,15 +29,34 @@ import sys
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 DEFAULT_MANIFEST = os.path.join(REPO_ROOT, "eval", "benchmarks", "provenance_manifest.json")
 
-# Discovery set: publication-facing status reports are DISCOVERED by scanning
-# the plans directory, not hardcoded as an allowlist (review P2-1). A file is a
-# publication-facing report when its name ends in REPORT_SUFFIX ("-report.md");
-# design/plan docs (e.g. "*-implementation-plan.md", dated plans) are excluded
-# because they carry no publication measurements. Any new "*-report.md" added
-# under this directory is picked up automatically and must carry provenance for
-# every measured number it contains; the manifest is the record, not the gate.
+# Discovery set: EVERY markdown document under the plans directory is scanned,
+# not just those named "*-report.md" (review P2 residual, PR #1307). Gating on
+# the filename suffix was a real hole: a plan doc
+# ("industrial-scientific-implementation-plan.md") carried measured campaign
+# numbers ("7/10 proposals, 3/10 applied, ...") yet was never scanned, and the
+# comment that "plan docs carry no publication measurements" was falsified by
+# that very row. The rule is now: a measured number anywhere under
+# docs/superpowers/plans/*.md must have a provenance entry; the manifest is the
+# record, not the gate.
+#
+# DESIGN_DOC_OPTOUT is the narrow, explicit exception list. Each entry is a
+# design/protocol/runbook document reviewed to carry NO publication measurement;
+# it is excluded so the fail-closed bare-integer table rule (which fires on
+# success criteria like "`make ci` exits 0") does not force a bogus provenance
+# entry onto a doc that has nothing to attribute. This is an allow-list of
+# exceptions by decision, never a broad "design docs are skipped" category --
+# any other plans doc that gains a measured number is gated automatically.
 PLANS_DIR = os.path.join(REPO_ROOT, "docs", "superpowers", "plans")
-REPORT_SUFFIX = "-report.md"
+MARKDOWN_SUFFIX = ".md"
+DESIGN_DOC_OPTOUT = frozenset(
+    {
+        # Validation runbook: its only "measured" hits are the fail-closed
+        # bare-integer table rule firing on target counts / success criteria
+        # (e.g. "`make ci` exits 0"), which are acceptance criteria, not
+        # measurements.
+        "docs/superpowers/plans/linux-server-validation-protocol.md",
+    }
+)
 
 REQUIRED_ENTRY_KEYS = (
     "source_commit",
@@ -55,11 +74,14 @@ _SEPARATOR_CELL_RE = re.compile(r"^:?-{3,}:?$")
 #
 # A number counts as a *measurement* when it is one of:
 #   * a percentage            e.g. "99.9%", "12 %"
+#   * a fraction              e.g. "7/10", "3 / 10", "8/9 applied"
+#   * a word percent          e.g. "49 percent", "12 pct"
 #   * scientific notation     e.g. "1.2e-3", "2E6", "5e-2"
 #   * a decimal with a        e.g. "118.69 ms", "9.50", "3159.5 nodes/sec"
 #     fractional part
-# These are detected anywhere in a report (prose or table cell), so prose
-# statements like "latency was 118.69 ms" or "99.9% complete" are caught.
+# These are detected anywhere in a document (prose or table cell), so prose
+# statements like "latency was 118.69 ms", "coverage reached 99.9%", or "7/10
+# cases" are caught.
 #
 # A *plain integer* (e.g. "30") is treated as a measurement only inside a
 # markdown table data row, never in prose -- prose integers are far more often
@@ -67,23 +89,76 @@ _SEPARATOR_CELL_RE = re.compile(r"^:?-{3,}:?$")
 # "section 2") than measurements.
 #
 # Dotted version / section strings are deliberately NOT measurements: a
-# multi-segment dotted number ("26.10.6", "1.98.0", "3.12.4", "127.0.0.1")
-# never matches because the decimal pattern is anchored to reject a trailing
-# dot and a leading dot/digit, so the inner "10.6" / "12.4" fragments are not
-# mistaken for decimals.
+# two-or-more-segment dotted identifier ("26.10.6", "1.98.0", "3.12.4",
+# "127.0.0.1", "v1.2", "section 1.4", "WCAG 2.1", "### Task 2.1") must not be
+# read as a decimal. Two guards enforce this:
+#   1. the decimal / fraction patterns are anchored to reject a leading or
+#      trailing dot and slash, so the inner "10.6" / "12.4" fragments of a
+#      multi-segment string never match; and
+#   2. a real two-segment decimal still needs to be told from "v1.2" / "1.4"
+#      context, so a candidate is ignored when the token immediately before it
+#      is a version / section / figure keyword (see _DOTTED_CONTEXT_KEYWORDS).
+# Numbers inside fenced code blocks and inline `code` spans are stripped first:
+# design docs quote snippets ($k \in \{1, 3, 5\}$, `wall_time_secs 1.5`) that
+# are not measurements.
 _PERCENT_RE = re.compile(r"-?\d+(?:\.\d+)?\s?%")
+_FRACTION_RE = re.compile(r"(?<![\d./:])-?\d+\s?/\s?\d+(?![\d/])")
+_WORD_PERCENT_RE = re.compile(r"\b\d+(?:\.\d+)?\s?(?:percent|pct)\b", re.IGNORECASE)
 _SCI_RE = re.compile(r"-?\d+(?:\.\d+)?[eE][+-]?\d+")
-_DECIMAL_RE = re.compile(r"(?<![\d.])-?\d+\.\d+(?![\d.])")
+_DECIMAL_RE = re.compile(r"(?<![\d./])-?\d+\.\d+(?![\d./])")
 _INTEGER_RE = re.compile(r"^-?\d+$")
+
+# Keyword immediately preceding a dotted "x.y" that marks it as an
+# identifier/version/section/standard token rather than a measurement.
+_DOTTED_CONTEXT_KEYWORDS = frozenset(
+    {
+        "v", "ver", "version", "sec", "section", "ch", "chapter", "fig",
+        "figure", "tab", "table", "step", "task", "phase", "milestone", "part",
+        "appendix", "annex", "edition", "clause", "rfc", "iso", "iec", "no",
+        "article", "p", "pp", "wcag", "snakemake", "nextflow", "§",
+    }
+)
+# Fenced code (```...```) and inline code (`...`) are stripped before scanning.
+_FENCE_RE = re.compile(r"```.*?```", re.DOTALL)
+_INLINE_CODE_RE = re.compile(r"`[^`]*`")
+
+
+def _strip_code(text: str) -> str:
+    """Remove fenced code blocks and inline code spans (not prose)."""
+    return _INLINE_CODE_RE.sub(" ", _FENCE_RE.sub(" ", text))
+
+
+def _preceded_by_dotted_keyword(line: str, start: int) -> bool:
+    """True when ``line[:start]`` ends in a version/section/standard keyword.
+
+    Allows "#", "##", "###" markdown heading markers as section context so that
+    headings like "### Task 1.1" / "### 1.1 Title" are not read as decimals.
+    """
+    prefix = line[max(0, start - 16) : start].rstrip(" \t-–—~/,:.;0123456789")
+    match = re.search(r"([A-Za-z§#]+)\s*$", prefix)
+    if not match:
+        return False
+    token = match.group(1).lower()
+    if set(token) <= {"#"}:
+        return True
+    return token in _DOTTED_CONTEXT_KEYWORDS
 
 
 def _has_measured_number(text: str) -> bool:
-    """True when ``text`` carries a percent / scientific / decimal measurement."""
-    return bool(
+    """True when ``text`` carries a percent / fraction / word-percent / scientific / decimal measurement."""
+    if (
         _PERCENT_RE.search(text)
+        or _WORD_PERCENT_RE.search(text)
         or _SCI_RE.search(text)
-        or _DECIMAL_RE.search(text)
-    )
+    ):
+        return True
+    for match in _FRACTION_RE.finditer(text):
+        if not _preceded_by_dotted_keyword(text, match.start()):
+            return True
+    for match in _DECIMAL_RE.finditer(text):
+        if not _preceded_by_dotted_keyword(text, match.start()):
+            return True
+    return False
 
 
 def _is_measured_table_row(line: str) -> bool:
@@ -114,10 +189,12 @@ def _is_measured_table_row(line: str) -> bool:
 def report_has_measured_number(text: str) -> bool:
     """Return True when a report body contains a measured number.
 
-    Detects a measured markdown table data row, or a percent / scientific /
-    decimal measurement in prose (review P2-2).
+    Detects a measured markdown table data row, or a percent / fraction /
+    word-percent / scientific / decimal measurement in prose (review P2-2).
+    Fenced code blocks and inline code spans are stripped first so quoted
+    snippets are not mistaken for measurements.
     """
-    for line in text.splitlines():
+    for line in _strip_code(text).splitlines():
         if _is_measured_table_row(line):
             return True
         if line.strip().startswith("|"):
@@ -195,30 +272,75 @@ def check_provenance(manifest: object, report_paths: list) -> list:
 
 
 def discover_report_paths(plans_dir: str = PLANS_DIR) -> list:
-    """Discover publication-facing report files under ``plans_dir``.
+    """Discover scannable markdown documents under ``plans_dir``.
 
-    Deterministic (``sorted``) so the gate set is order-independent. Only files
-    whose name ends in ``REPORT_SUFFIX`` are considered publication-facing
-    reports; other plan/design docs are skipped. Returns
-    ``(repo_relative_path, absolute_path)`` pairs.
+    Deterministic (``sorted``) so the gate set is order-independent. EVERY
+    ``*.md`` document is a candidate (review P2 residual, PR #1307): gating on a
+    filename suffix let a plan doc with measured numbers escape, so the scope is
+    now "the whole plans directory" minus the explicit ``DESIGN_DOC_OPTOUT``
+    list. Returns ``(repo_relative_path, absolute_path)`` pairs.
     """
     if not os.path.isdir(plans_dir):
         return []
     names = sorted(
         n
         for n in os.listdir(plans_dir)
-        if n.endswith(REPORT_SUFFIX) and os.path.isfile(os.path.join(plans_dir, n))
+        if n.endswith(MARKDOWN_SUFFIX) and os.path.isfile(os.path.join(plans_dir, n))
     )
     pairs = []
     for name in names:
         abs_path = os.path.join(plans_dir, name)
-        rel_path = os.path.relpath(abs_path, REPO_ROOT)
-        pairs.append((rel_path.replace(os.sep, "/"), abs_path))
+        rel_path = os.path.relpath(abs_path, REPO_ROOT).replace(os.sep, "/")
+        if rel_path in DESIGN_DOC_OPTOUT:
+            continue
+        pairs.append((rel_path, abs_path))
     return pairs
 
 
 def default_report_paths() -> list:
     return discover_report_paths()
+
+
+def _implementation_plan_entry() -> dict:
+    """Provenance for the measured AI-repair row in the implementation plan.
+
+    The plan's status table and section 5 quote the Round-2 fault-injection
+    campaign (7/10 proposals, 3/10 applied/verified/reruns). The measured table
+    of record is ``eval/frontier/PILOT_FINDINGS.md``; this entry names the
+    commit that added that campaign's numbers and the harness that produced
+    them.
+    """
+    return {
+        "source_commit": "c72cb7e467ce8e106bbab4f029efb373bdb46e20",
+        "generator_command": (
+            "OXO_FLOW_AI_PROVIDER=openai OPENAI_BASE_URL=<provider-endpoint> "
+            "OPENAI_API_KEY=<provider-key> OPENAI_MODEL=<model> "
+            "python3 eval/frontier/fault_injection.py "
+            "--binary target/release/oxo-flow "
+            "--out-json eval/frontier/results/fault_repair_logs/live_summary.json"
+        ),
+        "host": {
+            "os": "Linux",
+            "cpu": "school-proxy GLM endpoint (model round-trips remote)",
+            "note": "GLM via school proxy, campaign date 2026-11-18",
+        },
+        "tool_versions": {
+            "python3": "3.12.4",
+            "oxo-flow": "0.32.0 (v0.32.0 + verified-repair loop, #1185/#1186/#1187)",
+        },
+        "inputs": [
+            {
+                "path": "eval/frontier/intents.json",
+                "sha256": "76136532e308464bed29827e001b6d894840c5d2e7bdd8925f24361bde75bd51",
+            }
+        ],
+        "note": (
+            "Pins the Round-2 seeded fault-injection row (7/10 proposals, 3/10 "
+            "applied, 3/10 verified, 3/10 reruns). Attribution provenance only: "
+            "the campaign numbers and their raw logs live in "
+            "eval/frontier/PILOT_FINDINGS.md and are not re-derived here."
+        ),
+    }
 
 
 def build_manifest() -> dict:
@@ -251,12 +373,19 @@ def build_manifest() -> dict:
             "is UNPINNED and documented as such; it is not attributable to this commit."
         ),
     }
-    artifacts = {"docs/superpowers/plans/cohort-scaling-report.md": cohort_entry}
+    artifacts = {
+        "docs/superpowers/plans/cohort-scaling-report.md": cohort_entry,
+        "docs/superpowers/plans/industrial-scientific-implementation-plan.md": (
+            _implementation_plan_entry()
+        ),
+    }
     return {
         "version": 1,
         "description": (
-            "Provenance manifest for publication-facing status reports (#1305). "
-            "Key-ordered; reports without measured numbers need no entry."
+            "Provenance manifest for publication-facing artifacts under "
+            "docs/superpowers/plans (#1305). Key-ordered; every scanned *.md "
+            "document (minus the explicit DESIGN_DOC_OPTOUT list) that carries "
+            "a measured number must have an entry here."
         ),
         "artifacts": dict(sorted(artifacts.items())),
     }
