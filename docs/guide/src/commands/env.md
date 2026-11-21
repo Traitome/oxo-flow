@@ -19,7 +19,7 @@ oxo-flow env <SUBCOMMAND>
 List available environment backends, or list environments defined in a workflow.
 
 ```bash
-oxo-flow env list [WORKFLOW]
+oxo-flow env list [WORKFLOW] [--json]
 ```
 
 When called without arguments, lists all backends detected on the system.
@@ -47,12 +47,50 @@ Available environment backends:
 
 The two banner lines print only at an interactive terminal. All of this output goes to **stderr** — capture it with `2>` or `2>&1`; stdout stays empty.
 
+**`--json` output** (issue #1336): pass `--json` to emit one machine-readable
+document to stdout instead. Without a workflow the `backends` array is filled
+and `rules` is empty; with a workflow the reverse holds. `resolved_binary` is
+present only where the resolver names the binary it would invoke (the
+conda family).
+
+```bash
+oxo-flow env list --json
+```
+
+```json
+{
+  "command": "env list",
+  "backends": [
+    { "name": "system", "available": true },
+    { "name": "conda", "available": true, "resolved_binary": "conda" },
+    { "name": "docker", "available": false }
+  ],
+  "rules": []
+}
+```
+
+```bash
+oxo-flow env list pipeline.oxoflow --json
+```
+
+```json
+{
+  "command": "env list",
+  "workflow": "pipeline.oxoflow",
+  "backends": [],
+  "rules": [
+    { "name": "align", "backend": "conda" },
+    { "name": "call_variants", "backend": "docker" }
+  ]
+}
+```
+
 ### `env check`
 
 Check that all environments declared in a workflow file are valid and their backends are available. Each rule's environment is resolved with the same precedence the run uses (`env_group` → rule `environment` → `[defaults] environment`), so a rule that inherits the defaults is validated against the backend that will actually execute.
 
 ```bash
-oxo-flow env check [WORKFLOW]
+oxo-flow env check [WORKFLOW] [--json]
 ```
 
 | Argument | Description |
@@ -77,6 +115,41 @@ Environment backend availability:
   ✓ mamba (resolved: micromamba)
   ✓ conda
   ✗ docker (not found)
+```
+
+**`--json` output** (issue #1336): with `--json`, `env check` emits one
+document with a per-rule verdict (`rules[].ok`, and `rules[].error` when a
+rule fails) plus a top-level `all_ok` summary. The exit code is preserved: a
+failing check still exits `1`, so `all_ok` and the process status agree.
+
+```bash
+oxo-flow env check pipeline.oxoflow --json
+```
+
+```json
+{
+  "command": "env check",
+  "workflow": "pipeline.oxoflow",
+  "all_ok": false,
+  "backends": [],
+  "rules": [
+    { "name": "align", "backend": "conda", "ok": true },
+    {
+      "name": "call_variants",
+      "backend": "docker",
+      "ok": false,
+      "error": "environment error (docker): docker is not installed or not in PATH"
+    }
+  ]
+}
+```
+
+Without a workflow, `--json` reports backend availability instead
+(`backends[]` filled, `rules` empty) and `all_ok` stays `true` — availability
+is informational, matching the text path's exit `0`.
+
+```bash
+oxo-flow env check --json
 ```
 
 ### `env create`
@@ -176,6 +249,7 @@ Summary: 1 store dir(s) would be deleted, freeing ~310.4 MiB (dry run — nothin
 | Option | Short | Description |
 |---|---|---|
 | `--verbose` | `-v` | Enable debug-level logging |
+| `--json` | — | Emit a machine-readable JSON document instead of text. Supported by `env list` and `env check` (issue #1336); `env create` and `env gc` reject it |
 
 ---
 
@@ -187,6 +261,10 @@ oxo-flow env list
 
 # Check a specific workflow
 oxo-flow env check pipeline.oxoflow
+
+# Machine-readable
+oxo-flow env list pipeline.oxoflow --json
+oxo-flow env check pipeline.oxoflow --json
 
 # Opt into the shared env store for this shell session, then preview GC
 export OXO_FLOW_ENV_STORE=~/.cache/oxo-flow/envs

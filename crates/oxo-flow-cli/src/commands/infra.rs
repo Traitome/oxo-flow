@@ -1,10 +1,84 @@
 use anyhow::{Context, Result};
 use colored::Colorize;
 use oxo_flow_core::config::WorkflowConfig;
+use serde::Serialize;
 
 use crate::commands::print_banner;
 
 use crate::{ConfigAction, EnvAction};
+
+/// One backend in the `env list` / `env check` documents.
+///
+/// `available` is the resolver's own verdict; `resolved_binary` is populated
+/// only where the resolver can name the concrete binary it would invoke
+/// (`resolved_backend_binary`, the conda family) — never fabricated for a
+/// backend that resolves structurally.
+#[derive(Serialize)]
+struct EnvBackendJson {
+    name: String,
+    available: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    resolved_binary: Option<String>,
+}
+
+/// One rule's resolved environment in the `env list` / `env check` documents.
+///
+/// `backend` is the shared resolver's `kind()` (the same value the human
+/// output prints); `ok`/`error` are set only by `env check`.
+#[derive(Serialize)]
+struct EnvRuleJson {
+    name: String,
+    backend: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ok: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+/// The `env list --json` document (issue #1336): available backends and/or the
+/// resolved per-rule environments, exactly as the resolver exposes them.
+/// Field order is fixed by the struct declaration (AGENTS.md order-independence
+/// invariant).
+#[derive(Serialize)]
+struct EnvListJson {
+    command: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    workflow: Option<String>,
+    backends: Vec<EnvBackendJson>,
+    rules: Vec<EnvRuleJson>,
+}
+
+impl EnvListJson {
+    fn emit(&self) {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(self).expect("env list JSON is serializable")
+        );
+    }
+}
+
+/// The `env check --json` document (issue #1336): per-rule check results (or
+/// global backend availability) plus `all_ok`. `all_ok` is false exactly when
+/// the non-JSON path would `exit(1)`, so a consumer can read the verdict from
+/// the document as well as the exit code.
+#[derive(Serialize)]
+struct EnvCheckJson {
+    command: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    workflow: Option<String>,
+    all_ok: bool,
+    backends: Vec<EnvBackendJson>,
+    rules: Vec<EnvRuleJson>,
+}
+
+impl EnvCheckJson {
+    fn emit(&self) {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(self).expect("env check JSON is serializable")
+        );
+    }
+}
 
 /// The environment a rule will actually execute in.
 ///
@@ -21,13 +95,62 @@ fn resolved_rule_environment(
     config.resolve_environment(rule).unwrap_or_default()
 }
 
-pub async fn env_command(action: EnvAction) -> Result<()> {
+/// Resolve the global backend-availability rows used by both the JSON
+/// documents and the human `env check` output (issue #1336).
+fn backend_rows(resolver: &oxo_flow_core::environment::EnvironmentResolver) -> Vec<EnvBackendJson> {
+    let available = resolver.available_backends();
+    oxo_flow_core::environment::EnvironmentResolver::all_known_backends()
+        .iter()
+        .map(|backend| EnvBackendJson {
+            name: (*backend).to_string(),
+            available: available.contains(backend),
+            resolved_binary: if available.contains(backend) {
+                resolver.resolved_backend_binary(backend)
+            } else {
+                None
+            },
+        })
+        .collect()
+}
+
+/// Resolve the per-rule environment rows for `env list --json` (issue #1336).
+fn list_rule_rows(config: &WorkflowConfig) -> Vec<EnvRuleJson> {
+    let mut seen = std::collections::HashSet::new();
+    let mut rows = Vec::new();
+    for rule in &config.rules {
+        // Share the resolver `run` uses ([defaults] environment, [env_groups],
+        // then the rule's own spec) — same resolution as the text path.
+        let env = resolved_rule_environment(config, rule);
+        let kind = env.kind().to_string();
+        if seen.insert(format!("{}:{kind}", rule.name)) {
+            rows.push(EnvRuleJson {
+                name: rule.name.clone(),
+                backend: kind,
+                ok: None,
+                error: None,
+            });
+        }
+    }
+    rows
+}
+
+pub async fn env_command(action: EnvAction, json: bool) -> Result<()> {
     print_banner();
     match action {
-        EnvAction::List { workflow } => match workflow {
+        EnvAction::List { workflow, .. } => match workflow {
             Some(wf_path) => {
                 let config = WorkflowConfig::from_file(&wf_path)
                     .with_context(|| format!("failed to parse {}", wf_path.display()))?;
+                if json {
+                    let doc = EnvListJson {
+                        command: "env list",
+                        workflow: Some(wf_path.display().to_string()),
+                        backends: Vec::new(),
+                        rules: list_rule_rows(&config),
+                    };
+                    doc.emit();
+                    return Ok(());
+                }
                 eprintln!(
                     "{} {}",
                     "Environments in".bold(),
@@ -55,13 +178,30 @@ pub async fn env_command(action: EnvAction) -> Result<()> {
             None => {
                 let resolver = oxo_flow_core::environment::EnvironmentResolver::new();
                 let available = resolver.available_backends();
+                if json {
+                    let doc = EnvListJson {
+                        command: "env list",
+                        workflow: None,
+                        backends: available
+                            .iter()
+                            .map(|b| EnvBackendJson {
+                                name: (*b).to_string(),
+                                available: true,
+                                resolved_binary: resolver.resolved_backend_binary(b),
+                            })
+                            .collect(),
+                        rules: Vec::new(),
+                    };
+                    doc.emit();
+                    return Ok(());
+                }
                 eprintln!("{}", "Available environment backends:".bold());
                 for backend in available {
                     eprintln!("  {} {}", "✓".green(), backend);
                 }
             }
         },
-        EnvAction::Check { workflow } => {
+        EnvAction::Check { workflow, .. } => {
             let resolver = oxo_flow_core::environment::EnvironmentResolver::new();
 
             match workflow {
@@ -79,6 +219,7 @@ pub async fn env_command(action: EnvAction) -> Result<()> {
                         .unwrap_or_else(|| std::path::Path::new("."));
 
                     let mut all_ok = true;
+                    let mut rows = Vec::new();
                     for rule in &config.rules {
                         // Same resolution as `run` / `env list` (journey-power
                         // P1): checking `rule.environment` alone validated the
@@ -87,23 +228,71 @@ pub async fn env_command(action: EnvAction) -> Result<()> {
                         let spec = resolved.resolve_relative_paths(Some(workflow_dir));
                         match resolver.validate_spec(&spec) {
                             Ok(()) => {
-                                eprintln!("  {} {} ({})", "✓".green(), rule.name, resolved.kind());
+                                rows.push(EnvRuleJson {
+                                    name: rule.name.clone(),
+                                    backend: resolved.kind().to_string(),
+                                    ok: Some(true),
+                                    error: None,
+                                });
+                                if !json {
+                                    eprintln!(
+                                        "  {} {} ({})",
+                                        "✓".green(),
+                                        rule.name,
+                                        resolved.kind()
+                                    );
+                                }
                             }
                             Err(e) => {
-                                eprintln!("  {} {} — {}", "✗".red(), rule.name, e);
                                 all_ok = false;
+                                rows.push(EnvRuleJson {
+                                    name: rule.name.clone(),
+                                    backend: resolved.kind().to_string(),
+                                    ok: Some(false),
+                                    error: Some(e.to_string()),
+                                });
+                                if !json {
+                                    eprintln!("  {} {} — {}", "✗".red(), rule.name, e);
+                                }
                             }
                         }
+                    }
+
+                    if json {
+                        let doc = EnvCheckJson {
+                            command: "env check",
+                            workflow: Some(wf_path.display().to_string()),
+                            all_ok,
+                            backends: Vec::new(),
+                            rules: rows,
+                        };
+                        doc.emit();
                     }
 
                     if !all_ok {
                         std::process::exit(1);
                     }
+                    return Ok(());
                 }
                 None => {
                     // No workflow provided: report global backend availability.
-                    eprintln!("{}", "Environment backend availability:".bold());
                     let available = resolver.available_backends();
+                    let backends = backend_rows(&resolver);
+                    if json {
+                        let doc = EnvCheckJson {
+                            command: "env check",
+                            workflow: None,
+                            // Availability of the baking backends is
+                            // informational, not a pass/fail gate — the text
+                            // path exits 0 here even when a backend is missing.
+                            all_ok: true,
+                            backends,
+                            rules: Vec::new(),
+                        };
+                        doc.emit();
+                        return Ok(());
+                    }
+                    eprintln!("{}", "Environment backend availability:".bold());
                     for backend in
                         oxo_flow_core::environment::EnvironmentResolver::all_known_backends()
                     {

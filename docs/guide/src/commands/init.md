@@ -31,9 +31,7 @@ oxo-flow init [OPTIONS] <NAME>
 | `--quiet` | — | — | Suppress informational output (the version banner and scaffold listings are omitted; errors and warnings are unaffected) |
 | `--no-color` | — | — | Disable colored output |
 
-
-> The global `--json` flag is **not supported** by this command — passing it fails fast instead of being silently ignored. Machine-readable output is available from: `run`, `dry-run`, `validate`, `lint`, `test`, `status`, `wait`, `batch`, `info`, `knowledge`, `schema`, `verify-data`, `license`, `ai`, `graph`, `provenance verify`, `diff`, `runs gc`, `import`, and `cluster status`/`cancel`/`logs`.
-
+> The global `--json` flag is **not supported** by this command — passing it fails fast instead of being silently ignored. Machine-readable output is available from: `run`, `dry-run`, `validate`, `lint`, `test`, `status`, `wait`, `batch`, `info`, `knowledge`, `schema`, `verify-data`, `license`, `ai`, `graph`, `provenance verify`, `diff`, `runs gc`, `import`, `env list`/`check`, and `cluster status`/`cancel`/`logs`.
 
 ---
 
