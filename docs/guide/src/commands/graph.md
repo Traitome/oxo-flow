@@ -34,7 +34,8 @@ oxo-flow graph [OPTIONS] <WORKFLOW>
 | `--no-color` | | Disable colored output |
 
 
-> JSON output for `graph` is the global `--json` flag (see [JSON output](#json-output)); it fails fast if combined with a diagram format. Machine-readable output is also available from: `run`, `dry-run`, `validate`, `lint`, `test`, `status`, `wait`, `batch`, `info`, `knowledge`, `schema`, `verify-data`, `license`, `ai`, `provenance verify`, `runs gc`, `import`, and `cluster status`/`cancel`/`logs` (see [`init`](init.md#options) for the canonical note).
+> JSON output for `graph` is the global `--json` flag (see [JSON output](#json-output)); it fails fast if combined with a diagram format. Machine-readable output is also available from: `run`, `dry-run`, `validate`, `lint`, `test`, `status`, `wait`, `batch`, `info`, `knowledge`, `schema`, `verify-data`, `license`, `ai`, `provenance verify`, `diff`, `runs gc`, `import`, and `cluster status`/`cancel`/`logs` (see [`init`](init.md#options) for the canonical note).
+
 
 ---
 
