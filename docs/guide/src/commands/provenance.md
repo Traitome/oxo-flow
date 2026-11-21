@@ -167,9 +167,15 @@ Summary: 1 matched, 1 differing, 1 only left, 1 only right
 ```
 
 Each checkpoint's `checksums` and `cleaned_checksums` maps are merged before
-comparison (a chunk moved into the cleaned bucket is a bookkeeping change, not
-a file change), exactly as `report --diff` does. Artifacts are partitioned into
-four classes:
+comparison via the **same shared merge** (`merge_recorded_checksums`) that
+`report --diff` uses, so the two surfaces can never classify the same input
+pair differently — a chunk moved into the cleaned bucket is a bookkeeping
+change, not a file change, and its merged value carries the `(cleaned by
+design)` annotation, so a mixed pair (recorded under `checksums` on one side,
+`cleaned_checksums` on the other) reads as `differing`, not a spurious
+`matched`. When a checkpoint has no embedded `checksums` object, `diff` falls
+back to the same legacy companion `checkpoint.checksums.json` file
+`provenance verify` reads. Artifacts are partitioned into four classes:
 
 - `matched` — present in both, identical checksums.
 - `differing` — present in both, different checksums.

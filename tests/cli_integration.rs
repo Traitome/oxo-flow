@@ -6061,6 +6061,93 @@ fn cli_provenance_diff_missing_checkpoint_errors_cleanly() {
         .stderr(predicate::str::contains("failed to read checkpoint"));
 }
 
+#[test]
+fn cli_provenance_diff_mixed_bucket_pair_is_differing() {
+    // P1 regression (issue #1320): an artifact recorded under `checksums` on
+    // the left and `cleaned_checksums` on the right is a bookkeeping change,
+    // not a hash agreement — `provenance diff` must report it as DIFFERING and
+    // exit nonzero (matching `report --diff`), never as a spurious match.
+    let dir = tempfile::tempdir().unwrap();
+    let left = dir.path().join("left.json");
+    let right = dir.path().join("right.json");
+    fs::write(&left, r#"{"checksums":{"chunk":"sha256:aa"}}"#).unwrap();
+    fs::write(&right, r#"{"cleaned_checksums":{"chunk":"sha256:aa"}}"#).unwrap();
+
+    let assert = oxo_flow_cmd()
+        .args([
+            "provenance",
+            "diff",
+            left.to_str().unwrap(),
+            right.to_str().unwrap(),
+            "--json",
+        ])
+        .assert()
+        .failure();
+
+    let out = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    let doc: serde_json::Value = serde_json::from_str(&out).unwrap();
+    let d = &doc["diff"];
+    assert_eq!(d["matched"], 0);
+    assert_eq!(d["differing"], 1);
+    assert_eq!(d["entries"][0]["status"], "differing");
+}
+
+#[test]
+fn cli_provenance_diff_non_object_checksums_errors() {
+    // P3b regression (issue #1320): a present-but-non-object `checksums`
+    // value must be a hard, named error, never a silent empty map.
+    let dir = tempfile::tempdir().unwrap();
+    let left = dir.path().join("left.json");
+    let right = dir.path().join("right.json");
+    fs::write(&left, r#"{"checksums":"x"}"#).unwrap();
+    fs::write(&right, r#"{"checksums":{"a.txt":"sha256:aa"}}"#).unwrap();
+
+    oxo_flow_cmd()
+        .args([
+            "provenance",
+            "diff",
+            left.to_str().unwrap(),
+            right.to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("not a JSON object"));
+}
+
+#[test]
+fn cli_provenance_diff_reads_companion_checksums_file() {
+    // P3a regression (issue #1320): hashes living only in the legacy
+    // companion `checkpoint.checksums.json` must be read (parity with
+    // `provenance verify`), so identical companions exit zero rather than
+    // reporting false agreement.
+    let dir = tempfile::tempdir().unwrap();
+    let left = dir.path().join("left.json");
+    let right = dir.path().join("right.json");
+    fs::write(&left, r#"{"completed_rules":["a"]}"#).unwrap();
+    fs::write(&right, r#"{"completed_rules":["a"]}"#).unwrap();
+    fs::write(
+        dir.path().join("left.checksums.json"),
+        r#"{"a.txt":"sha256:aa"}"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("right.checksums.json"),
+        r#"{"a.txt":"sha256:aa"}"#,
+    )
+    .unwrap();
+
+    oxo_flow_cmd()
+        .args([
+            "provenance",
+            "diff",
+            left.to_str().unwrap(),
+            right.to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("1 matched, 0 differing"));
+}
+
 // ---------------------------------------------------------------------------
 // clean --orphans tests
 // ---------------------------------------------------------------------------
