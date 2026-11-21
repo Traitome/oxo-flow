@@ -157,6 +157,26 @@ fn compile(patterns: &[&str]) -> Vec<Regex> {
         .collect()
 }
 
+/// Read-only description of one runtime diagnostic pattern.
+///
+/// Derived from the engine's own `Pattern` table by [`DiagnosticsEngine::catalog`],
+/// so the exposed list can never drift from what `analyze` actually matches.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PatternInfo {
+    /// Stable pattern id (e.g. `oom_killed`, `bam_index_missing`).
+    pub id: String,
+    /// Failure category the pattern is grouped under.
+    pub category: ErrorCategory,
+    /// One-line human summary of the cause (the engine's `likely_cause` text).
+    pub summary: String,
+    /// Whether the engine can auto-repair this failure.
+    pub auto_fixable: bool,
+    /// Config key the fix targets, when the pattern declares one.
+    pub fix_config_path: Option<String>,
+    /// Shell exit codes that participate in matching (empty = any exit code).
+    pub exit_codes: Vec<i32>,
+}
+
 /// Global causal diagnostics engine.
 pub struct DiagnosticsEngine {
     patterns: Vec<Pattern>,
@@ -839,6 +859,38 @@ impl DiagnosticsEngine {
         }
 
         results
+    }
+
+    /// Enumerate the full pattern catalog, key-ordered by id.
+    ///
+    /// Read-only introspection over the same table `analyze` matches against
+    /// (single source of truth), so surfaces like `oxo-flow diagnostics list`
+    /// can never enumerate ids the engine does not actually know. Ids are
+    /// unique, so the `BTreeMap` ordering below is total and stable across
+    /// runs.
+    #[must_use]
+    pub fn catalog() -> Vec<PatternInfo> {
+        let engine = Self::new();
+        let by_id: std::collections::BTreeMap<&'static str, PatternInfo> = engine
+            .patterns
+            .iter()
+            .map(|p| {
+                (
+                    p.id,
+                    PatternInfo {
+                        id: p.id.to_string(),
+                        category: p.category,
+                        summary: p.likely_cause.to_string(),
+                        auto_fixable: p.auto_fixable,
+                        fix_config_path: p.fix_config_path.map(str::to_string),
+                        exit_codes: p.exit_codes.clone(),
+                    },
+                )
+            })
+            .collect();
+        // BTreeMap iteration is already key-ordered; rebuild the vec in that
+        // order (into_values consumes the map, so entries move out sorted).
+        by_id.into_values().collect()
     }
 }
 

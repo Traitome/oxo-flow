@@ -145,7 +145,7 @@ Jump to the **How-to Guides**:
 
 ### If you need exact syntax and options
 
-See the **Command Reference** for all 36 CLI subcommands with usage, options, and examples, or the [VS Code Extension](./reference/vscode-extension.md) reference for the first-party editor integration.
+See the **Command Reference** for all 37 CLI subcommands with usage, options, and examples, or the [VS Code Extension](./reference/vscode-extension.md) reference for the first-party editor integration.
 
 ### If you want the full technical details
 

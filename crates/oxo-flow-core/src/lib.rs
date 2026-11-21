@@ -66,6 +66,7 @@ pub mod report;
 pub mod report_metrics;
 pub mod rule;
 pub mod scheduler;
+pub mod scientific_catalog;
 pub mod scientific_preflight;
 pub mod software_versions;
 pub mod stage;
