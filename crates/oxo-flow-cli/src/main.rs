@@ -73,7 +73,7 @@ pub struct Cli {
     /// Output machine-readable JSON to stdout (human-readable logs stay on stderr).
     /// Implemented by run, dry-run, validate, lint, test, status, wait, batch,
     /// info, knowledge, schema, verify-data, license, provenance verify, ai,
-    /// runs gc, and the cluster status/cancel/logs monitors;
+    /// runs gc, diff, and the cluster status/cancel/logs monitors;
     /// every other command rejects the flag instead of silently ignoring it.
     /// For info and knowledge, an explicit `--format text` takes precedence
     /// over `--json`.
@@ -1352,6 +1352,8 @@ fn json_supported(command: &Commands) -> bool {
         | Commands::Schema
         | Commands::License { .. }
         | Commands::Ai { .. } => true,
+        // `diff --json` emits one machine-readable diff document (issue #1330).
+        Commands::Diff { .. } => true,
         Commands::Provenance { action } => matches!(action, ProvenanceAction::Verify { .. }),
         Commands::VerifyData { .. } => true,
         Commands::Runs { .. } => true,
@@ -2030,7 +2032,7 @@ async fn main() -> Result<()> {
         Commands::Diff {
             workflow_a,
             workflow_b,
-        } => handle_diff(workflow_a, workflow_b)?,
+        } => handle_diff(workflow_a, workflow_b, cli.json)?,
         Commands::Debug {
             workflow,
             rule_name,
