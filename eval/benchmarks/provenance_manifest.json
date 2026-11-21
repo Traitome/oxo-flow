@@ -1,0 +1,28 @@
+{
+  "artifacts": {
+    "docs/superpowers/plans/cohort-scaling-report.md": {
+      "generator_command": "OXO_FLOW_BIN=target/release/oxo-flow python3 eval/benchmarks/cohort_driver.py --samples 10",
+      "host": {
+        "cpu": "Apple M3",
+        "logical_cores": 8,
+        "memory_bytes": 25769803776,
+        "os": "macOS 26.6.2 (25G83) / Darwin 25.6.0 arm64"
+      },
+      "inputs": [
+        {
+          "path": "target/release/oxo-flow",
+          "sha256": "81bf9bab8fb253b35f1f04575650c7ea573db878a9fd04957378c7788748809f"
+        }
+      ],
+      "note": "Pins the section 2 reproduction block. The section 1 row (118.69 ms) is UNPINNED and documented as such; it is not attributable to this commit.",
+      "source_commit": "e855fa6a71631237d5973041caf95664af23590d",
+      "tool_versions": {
+        "cargo": "1.98.0",
+        "python3": "3.12.4",
+        "rustc": "1.98.0 (88d9e12ae 2026-08-18)"
+      }
+    }
+  },
+  "description": "Provenance manifest for publication-facing status reports (#1305). Key-ordered; reports without measured numbers need no entry.",
+  "version": 1
+}

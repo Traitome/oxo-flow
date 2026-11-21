@@ -48,6 +48,16 @@ The final report must include:
 - negative, null, and contradictory findings;
 - raw response data or a controlled-access justification.
 
-## 4. Current Decision
+## 4. Generator Relationship (provenance note)
+
+This report is a **hand-authored status document**. It contains no measured
+numbers, so it carries no provenance entry in
+`eval/benchmarks/provenance_manifest.py`. The generator
+`eval/benchmarks/sus_survey_analysis.py` refuses to render anything but a
+synthetic "Synthetic Human-Factors Harness Check" table; it cannot regenerate
+this file byte-for-byte and does not produce study results. The generator
+produces the raw harness-check table, the report states the evidence status.
+
+## 5. Current Decision
 
 Human factors remain **Simulation only**. No usability claim may appear in a roadmap, release note, slide, or manuscript until real study data pass review.

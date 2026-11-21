@@ -50,6 +50,17 @@ Each measured campaign must record:
 - Reanalyze raw data independently.
 - Report negative results.
 
-## 4. Current Decision
+## 4. Generator Relationship (provenance note)
+
+This report is a **hand-authored status document**. It contains no measured
+numbers, so it carries no provenance entry in
+`eval/benchmarks/provenance_manifest.py`. The generator
+`eval/benchmarks/hardware_scaling.py` emits a "Hardware Scaling Model
+Projection (Not Measurement)" table on the `--allow-simulation` path and a
+measured table only when fed `--measurements-json` run-level data. Neither mode
+regenerates this file byte-for-byte; the generator produces the raw table, the
+report states the evidence status.
+
+## 5. Current Decision
 
 Hardware performance remains **Planned / blocked**. The next admissible artifact is a measured campaign manifest and raw run-level data, not a speedup table.
