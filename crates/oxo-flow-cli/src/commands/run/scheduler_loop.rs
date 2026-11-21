@@ -50,6 +50,10 @@ pub(crate) struct SchedulerLoopContext<'a> {
     /// (issue #1164 review-R3): workdir, config overrides, provenance,
     /// concurrency, keep-going — so the child re-derives the same run.
     pub rerun_ctx: &'a crate::commands::run::repair::RerunContext,
+    /// Issue #1302: the reviewed repair document path (`--apply-patch <FILE>`)
+    /// forwarded to the failure-abort handler, which applies it through the
+    /// same verified-repair path `--ai-recover` uses.
+    pub apply_patch: Option<&'a Path>,
 }
 
 /// Record a post-completion processing failure (checkpoint re-entry,
@@ -209,6 +213,7 @@ pub(crate) async fn run_scheduler_loop(ctx: SchedulerLoopContext<'_>) -> anyhow:
         wildcard_values,
         samples_filter,
         workflow,
+        apply_patch,
         json_summary,
     } = ctx;
 
@@ -1292,6 +1297,7 @@ pub(crate) async fn run_scheduler_loop(ctx: SchedulerLoopContext<'_>) -> anyhow:
                     no_ai_recover,
                     ai_max_retries,
                     rerun_ctx,
+                    apply_patch,
                 },
             )
             .await;
