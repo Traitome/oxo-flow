@@ -122,3 +122,4 @@ uuid = { workspace = true }
 zstd = { version = "0.14", default-features = false }
 tar = "0.4"
 filetime = "0.2.29"
+sha2 = { workspace = true }

@@ -10,6 +10,12 @@ pub(crate) struct RunLogStart {
     pub run_log: SharedRunLog,
     pub workflow_abs: PathBuf,
     pub workflow_git_sha: Option<String>,
+    /// Content digest (`sha256:<hex>`) of the executed workflow bytes
+    /// (issue #1324); `None` when the file could not be read.
+    pub workflow_content_hash: Option<String>,
+    /// Whether the workflow's git tree had uncommitted changes (issue
+    /// #1324); `None` when not inside a git repository.
+    pub workflow_git_dirty: Option<bool>,
 }
 
 /// Relative `--log-file` paths resolve against the workdir, matching the
@@ -30,10 +36,12 @@ pub(crate) fn run_log_header(
     workflow_abs: &Path,
     config: &WorkflowConfig,
     workflow_git_sha: Option<&str>,
+    workflow_content_hash: Option<&str>,
+    workflow_git_dirty: Option<bool>,
     workdir: &Path,
 ) -> String {
     format!(
-        "oxo-flow run log\nstarted_at: {}\noxo-flow: v{}\ncommand: {}\nworkflow: {}\nworkflow_name: {}\nworkflow_version: {}\ngit_sha: {}\nworkdir: {}\n\n",
+        "oxo-flow run log\nstarted_at: {}\noxo-flow: v{}\ncommand: {}\nworkflow: {}\nworkflow_name: {}\nworkflow_version: {}\ngit_sha: {}\nworkflow_content_hash: {}\nworkflow_git_dirty: {}\nworkdir: {}\n\n",
         chrono::Local::now().to_rfc3339(),
         env!("CARGO_PKG_VERSION"),
         command_line,
@@ -41,6 +49,12 @@ pub(crate) fn run_log_header(
         config.workflow.name,
         config.workflow.version,
         workflow_git_sha.unwrap_or("(not inside a git repository)"),
+        workflow_content_hash.unwrap_or("(unreadable)"),
+        match workflow_git_dirty {
+            Some(true) => "true",
+            Some(false) => "false",
+            None => "(not inside a git repository)",
+        },
         workdir.display(),
     )
 }
@@ -60,6 +74,10 @@ pub(crate) fn start_run_log(
     let workflow_abs = absolutize(workflow)?;
     let workflow_git_sha =
         oxo_flow_core::executor::checkpoint::CheckpointState::workflow_git_sha(&workflow_abs);
+    let workflow_content_hash =
+        oxo_flow_core::executor::checkpoint::compute_file_checksum(&workflow_abs).ok();
+    let workflow_git_dirty =
+        oxo_flow_core::executor::checkpoint::CheckpointState::workflow_git_dirty(&workflow_abs);
     let run_log_path = resolve_run_log_path(workdir, log_file);
     let command_line = oxo_flow_core::executor::process::mask_sensitive(
         &std::env::args().collect::<Vec<_>>().join(" "),
@@ -70,6 +88,8 @@ pub(crate) fn start_run_log(
         &workflow_abs,
         config,
         workflow_git_sha.as_deref(),
+        workflow_content_hash.as_deref(),
+        workflow_git_dirty,
         workdir,
     );
     // Background runs (issue #194 A3): `spawn_detached` already redirected
@@ -103,6 +123,8 @@ pub(crate) fn start_run_log(
         run_log,
         workflow_abs,
         workflow_git_sha,
+        workflow_content_hash,
+        workflow_git_dirty,
     })
 }
 
@@ -144,6 +166,8 @@ version = "2.0"
             std::path::Path::new("/repo/wf.oxoflow"),
             &config,
             Some("abc123"),
+            Some("sha256:deadbeef"),
+            Some(true),
             std::path::Path::new("/data/run"),
         );
         assert!(
@@ -158,12 +182,19 @@ version = "2.0"
         assert!(header.contains("workflow_name: wes"), "{header}");
         assert!(header.contains("workflow_version: 2.0"), "{header}");
         assert!(header.contains("git_sha: abc123"), "{header}");
+        assert!(
+            header.contains("workflow_content_hash: sha256:deadbeef"),
+            "{header}"
+        );
+        assert!(header.contains("workflow_git_dirty: true"), "{header}");
         assert!(header.contains("workdir: /data/run"), "{header}");
         // No git repo — the placeholder, not an empty field.
         let no_sha = run_log_header(
             "cmd",
             std::path::Path::new("/repo/wf.oxoflow"),
             &config,
+            None,
+            None,
             None,
             std::path::Path::new("/data/run"),
         );

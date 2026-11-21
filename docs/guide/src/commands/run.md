@@ -1167,9 +1167,17 @@ run start. Every result set is therefore auditable to the exact workflow
 version that produced it: `oxo-flow provenance verify` prints the SHA, and
 report snapshots carry it through the checkpoint they embed.
 
+The engine also records a **content digest of the executed workflow bytes**
+(`workflow_content_hash`, a `sha256:<hex>` of the file) and whether the
+workflow file had **uncommitted changes** (`workflow_git_dirty`). The HEAD
+SHA alone cannot tell two runs of the same uncommitted file apart — when
+the tree is dirty, the content hash is the authoritative identity, and it
+changes with every edit. The run log header
+(`.oxo-flow/logs/oxo-flow.log`) carries all three values.
+
 The lookup is best-effort — running outside a git repository simply omits
-the field and never fails the run. Commit your workflow before running to
-get fully version-audited results. See
+the SHA and dirty fields and never fails the run. Commit your workflow
+before running to get fully version-audited results. See
 [Workflow Versioning](../reference/versioning.md) for the full model.
 
 ### Include resolutions in the checkpoint

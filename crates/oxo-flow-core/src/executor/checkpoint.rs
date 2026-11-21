@@ -454,6 +454,21 @@ pub struct CheckpointState {
     /// git repository.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workflow_git_sha: Option<String>,
+    /// Content digest (`sha256:<hex>`) of the workflow file as it was
+    /// executed at run start (issue #1324). The HEAD SHA alone cannot tell
+    /// two runs of the SAME uncommitted workflow apart — HEAD never moves
+    /// when the file is edited — so this is the byte-level record of the
+    /// workflow version that actually produced the results. `None` when the
+    /// file could not be read (best-effort, never fails the run).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow_content_hash: Option<String>,
+    /// Whether the workflow's git repository had uncommitted changes at run
+    /// start (issue #1324), from `git status --porcelain`. `Some(true)`
+    /// means the executed bytes did NOT come from any commit — the recorded
+    /// content hash, not the HEAD SHA, is authoritative. `None` when the
+    /// workflow is not inside a git repository or git is unavailable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow_git_dirty: Option<bool>,
     /// Resolved include provenance (issue #899): per repo-include, the
     /// repo@ref and the checkout's HEAD SHA recorded at include resolution
     /// time. Branch/tag pins re-fetch on every activation, so this is the
@@ -716,6 +731,8 @@ impl CheckpointState {
             benchmarks: BTreeMap::new(),
             workflow_path: None,
             workflow_git_sha: None,
+            workflow_content_hash: None,
+            workflow_git_dirty: None,
             include_resolutions: BTreeMap::new(),
             env_store_refs: BTreeMap::new(),
             workdir: None,
@@ -885,6 +902,19 @@ impl CheckpointState {
         self.workflow_git_sha = Some(sha);
     }
 
+    /// Record the content digest (`sha256:<hex>`) of the workflow file as it
+    /// was executed (issue #1324). Unlike the HEAD SHA, this changes when the
+    /// executed bytes change — including uncommitted edits.
+    pub fn set_workflow_content_hash(&mut self, hash: String) {
+        self.workflow_content_hash = Some(hash);
+    }
+
+    /// Record whether the workflow's git repository had uncommitted changes
+    /// at run start (issue #1324).
+    pub fn set_workflow_git_dirty(&mut self, dirty: bool) {
+        self.workflow_git_dirty = Some(dirty);
+    }
+
     /// Record resolved include provenance (issue #899): one `repo@ref path`
     /// → `resolved_sha` entry per repo-include, collected during include
     /// resolution. Later entries for the same key overwrite earlier ones —
@@ -914,6 +944,33 @@ impl CheckpointState {
             if !sha.is_empty() {
                 return Some(sha);
             }
+        }
+        None
+    }
+
+    /// Whether the workflow file at `workflow_path` has uncommitted changes
+    /// relative to its git HEAD (issue #1324), from `git status --porcelain
+    /// -- <path>` (empty output = tracked and unmodified). Returns `None`
+    /// when the workflow is not in a git repository or git is unavailable;
+    /// best-effort, never fails the run.
+    ///
+    /// Scoped to the workflow file, NOT the whole tree: a run creates
+    /// `.oxo-flow/` and its outputs inside the workdir, which would make an
+    /// unscoped `git status` report "dirty" on every run and render the flag
+    /// meaningless. What matters for reproducibility is whether the executed
+    /// workflow bytes still match what HEAD records — an untracked or
+    /// modified workflow file is exactly the case where HEAD cannot identify
+    /// the run and the content hash is authoritative.
+    pub fn workflow_git_dirty(workflow_path: &Path) -> Option<bool> {
+        let root = crate::git::find_repo_root(workflow_path)?;
+        let out = std::process::Command::new("git")
+            .args(["status", "--porcelain", "--"])
+            .arg(workflow_path)
+            .current_dir(root)
+            .output()
+            .ok()?;
+        if out.status.success() {
+            return Some(!out.stdout.iter().all(|b| b.is_ascii_whitespace()));
         }
         None
     }
@@ -4140,6 +4197,92 @@ mod tests {
         // (skip_serializing_if) — legacy consumers never see a null key.
         let json = CheckpointState::new().to_json().unwrap();
         assert!(!json.contains("workflow_git_sha"));
+    }
+
+    #[test]
+    fn workflow_content_hash_and_dirty_roundtrip_and_legacy_default() {
+        // Issue #1324: both new fields survive a save/load roundtrip and are
+        // absent (skip_serializing_if) on a fresh checkpoint, so a
+        // pre-#1324 checkpoint stays byte-identical.
+        let mut state = CheckpointState::new();
+        state.set_workflow_content_hash("sha256:deadbeef".to_string());
+        state.set_workflow_git_dirty(true);
+        let json = state.to_json().unwrap();
+        let loaded: CheckpointState = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            loaded.workflow_content_hash.as_deref(),
+            Some("sha256:deadbeef")
+        );
+        assert_eq!(loaded.workflow_git_dirty, Some(true));
+        // A checkpoint without the fields (legacy) loads as None.
+        let legacy = r#"{"completed_rules":[],"failed_rules":[],"benchmarks":{}}"#;
+        let loaded: CheckpointState = serde_json::from_str(legacy).unwrap();
+        assert!(loaded.workflow_content_hash.is_none());
+        assert!(loaded.workflow_git_dirty.is_none());
+    }
+
+    #[test]
+    fn workflow_content_hash_and_dirty_absent_from_json_by_default() {
+        let json = CheckpointState::new().to_json().unwrap();
+        assert!(!json.contains("workflow_content_hash"));
+        assert!(!json.contains("workflow_git_dirty"));
+    }
+
+    #[test]
+    fn workflow_git_dirty_resolver_returns_none_outside_git_repo() {
+        let dir = tempfile::tempdir().unwrap();
+        let wf = dir.path().join("wf.oxoflow");
+        std::fs::write(&wf, "x").unwrap();
+        assert!(CheckpointState::workflow_git_dirty(&wf).is_none());
+    }
+
+    #[test]
+    fn workflow_git_dirty_resolver_flags_untracked_workflow_file() {
+        // A committed-then-edited workflow (the case HEAD cannot identify)
+        // reports Some(true); a clean tree reports Some(false). Scoping to
+        // the workflow path is what keeps `.oxo-flow/` outputs from making
+        // every run look dirty (see the resolver doc comment).
+        let dir = tempfile::tempdir().unwrap();
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args(args)
+                .current_dir(dir.path())
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "git {:?}", args);
+        };
+        git(&["init", "-q"]);
+        let wf = dir.path().join("wf.oxoflow");
+        std::fs::write(&wf, "v1\n").unwrap();
+        git(&["add", "wf.oxoflow"]);
+        git(&[
+            "-c",
+            "user.name=oxo-test",
+            "-c",
+            "user.email=t@e.local",
+            "commit",
+            "-q",
+            "-m",
+            "v1",
+        ]);
+        assert_eq!(CheckpointState::workflow_git_dirty(&wf), Some(false));
+        std::fs::write(&wf, "v2 uncommitted\n").unwrap();
+        assert_eq!(CheckpointState::workflow_git_dirty(&wf), Some(true));
+        // Untracked run artifacts elsewhere in the tree do NOT flag the
+        // workflow file itself as dirty.
+        std::fs::write(dir.path().join("out.txt"), "x").unwrap();
+        git(&["add", "wf.oxoflow"]);
+        git(&[
+            "-c",
+            "user.name=oxo-test",
+            "-c",
+            "user.email=t@e.local",
+            "commit",
+            "-q",
+            "-m",
+            "v2",
+        ]);
+        assert_eq!(CheckpointState::workflow_git_dirty(&wf), Some(false));
     }
 
     #[test]
