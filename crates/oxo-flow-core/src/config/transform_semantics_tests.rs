@@ -201,6 +201,22 @@ struct ExpectedTransformRule {
     shell: String,
     cleanup_chunks: bool,
     expand_inputs_baked: BTreeSet<String>,
+    /// The typed contract the generated rule must carry. Map rules mirror the
+    /// authored `types` verbatim; the combine rule re-keys its INPUT channel to
+    /// the chunk-OUTPUT type (issue #1299) — see
+    /// [`combine_expected_types`].
+    types: Option<RuleTypesSpec>,
+}
+
+/// The combine rule's expected typed contract: the authored spec with its
+/// `inputs` reset to the authored `outputs` (the transform's chunk-output
+/// type), because its real inputs are the generated map rules' per-chunk
+/// outputs.
+fn combine_expected_types(source: &Rule) -> Option<RuleTypesSpec> {
+    source.types.as_ref().map(|types| RuleTypesSpec {
+        inputs: types.outputs.clone(),
+        outputs: types.outputs.clone(),
+    })
 }
 
 /// Assert, field by field, that a generated rule differs from the authored
@@ -364,7 +380,7 @@ fn assert_transform_generated_rule(
     assert_eq!(rule_metadata, &source.rule_metadata, "rule_metadata");
     assert_eq!(cache_key, &source.cache_key, "cache_key");
     assert_eq!(interpreter, &source.interpreter, "interpreter");
-    assert_eq!(types, &source.types, "types");
+    assert_eq!(types, &expected.types, "types");
 }
 
 /// Expand `source` (plus the support rules its `extends`/`depends_on`
@@ -459,6 +475,7 @@ fn transform_generated_rules_preserve_every_rule_field() {
                 shell: format!("process {value} {{input}} > {{output}}"),
                 cleanup_chunks: false,
                 expand_inputs_baked: baked.clone(),
+                types: source.types.clone(),
             },
         );
     }
@@ -478,6 +495,7 @@ fn transform_generated_rules_preserve_every_rule_field() {
             ),
             cleanup_chunks: false, // transform.cleanup = false, NOT the source value
             expand_inputs_baked: baked,
+            types: combine_expected_types(&source),
         },
     );
 }
@@ -501,6 +519,7 @@ fn transform_without_combine_preserves_every_rule_field() {
                 shell: format!("process {value} {{input}} > {{output}}"),
                 cleanup_chunks: false,
                 expand_inputs_baked: baked.clone(),
+                types: source.types.clone(),
             },
         );
     }
@@ -537,6 +556,7 @@ fn transform_aggregate_combine_preserves_every_rule_field() {
                 shell: format!("process {value} {{input}} > {{output}}"),
                 cleanup_chunks: false,
                 expand_inputs_baked: baked.clone(),
+                types: source.types.clone(),
             },
         );
     }
@@ -556,6 +576,71 @@ fn transform_aggregate_combine_preserves_every_rule_field() {
             ),
             cleanup_chunks: false, // transform.cleanup = false, NOT the source value
             expand_inputs_baked: baked,
+            types: combine_expected_types(&source),
         },
+    );
+}
+
+/// Issue #1299: a scatter rule whose declared INPUT type differs from its
+/// declared OUTPUT type must NOT produce a TYPE-001 on the generated
+/// map -> combine edge. The combine rule's real inputs are the map rules'
+/// per-chunk outputs (the chunk-OUTPUT type), so its typed input contract
+/// must be re-keyed to that type — mirroring the dry-run/`run` type-check
+/// path (`WorkflowConfig::parse` -> `expand_wildcards` ->
+/// `check_workflow_types`).
+#[test]
+fn scatter_combine_edge_has_no_type_mismatch_when_input_differs_from_output() {
+    let toml = r#"
+        [workflow]
+        name = "scatter-combine-type"
+
+        [config]
+        chromosomes = ["chr1", "chr2"]
+
+        [[rules]]
+        name = "scatter_call"
+        input = ["sample.bam"]
+        output = ["calls.vcf.gz"]
+        shell = "custom -o {output} {input}"
+
+        [rules.types]
+        inputs = { default = "BAM" }
+        outputs = { default = "VCF[sort_order=coordinate]" }
+
+        [rules.transform.split]
+        by = "chr"
+        values_from = "config.chromosomes"
+
+        [rules.transform]
+        map = "call -L {chr} -o {output} {input}"
+
+        [rules.transform.combine]
+        shell = "merge {chunks} -o {output}"
+    "#;
+    let mut config = WorkflowConfig::parse(toml).expect("scatter workflow parses");
+    config
+        .expand_wildcards()
+        .expect("scatter expansion succeeds");
+
+    // The generated combine rule must carry the chunk-OUTPUT type as its
+    // INPUT contract, mirroring the map rule's output type.
+    let combine_rule = find_rule(&config, "scatter_call_combine");
+    let combine_types = combine_rule.types.as_ref().expect("combine keeps types");
+    assert_eq!(
+        combine_types.inputs, combine_types.outputs,
+        "combine input contract must be the chunk-output type (the map rule's output type)"
+    );
+
+    // Driving the real type-check path must yield NO format mismatch on the
+    // generated map -> combine edge (the reported TYPE-001 before the fix).
+    let dag = crate::dag::WorkflowDag::from_rules(&config.rules).expect("valid dag");
+    let diagnostics = crate::types::check_workflow_types(&config, &dag);
+    let mismatches: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d.consumer_rule == "scatter_call_combine" && d.violation.code == "TYPE-001")
+        .collect();
+    assert!(
+        mismatches.is_empty(),
+        "generated map -> combine edge must type-check; got: {mismatches:?}"
     );
 }

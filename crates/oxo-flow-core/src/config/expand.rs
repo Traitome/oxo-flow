@@ -1557,6 +1557,20 @@ impl WorkflowConfig {
                     combine_rule.scatter = None;
                     combine_rule.output_pattern = None;
                     combine_rule.cleanup_chunks = transform.cleanup;
+                    // The combine rule's real inputs are the per-chunk outputs
+                    // of the generated map rules, whose type is the transform's
+                    // chunk-OUTPUT type (issue #1299). The map rule mirrors the
+                    // authored rule's `types` verbatim, so its output annotation
+                    // is `rule.types.outputs`. Cloning the authored rule left
+                    // `types.inputs` as the PRE-transform declared input, so
+                    // whenever a scatter rule's input type differed from its
+                    // output type the generated map -> combine edge was a
+                    // guaranteed TYPE-001 mismatch. Reset the input annotation
+                    // to that same chunk-output type, reusing the map rule's
+                    // own source (`rule.types.outputs`) rather than a hand-copy.
+                    if let Some(ref mut types) = combine_rule.types {
+                        types.inputs = types.outputs.clone();
+                    }
 
                     final_rules.push(combine_rule);
                 }
