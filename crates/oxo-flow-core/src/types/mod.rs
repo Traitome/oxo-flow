@@ -18,6 +18,7 @@ mod inspect_tests;
 mod negative_tests;
 #[cfg(test)]
 mod tests;
+pub mod type_codes;
 
 pub use checker::{
     ADVISORY_TYPE_CODES, TypeDiagnostic, check_workflow_types, is_advisory_type_code,

@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     BioFormat, BioTypeSpec, CompressionKind, IndexKind, ReadGroupContract, SortOrder,
-    TypeViolation, coercion_rule_for_index,
+    TypeViolation, coercion_rule_for_index, type_codes,
 };
 
 /// Bounded byte budget for header introspection: 64 KiB is sufficient to capture
@@ -601,7 +601,7 @@ pub fn introspect_path_with_spec(
         Ok(t) => t,
         Err(e) => {
             violations.push(TypeViolation {
-                code: "TYPE-INSPECT".to_string(),
+                code: type_codes::TYPE_INSPECT.to_string(),
                 message: format!("failed to introspect header of '{}': {}", path.display(), e),
                 suggestion: Some("verify file integrity and permissions".to_string()),
                 coercion_rule: None,
@@ -620,7 +620,7 @@ pub fn introspect_path_with_spec(
         if !has_index {
             let coercion_rule = coercion_rule_for_index(expected_index).map(str::to_string);
             violations.push(TypeViolation {
-                code: "TYPE-003".to_string(),
+                code: type_codes::TYPE_003.to_string(),
                 message: format!(
                     "missing companion index: expected '{}' for file '{}' was not found on disk",
                     expected_index,
