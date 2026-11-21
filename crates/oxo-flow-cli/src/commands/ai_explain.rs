@@ -41,6 +41,11 @@ pub struct WarningPlan {
     pub rule: String,
     pub message: String,
     pub suggestion: String,
+    /// Synthesized BioTypes coercion command (TYPE-001..TYPE-007), copied
+    /// through from the preflight warning; omitted when absent so the plan
+    /// JSON stays byte-stable for rule-less findings (issue #1322).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coercion_rule: Option<String>,
 }
 
 /// One pipeline-knowledge-graph node matched for a rule, with its
@@ -188,6 +193,7 @@ pub fn build_explain_plan(config: &WorkflowConfig, step: Option<&str>) -> Result
             rule: w.rule,
             message: w.message,
             suggestion: w.suggestion,
+            coercion_rule: w.coercion_rule,
         })
         .collect();
 

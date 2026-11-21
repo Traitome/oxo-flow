@@ -221,6 +221,9 @@ async fn dry_run_command_inner(
         for w in &scientific {
             eprintln!("  ⚠ [{}] {}: {}", w.code, w.rule, w.message);
             eprintln!("    {} {}", "→".bold(), w.suggestion);
+            if let Some(ref coercion) = w.coercion_rule {
+                eprintln!("    {} coercion: {}", "·".bold(), coercion);
+            }
         }
     }
 
