@@ -422,12 +422,51 @@ pub struct RepairRecord {
     pub timestamp: String,
 }
 
+/// On-disk checkpoint format version this engine writes (issue #1309).
+///
+/// Bumped ONLY on a breaking change to the checkpoint model — one that would
+/// make this engine *misinterpret* a checkpoint written by a different build
+/// (a field removed or retyped, or an existing field carrying a different
+/// meaning). Purely additive fields must NOT bump it: an older build tolerates
+/// them (unknown JSON keys are ignored) and every added field carries
+/// `#[serde(default)]`.
+///
+/// The marker is additive, so an OLD build ignores it on read. That is
+/// deliberate: the gate protects a *reader* from a *newer writer*, the one
+/// direction the schema-additive serde model cannot otherwise guard (an old
+/// binary cannot know to look for a field it predates). The complementary
+/// direction — an older checkpoint read by a newer engine — is served by the
+/// unknown/absent-version handling in [`CheckpointState::compat`].
+pub const CHECKPOINT_FORMAT_VERSION: u32 = 1;
+
+/// Verdict of comparing a checkpoint's recorded format version against the
+/// running engine (issue #1309). Fail-safe resume trusts a completion set only
+/// when the engine can prove the format compatible.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckpointCompat {
+    /// Written at (or below) this engine's [`CHECKPOINT_FORMAT_VERSION`]: the
+    /// format is understood, so recorded completion state may be trusted.
+    Compatible,
+    /// Written by a NEWER build (recorded version > this engine's). The newer
+    /// build may have changed the meaning of fields this engine still parses,
+    /// so its completion set cannot be trusted. Resume refuses (Execute) /
+    /// degrades (read-only preview).
+    Newer,
+}
+
 /// Persistent checkpoint state for resumable workflow execution.
 ///
 /// Tracks which rules have completed or failed so that a restarted workflow
 /// can skip already-finished work.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CheckpointState {
+    /// On-disk format version of this checkpoint (issue #1309). Written by
+    /// this engine as [`CHECKPOINT_FORMAT_VERSION`]; absent (→ `0`) in a
+    /// legacy checkpoint that predates the marker. [`CheckpointState::compat`]
+    /// compares it against the running engine so resume can refuse to trust a
+    /// completion set written in an unknown format.
+    #[serde(default)]
+    pub checkpoint_format_version: u32,
     /// Rules that completed successfully.
     pub completed_rules: BTreeSet<String>,
     /// Rules that failed during execution.
@@ -710,6 +749,7 @@ impl CheckpointState {
     /// Create a new, empty checkpoint state.
     pub fn new() -> Self {
         Self {
+            checkpoint_format_version: CHECKPOINT_FORMAT_VERSION,
             completed_rules: BTreeSet::new(),
             failed_rules: BTreeSet::new(),
             running: BTreeSet::new(),
@@ -804,6 +844,24 @@ impl CheckpointState {
     /// Set the workflow path that generated this checkpoint.
     pub fn set_workflow_path(&mut self, path: &Path) {
         self.workflow_path = Some(path.to_string_lossy().to_string());
+    }
+
+    /// Compare this checkpoint's recorded format version against the running
+    /// engine (issue #1309) — the fail-safe resume gate.
+    ///
+    /// A checkpoint written by a newer build (a higher recorded version) may
+    /// have changed the meaning of fields this engine still parses, so its
+    /// completion set cannot be trusted; callers refuse (Execute) or degrade
+    /// (read-only preview) rather than silently skipping rules. An equal or
+    /// older version (including a legacy checkpoint with no marker → `0`) is
+    /// [`CheckpointCompat::Compatible`]: the fields this engine reads have the
+    /// meaning it expects.
+    pub fn compat(&self) -> CheckpointCompat {
+        if self.checkpoint_format_version > CHECKPOINT_FORMAT_VERSION {
+            CheckpointCompat::Newer
+        } else {
+            CheckpointCompat::Compatible
+        }
     }
 
     /// Whether this checkpoint was written by a DIFFERENT workflow than
@@ -3472,6 +3530,33 @@ mod tests {
         let loaded: CheckpointState = serde_json::from_str(json).unwrap();
         assert_eq!(loaded.workdir, None);
         assert_eq!(loaded.workflow_path.as_deref(), Some("/wf/p.oxoflow"));
+    }
+
+    #[test]
+    fn checkpoint_new_records_current_format_version() {
+        let ck = CheckpointState::new();
+        assert_eq!(ck.checkpoint_format_version, CHECKPOINT_FORMAT_VERSION);
+        assert_eq!(ck.compat(), CheckpointCompat::Compatible);
+    }
+
+    #[test]
+    fn legacy_checkpoint_without_format_version_is_compatible() {
+        // A checkpoint written before the marker existed has no field; serde
+        // defaults it to 0, which is <= our version, so it stays trusted.
+        let json = r#"{"completed_rules":[],"failed_rules":[],"benchmarks":{}}"#;
+        let loaded: CheckpointState = serde_json::from_str(json).unwrap();
+        assert_eq!(loaded.checkpoint_format_version, 0);
+        assert_eq!(loaded.compat(), CheckpointCompat::Compatible);
+    }
+
+    #[test]
+    fn newer_checkpoint_format_version_is_flagged() {
+        // A checkpoint from a future build records a version we cannot prove
+        // compatible; compat() must flag it so resume refuses/degrade.
+        let json = r#"{"checkpoint_format_version":9999,"completed_rules":[],"failed_rules":[],"benchmarks":{}}"#;
+        let loaded: CheckpointState = serde_json::from_str(json).unwrap();
+        assert_eq!(loaded.checkpoint_format_version, 9999);
+        assert_eq!(loaded.compat(), CheckpointCompat::Newer);
     }
 
     #[test]
