@@ -138,7 +138,7 @@ Returns paginated structured audit entries:
 ```
 `page` defaults to 1 and `per_page` defaults to 50 (max 200). **Team/hpc modes: admin-only** (the trail spans every user's actions; personal mode keeps the localhost trust model).
 
-`user` is the actor's canonical `users.id`, stored verbatim with each row — the same identity sessions and ownership columns carry. That id is a UUID for DB-created/bootstrap accounts and the username itself for env-password-provisioned identities (`user`, `viewer`) and the `default` personal-mode pseudo-user, so a result set legitimately mixes both shapes. Historical rows are never rewritten; resolve a UUID to a human label through `GET /api/users` when one is needed (admin-only).
+`user` is the actor's canonical `users.id`, stored verbatim with each row — the same identity sessions and ownership columns carry. That id is a UUID for DB-created/bootstrap accounts and the username itself for env-password-provisioned identities (`user`, `viewer`) and the `default` personal-mode pseudo-user, so a result set legitimately mixes both shapes. Historical rows are never rewritten; resolve a UUID to a human label through `GET /api/users` when one is needed (admin-only). The `result` field is `success`, `failure`, or `pending` (see the write-ahead note below): a `pending` row is a request whose audit intent was written but never finalized — the process died (or storage failed) between the mutation and its outcome write, so it is the audit trail's record of that action.
 
 #### Audit durability (WEB-15 / issue #1140)
 
@@ -167,19 +167,31 @@ route contract:
   template writes, quota and event-ticket requests). A failed write is
   logged as a warning and the request answers normally.
 
-**The audit row is not written in the same transaction as the mutation.**
-The handler runs first; the audit insert is attempted afterwards. A
-REQUIRED-audit failure therefore does **not** roll the action back — the
-pipeline may already be deleted, the run retry may already have spawned,
-the key revocation may already be applied, the account may already exist.
-The `500 AUDIT_WRITE_FAILED` body says the action "may already have been
-applied" and its `suggestion` tells the caller to verify the affected
-resource (list/inspect it) before retrying, because a blind retry can
-duplicate the effect (e.g. a second forked/deleted resource or a second
-run). Writing the audit row in the mutation's transaction is tracked as
-remaining work in the WEB-15 ledger entry. Per-route implication: every
-REQUIRED route listed above can answer this 500 **after** applying its
-change; treat the 500 as "state unknown", not as "nothing happened".
+**Write-ahead ordering (issue #1311 / WEB-15 D1).** The audit row is
+committed **before** the handler mutates state, then finalized with the
+observed outcome **after**: for every state-changing request the middleware
+first durably inserts the audit row with `result = "pending"`, runs the
+handler, and finally updates that same row to `success` or `failure`. A crash
+or storage failure between the mutation and its outcome write therefore leaves
+a durable `pending` row rather than no row — the trail is never shorter than
+the set of committed mutations. The synthetic `users` seed and the audit row
+commit in one transaction, so the seed cannot survive without its row either.
+If the write-ahead insert itself cannot be persisted the request degrades to
+the pre-#1311 ordering (the handler runs, then the row is written) — a
+storage outage that blocks the header write is the same outage the handler's
+own mutation hits, and the fail-closed / 5xx-preservation contract below is
+unchanged.
+
+A REQUIRED-audit failure still does **not** roll the action back: the pipeline
+may already be deleted, the run retry may already have spawned, the key
+revocation may already be applied, the account may already exist. The
+`500 AUDIT_WRITE_FAILED` body says the action "may already have been applied"
+and its `suggestion` tells the caller to verify the affected resource
+(list/inspect it) before retrying, because a blind retry can duplicate the
+effect (e.g. a second forked/deleted resource or a second run). Per-route
+implication: every REQUIRED route listed above can answer this 500 **after**
+applying its change; treat the 500 as "state unknown", not as "nothing
+happened".
 
 Both classes share one writer (the storage backend's `record_audit_log`)
 behind the named `audit_required` / `audit_best_effort` helpers; no handler
