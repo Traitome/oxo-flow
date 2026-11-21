@@ -416,3 +416,81 @@ fn cli_info_json_omits_git_provenance_outside_repo() {
     assert!(meta.get("git_remote").is_none());
     assert!(meta.get("git_describe").is_none());
 }
+
+/// Issue #1324: the checkpoint records a content digest of the executed
+/// workflow bytes, so two runs of the SAME uncommitted file stay
+/// distinguishable, and a dirty tree is flagged. Deterministic,
+/// provider-free.
+#[test]
+fn cli_run_records_workflow_content_hash_and_dirty_flag() {
+    use sha2::{Digest, Sha256};
+
+    let dir = tempfile::tempdir().unwrap();
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "git {:?} failed: {}",
+            args,
+            String::from_utf8_lossy(&out.stderr)
+        );
+        out
+    };
+    git(&["init", "-q"]);
+    let wf = dir.path().join("hashed.oxoflow");
+    let v1 = "[workflow]\nname = \"hashed\"\nversion = \"1.0.0\"\n\n[[rules]]\nname = \"gen\"\noutput = [\"out.txt\"]\nshell = \"echo hi > {output}\"\n";
+    fs::write(&wf, v1).unwrap();
+    git(&["add", "hashed.oxoflow"]);
+    git(&[
+        "-c",
+        "user.name=oxo-test",
+        "-c",
+        "user.email=test@oxo-flow.local",
+        "commit",
+        "-q",
+        "-m",
+        "workflow v1",
+    ]);
+    let head_before = git_head(dir.path());
+
+    let sha = |s: &str| -> String {
+        let digest = Sha256::digest(s.as_bytes());
+        let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
+        format!("sha256:{hex}")
+    };
+
+    oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .assert()
+        .success();
+
+    let cp = dir.path().join(".oxo-flow/checkpoint.json");
+    let v: serde_json::Value = serde_json::from_str(&fs::read_to_string(&cp).unwrap()).unwrap();
+    assert_eq!(v["workflow_content_hash"].as_str(), Some(sha(v1).as_str()));
+    assert_eq!(v["workflow_git_sha"].as_str(), Some(head_before.as_str()));
+    assert_eq!(v["workflow_git_dirty"].as_bool(), Some(false));
+
+    // Uncommitted edit between the two runs: HEAD never moves, but the
+    // executed bytes differ, so the content hash must differ and the dirty
+    // flag must now be set.
+    let v2 = "[workflow]\nname = \"hashed\"\nversion = \"1.0.0\"\n\n# uncommitted edit\n\n[[rules]]\nname = \"gen\"\noutput = [\"out.txt\"]\nshell = \"echo hi > {output}\"\n";
+    fs::write(&wf, v2).unwrap();
+    assert_ne!(sha(v1), sha(v2));
+
+    oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .assert()
+        .success();
+
+    let v: serde_json::Value = serde_json::from_str(&fs::read_to_string(&cp).unwrap()).unwrap();
+    assert_eq!(v["workflow_content_hash"].as_str(), Some(sha(v2).as_str()));
+    assert_eq!(v["workflow_git_sha"].as_str(), Some(head_before.as_str()));
+    assert_eq!(git_head(dir.path()), head_before);
+    assert_eq!(v["workflow_git_dirty"].as_bool(), Some(true));
+}

@@ -188,6 +188,29 @@ pub fn provenance_verify_command(checkpoint_path: PathBuf, json: bool) -> Result
     if let Some(path) = checkpoint.get("workflow_path").and_then(|v| v.as_str()) {
         eprintln!("  {} workflow path: {}", "•".dimmed(), path);
     }
+    // Content digest of the workflow file as read at run start (issue
+    // #1324): the authoritative record when the tree is dirty; HEAD alone
+    // cannot distinguish two runs of the same uncommitted file. Covers the
+    // top-level file only; include identity lives in include_resolutions.
+    let workflow_content_hash = checkpoint
+        .get("workflow_content_hash")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty());
+    let workflow_git_dirty = checkpoint
+        .get("workflow_git_dirty")
+        .and_then(|v| v.as_bool());
+    if let Some(hash) = workflow_content_hash {
+        eprintln!("  {} workflow content hash: {}", "•".dimmed(), hash);
+    }
+    match workflow_git_dirty {
+        Some(true) => eprintln!(
+            "  {} workflow git tree: {}",
+            "•".dimmed(),
+            "uncommitted changes present — recorded content hash is authoritative".yellow()
+        ),
+        Some(false) => eprintln!("  {} workflow git tree: clean", "•".dimmed()),
+        None => {}
+    }
     eprintln!();
 
     // Try embedded checksums first, then companion file. Non-string values
@@ -284,6 +307,9 @@ pub fn provenance_verify_command(checkpoint_path: PathBuf, json: bool) -> Result
                         "missing": 0,
                         "cleaned": 0,
                         "entries": [],
+                        "workflow_git_sha": checkpoint.get("workflow_git_sha").cloned(),
+                        "workflow_content_hash": checkpoint.get("workflow_content_hash").cloned(),
+                        "workflow_git_dirty": checkpoint.get("workflow_git_dirty").cloned(),
                         "note": "No stored checksums found. Run workflow with --provenance to enable tracking.",
                     },
                 });
@@ -305,6 +331,9 @@ pub fn provenance_verify_command(checkpoint_path: PathBuf, json: bool) -> Result
                     "missing": 0,
                     "cleaned": 0,
                     "entries": [],
+                    "workflow_git_sha": checkpoint.get("workflow_git_sha").cloned(),
+                    "workflow_content_hash": checkpoint.get("workflow_content_hash").cloned(),
+                    "workflow_git_dirty": checkpoint.get("workflow_git_dirty").cloned(),
                     "note": "No completed rules or checksums found in the checkpoint.",
                 },
             });
@@ -384,6 +413,9 @@ pub fn provenance_verify_command(checkpoint_path: PathBuf, json: bool) -> Result
                 "missing": missing,
                 "cleaned": cleaned,
                 "entries": entries,
+                "workflow_git_sha": checkpoint.get("workflow_git_sha").cloned(),
+                "workflow_content_hash": checkpoint.get("workflow_content_hash").cloned(),
+                "workflow_git_dirty": checkpoint.get("workflow_git_dirty").cloned(),
             },
         });
         println!("{}", serde_json::to_string_pretty(&output)?);
