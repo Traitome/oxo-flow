@@ -251,17 +251,18 @@ pub fn resolve_bind_addr(host: &str, port: u16) -> anyhow::Result<std::net::Sock
 /// Capability matrix advertised at startup when `DATABASE_URL` selects
 /// PostgreSQL.
 ///
-/// It must describe what this build actually serves: storage-backed routes
-/// use `StorageBackend`, while domains that have not completed migration
-/// still read the embedded SQLite pool and answer 503 on PostgreSQL.
+/// It must describe what this build actually serves: every web domain
+/// handler routes through `StorageBackend`, so the same surfaces are
+/// available on SQLite and PostgreSQL; only the `/api/runs*` domain gates on
+/// an initialized backend (either kind passes).
 pub const PG_CAPABILITY_MATRIX: &str = "PostgreSQL deployment capability matrix:\n  \
      available: /api/health · /api/license · /api/openapi.json · SPA assets; \
      storage-backed users, login sessions, API keys, OAuth CSRF state, credential cascades, \
      pipelines, revisions, templates, shares, run records, cluster inventory and mutations, \
      chat sessions and messages, audit logging, webhook configuration, and AI provider configuration\n  \
      unavailable: none (all web domain handlers decoupled through unified StorageBackend)\n  \
-     gated 503 RUNS_REQUIRE_STORAGE_BACKEND: every /api/runs* endpoint \
-     (record metadata is storage-backed; execution is SQLite-only)";
+     gated 503 RUNS_REQUIRE_STORAGE_BACKEND: every /api/runs* endpoint when NO backend is initialized \
+     (record metadata and execution are storage-backed on either backend)";
 
 /// Whether a database URL selects the PostgreSQL backend.
 pub fn is_postgres_url(url: &str) -> bool {
@@ -580,7 +581,8 @@ mod effective_bind_host_tests {
     use super::*;
 
     /// The PG capability log is the operator-facing contract; it must
-    /// distinguish migrated storage surfaces from SQLite-only remnants.
+    /// distinguish migrated storage surfaces from the backend-agnostic runs
+    /// gate.
     #[test]
     fn pg_capability_matrix_is_truthful_about_storage_migration() {
         let line = |prefix: &str| {
