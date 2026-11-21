@@ -177,7 +177,8 @@ environments, I/O, shell shape) of every workflow it claims to support?"
   was invoked. The full #1165 ask — per-workflow execution equivalence on
   identical hosts/containers/resources — is **not** achievable in this
   environment (no container runtime, no toolchain, no real data) and is **not
-  claimed**.
+  claimed**. The execution half is now instrumented separately; see §9, which
+  reports the same conclusion from an actual run attempt.
 - **"MATCHED" is not "equivalent".** It means the declared facts in §1 agree
   after documented normalization. It says nothing about whether the generated
   shell produces the same files, or whether the workflow runs at all.
@@ -208,3 +209,60 @@ container host, and a second independent derivation of the truth table.
 | Claimed boundary | `docs/guide/src/commands/import.md` |
 | Corpus baseline commit | `b7be10ba844df04b51299264184c207cca95286c` — the fixtures under `tests/fixtures/import/**` and the importer are unchanged from this commit to the PR's head (verified with `git diff --stat b7be10ba 5e90bd05 -- tests/fixtures/import crates/oxo-flow-core/src/transpile`, empty) |
 | Harness + truth table commit | `5e90bd05` — this PR's head; `scripts/import-equivalence.sh` and the truth table were introduced here, not in the corpus baseline commit |
+
+## 9. Execution equivalence (issue #1300)
+
+**What this is.** The honest execution half of the #1165 ask, now instrumented:
+`scripts/import-execution-equivalence.sh` (+ `scripts/import_execution_equivalence_run.py`)
+runs the SOURCE workflow and the IMPORTED `.oxoflow` on identical planted
+inputs and compares the produced output-artifact sets by SHA-256. It enumerates
+its fixtures from the same truth table (`status == "supported"`), so it never
+drifts from the declared-artifact corpus above.
+
+**The honesty rule this harness enforces.** A fixture is `MATCHED` only when
+BOTH arms genuinely executed (exit 0) and their artifact sets agree. Any missing
+runtime / container / conda backend, any non-zero arm, or any missing arm makes
+the verdict `SKIPPED` with the reason — never `MATCHED`. `--strict` fails on
+drift for fixtures that actually executed, and is a no-op otherwise. A green
+tally therefore means runs happened; an all-`SKIPPED` tally means they did not.
+The rule is unit-tested in `eval/scripts/test_import_execution_equivalence.py`
+(`test_absent_runtime_is_skipped_never_matched`).
+
+**Measured result (2026-11-21).** `executed = 0`, `skipped = 4`, `matched = 0`,
+`drifted = 0`. **Nothing was executed to a matched comparison — execution
+equivalence remains unproven and is not claimed.** Two environments were tried:
+
+- *Local build host* (macOS): no `nextflow`, no `snakemake`, no `docker` — all
+  four fixtures `SKIPPED (no execution environment: missing …)`.
+- *Verification host* (`tx-ubuntu`: docker present, `nextflow` 26.10.6,
+  `snakemake` 9.27.2 in a venv, no conda/mamba, no HPC `module`): still all four
+  `SKIPPED`. Raw per-arm evidence:
+
+| Fixture | SOURCE arm | IMPORTED arm |
+| :--- | :--- | :--- |
+| `nextflow/nfcore_module.ok.nf` | `nextflow run … -with-docker` → exit 1, **ERROR ~ Script compilation failed** (the `fastqc: $( fastqc --version )` line is not valid DSL2 that this Nextflow compiles). No outputs. | `oxo-flow run` → exit 1, `fastqc_auto-discovered_s1` `rule_failed`, exit_code 1. No declared outputs. |
+| `nextflow/rnaseq.ok.nf` | `nextflow run … -with-docker` → exit 1, input-tuple mismatch in process `TRIM`. No outputs. | `oxo-flow run` → exit 1, **`conda is not installed or not in PATH`** — required by 12 pending rules (`bioconda::trimmomatic=0.39`, …); no rules ran. |
+| `snakemake/expand.ok.smk` | `snakemake -s … --cores 2` → exit 1, **`WorkflowError: Target rules may not contain wildcards.`** No outputs. | `oxo-flow run` → exit 1, `quantify` failed: `output pattern 'quant/{sample}.sf' contains unbound wildcard {sample}` (declares HPC `modules` backend, also absent). |
+| `snakemake/rnaseq.ok.smk` | `snakemake -s … --cores 2` → exit 1, **`WorkflowError: Target rules may not contain wildcards.`** No outputs. | `oxo-flow run` → exit 1, **`conda is not installed or not in PATH`** — required by 2 pending rules (`envs/trimmomatic.yaml`); no rules ran. |
+
+Two independent walls block a matched run, and neither is an importer defect
+this PR may paper over: (1) the SOURCE fixtures are not runnable as written —
+two need a Snakemake `rule all` target and two are not valid Nextflow for the
+installed engine; (2) the IMPORTED arms that do reach a rule need a conda
+backend the verification host lacks. Inventing a run, or loosening an arm to
+call a non-run `MATCHED`, is exactly what the honesty rule forbids.
+
+**What would move it forward.** A container host with conda/mamba (or
+module-loaded envs) plus source fixtures that actually run standalone — a
+Snakemake `rule all` collecting concrete outputs, and Nextflow that the
+installed engine compiles. Until then this section stands as the boundary: the
+execution path is instrumented and falsifiable, and it reports zero executed.
+
+**Raw-data lineage (execution half).**
+
+| Artifact | Path |
+| :--- | :--- |
+| Harness (bash) | `scripts/import-execution-equivalence.sh` |
+| Execution runner (python) | `scripts/import_execution_equivalence_run.py` |
+| Hermetic verdict test | `eval/scripts/test_import_execution_equivalence.py` |
+| Fixtures | enumerated from `scripts/import_equivalence_expectations.py` (`supported`) |
