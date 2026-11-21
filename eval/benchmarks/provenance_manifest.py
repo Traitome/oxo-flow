@@ -29,13 +29,15 @@ import sys
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 DEFAULT_MANIFEST = os.path.join(REPO_ROOT, "eval", "benchmarks", "provenance_manifest.json")
 
-# Publication-facing reports that must carry provenance for any measured number.
-PUBLICATION_ARTIFACTS = [
-    "docs/superpowers/plans/cohort-scaling-report.md",
-    "docs/superpowers/plans/statistical-benchmark-report.md",
-    "docs/superpowers/plans/sus-survey-report.md",
-    "docs/superpowers/plans/hardware-scaling-report.md",
-]
+# Discovery set: publication-facing status reports are DISCOVERED by scanning
+# the plans directory, not hardcoded as an allowlist (review P2-1). A file is a
+# publication-facing report when its name ends in REPORT_SUFFIX ("-report.md");
+# design/plan docs (e.g. "*-implementation-plan.md", dated plans) are excluded
+# because they carry no publication measurements. Any new "*-report.md" added
+# under this directory is picked up automatically and must carry provenance for
+# every measured number it contains; the manifest is the record, not the gate.
+PLANS_DIR = os.path.join(REPO_ROOT, "docs", "superpowers", "plans")
+REPORT_SUFFIX = "-report.md"
 
 REQUIRED_ENTRY_KEYS = (
     "source_commit",
@@ -48,14 +50,49 @@ REQUIRED_ENTRY_KEYS = (
 COMMIT_RE = re.compile(r"^[0-9a-f]{7,40}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _SEPARATOR_CELL_RE = re.compile(r"^:?-{3,}:?$")
-_NUMBER_RE = re.compile(r"^-?\d+(?:\.\d+)?$")
+
+# Measured-number detection rule (review P2-2; documented so it is auditable).
+#
+# A number counts as a *measurement* when it is one of:
+#   * a percentage            e.g. "99.9%", "12 %"
+#   * scientific notation     e.g. "1.2e-3", "2E6", "5e-2"
+#   * a decimal with a        e.g. "118.69 ms", "9.50", "3159.5 nodes/sec"
+#     fractional part
+# These are detected anywhere in a report (prose or table cell), so prose
+# statements like "latency was 118.69 ms" or "99.9% complete" are caught.
+#
+# A *plain integer* (e.g. "30") is treated as a measurement only inside a
+# markdown table data row, never in prose -- prose integers are far more often
+# issue numbers, years, or section numbers ("issue #1305", "Edition 2024",
+# "section 2") than measurements.
+#
+# Dotted version / section strings are deliberately NOT measurements: a
+# multi-segment dotted number ("26.10.6", "1.98.0", "3.12.4", "127.0.0.1")
+# never matches because the decimal pattern is anchored to reject a trailing
+# dot and a leading dot/digit, so the inner "10.6" / "12.4" fragments are not
+# mistaken for decimals.
+_PERCENT_RE = re.compile(r"-?\d+(?:\.\d+)?\s?%")
+_SCI_RE = re.compile(r"-?\d+(?:\.\d+)?[eE][+-]?\d+")
+_DECIMAL_RE = re.compile(r"(?<![\d.])-?\d+\.\d+(?![\d.])")
+_INTEGER_RE = re.compile(r"^-?\d+$")
+
+
+def _has_measured_number(text: str) -> bool:
+    """True when ``text`` carries a percent / scientific / decimal measurement."""
+    return bool(
+        _PERCENT_RE.search(text)
+        or _SCI_RE.search(text)
+        or _DECIMAL_RE.search(text)
+    )
 
 
 def _is_measured_table_row(line: str) -> bool:
     """True when a markdown table row carries at least one numeric data cell.
 
     Header rows and ``| :---: |`` separator rows are excluded so that a table
-    with no measured values does not require a provenance entry.
+    with no measured values does not require a provenance entry. A data row is
+    "measured" when any cell holds a percent / scientific / decimal number or a
+    bare integer (the historical, fail-closed rule).
     """
     stripped = line.strip()
     if not stripped.startswith("|"):
@@ -66,16 +103,28 @@ def _is_measured_table_row(line: str) -> bool:
     if all(_SEPARATOR_CELL_RE.match(c) for c in cells):
         return False
     for cell in cells:
-        token = cell.replace(",", "").replace("+/-", " ").split()
-        for piece in token:
-            if _NUMBER_RE.match(piece):
+        if _has_measured_number(cell):
+            return True
+        for piece in cell.replace(",", "").replace("+/-", " ").split():
+            if _INTEGER_RE.match(piece):
                 return True
     return False
 
 
 def report_has_measured_number(text: str) -> bool:
-    """Return True when a report body contains a measured markdown table row."""
-    return any(_is_measured_table_row(line) for line in text.splitlines())
+    """Return True when a report body contains a measured number.
+
+    Detects a measured markdown table data row, or a percent / scientific /
+    decimal measurement in prose (review P2-2).
+    """
+    for line in text.splitlines():
+        if _is_measured_table_row(line):
+            return True
+        if line.strip().startswith("|"):
+            continue
+        if _has_measured_number(line):
+            return True
+    return False
 
 
 def _validate_entry(rel_path: str, entry: object, errors: list) -> None:
@@ -85,6 +134,14 @@ def _validate_entry(rel_path: str, entry: object, errors: list) -> None:
     for key in REQUIRED_ENTRY_KEYS:
         if key not in entry:
             errors.append(f"{rel_path}: missing required key '{key}'")
+    # 'note' is optional but, when present, must be a non-empty string (review
+    # P3): it carries the free-text honesty caveat (e.g. which figure is
+    # UNPINNED), so an empty or non-string value is a malformed entry, not a
+    # silent no-op.
+    if "note" in entry:
+        note = entry.get("note")
+        if not isinstance(note, str) or not note.strip():
+            errors.append(f"{rel_path}: optional 'note' must be a non-empty string")
     commit = entry.get("source_commit")
     if not isinstance(commit, str) or not COMMIT_RE.match(commit):
         errors.append(f"{rel_path}: 'source_commit' is not a 7-40 hex commit: {commit!r}")
@@ -137,8 +194,31 @@ def check_provenance(manifest: object, report_paths: list) -> list:
     return errors
 
 
+def discover_report_paths(plans_dir: str = PLANS_DIR) -> list:
+    """Discover publication-facing report files under ``plans_dir``.
+
+    Deterministic (``sorted``) so the gate set is order-independent. Only files
+    whose name ends in ``REPORT_SUFFIX`` are considered publication-facing
+    reports; other plan/design docs are skipped. Returns
+    ``(repo_relative_path, absolute_path)`` pairs.
+    """
+    if not os.path.isdir(plans_dir):
+        return []
+    names = sorted(
+        n
+        for n in os.listdir(plans_dir)
+        if n.endswith(REPORT_SUFFIX) and os.path.isfile(os.path.join(plans_dir, n))
+    )
+    pairs = []
+    for name in names:
+        abs_path = os.path.join(plans_dir, name)
+        rel_path = os.path.relpath(abs_path, REPO_ROOT)
+        pairs.append((rel_path.replace(os.sep, "/"), abs_path))
+    return pairs
+
+
 def default_report_paths() -> list:
-    return [(rel, os.path.join(REPO_ROOT, rel)) for rel in PUBLICATION_ARTIFACTS]
+    return discover_report_paths()
 
 
 def build_manifest() -> dict:
