@@ -322,9 +322,9 @@ pub async fn audit_middleware(
     response
 }
 
-/// THE audit writer. No other path may insert into `audit_logs`; the
-/// durability helpers below both delegate here, and this delegates to the
-/// storage backend's single `record_audit_log` implementation.
+/// Finalizer/append path for a post-response audit row: the durability helpers
+/// below delegate here, and this calls the backend's `record_audit_log`. The
+/// write-ahead `pending` row is inserted separately by `begin_audit_intent`.
 async fn write_audit(
     actor: &str,
     action: &str,
