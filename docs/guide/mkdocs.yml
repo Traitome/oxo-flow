@@ -175,6 +175,7 @@ nav:
       - completions: commands/completions.md
       - config: commands/config.md
       - debug: commands/debug.md
+      - diagnostics: commands/diagnostics.md
       - diff: commands/diff.md
       - dry-run: commands/dry-run.md
       - env: commands/env.md
