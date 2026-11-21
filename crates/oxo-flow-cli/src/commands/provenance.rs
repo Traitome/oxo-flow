@@ -188,9 +188,10 @@ pub fn provenance_verify_command(checkpoint_path: PathBuf, json: bool) -> Result
     if let Some(path) = checkpoint.get("workflow_path").and_then(|v| v.as_str()) {
         eprintln!("  {} workflow path: {}", "•".dimmed(), path);
     }
-    // Content digest of the executed workflow bytes (issue #1324): the
-    // authoritative record when the tree is dirty — HEAD alone cannot
-    // distinguish two runs of the same uncommitted file.
+    // Content digest of the workflow file as read at run start (issue
+    // #1324): the authoritative record when the tree is dirty; HEAD alone
+    // cannot distinguish two runs of the same uncommitted file. Covers the
+    // top-level file only; include identity lives in include_resolutions.
     let workflow_content_hash = checkpoint
         .get("workflow_content_hash")
         .and_then(|v| v.as_str())

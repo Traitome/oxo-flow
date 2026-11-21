@@ -10,8 +10,10 @@ pub(crate) struct RunLogStart {
     pub run_log: SharedRunLog,
     pub workflow_abs: PathBuf,
     pub workflow_git_sha: Option<String>,
-    /// Content digest (`sha256:<hex>`) of the executed workflow bytes
-    /// (issue #1324); `None` when the file could not be read.
+    /// Content digest (`sha256:<hex>`) of the workflow file as read at run
+    /// start (issue #1324); `None` when the file could not be read. Covers
+    /// the top-level file only — include identity is recorded separately in
+    /// `include_resolutions`.
     pub workflow_content_hash: Option<String>,
     /// Whether the workflow's git tree had uncommitted changes (issue
     /// #1324); `None` when not inside a git repository.

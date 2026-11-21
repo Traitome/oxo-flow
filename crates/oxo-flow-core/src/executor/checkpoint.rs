@@ -454,12 +454,15 @@ pub struct CheckpointState {
     /// git repository.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workflow_git_sha: Option<String>,
-    /// Content digest (`sha256:<hex>`) of the workflow file as it was
-    /// executed at run start (issue #1324). The HEAD SHA alone cannot tell
+    /// Content digest (`sha256:<hex>`) of the workflow file as read at run
+    /// start (issue #1324). The HEAD SHA alone cannot tell
     /// two runs of the SAME uncommitted workflow apart — HEAD never moves
     /// when the file is edited — so this is the byte-level record of the
-    /// workflow version that actually produced the results. `None` when the
-    /// file could not be read (best-effort, never fails the run).
+    /// workflow file that produced the results. It covers the top-level
+    /// workflow file only; for `[[include]]` workflows the full identity is
+    /// this file plus the separately recorded include resolutions
+    /// (`include_resolutions`, the per-include checkout SHAs). `None` when
+    /// the file could not be read (best-effort, never fails the run).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workflow_content_hash: Option<String>,
     /// Whether the workflow's git repository had uncommitted changes at run

@@ -17,10 +17,14 @@ or unverified outputs.
 
 The header also surfaces the workflow provenance recorded at run start —
 the git HEAD SHA of the repository the workflow lives in, a content digest
-(`sha256:<hex>`) of the exact workflow bytes that were executed, and a
+(`sha256:<hex>` of the top-level workflow file as read at run start), and a
 marker for whether the workflow file had uncommitted changes — so every
 verification names the exact workflow version that produced the results
-(see [Workflow Versioning](../reference/versioning.md)). When the file was
+(see [Workflow Versioning](../reference/versioning.md)). The content hash
+covers only the top-level workflow file; for `[[include]]` workflows the
+identity is that file plus the separately recorded include resolutions
+(`include_resolutions`, their per-include checkout SHAs — see
+[Workflow Versioning](../reference/versioning.md)). When the file was
 dirty at run start, the content hash is the authoritative record: the HEAD
 SHA alone cannot tell two runs of the same uncommitted file apart. The same
 three values appear in the `--json` `verify` document

@@ -1167,9 +1167,13 @@ run start. Every result set is therefore auditable to the exact workflow
 version that produced it: `oxo-flow provenance verify` prints the SHA, and
 report snapshots carry it through the checkpoint they embed.
 
-The engine also records a **content digest of the executed workflow bytes**
-(`workflow_content_hash`, a `sha256:<hex>` of the file) and whether the
-workflow file had **uncommitted changes** (`workflow_git_dirty`). The HEAD
+The engine also records a **content digest of the top-level workflow file as
+read at run start** (`workflow_content_hash`, a `sha256:<hex>` of the file)
+and whether the workflow file had **uncommitted changes**
+(`workflow_git_dirty`). For a `[[include]]` workflow the digest covers the
+top-level file only — the complete identity is that file plus the
+separately recorded include resolutions (`include_resolutions`, the
+per-include checkout SHAs). The HEAD
 SHA alone cannot tell two runs of the same uncommitted file apart — when
 the tree is dirty, the content hash is the authoritative identity, and it
 changes with every edit. The run log header
