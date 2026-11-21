@@ -161,13 +161,20 @@ fn one_segment_under(path: &str, prefix: &str) -> bool {
 /// user id inserted into request extensions is visible; personal-mode
 /// requests fall back to the 'default' pseudo-user.
 ///
+/// Ordering (issue #1311 / WEB-15 D1): the audit row is written AHEAD of the
+/// mutation — a durable `pending` intent is committed before the handler runs,
+/// then finalized to `success`/`failure` after. A crash between the mutation
+/// and its outcome write leaves a durable `pending` row, so the trail is never
+/// shorter than the set of committed mutations.
+///
 /// Durability is per request ([`audit_durability_for`]): a failed REQUIRED
-/// insert replaces a non-5xx already-computed response with a structured
-/// `500 AUDIT_WRITE_FAILED` (fail closed); a response that is already a
-/// server error is preserved (it is not an acknowledgment of success, and
-/// the documented runs-domain 503 boundary must survive a no-backend
-/// deployment). A failed BEST-EFFORT insert logs a warning and returns the
-/// response unchanged.
+/// finalize (or a failed write-ahead insert when the request had to degrade to
+/// the post-handler order) replaces a non-5xx already-computed response with a
+/// structured `500 AUDIT_WRITE_FAILED` (fail closed); a response that is
+/// already a server error is preserved (it is not an acknowledgment of
+/// success, and the documented runs-domain 503 boundary must survive a
+/// no-backend deployment). A failed BEST-EFFORT write logs a warning and
+/// returns the response unchanged.
 pub async fn audit_middleware(
     request: axum::extract::Request,
     next: axum::middleware::Next,
@@ -175,6 +182,11 @@ pub async fn audit_middleware(
     use axum::http::Method;
 
     let method = request.method().clone();
+    if matches!(method, Method::GET | Method::HEAD | Method::OPTIONS) {
+        // Read-only: nothing is audited, so nothing to write ahead.
+        return next.run(request).await;
+    }
+
     let path = request.uri().path().to_string();
     // The auth middleware (S2, issue #82 P0-4) injects a CurrentUser;
     // personal mode falls back to the 'default' pseudo-user.
@@ -183,26 +195,73 @@ pub async fn audit_middleware(
             .extensions()
             .get::<crate::domains::auth::current_user::CurrentUser>(),
     );
+    let action = format!("{method} {path}");
+    let durability = audit_durability_for(method.as_str(), &path);
 
-    let response = next.run(request).await;
-
-    if matches!(method, Method::GET | Method::HEAD | Method::OPTIONS) {
-        return response;
+    // Handler-owned success rows (login / OAuth callback) are excluded from the
+    // write-ahead intent: their SUCCESS row must carry the real authenticated
+    // identity, which the middleware cannot see pre-auth, and a failed attempt
+    // mutates nothing — so there is no write-ahead window to close. See
+    // [`auth_success_owner_path`].
+    let owned_success = auth_success_owner_path(&path);
+    let intent_id = uuid::Uuid::new_v4().to_string();
+    let mut intent_ok = false;
+    if !owned_success {
+        // Write-ahead intent (issue #1311 / WEB-15 D1): the durable audit row
+        // is committed BEFORE the handler mutates state. A crash between the
+        // mutation and its outcome write then leaves a `pending` row for the
+        // action — a committed state change can no longer lack its audit row.
+        match begin_audit_intent(&intent_id, &user, &action, &path).await {
+            Ok(()) => intent_ok = true,
+            // A failed intent degrades to the legacy post-handler write below
+            // — the fail-closed contract and the documented 5xx-preservation
+            // boundary (WEB-17) are unchanged either way.
+            Err(error) => tracing::warn!(
+                actor = %user,
+                action,
+                error = %error,
+                "write-ahead audit intent failed — falling back to post-handler recording"
+            ),
+        }
     }
 
+    // The handler (and its mutation) runs AFTER the intent is durable.
+    let response = next.run(request).await;
     let status = response.status().as_u16();
-    let action = format!("{method} {path}");
 
-    // Successful sign-ins are recorded by the handler that owns the identity
-    // — the password login and the OAuth callback — which knows the
-    // authenticated identity. The middleware only sees the pre-auth request,
-    // so every success row it writes would be misattributed to the `default`
-    // pseudo-user (web-api.md §Audit Logs contract). Those handler rows are
-    // REQUIRED (WEB-15 / #1199): their failure already replaced the response
-    // with the structured 500, and a 5xx is preserved below. Failed attempts
-    // still fall through here (actor unknown → `default`, result: "failure"
-    // — the actionable brute-force signal).
-    if auth_success_is_handler_recorded(&path, status) {
+    if owned_success {
+        // Successful sign-ins are recorded by the handler that owns the
+        // authenticated identity ([`auth_success_is_handler_recorded`]); the
+        // middleware only sees the pre-auth request, so every success row it
+        // wrote would be misattributed to the `default` pseudo-user. Failed
+        // attempts fall through here (actor unknown → `default`, result:
+        // "failure" — the actionable brute-force signal).
+        if auth_success_is_handler_recorded(&path, status) {
+            return response;
+        }
+        let result = if (200..300).contains(&status) {
+            "success"
+        } else {
+            "failure"
+        };
+        let metadata = serde_json::json!({ "status": status }).to_string();
+        match durability {
+            AuditDurability::Required => {
+                if let Err((error_status, Json(error))) =
+                    audit_required(&user, &action, &path, result, Some(&metadata)).await
+                {
+                    emit_audit_event(&user, &action, &path, result);
+                    if status >= 500 {
+                        return response;
+                    }
+                    return (error_status, Json(error)).into_response();
+                }
+            }
+            AuditDurability::BestEffort => {
+                audit_best_effort(&user, &action, &path, result, Some(&metadata)).await;
+            }
+        }
+        emit_audit_event(&user, &action, &path, result);
         return response;
     }
 
@@ -213,23 +272,28 @@ pub async fn audit_middleware(
     };
     let metadata = serde_json::json!({ "status": status }).to_string();
 
-    // One write path, two explicit durability classes (WEB-15 / #1140).
-    match audit_durability_for(method.as_str(), &path) {
+    // One write path, two explicit durability classes (WEB-15 / #1140). The
+    // intent written above is finalized with the observed outcome; a REQUIRED
+    // failure replaces a non-5xx answer with the structured fail-closed 500
+    // while an already-5xx answer is preserved (it is not an acknowledgment of
+    // success, and the runs-domain 503 boundary must survive a no-backend
+    // deployment).
+    match durability {
         AuditDurability::Required => {
-            if let Err((error_status, Json(error))) =
+            let outcome: Result<(), (StatusCode, Json<ApiError>)> = if intent_ok {
+                finalize_audit_intent(&intent_id, result, Some(&metadata))
+                    .await
+                    .map_err(|error| audit_failure_error(&action, &error))
+            } else {
+                // The intent was never durable: fall back to the legacy
+                // post-handler REQUIRED write so a security action without its
+                // audit row still fails closed.
                 audit_required(&user, &action, &path, result, Some(&metadata)).await
-            {
+            };
+            if let Err((error_status, Json(error))) = outcome {
                 // The structured event stream still records the attempt for
                 // machine consumers even when the database row is lost.
                 emit_audit_event(&user, &action, &path, result);
-                // A response that is ALREADY a server error is not an
-                // acknowledgment of success — preserve it. This keeps the
-                // documented runs-domain 503 boundary
-                // (`RUNS_REQUIRE_STORAGE_BACKEND`, WEB-17) when a deployment
-                // has no initialized backend at all: overwriting it with
-                // AUDIT_WRITE_FAILED would hide the actionable cause while
-                // still refusing the request. 2xx and 4xx answers are
-                // replaced by the structured fail-closed 500.
                 if status >= 500 {
                     return response;
                 }
@@ -237,7 +301,19 @@ pub async fn audit_middleware(
             }
         }
         AuditDurability::BestEffort => {
-            audit_best_effort(&user, &action, &path, result, Some(&metadata)).await;
+            if intent_ok {
+                if let Err(error) = finalize_audit_intent(&intent_id, result, Some(&metadata)).await
+                {
+                    tracing::warn!(
+                        actor = %user,
+                        action,
+                        error = %error,
+                        "best-effort audit finalize failed — the request is unaffected"
+                    );
+                }
+            } else {
+                audit_best_effort(&user, &action, &path, result, Some(&metadata)).await;
+            }
         }
     }
     // Structured event stream for machine consumers (issue #81).
@@ -261,6 +337,43 @@ async fn write_audit(
     backend
         .record_audit_log(actor, action, target, result, metadata)
         .await
+}
+
+/// Write-ahead audit intent (issue #1311 / WEB-15 D1): durably insert a
+/// `pending` audit row BEFORE the handler runs, so a crash between the mutation
+/// and its outcome write still leaves an audit row for the action. The row is
+/// finalized with the observed outcome by [`finalize_audit_intent`].
+async fn begin_audit_intent(
+    id: &str,
+    actor: &str,
+    action: &str,
+    target: &str,
+) -> Result<(), String> {
+    let backend = crate::infra::db::global_backend()
+        .ok_or_else(|| "audit storage backend is not initialized".to_string())?;
+    backend
+        .begin_audit_intent(id, actor, action, target, None)
+        .await
+}
+
+/// Finalize a write-ahead audit intent with the observed outcome. A row that
+/// vanished between begin and finalize is an error (the intent must exist).
+async fn finalize_audit_intent(
+    id: &str,
+    result: &str,
+    metadata: Option<&str>,
+) -> Result<(), String> {
+    let backend = crate::infra::db::global_backend()
+        .ok_or_else(|| "audit storage backend is not initialized".to_string())?;
+    backend.finalize_audit_intent(id, result, metadata).await
+}
+
+/// True for the routes whose successful sign-in row is written by the owning
+/// handler (password login and the OAuth callback), because only the handler
+/// knows the authenticated identity; the middleware excludes them from the
+/// write-ahead intent and records their failed attempts only.
+fn auth_success_owner_path(path: &str) -> bool {
+    matches!(path, "/api/auth/login" | "/api/auth/oauth/callback")
 }
 
 /// Write a REQUIRED audit row; a failure is returned as the structured
@@ -338,10 +451,12 @@ pub async fn audit_best_effort(
 /// The structured `500 AUDIT_WRITE_FAILED` body returned when a REQUIRED
 /// audit row cannot be persisted.
 ///
-/// The middleware writes the row AFTER the handler has run, and it is not in
-/// the same transaction as the mutation — so the action may already have
-/// committed. The message must not claim the request was "refused", and the
-/// suggestion must warn that a blind retry can duplicate the effect.
+/// The mutation is not rolled back: the audit row is written ahead of the
+/// handler (a durable `pending` intent, issue #1311) and finalized after it,
+/// but a failed FINALIZE or a handler that committed before its write-ahead
+/// insert could not be persisted still leaves the action applied. So the
+/// message must not claim the request was "refused", and the suggestion must
+/// warn that a blind retry can duplicate the effect.
 pub fn audit_failure_error(action: &str, error: &str) -> (StatusCode, Json<ApiError>) {
     audit_failure_error_with_hint(action, error, None)
 }
