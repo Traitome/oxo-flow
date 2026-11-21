@@ -1,0 +1,23 @@
+# B31 — [[include]]-contributed type drives a typed edge (reject).
+# The producing rule lives in an included module (incmod_grch38.oxoflow) and
+# declares GTF[reference_build=GRCh38] inline; the main workflow's consumer
+# expects GTF[reference_build=GRCh37]. The type propagates ACROSS the include
+# boundary ⇒ TYPE-004 build mismatch.
+# Derivation: include-contributed typed edge, GRCh38 producer vs GRCh37 consumer ⇒ TYPE-004.
+#
+# EXPECTED: reject — TYPE-004.
+
+[workflow]
+name = "b31"
+
+[[include]]
+path = "incmod_grch38.oxoflow"
+
+[[rules]]
+name = "consume_gtf"
+input = ["genes.gtf"]
+output = ["counts.txt"]
+shell = "count {input} > {output}"
+
+[rules.types]
+inputs = { default = "GTF[reference_build=GRCh37]" }

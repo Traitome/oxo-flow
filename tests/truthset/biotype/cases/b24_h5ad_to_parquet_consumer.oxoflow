@@ -1,0 +1,24 @@
+# B24 — format-coverage reject (h5ad vs parquet). A single-cell h5ad matrix is
+# fed to a consumer that expects a columnar parquet table (e.g. a dataframe
+# exchange step). Distinct enum variants, no coercion arm ⇒ TYPE-001.
+# Derivation: H5ad producer vs Parquet consumer, no coercion ⇒ TYPE-001.
+#
+# EXPECTED: reject — TYPE-001.
+
+[workflow]
+name = "b24"
+
+[[rules]]
+name = "export_h5ad"
+output = ["matrix.h5ad"]
+shell = "python -c 'import scanpy as sc; sc.write_h5ad(\"matrix.h5ad\")'"
+[rules.types]
+outputs = { default = "H5AD" }
+
+[[rules]]
+name = "to_parquet"
+input = ["matrix.h5ad"]
+output = ["matrix.parquet"]
+shell = "python -c 'import pandas as pd; pd.read_parquet(\"matrix.parquet\")'"
+[rules.types]
+inputs = { default = "PARQUET" }

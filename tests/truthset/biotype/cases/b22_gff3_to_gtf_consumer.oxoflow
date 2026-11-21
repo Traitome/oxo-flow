@@ -1,0 +1,24 @@
+# B22 — format-coverage reject (GFF3 vs GTF). A GFF3 producer feeds a GTF
+# consumer: both are annotation feature formats but are distinct enum variants
+# with no coercion arm, so the format boundary must reject with TYPE-001.
+# Derivation: Gff3 producer vs Gtf consumer, no coercion ⇒ TYPE-001.
+#
+# EXPECTED: reject — TYPE-001.
+
+[workflow]
+name = "b22"
+
+[[rules]]
+name = "make_gff3"
+output = ["features.gff3"]
+shell = "convert -o features.gff3 annotation.gtf"
+[rules.types]
+outputs = { default = "GFF3[reference_build=GRCh38]" }
+
+[[rules]]
+name = "count"
+input = ["features.gff3"]
+output = ["counts.txt"]
+shell = "featureCounts -a features.gff3 -o counts.txt a.bam"
+[rules.types]
+inputs = { default = "GTF[reference_build=GRCh38]" }

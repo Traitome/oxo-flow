@@ -3,9 +3,9 @@
 > **Status**: broadened truth set. This supersedes the 18-case first set in
 > [`biotype-truth-set-2026-11-19.md`](biotype-truth-set-2026-11-19.md) as the
 > current measured state, and replaces the *claim* "broad truth-set validation"
-> with a *number*: a **42-case** set run through the real `oxo-flow validate
-> --json` surface, yielding **25 true-accept, 0 false-accept, 17 true-reject, 0
-> false-reject**, with a diagnostic-code cross-check of **42/42**. It is a
+> with a *number*: a **53-case** set run through the real `oxo-flow validate
+> --json` surface, yielding **31 true-accept, 0 false-accept, 22 true-reject, 0
+> false-reject**, with a diagnostic-code cross-check of **53/53**. It is a
 > *breadth* improvement over N=18 but is still **not** the full governed
 > campaign: the pre-registration threshold `τ_FA` remains UNDECIDED, so no
 > governed POSITIVE/NEGATIVE decision is claimed.
@@ -20,7 +20,7 @@
 ## 1. What was measured
 
 The BioType checker (`.oxoflow` `[rules.types]` / `[types.*]` contracts) was
-exercised against a 42-case truth set authored **independently of the checker**
+exercised against a 53-case truth set authored **independently of the checker**
 and run through the real CLI validation surface, `oxo-flow validate <case>
 --json`. For every case the *expected* verdict (accept / reject, and the
 TYPE-* code set when reject) and a one-line rationale were recorded in a header
@@ -36,11 +36,15 @@ Three case sources:
   FASTQ-gz passthrough) track an edge literally present in
   `tests/fixtures/import/nextflow/rnaseq.ok.nf`; the rest are hand-authored
   format-analogue edges.
-- **Adversarial boundary probes (29)** — `a06`–`a14` (9) hand-authored at the
+- **Adversarial boundary probes (40)** — `a06`–`a14` (9) hand-authored at the
   edges of individual TYPE codes, plus the **`b01`–`b20` breadth wave (20)**,
   authored from the published contract (the format list in the schema, the
   index/build/compression/sort semantics in `workflow-format.md`, and the
-  TYPE-001–010 catalogue) rather than from the checker source.
+  TYPE-001–010 catalogue) rather than from the checker source, plus the
+  **`b21`–`b31` #1292 wave (11)** extending format coverage to the remaining
+  BioFormat enum variants (`gff3`/`h5ad`/`rds`/`parquet`/`tsv`) and driving two
+  new construct classes (a `transform.*` scatter/combine GENERATED typed edge,
+  and a type contributed across an `[[include]]` boundary).
 - **Real repository examples (7)** — `examples/gallery/{13_simple_variant_calling,
   06_rnaseq_quantification,09_single_cell_rnaseq,07_wgs_germline,
   08_multiomics_integration,14_paired_experiment_control,16_16s_qiime2_amplicon}.
@@ -125,7 +129,7 @@ as the 18-case report so it cannot be fitted to the result).**
 
 **Result: 0 false-accepts, 0 false-rejects — the operational criterion PASSES.**
 
-**Scope caveat filed up front.** Even a perfect 42-case matrix does not by
+**Scope caveat filed up front.** Even a perfect 53-case matrix does not by
 itself clear the full WF-04 exit criterion (see §9 for the excluded
 constructs); the criterion governs *correctness of this set*, not roadmap
 closure.
@@ -138,15 +142,15 @@ one-sided upper bounds are reported as the two-sided interval's upper limit:
 
 | Endpoint | Count | Point estimate | Exact 95% CI (Clopper-Pearson) |
 | :--- | :--- | :--- | :--- |
-| False-accept rate `FA/(FA+TR)` | 0/17 | 0.0% | **[0.0%, 19.5%]** |
-| False-reject rate `FR/(FR+TA)` | 0/25 | 0.0% | **[0.0%, 13.7%]** |
+| False-accept rate `FA/(FA+TR)` | 0/22 | 0.0% | **[0.0%, 15.4%]** |
+| False-reject rate `FR/(FR+TA)` | 0/31 | 0.0% | **[0.0%, 11.2%]** |
 
-Computation (false-accept, x = 0, n = 17): upper = `Beta.ppf(0.975, 1, 17)`
-= 0.1950 → **[0.0%, 19.5%]**. False-reject (x = 0, n = 25): upper =
-`Beta.ppf(0.975, 1, 25)` = 0.1372 → **[0.0%, 13.7%]**. The upper bounds are
-still wide (N = 17 expected-reject cases), which is itself the point PR-06 §0.1
+Computation (false-accept, x = 0, n = 22): upper = `Beta.ppf(0.975, 1, 22)`
+= 0.1544 → **[0.0%, 15.4%]**. False-reject (x = 0, n = 31): upper =
+`Beta.ppf(0.975, 1, 31)` = 0.1122 → **[0.0%, 11.2%]**. The upper bounds are
+still wide, which is itself the point PR-06 §0.1
 step 5 makes: a zero count bounds the true rate only loosely, and even a
-0-false-accept result with U ≈ 19.5% cannot decide a governed verdict without a
+0-false-accept result with U ≈ 15.4% cannot decide a governed verdict without a
 fixed `τ_FA`.
 
 ## 5. Confusion matrix
@@ -154,16 +158,16 @@ fixed `τ_FA`.
 ```
   2x2 confusion matrix (rows = expected, cols = actual) — VERDICT scoring:
                      accept   reject
-    EXPECT-ACCEPT    25       0
-    EXPECT-REJECT    0        17
+    EXPECT-ACCEPT    31       0
+    EXPECT-REJECT    0        22
 
-  true-accept=25  false-accept=0  true-reject=17  false-reject=0
+  true-accept=31  false-accept=0  true-reject=22  false-reject=0
 ```
 
-42/42 cases (100%) match their pre-registered verdict.
+53/53 cases (100%) match their pre-registered verdict.
 
 **Diagnostic-code cross-check (expected-code set == actual-code set, asserted):**
-`codes-correct=42  codes-fail=0  (of 42)`. The ACTUAL code set is the union of
+`codes-correct=53  codes-fail=0  (of 53)`. The ACTUAL code set is the union of
 the `TYPE-NNN` codes seen on `validate --json` and on `lint --json`, compared
 for **set-equality** against the EXPECT table (the lint surface is load-bearing
 because the advisory codes `TYPE-008`/`009`/`010` are filtered out of
@@ -174,7 +178,7 @@ matches the actual set exactly.
 This is an operational pass on *this* set, not a governed campaign verdict
 (§4), and the breadth boundary in §9 still applies.
 
-## 6. Per-case summary (42 cases)
+## 6. Per-case summary (53 cases)
 
 Verdicts are read from the CLI JSON; `codes` is the asserted code set. Full
 per-case rows (verdict, expected-codes, actual-codes, note) are in the
@@ -235,7 +239,52 @@ multi-channel **paired** accept control (`b12`) distinct from the advisory
 `TYPE-010` shapes (`b17`); the advisory `TYPE-009` build-incomplete edge
 (`b19`); and the consumer `sort_order=unsorted` no-constraint path (`b20`).
 
-### 6.3 Real repository examples (7)
+### 6.3 Format-coverage and construct wave b21–b31 (#1292)
+
+| case | expected | actual | codes | correct? |
+| :--- | :---: | :---: | :--- | :---: |
+| `b21_gff3_accept` | accept | accept | — | yes |
+| `b22_gff3_to_gtf_consumer` | reject | reject | TYPE-001 | yes |
+| `b23_h5ad_accept` | accept | accept | — | yes |
+| `b24_h5ad_to_parquet_consumer` | reject | reject | TYPE-001 | yes |
+| `b25_rds_accept` | accept | accept | — | yes |
+| `b26_rds_to_tsv_consumer` | reject | reject | TYPE-001 | yes |
+| `b27_parquet_accept` | accept | accept | — | yes |
+| `b28_tsv_accept` | accept | accept | — | yes |
+| `b29_transform_scatter_reject` | reject | reject | TYPE-001 | yes |
+| `b30_transform_scatter_accept` | accept | accept | — | yes |
+| `b31_include_contributed_type` | reject | reject | TYPE-004 | yes |
+
+Newly covered by this wave (constructs and formats the 42-case set did not
+drive):
+
+- **Format variants `gff3`, `h5ad`, `rds`, `parquet`, `tsv`** — the five
+  `BioFormat` enum variants the breadth wave left undriven. `is_subtype_of`
+  (`crates/oxo-flow-core/src/types/checker.rs`) defines coercion arms only for
+  `(Sam,Bam)`, `(Bcf,Vcf)`, `(Vcf,Bcf)`, and `(Bam,Cram)`; there is **no**
+  coercion arm for any of these five, so a same-format pair (`b21`/`b23`/`b25`/
+  `b27`/`b28`) is the honest compatible case and every cross-format pair
+  (`b22`/`b24`/`b26`) fires `TYPE-001`. Types were taken verbatim from the enum
+  in `crates/oxo-flow-core/src/types/mod.rs`.
+- **A `transform.*` scatter/combine GENERATED typed edge** (`b29` reject,
+  `b30` accept). The authored rule carries inline `[rules.types]
+  inputs`/`outputs` plus `[rules.transform.split]`/`map`/`combine`;
+  `expand_wildcards` materializes the generated `<name>_<value>` scatter rules
+  and the `<name>_combine` rule carrying the same declared output type. On the
+  **un-expanded** `validate` surface the authored rule name is the producer; on
+  `dry-run` the generated rules appear. This is a genuine generated-rule edge,
+  not a hand-wired producer/consumer pair.
+- **A type contributed across an `[[include]]` boundary** (`b31`). The
+  producing rule lives in the included module `incmod_grch38.oxoflow` and
+  declares `GTF[reference_build=GRCh38]` inline; the main workflow's consumer
+  expects `GTF[reference_build=GRCh37]`, so the type propagates across the
+  include boundary and fires `TYPE-004`. `incmod_grch38.oxoflow` is an include
+  **fixture**, not a standalone case — it has no EXPECT row and is exercised
+  only through `b31`. The include is resolved only by
+  `WorkflowConfig::from_file` (→ `resolve_includes`), which is the surface the
+  harness drives.
+
+### 6.4 Real repository examples (7)
 
 | case | expected | actual | correct? |
 | :--- | :---: | :---: | :---: |
@@ -280,18 +329,20 @@ case is what caught a wrong claim in the reference text.
 
 ## 8. Verdict
 
-- **Correctness of this 42-case set vs the pre-registered operational
-  criterion: PASS** (0 false-accepts, 0 false-rejects; codes 42/42). Not a
+- **Correctness of this 53-case set vs the pre-registered operational
+  criterion: PASS** (0 false-accepts, 0 false-rejects; codes 53/53). Not a
   governed verdict: `τ_FA` is UNDECIDED in the frozen pre-registration
   (PR-06 §C1), so no POSITIVE/NEGATIVE/INCONCLUSIVE decision is claimed.
-- **Breadth:** 2.3× the first set (42 vs 18 cases) and it now drives BED, FASTA,
-  GTF, BCF, the named-table path, the index-kind boundary, and the advisory
-  TYPE-009 path — but it is still not the full corpus (§9).
+- **Breadth:** 2.9× the first set (53 vs 18 cases) and it now drives every
+  `BioFormat` enum variant except `Generic`, plus the named-table path, the
+  index-kind boundary, the advisory TYPE-009 path, a `transform.*`
+  scatter/combine GENERATED edge, and an `[[include]]`-contributed type — but
+  it is still not the full corpus (§9).
 - **Defects surfaced:** one, and it is a **documentation** defect (§7),
-  corrected in this change. No checker defect was exposed by the breadth wave,
-  so no checker fix and no new issue were required.
+  corrected in this change. No checker defect was exposed, so no checker fix
+  and no new issue were required.
 - **Roadmap:** WF-04's "broad truth-set validation" exit criterion moves from
-  UNMET (N=18) toward met (N=42, 0/0, exclusions enumerated) but stays gated on
+  UNMET (N=18) toward met (N=53, 0/0, exclusions enumerated) but stays gated on
   the governed `τ_FA`, so the label is not closed outright. See the ledger
   update and §9.
 
@@ -299,31 +350,37 @@ case is what caught a wrong claim in the reference text.
 
 Reported with its exclusions, as the exit gate requires:
 
-- **Excluded formats.** The `Generic` short-circuit format and the `gff3`,
-  `h5ad`, `rds`, `parquet`, and `tsv` format enum variants are **not driven** by
-  any case. Formats driven: BAM, SAM, CRAM, VCF, BCF, BED, FASTA, GTF, FASTQ.
+- **Driven formats.** Every `BioFormat` enum variant except `Generic` is now
+  driven by at least one case: BAM, SAM, CRAM, VCF, BCF, BED, FASTA, GTF, FASTQ,
+  GFF3, H5AD, RDS, PARQUET, TSV. Only the `Generic` short-circuit format
+  remains undriven — it is the checker's default/no-type sentinel, not a real
+  data format.
 - **Excluded diagnostics.** Every TYPE-001–010 code is exercised except none —
-  all of TYPE-001 (b01/b02/b06), 002 (t02/a06/b14), 003 (t04/b03/b07), 004
-  (t05/b09/b16), 005 (a07), 006 (t04/b18), 007 (a13/b13), 008 (a14), 009
-  (b19), and 010 (a08/a11/b17) have at least one case. `TYPE-UNKNOWN`
-  resolution is only touched indirectly.
-- **Excluded constructs.** No case uses `transform.*` scatter/combine generated
-  rules, `[[include]]`-contributed types, or `[ai]`; the truth set is
-  single-document, hand-authored DAGs.
+  all of TYPE-001 (b01/b02/b06/b22/b24/b26/b29), 002 (t02/a06/b14), 003
+  (t04/b03/b07), 004 (t05/b09/b16/b31), 005 (a07), 006 (t04/b18), 007
+  (a13/b13), 008 (a14), 009 (b19), and 010 (a08/a11/b17) have at least one
+  case. `TYPE-UNKNOWN` resolution is only touched indirectly.
+- **Driven constructs.** Two of the three previously-excluded constructs are now
+  driven: a `transform.*` scatter/combine GENERATED typed edge (`b29`/`b30`) and
+  a type contributed across an `[[include]]` boundary (`b31`). Only `[ai]`
+  remains undriven — it is orthogonal to the type checker and does not create
+  typed edges.
 - **Still no `[types.*]` usage in the repo.** The typed-correctness evidence
   rests entirely on hand-authored cases, not on real typed pipelines.
 - **Single arm, single toolchain** (macOS arm64, rustc 1.98.0). No
   cross-platform or cross-version contrast intended or performed.
 - **Not the governed campaign.** `τ_FA` remains UNDECIDED (PR-06 §C1), so even
-  this 42-case, 0/0 result cannot be scored POSITIVE/NEGATIVE/INCONCLUSIVE; the
-  exact 95% upper bound on the false-accept rate is still ≈19.5% at N=17.
+  this 53-case, 0/0 result cannot be scored POSITIVE/NEGATIVE/INCONCLUSIVE; the
+  exact 95% upper bound on the false-accept rate is still ≈15.4% at N=22.
 - **The examples were validated, not executed** — no real data was staged and no
   bioinformatics tool was run.
 
 ## 10. Raw-data lineage
 
-- Cases: `tests/truthset/biotype/cases/{t01..t06,a06..a14,b01..b20}*.oxoflow`
-  (each with its pre-registered EXPECT in a header comment).
+- Cases: `tests/truthset/biotype/cases/{t01..t06,a06..a14,b01..b31}*.oxoflow`
+  (each with its pre-registered EXPECT in a header comment). The
+  `[[include]]` fixture `tests/truthset/biotype/cases/incmod_grch38.oxoflow`
+  is pulled in by `b31` and has no EXPECT row of its own.
 - Harness: `scripts/biotype-truth-set.sh` (EXPECT table + matrix printer +
   machine-readable JSON emitter).
 - Machine-readable result file:
