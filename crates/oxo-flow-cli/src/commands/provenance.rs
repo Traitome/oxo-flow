@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use colored::Colorize;
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 /// One verified file's outcome, machine-readable for `--json`.
@@ -144,6 +144,249 @@ fn verify_files(
     }
 
     (matched, mismatched, missing, cleaned_count, entries)
+}
+
+/// One artifact's two-checkpoint hash-agreement outcome, machine-readable
+/// for `--json`.
+#[derive(Debug, Serialize)]
+struct DiffEntry {
+    artifact: String,
+    /// `matched`, `differing`, `only_left`, or `only_right`.
+    status: &'static str,
+    /// The checksum recorded in the LEFT checkpoint (absent when `only_right`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    left: Option<String>,
+    /// The checksum recorded in the RIGHT checkpoint (absent when `only_left`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    right: Option<String>,
+}
+
+/// Deterministic partition of two recorded-checksum maps.
+///
+/// Keys are the sorted union of both maps, so the report is byte-stable
+/// (the same order-independent convention the recorded checksum maps follow,
+/// issue #528). `matched` counts artifacts present in both with equal
+/// checksums; `differing` present in both with unequal checksums;
+/// `only_left` / `only_right` present on one side only.
+#[derive(Debug, Default, Serialize)]
+struct DiffSummary {
+    matched: usize,
+    differing: usize,
+    only_left: usize,
+    only_right: usize,
+    entries: Vec<DiffEntry>,
+}
+
+impl DiffSummary {
+    /// Nonzero (a divergence) when any artifact differs or is missing on one
+    /// side — the exit-code contract of `provenance diff`.
+    fn has_divergence(&self) -> bool {
+        self.differing > 0 || self.only_left > 0 || self.only_right > 0
+    }
+}
+
+/// Partition two merged recorded-checksum maps into agreement classes
+/// (unit-testable).
+fn diff_recorded_checksums(
+    left: &BTreeMap<String, String>,
+    right: &BTreeMap<String, String>,
+) -> DiffSummary {
+    let mut keys: BTreeSet<&String> = BTreeSet::new();
+    keys.extend(left.keys());
+    keys.extend(right.keys());
+
+    let mut summary = DiffSummary::default();
+    for key in keys {
+        match (left.get(key), right.get(key)) {
+            (Some(l), Some(r)) if l == r => {
+                summary.matched += 1;
+                summary.entries.push(DiffEntry {
+                    artifact: key.clone(),
+                    status: "matched",
+                    left: Some(l.clone()),
+                    right: Some(r.clone()),
+                });
+            }
+            (Some(l), Some(r)) => {
+                summary.differing += 1;
+                summary.entries.push(DiffEntry {
+                    artifact: key.clone(),
+                    status: "differing",
+                    left: Some(l.clone()),
+                    right: Some(r.clone()),
+                });
+            }
+            (Some(l), None) => {
+                summary.only_left += 1;
+                summary.entries.push(DiffEntry {
+                    artifact: key.clone(),
+                    status: "only_left",
+                    left: Some(l.clone()),
+                    right: None,
+                });
+            }
+            (None, Some(r)) => {
+                summary.only_right += 1;
+                summary.entries.push(DiffEntry {
+                    artifact: key.clone(),
+                    status: "only_right",
+                    left: None,
+                    right: Some(r.clone()),
+                });
+            }
+            (None, None) => unreachable!("key came from at least one map"),
+        }
+    }
+    summary
+}
+
+/// Parse a `<key>: {path: checksum}` object into a key-ordered map.
+///
+/// A missing key yields an empty map (a checkpoint with no recorded checksums
+/// is legitimate); a non-string value is a hard error rather than being
+/// coerced to `""`, which would falsify the audit trail without a diagnostic
+/// (same stance as `provenance verify`).
+fn parse_checksum_map(
+    checkpoint: &serde_json::Value,
+    key: &str,
+) -> Result<BTreeMap<String, String>> {
+    let mut map = BTreeMap::new();
+    if let Some(obj) = checkpoint.get(key).and_then(|v| v.as_object()) {
+        for (k, v) in obj {
+            let s = v
+                .as_str()
+                .with_context(|| format!("checkpoint {key} value for '{k}' is not a string"))?;
+            map.insert(k.clone(), s.to_string());
+        }
+    }
+    Ok(map)
+}
+
+/// Merge a checkpoint's `checksums` and `cleaned_checksums` maps into one
+/// `{path: checksum}` map, cleaned entries winning on collision.
+///
+/// Mirrors the merge `print_checkpoint_diff` performs (issue #315 F2): a
+/// chunk moved into the cleaned bucket is a bookkeeping change, not a file
+/// change, so it must not read as a spurious add/remove when diffed against a
+/// checkpoint whose chunks still sit under `checksums`.
+fn merge_recorded_checksums(
+    checksums: &BTreeMap<String, String>,
+    cleaned_checksums: &BTreeMap<String, String>,
+) -> BTreeMap<String, String> {
+    let mut merged = checksums.clone();
+    for (path, sha) in cleaned_checksums {
+        merged.insert(path.clone(), sha.clone());
+    }
+    merged
+}
+
+/// Read one checkpoint file into its two recorded-checksum maps, with a clear
+/// error (never a panic) on an absent or malformed file.
+fn load_checkpoint_checksums(
+    path: &Path,
+) -> Result<(BTreeMap<String, String>, BTreeMap<String, String>)> {
+    let content = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read checkpoint {}", path.display()))?;
+    let checkpoint: serde_json::Value = serde_json::from_str(&content)
+        .with_context(|| format!("failed to parse checkpoint JSON: {}", path.display()))?;
+    let checksums = parse_checksum_map(&checkpoint, "checksums")?;
+    let cleaned = parse_checksum_map(&checkpoint, "cleaned_checksums")?;
+    Ok((checksums, cleaned))
+}
+
+/// Compare the recorded output checksums of two checkpoints (bet-4 measuring
+/// primitive, issue #1320).
+///
+/// Emits a deterministic JSON report partitioning the merged recorded-checksum
+/// maps into `matched` / `only_left` / `only_right` / `differing`. Exits
+/// nonzero when any artifact differs or is missing on one side; zero when all
+/// recorded artifacts agree. `--json` prints the document to stdout (the human
+/// table stays on stderr, like `provenance verify`).
+pub fn provenance_diff_command(left: PathBuf, right: PathBuf, json: bool) -> Result<()> {
+    let left = std::path::absolute(&left).context("failed to resolve left checkpoint path")?;
+    let right = std::path::absolute(&right).context("failed to resolve right checkpoint path")?;
+
+    let (left_checksums, left_cleaned) = load_checkpoint_checksums(&left)?;
+    let (right_checksums, right_cleaned) = load_checkpoint_checksums(&right)?;
+
+    let left_merged = merge_recorded_checksums(&left_checksums, &left_cleaned);
+    let right_merged = merge_recorded_checksums(&right_checksums, &right_cleaned);
+    let summary = diff_recorded_checksums(&left_merged, &right_merged);
+
+    if !json {
+        eprintln!(
+            "{} {} vs {}",
+            "Provenance Diff".bold().cyan(),
+            left.display(),
+            right.display()
+        );
+        eprintln!();
+        for entry in &summary.entries {
+            match entry.status {
+                "matched" => eprintln!(
+                    "  {} {} {}",
+                    "✓".green().bold(),
+                    entry.artifact,
+                    entry.left.as_deref().unwrap_or_default().dimmed()
+                ),
+                "differing" => eprintln!(
+                    "  {} {} (left: {}, right: {})",
+                    "✗".red().bold(),
+                    entry.artifact,
+                    entry.left.as_deref().unwrap_or_default(),
+                    entry.right.as_deref().unwrap_or_default()
+                ),
+                "only_left" => eprintln!(
+                    "  {} {} (only in left)",
+                    "-".yellow().bold(),
+                    entry.artifact
+                ),
+                "only_right" => eprintln!(
+                    "  {} {} (only in right)",
+                    "+".yellow().bold(),
+                    entry.artifact
+                ),
+                _ => {}
+            }
+        }
+        eprintln!();
+        if summary.entries.is_empty() {
+            eprintln!(
+                "{} No recorded checksums in either checkpoint.",
+                "Note:".bold().yellow()
+            );
+        }
+        eprintln!(
+            "{} {} matched, {} differing, {} only left, {} only right",
+            "Summary:".bold(),
+            summary.matched,
+            summary.differing,
+            summary.only_left,
+            summary.only_right
+        );
+    }
+
+    if json {
+        let document = serde_json::json!({
+            "command": "provenance",
+            "diff": {
+                "left": left.display().to_string(),
+                "right": right.display().to_string(),
+                "matched": summary.matched,
+                "differing": summary.differing,
+                "only_left": summary.only_left,
+                "only_right": summary.only_right,
+                "entries": summary.entries,
+            },
+        });
+        println!("{}", serde_json::to_string_pretty(&document)?);
+    }
+
+    if summary.has_divergence() {
+        std::process::exit(1);
+    }
+
+    Ok(())
 }
 
 /// Verify output file checksums stored in a checkpoint file.
@@ -450,5 +693,72 @@ mod tests {
             verify_files(&HashMap::new(), &cleaned, dir.path());
         assert_eq!((matched, mismatched, missing, cleaned_n), (0, 0, 0, 1));
         assert_eq!(entries[0].status, "cleaned");
+    }
+
+    fn map(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn diff_recorded_checksums_partitions_agreement_classes() {
+        let left = map(&[
+            ("a.txt", "sha256:1"),
+            ("b.txt", "sha256:2"),
+            ("only_left.txt", "sha256:3"),
+        ]);
+        let right = map(&[
+            ("a.txt", "sha256:1"),
+            ("b.txt", "sha256:CHANGED"),
+            ("only_right.txt", "sha256:4"),
+        ]);
+
+        let summary = diff_recorded_checksums(&left, &right);
+        assert_eq!(summary.matched, 1);
+        assert_eq!(summary.differing, 1);
+        assert_eq!(summary.only_left, 1);
+        assert_eq!(summary.only_right, 1);
+        assert!(summary.has_divergence());
+
+        // Deterministic: entries are sorted by artifact path (BTreeSet union).
+        let names: Vec<&str> = summary
+            .entries
+            .iter()
+            .map(|e| e.artifact.as_str())
+            .collect();
+        assert_eq!(
+            names,
+            vec!["a.txt", "b.txt", "only_left.txt", "only_right.txt"]
+        );
+        assert_eq!(summary.entries[0].status, "matched");
+        assert_eq!(summary.entries[1].status, "differing");
+        assert_eq!(summary.entries[2].status, "only_left");
+        assert_eq!(summary.entries[2].left.as_deref(), Some("sha256:3"));
+        assert_eq!(summary.entries[2].right, None);
+        assert_eq!(summary.entries[3].status, "only_right");
+        assert_eq!(summary.entries[3].left, None);
+    }
+
+    #[test]
+    fn diff_recorded_checksums_agreeing_maps_have_no_divergence() {
+        let left = map(&[("a.txt", "sha256:1"), ("b.txt", "sha256:2")]);
+        let right = map(&[("b.txt", "sha256:2"), ("a.txt", "sha256:1")]);
+        let summary = diff_recorded_checksums(&left, &right);
+        assert_eq!(summary.matched, 2);
+        assert!(!summary.has_divergence());
+    }
+
+    #[test]
+    fn merge_recorded_checksums_cleaned_wins_on_collision() {
+        // A chunk recorded under both buckets (legacy vs cleaned checkpoint)
+        // must diff equal: the merged map is what `provenance diff` compares,
+        // mirroring `print_checkpoint_diff` (issue #315 F2).
+        let checksums = map(&[("chunk", "sha256:1"), ("out.txt", "sha256:2")]);
+        let cleaned = map(&[("chunk", "sha256:1")]);
+        let merged = merge_recorded_checksums(&checksums, &cleaned);
+        assert_eq!(merged.get("chunk").map(String::as_str), Some("sha256:1"));
+        assert_eq!(merged.len(), 2);
     }
 }

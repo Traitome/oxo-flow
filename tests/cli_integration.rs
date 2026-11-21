@@ -5966,6 +5966,102 @@ fn cli_provenance_verify_embedded_checksums() {
 }
 
 // ---------------------------------------------------------------------------
+// provenance diff tests (issue #1320)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn cli_provenance_diff_agreement_exits_zero() {
+    let dir = tempfile::tempdir().unwrap();
+    let left = dir.path().join("left.json");
+    let right = dir.path().join("right.json");
+    fs::write(
+        &left,
+        r#"{"checksums":{"a.txt":"sha256:aa","b.txt":"sha256:bb"}}"#,
+    )
+    .unwrap();
+    fs::write(
+        &right,
+        r#"{"checksums":{"b.txt":"sha256:bb","a.txt":"sha256:aa"}}"#,
+    )
+    .unwrap();
+
+    oxo_flow_cmd()
+        .args([
+            "provenance",
+            "diff",
+            left.to_str().unwrap(),
+            right.to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("2 matched, 0 differing"));
+}
+
+#[test]
+fn cli_provenance_diff_divergence_exits_nonzero_json_lists_artifact() {
+    let dir = tempfile::tempdir().unwrap();
+    let left = dir.path().join("left.json");
+    let right = dir.path().join("right.json");
+    fs::write(
+        &left,
+        r#"{"checksums":{"a.txt":"sha256:aa","gone.txt":"sha256:gg"}}"#,
+    )
+    .unwrap();
+    // a.txt differs; b.txt is only on the right; gone.txt is only on the left.
+    fs::write(
+        &right,
+        r#"{"checksums":{"a.txt":"sha256:CHANGED","b.txt":"sha256:bb"}}"#,
+    )
+    .unwrap();
+
+    let assert = oxo_flow_cmd()
+        .args([
+            "provenance",
+            "diff",
+            left.to_str().unwrap(),
+            right.to_str().unwrap(),
+            "--json",
+        ])
+        .assert()
+        .failure();
+
+    let out = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    let doc: serde_json::Value = serde_json::from_str(&out).unwrap();
+    let d = &doc["diff"];
+    assert_eq!(d["matched"], 0);
+    assert_eq!(d["differing"], 1);
+    assert_eq!(d["only_left"], 1);
+    assert_eq!(d["only_right"], 1);
+    let statuses: Vec<&str> = d["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["status"].as_str().unwrap())
+        .collect();
+    assert!(statuses.contains(&"differing"));
+    assert!(statuses.contains(&"only_left"));
+    assert!(statuses.contains(&"only_right"));
+}
+
+#[test]
+fn cli_provenance_diff_missing_checkpoint_errors_cleanly() {
+    let dir = tempfile::tempdir().unwrap();
+    let right = dir.path().join("right.json");
+    fs::write(&right, r#"{"checksums":{}}"#).unwrap();
+
+    oxo_flow_cmd()
+        .args([
+            "provenance",
+            "diff",
+            dir.path().join("absent.json").to_str().unwrap(),
+            right.to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("failed to read checkpoint"));
+}
+
+// ---------------------------------------------------------------------------
 // clean --orphans tests
 // ---------------------------------------------------------------------------
 
