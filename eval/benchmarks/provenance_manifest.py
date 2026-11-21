@@ -122,6 +122,35 @@ _DOTTED_CONTEXT_KEYWORDS = frozenset(
         "snakemake", "nextflow", "§",
     }
 )
+# Statistical / measurement keywords (round-6 P3, PR #1307): these name a
+# quantity, never a location or version, so they must NEVER trigger the
+# zero-major ("0.x") reference suppression -- "p 0.5" and "p 0.9" are genuine
+# readings, while "version 0.2" / "section 0.1" stay suppressed.
+_MEASUREMENT_KEYWORDS = frozenset(
+    {
+        "p", "prob", "alpha", "beta", "power", "q", "fdr", "padj", "auc",
+        "r", "r2", "accuracy", "precision", "recall", "f1", "score", "rate",
+        "ratio",
+    }
+)
+# Abbreviated reference keywords (round-6 P2, PR #1307): a trailing period is
+# accepted as reference context ONLY for these curated abbreviations ("Fig.",
+# "Sec.", "pp.", "v."). A full lowercase word followed by "." is a SENTENCE
+# boundary, not a reference ("... the version. 1.5 participants" is a
+# measurement), so it must not be suppressed.
+#
+# Known lexical limitation (unfixable without parsing prose): a few entries
+# are ALSO ordinary English words -- "no" and "ref" -- so the sentence "The
+# answer was no. 3.5 samples" stays suppressed (read as the abbreviation
+# "No. 3.5"). Kept because "No. 3.1"/"Ref. 2.4" are the far more common
+# spelling in these design docs; the ambiguity is rare and fails closed in the
+# suppression direction only for those two tokens.
+_ABBREVIATION_KEYWORDS = frozenset(
+    {
+        "v", "ver", "sec", "secs", "fig", "figs", "tab", "ch", "no", "pp",
+        "eq", "ref",
+    }
+)
 # Units that, sitting immediately after a reference-like number, cancel the
 # "this is a section/figure reference" suppression: "1.4 ms" is a measurement,
 # not "section 1.4". Used only to refine the dotted-keyword guard, never to
@@ -193,9 +222,6 @@ def _preceded_by_dotted_keyword(line: str, start: int, end: int) -> bool:
             return False
         if major.lstrip("-") == "0" and len(frac) != 1:
             return False
-        # A reference may be followed by a comma or a clause ("see section 1.4,
-        # which describes it"); that does not make it a measurement, so the
-        # comma gate is deliberately NOT applied here.
     else:
         # A fraction ("4/5", "7/10") or any other match shape. Keep the round-4
         # rule so a step / part reference ("Step 4/5") stays suppressed while a
@@ -223,13 +249,25 @@ def _preceded_by_dotted_keyword(line: str, start: int, end: int) -> bool:
             break
         prefix = stripped[: range_match.start()]
     head = prefix.rstrip(" \t")
-    # The keyword may carry a trailing period ("Fig.", "Sec.", "pp.", "v.").
-    match = re.search(r"([A-Za-z§#]+)\.?$", head)
+    # The keyword may carry a trailing period ("Fig.", "Sec.", "pp.", "v."). That
+    # period is only reference context for a CURATED ABBREVIATION (round-6 P2):
+    # a full lowercase word ending a sentence ("... the version. 1.5", "...
+    # the table. 4.2") has a SENTENCE-ending period, not a reference, and must
+    # not suppress the following measurement.
+    match = re.search(r"([A-Za-z§#]+)(\.?)$", head)
     if not match:
         return False
     token = match.group(1).lower()
     if set(token) <= {"#"}:
         return True
+    if match.group(2) == "." and token not in _ABBREVIATION_KEYWORDS:
+        return False
+    # Measurement / statistical keywords ("p", "r", "q", ...) name a quantity,
+    # never a location or version, so they never suppress a reading (round-6
+    # P3): "p 0.5" / "p 0.9" are genuine readings, while the reference-noun
+    # keywords ("version 0.2", "section 0.1", "v0.8") still suppress.
+    if token in _MEASUREMENT_KEYWORDS:
+        return False
     return token in _DOTTED_CONTEXT_KEYWORDS
 
 

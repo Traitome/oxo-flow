@@ -266,6 +266,19 @@ class ProvenanceManifestTests(unittest.TestCase):
             "version 2.0 took 118.69 ms",
             # A bare decimal with no keyword at all is always a measurement.
             "latency 118.69 ms",
+            # Round-6 P3: statistical keywords name a quantity, never a
+            # location, so a single-digit zero-major reading is detected
+            # ("p 0.5"/"p 0.9"); only the reference-noun keywords suppress.
+            "p 0.5",
+            "p 0.9",
+            # Round-6 P2: a full lowercase word ending a SENTENCE ("... the
+            # appendix.") is a sentence boundary, not a reference context, so
+            # the measurement that starts the next sentence is detected.
+            "In the appendix. 2.5 million reads",
+            "as noted in the table. 4.2 samples",
+            "Check the version. 1.5 participants",
+            "the results for this phase. 3.1 of the cohort failed",
+            "at the end of this chapter. 3.5 samples dropped",
         ):
             self.assertTrue(report_has_measured_number(text), text)
 
