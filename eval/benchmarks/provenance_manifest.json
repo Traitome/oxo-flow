@@ -1,0 +1,48 @@
+{
+  "artifacts": {
+    "docs/superpowers/plans/cohort-scaling-report.md": {
+      "generator_command": "OXO_FLOW_BIN=target/release/oxo-flow python3 eval/benchmarks/cohort_driver.py --samples 10",
+      "host": {
+        "cpu": "Apple M3",
+        "logical_cores": 8,
+        "memory_bytes": 25769803776,
+        "os": "macOS 26.6.2 (25G83) / Darwin 25.6.0 arm64"
+      },
+      "inputs": [
+        {
+          "path": "target/release/oxo-flow",
+          "sha256": "81bf9bab8fb253b35f1f04575650c7ea573db878a9fd04957378c7788748809f"
+        }
+      ],
+      "note": "Pins the section 2 reproduction block. The section 1 row (118.69 ms) is UNPINNED and documented as such; it is not attributable to this commit.",
+      "source_commit": "e855fa6a71631237d5973041caf95664af23590d",
+      "tool_versions": {
+        "cargo": "1.98.0",
+        "python3": "3.12.4",
+        "rustc": "1.98.0 (88d9e12ae 2026-08-18)"
+      }
+    },
+    "docs/superpowers/plans/industrial-scientific-implementation-plan.md": {
+      "generator_command": "OXO_FLOW_AI_PROVIDER=openai OPENAI_BASE_URL=<provider-endpoint> OPENAI_API_KEY=<provider-key> OPENAI_MODEL=<model> python3 eval/frontier/fault_injection.py --binary target/release/oxo-flow --out-json eval/frontier/results/fault_repair_logs/live_summary.json",
+      "host": {
+        "cpu": "school-proxy GLM endpoint (model round-trips remote)",
+        "note": "GLM via school proxy, campaign date 2026-11-18",
+        "os": "Linux"
+      },
+      "inputs": [
+        {
+          "path": "eval/frontier/intents.json",
+          "sha256": "76136532e308464bed29827e001b6d894840c5d2e7bdd8925f24361bde75bd51"
+        }
+      ],
+      "note": "Pins the Round-2 seeded fault-injection row (7/10 proposals, 3/10 applied, 3/10 verified, 3/10 reruns). Attribution provenance only: the campaign numbers and their raw logs live in eval/frontier/PILOT_FINDINGS.md and are not re-derived here.",
+      "source_commit": "c72cb7e467ce8e106bbab4f029efb373bdb46e20",
+      "tool_versions": {
+        "oxo-flow": "0.32.0 (v0.32.0 + verified-repair loop, #1185/#1186/#1187)",
+        "python3": "3.12.4"
+      }
+    }
+  },
+  "description": "Provenance manifest for publication-facing artifacts under docs/superpowers/plans (#1305). Key-ordered; every scanned *.md document (minus the explicit DESIGN_DOC_OPTOUT list) that carries a measured number must have an entry here.",
+  "version": 1
+}
