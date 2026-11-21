@@ -1567,6 +1567,7 @@ mod scientific_preflight_tests {
             rule: rule.to_string(),
             message: message.to_string(),
             suggestion: "fix it".to_string(),
+            coercion_rule: None,
         }
     }
 

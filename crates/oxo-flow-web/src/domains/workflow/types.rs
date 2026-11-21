@@ -115,6 +115,10 @@ pub struct ValidationError {
     pub message: String,
     pub rule: Option<String>,
     pub suggestion: Option<String>,
+    /// Synthesized conversion command for a fixable BioTypes violation
+    /// (issue #1322). Omitted when the checker could not synthesize one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coercion_rule: Option<String>,
     /// 1-based source line when the error is a TOML syntax problem
     /// (issue #82 P2-8: editor highlights the failing line).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -359,6 +363,7 @@ mod tests {
                 message: "missing input".into(),
                 rule: Some("rule1".into()),
                 suggestion: Some("add input".into()),
+                coercion_rule: None,
                 line: Some(3),
             }],
             rules: 1,

@@ -224,6 +224,8 @@ The biological type system verifies formal format and coordination contracts acr
 
 `TYPE-001` .. `TYPE-007` are proven violations: they fail `oxo-flow validate` and abort `oxo-flow run` in preflight. `TYPE-008`, `TYPE-009`, and `TYPE-010` are **advisory** — they report an *unverifiable* edge (a missing or unpairable contract rather than a mismatch), surface as warnings (e.g. in the scientific preflight catalog), and never fail a run.
 
+When the checker synthesizes a concrete conversion command for a `TYPE-001`–`TYPE-007` violation, it is surfaced verbatim on the emitted diagnostic — as the `coercion_rule` field in JSON output (`validate --json`, `lint --json`) and as a labelled `coercion:` line in the human-readable output — alongside the prose remediation hint, so the suggested fix is directly runnable (issue #1322).
+
 ### Curated Scientific Preflight Catalog (`SCI-*`)
 
 Deterministic, evidence-backed rules covering genomics, transcriptomics, epigenomics, metagenomics, and DAG hardware execution.
