@@ -341,7 +341,7 @@ Content-Type: application/json
 
 {"pipeline_id": "...", "toml_content": "<TOML>", "base_dir": "inputs"}
 ```
-Returns `{ valid, errors: [{ code, message, rule, suggestion }] }`.
+Returns `{ valid, errors: [{ code, message, rule, suggestion, coercion_rule }] }`.
 `base_dir` (optional, for missing-input checks) must be relative (no
 `..`) and resolves inside the acting user's workspace.
 
@@ -379,7 +379,7 @@ Content-Type: application/json
 
 {"toml_content": "<TOML>"}
 ```
-Returns `{ valid, errors: [{ code, message, rule, suggestion }] }` — validation errors plus lint-level findings (e.g. missing description).
+Returns `{ valid, errors: [{ code, message, rule, suggestion, coercion_rule }] }` — validation errors plus lint-level findings (e.g. missing description).
 
 ### Stats
 ```

@@ -101,6 +101,7 @@ pub fn validate_pipeline(
                 message: "Workflow TOML is not valid TOML syntax".into(),
                 rule: None,
                 suggestion: Some("Fix the syntax error at the highlighted line".into()),
+                coercion_rule: None,
                 line: Some(line),
             }],
             rules: 0,
@@ -123,6 +124,7 @@ pub fn validate_pipeline(
             message: d.message.clone(),
             rule: d.rule.clone(),
             suggestion: d.suggestion.clone(),
+            coercion_rule: d.coercion_rule.clone(),
             line: None,
         })
         .collect();
@@ -135,6 +137,7 @@ pub fn validate_pipeline(
             line: None,
             rule: d.rule,
             suggestion: d.suggestion,
+            coercion_rule: d.coercion_rule,
         })
         .collect();
 
@@ -307,6 +310,7 @@ pub fn lint_workflow(toml_content: &str) -> Result<ValidateResponse, String> {
                 message: d.message,
                 rule: d.rule,
                 suggestion: d.suggestion,
+                coercion_rule: d.coercion_rule,
                 line: None,
             })
             .collect(),

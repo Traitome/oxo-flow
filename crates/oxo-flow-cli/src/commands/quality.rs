@@ -93,6 +93,7 @@ pub async fn validate_command(
                             rule: Some(w.rule),
                             code: w.code,
                             suggestion: Some(w.suggestion),
+                            coercion_rule: None,
                         }),
                 );
             }
@@ -113,6 +114,7 @@ pub async fn validate_command(
                             "message": d.message,
                             "rule": d.rule,
                             "suggestion": d.suggestion,
+                            "coercion_rule": d.coercion_rule,
                         }));
                     } else {
                         eprintln!("  {} [{}]: {}", "error".red().bold(), d.code, d.message);
@@ -121,6 +123,9 @@ pub async fn validate_command(
                         }
                         if let Some(ref suggestion) = d.suggestion {
                             eprintln!("    hint: {}", suggestion);
+                        }
+                        if let Some(ref coercion) = d.coercion_rule {
+                            eprintln!("    coercion: {}", coercion);
                         }
                     }
                 } else if d.code == "W042" {
@@ -188,6 +193,7 @@ pub async fn validate_command(
                                         "message": d.message,
                                         "rule": d.rule,
                                         "suggestion": d.suggestion,
+                                        "coercion_rule": d.coercion_rule,
                                     })
                                 })
                                 .collect();
@@ -228,6 +234,7 @@ pub async fn validate_command(
                             "message": d.message,
                             "rule": d.rule,
                             "suggestion": d.suggestion,
+                            "coercion_rule": d.coercion_rule,
                         })
                     })
                     .collect();
@@ -434,6 +441,9 @@ pub async fn lint_command(workflow: PathBuf, strict: bool, json: bool, ai: bool)
         if let Some(ref suggestion) = d.suggestion {
             eprintln!("    hint: {}", suggestion);
         }
+        if let Some(ref coercion) = d.coercion_rule {
+            eprintln!("    coercion: {}", coercion);
+        }
     }
 
     eprintln!(
@@ -459,6 +469,7 @@ pub async fn lint_command(workflow: PathBuf, strict: bool, json: bool, ai: bool)
                     "message": d.message,
                     "rule": d.rule,
                     "suggestion": d.suggestion,
+                    "coercion_rule": d.coercion_rule,
                 })
             })
             .collect();
