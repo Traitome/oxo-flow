@@ -15,6 +15,7 @@ use crate::commands::batch::batch_command;
 use crate::commands::clean::clean_command;
 use crate::commands::cluster::cluster_command;
 use crate::commands::completions::handle_completions;
+use crate::commands::diagnostics::{DiagnosticsAction, diagnostics_command};
 use crate::commands::info::info_command;
 use crate::commands::infra::{env_command, handle_license};
 use crate::commands::knowledge::{KnowledgeAction, knowledge_command};
@@ -72,8 +73,8 @@ pub struct Cli {
 
     /// Output machine-readable JSON to stdout (human-readable logs stay on stderr).
     /// Implemented by run, dry-run, validate, lint, test, status, wait, batch,
-    /// info, knowledge, schema, verify-data, license, provenance verify, ai,
-    /// runs gc, and the cluster status/cancel/logs monitors;
+    /// info, knowledge, diagnostics, schema, verify-data, license, provenance
+    /// verify, ai, runs gc, and the cluster status/cancel/logs monitors;
     /// every other command rejects the flag instead of silently ignoring it.
     /// For info and knowledge, an explicit `--format text` takes precedence
     /// over `--json`.
@@ -446,6 +447,18 @@ pub enum Commands {
     Knowledge {
         #[command(subcommand)]
         action: KnowledgeAction,
+        #[arg(
+            long,
+            value_name = "FORMAT",
+            global = true,
+            help = "Output format: json (default, machine-readable on stdout) or text (human-readable summary)"
+        )]
+        format: Option<String>,
+    },
+    /// List the diagnostic catalogs (runtime failure patterns + SCI-* rules).
+    Diagnostics {
+        #[command(subcommand)]
+        action: DiagnosticsAction,
         #[arg(
             long,
             value_name = "FORMAT",
@@ -1349,6 +1362,7 @@ fn json_supported(command: &Commands) -> bool {
         | Commands::Batch { .. }
         | Commands::Info { .. }
         | Commands::Knowledge { .. }
+        | Commands::Diagnostics { .. }
         | Commands::Schema
         | Commands::License { .. }
         | Commands::Ai { .. } => true,
@@ -1510,7 +1524,7 @@ async fn main() -> Result<()> {
             "`oxo-flow {name}` does not support --json yet{hint}.\n  \
              Drop --json to run it normally, or use a command whose JSON \
              document is implemented (run, dry-run, validate, lint, test, \
-             status, wait, batch, info, knowledge, schema, license, ai, \
+             status, wait, batch, info, knowledge, diagnostics, schema, license, ai, \
              provenance verify, verify-data, runs gc, cluster \
              status/cancel/logs)."
         );
@@ -1877,6 +1891,7 @@ async fn main() -> Result<()> {
             crate::commands::import::handle_import(&source, parsed_from, output.as_deref())?;
         }
         Commands::Knowledge { action, format } => knowledge_command(action, format)?,
+        Commands::Diagnostics { action, format } => diagnostics_command(action, format)?,
         Commands::Init {
             name,
             dir,
