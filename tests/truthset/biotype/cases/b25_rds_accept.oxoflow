@@ -1,0 +1,24 @@
+# B25 — format-coverage accept control (rds). A serialized R object (Seurat /
+# DESeq2 result) is round-tripped between two rds steps. rds has no coercion
+# arm, so the honest compatible case is a same-format pair.
+# Derivation: format enum variant Rds ("rds") driven on both sides.
+#
+# EXPECTED: accept — no TYPE diagnostic.
+
+[workflow]
+name = "b25"
+
+[[rules]]
+name = "fit_deseq"
+output = ["dds.rds"]
+shell = "Rscript -e 'saveRDS(1, \"dds.rds\")'"
+[rules.types]
+outputs = { default = "RDS" }
+
+[[rules]]
+name = "extract_results"
+input = ["dds.rds"]
+output = ["results.tsv"]
+shell = "Rscript -e 'write.table(readRDS(\"dds.rds\"), \"results.tsv\")'"
+[rules.types]
+inputs = { default = "RDS" }

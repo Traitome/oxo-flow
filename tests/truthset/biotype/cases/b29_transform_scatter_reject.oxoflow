@@ -1,0 +1,45 @@
+# B29 — transform.* scatter/combine GENERATED rule drives a typed edge (reject).
+# A scatter/combine variant-calling rule declares its merged output type as
+# VCF[sort_order=coordinate]; a downstream consumer mistakenly expects BAM.
+# On `validate` the AUTHORED rule (scatter_call) and its declared `[rules.types]
+# outputs` drive the typed edge; on `dry-run` the GENERATED rules
+# (scatter_call_chr1 / scatter_call_chr2 / scatter_call_combine) surface with the
+# same TYPE-001. Distinct format variants, no coercion arm ⇒ TYPE-001.
+# Derivation: transform-scattered typed edge, Vcf producer vs Bam consumer ⇒ TYPE-001.
+#
+# EXPECTED: reject — TYPE-001.
+
+[workflow]
+name = "b29"
+
+[config]
+chromosomes = ["chr1", "chr2"]
+
+[[rules]]
+name = "scatter_call"
+input = ["sample.bam"]
+output = ["calls.vcf.gz"]
+shell = "custom -o {output} {input}"
+
+[rules.types]
+inputs = { default = "BAM" }
+outputs = { default = "VCF[sort_order=coordinate]" }
+
+[rules.transform.split]
+by = "chr"
+values_from = "config.chromosomes"
+
+[rules.transform]
+map = "call -L {chr} -o {output} {input}"
+
+[rules.transform.combine]
+shell = "merge {chunks} -o {output}"
+
+[[rules]]
+name = "consume"
+input = ["calls.vcf.gz"]
+output = ["final.txt"]
+shell = "consume {input} > {output}"
+
+[rules.types]
+inputs = { default = "BAM" }

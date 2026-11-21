@@ -1,0 +1,24 @@
+# B23 — format-coverage accept control (h5ad). A single-cell AnnData matrix
+# produced by a scanpy normalize step feeds an h5ad consumer. h5ad has no
+# coercion arm, so the honest compatible case is a same-format pair.
+# Derivation: format enum variant H5ad ("h5ad") driven on both sides.
+#
+# EXPECTED: accept — no TYPE diagnostic.
+
+[workflow]
+name = "b23"
+
+[[rules]]
+name = "normalize_h5ad"
+output = ["normalized.h5ad"]
+shell = "python -c 'import scanpy as sc; sc.pp.normalize_total(sc.read_h5ad(\"raw.h5ad\"))'"
+[rules.types]
+outputs = { default = "H5AD" }
+
+[[rules]]
+name = "cluster"
+input = ["normalized.h5ad"]
+output = ["clustered.h5ad"]
+shell = "python -c 'import scanpy as sc; sc.pp.neighbors(sc.read_h5ad(\"normalized.h5ad\"))'"
+[rules.types]
+inputs = { default = "H5AD" }

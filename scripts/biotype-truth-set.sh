@@ -3,14 +3,18 @@
 # validation surface and print a 2x2 confusion matrix plus a diagnostic-code
 # cross-check (#1262, broadened by #1163).
 #
-# Truth set (42 cases):
-#   * 35 typed/adversarial cases under tests/truthset/biotype/cases/
+# Truth set (53 cases):
+#   * 46 typed/adversarial cases under tests/truthset/biotype/cases/
 #     (t01..t06 hand-authored adversarial edges modelled on the Nextflow/
 #      Snakemake import-fixture format edges — only t01/t06 track edges
 #      literally present in rnaseq.ok.nf; a06..a14 hand-authored adversarial
 #      probes at the TYPE-code boundaries; b01..b20 the #1163 breadth wave,
 #      each authored from the published contract (schema/spec/TYPE-* catalogue)
-#      rather than from the checker source).
+#      rather than from the checker source; b21..b28 the #1292 format-coverage
+#      wave driving the previously-undriven BioFormat variants gff3/h5ad/rds/
+#      parquet/tsv; b29..b30 drive a transform.* scatter/combine GENERATED typed
+#      edge; b31 drives a type contributed across an [[include]] boundary — its
+#      included fixture incmod_grch38.oxoflow has no EXPECT row of its own).
 #   * 7 real repository .oxoflow files under examples/gallery/ that were
 #     NOT written for the checker (all untyped, expected accept).
 #
@@ -94,6 +98,17 @@ tests/truthset/biotype/cases/b17_genuinely_unpaired_advisory.oxoflow	accept	TYPE
 tests/truthset/biotype/cases/b18_cram_implied_bgzip.oxoflow	reject	TYPE-006	plain CRAM -> CRAM[compression=bgzip] (CRAM is NOT BGZF)
 tests/truthset/biotype/cases/b19_build_incomplete_advisory.oxoflow	accept	TYPE-009	producer names no build, consumer names GRCh38 (advisory TYPE-009)
 tests/truthset/biotype/cases/b20_unsorted_consumer_accept.oxoflow	accept	-	coordinate BAM -> sort_order=unsorted consumer (no ordering constraint)
+tests/truthset/biotype/cases/b21_gff3_accept.oxoflow	accept	-	GFF3 -> GFF3 consumer (#1292 format coverage: gff3 variant)
+tests/truthset/biotype/cases/b22_gff3_to_gtf_consumer.oxoflow	reject	TYPE-001	GFF3 producer -> GTF consumer (format boundary, no coercion arm)
+tests/truthset/biotype/cases/b23_h5ad_accept.oxoflow	accept	-	H5AD -> H5AD consumer (#1292 format coverage: h5ad variant)
+tests/truthset/biotype/cases/b24_h5ad_to_parquet_consumer.oxoflow	reject	TYPE-001	H5AD producer -> PARQUET consumer (format boundary, no coercion arm)
+tests/truthset/biotype/cases/b25_rds_accept.oxoflow	accept	-	RDS -> RDS consumer (#1292 format coverage: rds variant)
+tests/truthset/biotype/cases/b26_rds_to_tsv_consumer.oxoflow	reject	TYPE-001	RDS producer -> TSV consumer (format boundary, no coercion arm)
+tests/truthset/biotype/cases/b27_parquet_accept.oxoflow	accept	-	PARQUET -> PARQUET consumer (#1292 format coverage: parquet variant)
+tests/truthset/biotype/cases/b28_tsv_accept.oxoflow	accept	-	TSV -> TSV consumer (#1292 format coverage: tsv variant)
+tests/truthset/biotype/cases/b29_transform_scatter_reject.oxoflow	reject	TYPE-001	transform.* scatter/combine GENERATED edge: VCF out vs BAM consumer (TYPE-001)
+tests/truthset/biotype/cases/b30_transform_scatter_accept.oxoflow	accept	-	transform.* scatter/combine GENERATED edge matching contract (#1292 control)
+tests/truthset/biotype/cases/b31_include_contributed_type.oxoflow	reject	TYPE-004	include-contributed type GRCh38 -> consumer GRCh37 (include boundary)
 examples/gallery/13_simple_variant_calling.oxoflow	accept	-	real repo example, untyped
 examples/gallery/06_rnaseq_quantification.oxoflow	accept	-	real repo example, untyped
 examples/gallery/09_single_cell_rnaseq.oxoflow	accept	-	real repo example, untyped

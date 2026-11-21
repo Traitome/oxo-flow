@@ -196,6 +196,75 @@ const CASES: &[Case] = &[
         expect_code: Some("TYPE-009"),
         accept: true,
     },
+    // --- #1292 format coverage: gff3/h5ad/rds/parquet/tsv --------------------
+    // These BioFormat variants have no coercion arm in the checker, so the
+    // honest compatible case is a same-format pair; the cross-format pair is
+    // the rejecting direction. Both are driven here so the format enum is no
+    // longer under-tested.
+    Case {
+        name: "type_001_format_accept_gff3",
+        types_block: "",
+        producer_ref: Some("GFF3"),
+        consumer_ref: Some("GFF3"),
+        expect_code: None,
+        accept: true,
+    },
+    Case {
+        name: "type_001_format_reject_gff3_to_gtf",
+        types_block: "",
+        producer_ref: Some("GFF3"),
+        consumer_ref: Some("GTF"),
+        expect_code: Some("TYPE-001"),
+        accept: false,
+    },
+    Case {
+        name: "type_001_format_accept_h5ad",
+        types_block: "",
+        producer_ref: Some("H5AD"),
+        consumer_ref: Some("H5AD"),
+        expect_code: None,
+        accept: true,
+    },
+    Case {
+        name: "type_001_format_reject_h5ad_to_parquet",
+        types_block: "",
+        producer_ref: Some("H5AD"),
+        consumer_ref: Some("PARQUET"),
+        expect_code: Some("TYPE-001"),
+        accept: false,
+    },
+    Case {
+        name: "type_001_format_accept_rds",
+        types_block: "",
+        producer_ref: Some("RDS"),
+        consumer_ref: Some("RDS"),
+        expect_code: None,
+        accept: true,
+    },
+    Case {
+        name: "type_001_format_reject_rds_to_tsv",
+        types_block: "",
+        producer_ref: Some("RDS"),
+        consumer_ref: Some("TSV"),
+        expect_code: Some("TYPE-001"),
+        accept: false,
+    },
+    Case {
+        name: "type_001_format_accept_parquet",
+        types_block: "",
+        producer_ref: Some("PARQUET"),
+        consumer_ref: Some("PARQUET"),
+        expect_code: None,
+        accept: true,
+    },
+    Case {
+        name: "type_001_format_accept_tsv",
+        types_block: "",
+        producer_ref: Some("TSV"),
+        consumer_ref: Some("TSV"),
+        expect_code: None,
+        accept: true,
+    },
 ];
 
 /// Render a two-rule workflow: `producer` emits `stage.bam`, `consumer` reads
@@ -742,4 +811,98 @@ fn satisfies_spec_and_is_subtype_of_agree_on_every_pair() {
         }
     }
     assert_eq!(pairs, 4 * 5 * 3 * 3 * expected_specs().len());
+}
+
+// --- Issue #1292: construct-driven typed edges (transform + include) ---------
+
+/// Truth-set b29/b30: a `transform.*` scatter/combine rule creates a typed edge
+/// whose contract is declared on the AUTHORED rule's `[rules.types] outputs`.
+/// This pins that the checker drives the edge from the authored rule's declared
+/// types (the generated scatter/map/combine rules only exist after
+/// `expand_wildcards`, so the un-expanded admission surface must already
+/// validate the contract). Reject direction: declared `VCF[sort_order=coordinate]`
+/// vs a `BAM` consumer ⇒ TYPE-001; accept direction: matching contract ⇒ clean.
+#[test]
+fn issue_1292_transform_scatter_drives_typed_edge() {
+    let reject = "\
+[workflow]\nname = \"transform_reject\"\n\n\
+[config]\nchromosomes = [\"chr1\", \"chr2\"]\n\n\
+[[rules]]\nname = \"scatter_call\"\ninput = [\"sample.bam\"]\noutput = [\"calls.vcf.gz\"]\nshell = \"custom -o {output} {input}\"\n\
+[rules.types]\ninputs = { default = \"BAM\" }\noutputs = { default = \"VCF[sort_order=coordinate]\" }\n\n\
+[rules.transform.split]\nby = \"chr\"\nvalues_from = \"config.chromosomes\"\n\n\
+[rules.transform]\nmap = \"call -L {chr} -o {output} {input}\"\n\n\
+[rules.transform.combine]\nshell = \"merge {chunks} -o {output}\"\n\n\
+[[rules]]\nname = \"consume\"\ninput = [\"calls.vcf.gz\"]\noutput = [\"final.txt\"]\nshell = \"consume {input} > {output}\"\n\
+[rules.types]\ninputs = { default = \"BAM\" }\n";
+    let (config, dag) = compile_toml(reject);
+    let diagnostics = check_workflow_types(&config, &dag);
+    assert!(
+        diagnostics.iter().any(|d| d.violation.code == "TYPE-001"),
+        "transform scatter edge VCF vs BAM consumer must be TYPE-001: {diagnostics:?}"
+    );
+    assert!(!validate_workflow_types(&config, &dag).is_ok());
+
+    // Accept control (b30): the consumer declares the same
+    // VCF[sort_order=coordinate] contract across the scatter/combine boundary,
+    // so the transform-driven edge is fully satisfied.
+    let accept = "\
+[workflow]\nname = \"transform_accept\"\n\n\
+[config]\nchromosomes = [\"chr1\", \"chr2\"]\n\n\
+[[rules]]\nname = \"scatter_call\"\ninput = [\"sample.bam\"]\noutput = [\"calls.vcf.gz\"]\nshell = \"custom -o {output} {input}\"\n\
+[rules.types]\ninputs = { default = \"BAM\" }\noutputs = { default = \"VCF[sort_order=coordinate]\" }\n\n\
+[rules.transform.split]\nby = \"chr\"\nvalues_from = \"config.chromosomes\"\n\n\
+[rules.transform]\nmap = \"call -L {chr} -o {output} {input}\"\n\n\
+[rules.transform.combine]\nshell = \"merge {chunks} -o {output}\"\n\n\
+[[rules]]\nname = \"consume\"\ninput = [\"calls.vcf.gz\"]\noutput = [\"final.txt\"]\nshell = \"consume {input} > {output}\"\n\
+[rules.types]\ninputs = { default = \"VCF[sort_order=coordinate]\" }\n";
+    let (config, dag) = compile_toml(accept);
+    let diagnostics = check_workflow_types(&config, &dag);
+    assert!(
+        diagnostics.is_empty(),
+        "transform scatter edge with matching contract must accept: {diagnostics:?}"
+    );
+    assert!(validate_workflow_types(&config, &dag).is_ok());
+}
+
+/// Truth-set b31: a type contributed by an INCLUDED module propagates across
+/// the `[[include]]` boundary and drives the downstream typed edge. The
+/// producing rule lives in a separate file whose inline `[rules.types] outputs`
+/// declares `GTF[reference_build=GRCh38]`; the including workflow's consumer
+/// expects `GTF[reference_build=GRCh37]` ⇒ TYPE-004. Uses `from_file` (the only
+/// surface that resolves includes) against a temp dir.
+#[test]
+fn issue_1292_include_contributed_type_drives_edge() {
+    use std::io::Write;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let module = dir.path().join("incmod_grch38.oxoflow");
+    std::fs::File::create(&module)
+        .and_then(|mut f| {
+            f.write_all(
+                b"[workflow]\nname = \"incmod_grch38\"\n\n\
+[[rules]]\nname = \"produce_gtf\"\noutput = [\"genes.gtf\"]\nshell = \"make-gtf > genes.gtf\"\n\
+[rules.types]\noutputs = { default = \"GTF[reference_build=GRCh38]\" }\n",
+            )
+        })
+        .expect("write module");
+    let main = dir.path().join("main.oxoflow");
+    std::fs::File::create(&main)
+        .and_then(|mut f| {
+            f.write_all(
+                b"[workflow]\nname = \"include_main\"\n\n\
+[[include]]\npath = \"incmod_grch38.oxoflow\"\n\n\
+[[rules]]\nname = \"consume_gtf\"\ninput = [\"genes.gtf\"]\noutput = [\"counts.txt\"]\nshell = \"count {input} > {output}\"\n\
+[rules.types]\ninputs = { default = \"GTF[reference_build=GRCh37]\" }\n",
+            )
+        })
+        .expect("write main");
+
+    let config = WorkflowConfig::from_file(&main).expect("main must parse with its include");
+    let dag = WorkflowDag::from_rules(&config.rules).expect("merged DAG");
+    let diagnostics = check_workflow_types(&config, &dag);
+    assert!(
+        diagnostics.iter().any(|d| d.violation.code == "TYPE-004"),
+        "include-contributed GRCh38 GTF vs GRCh37 consumer must be TYPE-004: {diagnostics:?}"
+    );
+    assert!(!validate_workflow_types(&config, &dag).is_ok());
 }

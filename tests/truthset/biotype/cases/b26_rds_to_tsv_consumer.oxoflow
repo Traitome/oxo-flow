@@ -1,0 +1,24 @@
+# B26 — format-coverage reject (rds vs tsv). A serialized R object is fed to a
+# consumer expecting a flat TSV table. Distinct enum variants, no coercion arm
+# ⇒ TYPE-001.
+# Derivation: Rds producer vs Tsv consumer, no coercion ⇒ TYPE-001.
+#
+# EXPECTED: reject — TYPE-001.
+
+[workflow]
+name = "b26"
+
+[[rules]]
+name = "make_rds"
+output = ["counts.rds"]
+shell = "Rscript -e 'saveRDS(1, \"counts.rds\")'"
+[rules.types]
+outputs = { default = "RDS" }
+
+[[rules]]
+name = "read_tsv"
+input = ["counts.rds"]
+output = ["parsed.tsv"]
+shell = "parse counts.rds > parsed.tsv"
+[rules.types]
+inputs = { default = "TSV" }

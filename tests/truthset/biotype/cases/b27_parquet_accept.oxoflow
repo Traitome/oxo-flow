@@ -1,0 +1,24 @@
+# B27 — format-coverage accept control (parquet). A columnar parquet table
+# (e.g. an Arrow-interchange summary) feeds a parquet consumer. parquet has no
+# coercion arm, so the honest compatible case is a same-format pair.
+# Derivation: format enum variant Parquet ("parquet") driven on both sides.
+#
+# EXPECTED: accept — no TYPE diagnostic.
+
+[workflow]
+name = "b27"
+
+[[rules]]
+name = "write_parquet"
+output = ["summary.parquet"]
+shell = "python -c 'import pandas as pd; pd.DataFrame().to_parquet(\"summary.parquet\")'"
+[rules.types]
+outputs = { default = "PARQUET" }
+
+[[rules]]
+name = "read_parquet"
+input = ["summary.parquet"]
+output = ["report.txt"]
+shell = "python -c 'import pandas as pd; print(pd.read_parquet(\"summary.parquet\"))' > report.txt"
+[rules.types]
+inputs = { default = "PARQUET" }
