@@ -1,0 +1,106 @@
+# Real-tool failure-tail corpus for the 31-pattern runtime diagnostics engine.
+# Each block: a `# intended=<pattern_id> exit=<code>` header, blank-line separated,
+# followed by a realistic multi-line stderr/stdout tail harvested (and trimmed)
+# from STAR/BWA/samtools/GATK/conda/docker/etc. output. A positive block MUST fire
+# its intended pattern. See crates/oxo-flow-core/tests/diagnostic_corpus.rs.
+
+# intended=command_not_found exit=127
+/workflow/scripts/quant.sh: line 12: multiqc: command not found
+
+# intended=segfault exit=139
+[E::hts_open_format] Failed to open file "sample.bam" : Success
+Segmentation fault (core dumped)
+
+# intended=illegal_instruction exit=132
+[main] Starting alignment against GRCh38
+Illegal instruction (core dumped)
+
+# intended=bus_error exit=138
+[main] Reading from /mnt/scratch/sample.bam
+Bus error (core dumped)
+
+# intended=tool_version_mismatch exit=1
+ERROR: incompatible library version: libhts requires 1.15, found 1.10
+
+# intended=oom_killed exit=137
+[main] Sorting 120000000 reads
+Killed process 41234 (sort) total-vm:8892100kB, anon-rss:7891234kB
+
+# intended=timeout exit=124
+[main] Mapping reads against GRCh38
+Command timed out after 7200 seconds
+
+# intended=disk_full exit=1
+Writing output VCF
+OSError: [Errno 28] No space left on device
+
+# intended=cpu_limit exit=1
+[main] Running variant calling
+CPU time limit exceeded, terminating the process
+
+# intended=ulimit exit=1
+samtools sort: too many open files while sorting sample.bam
+
+# intended=file_not_found exit=1
+samtools view: failed to open "sample.bam": No such file or directory
+
+# intended=truncated_file exit=1
+gzip: stdin: unexpected end of file
+
+# intended=empty_file exit=1
+Error: input FASTQ file is empty: sample_R1.fastq
+
+# intended=low_quality_fastq exit=1
+>>Per base sequence quality	FAIL
+
+# intended=gzip_corrupt exit=1
+gzip: stdin: invalid compressed data--format violated
+
+# intended=bam_truncated exit=1
+[E::bgzf_read_block] Read failed: EOF marker is absent. The input is probably truncated
+
+# intended=permission_denied exit=126
+bash: /workflow/scripts/picard.sh: Permission denied
+
+# intended=broken_pipe exit=141
+samtools view: error writing to stdout: Broken pipe
+
+# intended=network_error exit=1
+curl: (7) Failed to connect to ftp.ensembl.org port 21 after 5001 ms: Couldn't connect to server
+
+# intended=signal_kill exit=143
+slurmstepd: Job 123 on node01 terminated by signal 15
+
+# intended=signal_interrupt exit=130
+KeyboardInterrupt
+
+# intended=shared_library exit=127
+/opt/conda/envs/rnaseq/bin/STAR: error while loading shared libraries: libhts.so.2: cannot open shared object file: No such file or directory
+
+# intended=invalid_param exit=1
+fastqc: unrecognized option '--threads=4'
+
+# intended=missing_required_param exit=1
+usage: bwa mem [opts] <idx> <in1> [in2]
+bwa: error: the following arguments are required: idxbase
+
+# intended=wildcard_empty exit=1
+Error: No files found matching pattern: results/{sample}.bam
+
+# intended=unbound_wildcard exit=1
+output pattern 'results/{sample}/out.bam' contains unbound wildcard {sample} for this instance
+
+# intended=conda_env_fail exit=1
+CondaError: Cannot link a source that already exists
+
+# intended=docker_fail exit=125
+docker: Error response from daemon: pull access denied for foo/bar, repository does not exist
+
+# intended=singularity_fail exit=255
+FATAL:   image not found: /containers/bwa.sif
+
+# intended=shell_syntax exit=2
+/bin/bash: -c: line 3: syntax error near unexpected token `fi'
+
+# intended=bam_index_missing exit=1
+[E::idx_find_and_load] Could not retrieve index file for 'sample.bam'

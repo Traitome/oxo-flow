@@ -1,0 +1,10 @@
+# Near-miss / mention-only lines: realistic outputs that mention error
+# vocabulary but are NOT the intended failure. Documentation only — not
+# parsed into the asserted confusion matrix; it bounds what a future negative
+# fixture set should cover. See crates/oxo-flow-core/tests/diagnostic_corpus.rs.
+
+[main] Version check: using latest available version 2.7.11b (no update needed)
+--- retry 1/3 after transient error ---
+Note: this tool requires at least 8 GB of memory; 16 GB recommended
+The command finished within the 3600 second timeout budget
+Using 4 threads; you can raise this value if speed matters
