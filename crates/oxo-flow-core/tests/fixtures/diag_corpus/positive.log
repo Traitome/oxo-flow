@@ -1,106 +1,163 @@
 # Real-tool failure-tail corpus for the 31-pattern runtime diagnostics engine.
-# Each block: a `# intended=<pattern_id> exit=<code>` header, blank-line separated,
-# followed by a realistic multi-line stderr/stdout tail harvested (and trimmed)
-# from STAR/BWA/samtools/GATK/conda/docker/etc. output. A positive block MUST fire
-# its intended pattern. See crates/oxo-flow-core/tests/diagnostic_corpus.rs.
+# Each block: a ``# intended=<pattern_id> exit=<code>`` header, blank-line
+# separated, followed by a realistic multi-line stderr/stdout tail as a real
+# failed rule emits it (tool banner/prelude + the decisive failure line +
+# trailing shell/scheduler context). Every block is multi-line: the pattern's
+# text appears *inside* surrounding tool output. For a few signals whose real
+# signature genuinely IS one kernel/shell line (e.g. "Illegal instruction
+# (core dumped)", "KeyboardInterrupt"), that decisive line is kept verbatim
+# but is no longer the whole block: it is wrapped in the tool output that
+# really surrounds it. A positive block MUST fire its intended pattern.
+# See crates/oxo-flow-core/tests/diagnostic_corpus.rs.
 
 # intended=command_not_found exit=127
+[2026-11-21 10:00:00] [quant] aggregation stage
 /workflow/scripts/quant.sh: line 12: multiqc: command not found
+[2026-11-21 10:00:00] [quant] rule exited with status 127
 
 # intended=segfault exit=139
 [E::hts_open_format] Failed to open file "sample.bam" : Success
+[main_samview] fail to open "sample.bam" for reading
 Segmentation fault (core dumped)
 
 # intended=illegal_instruction exit=132
 [main] Starting alignment against GRCh38
+[main] Loading genome index from /ref/STARindex
 Illegal instruction (core dumped)
 
 # intended=bus_error exit=138
 [main] Reading from /mnt/scratch/sample.bam
+[M::bam_read] reading 1000000 records
 Bus error (core dumped)
 
 # intended=tool_version_mismatch exit=1
+[E::hts_check_errors] HTSlib runtime sanity check failed
 ERROR: incompatible library version: libhts requires 1.15, found 1.10
+picard: exited with 1
 
 # intended=oom_killed exit=137
-[main] Sorting 120000000 reads
+[main] Sorting 120000000 reads with 8 threads
+samtools sort: out of memory allocating 8.00 GB
 Killed process 41234 (sort) total-vm:8892100kB, anon-rss:7891234kB
 
 # intended=timeout exit=124
 [main] Mapping reads against GRCh38
+[main] 45% of reads processed
+slurmstepd: error: *** JOB 123 ON node01 CANCELLED AT 2026-11-21T12:00:00 DUE TO TIME LIMIT ***
 Command timed out after 7200 seconds
 
 # intended=disk_full exit=1
-Writing output VCF
+Writing output VCF to /scratch/results/sample.vcf.gz
+[bcf_sync] error writing compressed record
 OSError: [Errno 28] No space left on device
 
 # intended=cpu_limit exit=1
-[main] Running variant calling
+[main] Running variant calling on sample.bam
+slurmstepd: error: *** JOB 456 ON node02 CANCELLED AT 2026-11-21T13:00:00 DUE TO CPU TIME LIMIT ***
 CPU time limit exceeded, terminating the process
 
 # intended=ulimit exit=1
+samtools sort -@ 8 -m 2G -o sample.sorted.bam sample.bam
+[E::bam_sort_core] failed to create temporary file in /tmp
 samtools sort: too many open files while sorting sample.bam
 
 # intended=file_not_found exit=1
+samtools view -b -o alignments.bam sample.bam
+[main_samview] fail to open "sample.bam" for reading
 samtools view: failed to open "sample.bam": No such file or directory
 
 # intended=truncated_file exit=1
+gzip -dc reads.fq.gz | head -n 400000
+Read 285714 records before the stream ended
 gzip: stdin: unexpected end of file
 
 # intended=empty_file exit=1
-Error: input FASTQ file is empty: sample_R1.fastq
+fastp --in1 sample_R1.fastq --in2 sample_R2.fastq --out1 clean_R1.fastq
+[fastp] reading 0 reads from sample_R1.fastq
+ERROR: input FASTQ file is empty: sample_R1.fastq
 
 # intended=low_quality_fastq exit=1
+fastqc --threads 4 sample_R1.fastq
+Started analysis of sample_R1.fastq
 >>Per base sequence quality	FAIL
 
 # intended=gzip_corrupt exit=1
+samtools view sample.bam
+[E::hts_open] failed to read block header from sample.bam
 gzip: stdin: invalid compressed data--format violated
 
 # intended=bam_truncated exit=1
+samtools index -@ 4 sample.bam
 [E::bgzf_read_block] Read failed: EOF marker is absent. The input is probably truncated
+samtools index: failed to index sample.bam
 
 # intended=permission_denied exit=126
-bash: /workflow/scripts/picard.sh: Permission denied
+picard MarkDuplicates INPUT=sample.sorted.bam OUTPUT=sample.dedup.bam
+/workflow/scripts/picard.sh: line 3: /opt/picard/picard.jar: Permission denied
 
 # intended=broken_pipe exit=141
+samtools view -b sample.bam | samtools sort -o sample.sorted.bam
+[main_samview] fail to write to stdout
 samtools view: error writing to stdout: Broken pipe
 
 # intended=network_error exit=1
+curl -fsSL -o Homo_sapiens.GRCh38.fa.gz ftp://ftp.ensembl.org/pub/release-110/fa
 curl: (7) Failed to connect to ftp.ensembl.org port 21 after 5001 ms: Couldn't connect to server
 
 # intended=signal_kill exit=143
+slurmstepd: error: *** JOB 123 ON node01 CANCELLED AT 2026-11-21T12:00:00 ***
 slurmstepd: Job 123 on node01 terminated by signal 15
 
 # intended=signal_interrupt exit=130
+Traceback (most recent call last):
+  File "/workflow/scripts/quant.py", line 42, in <module>
+    main()
 KeyboardInterrupt
 
 # intended=shared_library exit=127
+/opt/conda/envs/rnaseq/bin/STAR --runThreadN 8 --genomeDir ref --readFilesIn R1.fq.gz
 /opt/conda/envs/rnaseq/bin/STAR: error while loading shared libraries: libhts.so.2: cannot open shared object file: No such file or directory
 
 # intended=invalid_param exit=1
+fastqc --threads=4 sample_R1.fastq
 fastqc: unrecognized option '--threads=4'
+Run 'fastqc --help' for usage.
 
 # intended=missing_required_param exit=1
+bwa mem reads_R1.fq.gz reads_R2.fq.gz
 usage: bwa mem [opts] <idx> <in1> [in2]
 bwa: error: the following arguments are required: idxbase
 
 # intended=wildcard_empty exit=1
+[expand] resolving input pattern results/{sample}.bam
+[expand] 0 files matched in results/
 Error: No files found matching pattern: results/{sample}.bam
 
 # intended=unbound_wildcard exit=1
+[plan] fan-out rule quant for instance sample_A
 output pattern 'results/{sample}/out.bam' contains unbound wildcard {sample} for this instance
 
 # intended=conda_env_fail exit=1
+conda create -n rnaseq python=3.11 -y
+Solving environment: failed with initial frozen solve.
 CondaError: Cannot link a source that already exists
 
 # intended=docker_fail exit=125
+docker run --rm -v /data:/data foo/bar:latest fastqc /data/sample_R1.fastq
+Unable to find image 'foo/bar:latest' locally
 docker: Error response from daemon: pull access denied for foo/bar, repository does not exist
 
 # intended=singularity_fail exit=255
+singularity exec -B /data:/data /containers/bwa.sif bwa mem ref.fa R1.fq.gz R2.fq.gz
+FATAL:   container creation failed: open /containers/bwa.sif: no such file or directory
 FATAL:   image not found: /containers/bwa.sif
 
 # intended=shell_syntax exit=2
+Running variant calling rule
 /bin/bash: -c: line 3: syntax error near unexpected token `fi'
+Command exited with non-zero status 2
 
 # intended=bam_index_missing exit=1
+samtools idxstats sample.bam
 [E::idx_find_and_load] Could not retrieve index file for 'sample.bam'
+[main_idxstats] fail to load index

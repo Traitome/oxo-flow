@@ -207,12 +207,19 @@ Every new pattern must ship with two test rows in the module's tests:
 stderr/stdout tails under `crates/oxo-flow-core/tests/fixtures/diag_corpus/`
 and asserts a documented baseline:
 
-- **True positives:** every positive block (a realistic failure tail from
-  STAR/BWA/samtools/GATK/conda/docker/etc.) fires its intended pattern. The
-  corpus covers all 31 patterns exactly once; a drift gate keeps the corpus in
-  sync with the ids declared in `diagnostics.rs`.
+- **True positives:** every positive block (a realistic multi-line failure
+  tail from STAR/BWA/samtools/GATK/conda/docker/etc.) fires its intended
+  pattern. The blocks are genuinely multi-line: each pattern's text appears
+  inside surrounding tool output (a prelude plus scheduler/shell context),
+  never as a bare canonical-trigger line — for the few signals whose real
+  signature is a single kernel/shell line, that decisive line is still wrapped
+  in the output that really surrounds it. The corpus covers all 31 patterns
+  exactly once; a drift gate keeps the corpus in sync with the ids declared in
+  `diagnostics.rs`.
 - **False positives:** benign handshake/banner blocks and mention-only blocks
-  fire no pattern at realistic non-zero exit codes.
+  fire no pattern at realistic non-zero exit codes. Both negative sets are
+  parsed and asserted by the harness — the report's `benign_fp` / `mention_fp`
+  counts are measurements, not documentation claims.
 
 This is **report-only**: the harness measures the existing table and changes no
 regex or engine behavior. It is a baseline, **not** a proof that the engine is

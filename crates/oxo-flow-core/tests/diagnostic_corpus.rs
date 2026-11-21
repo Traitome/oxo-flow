@@ -2,14 +2,17 @@
 //! runtime diagnostics engine (issue #1316).
 //!
 //! Report-only harness: it drives the *real* `DiagnosticsEngine` pattern table
-//! (no model, no container, no network) over a small realistic corpus harvested
-//! from STAR/BWA/samtools/GATK/conda/docker/etc. output and asserts a documented
-//! baseline. It changes no regex and no engine behavior; the deliverable is a
-//! measurement, not a proof that the engine is correct.
+//! (no model, no container, no network) over a small realistic corpus of
+//! multi-line failure tails from STAR/BWA/samtools/GATK/conda/docker/etc.
+//! output and asserts a documented baseline. Each positive block embeds the
+//! pattern's text inside surrounding tool output rather than copying a bare
+//! canonical-trigger line. It changes no regex and no engine behavior; the
+//! deliverable is a measurement, not a proof that the engine is correct.
 //!
 //! Method mirrors `scientific_preflight_adversarial.rs` (#1244):
 //! positive (must fire) / benign handshake (must stay silent) /
-//! mention-only (must stay silent) blocks.
+//! mention-only (must stay silent) blocks. All three sets are parsed and
+//! asserted here, so every reported count is a measurement.
 //!
 //! Fixtures live in `tests/fixtures/diag_corpus/`.
 
@@ -248,6 +251,25 @@ fn positive_corpus_covers_every_pattern_exactly_once() {
         engine_ids, covered,
         "positive corpus ids must exactly match the engine's registered pattern ids"
     );
+}
+
+/// Realism guard: every positive block must be a genuine multi-line failure
+/// tail. A block that is a single bare line is almost always a verbatim copy
+/// of the pattern's own canonical trigger, which trivially matches because it
+/// literally contains the regex text rather than surrounding real tool output.
+#[test]
+fn positive_corpus_blocks_are_all_multi_line() {
+    let positives = parse_positive(POSITIVE_LOG);
+    for p in &positives {
+        let body_lines = p.body.lines().filter(|l| !l.trim().is_empty()).count();
+        assert!(
+            body_lines >= 2,
+            "positive block '{}' is a single line ({:?}); it must carry surrounding \
+             real tool-output context, not a bare canonical-trigger line",
+            p.id,
+            p.body
+        );
+    }
 }
 
 /// Drift gate: the fixture table must stay in sync with the ids literally
