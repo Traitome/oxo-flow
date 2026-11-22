@@ -1,10 +1,10 @@
-.PHONY: ci fmt clippy build test coverage bench bench-macro bench-compare audit deny aws-legacy-tripwire issue-id-tripwire npmmirror-tripwire secrets docs frontend-lint frontend-test schema-drift skill-drift sync-skill version-check eval-tests eval-lint eval-verify extension-test extension-integration desktop-smoke contributors frontend-build frontend-dev dev bundle-static bundle-desktop bundle-macos bundle-deb bundle-rpm bundle-appimage help
+.PHONY: ci fmt clippy build test coverage bench bench-macro bench-compare audit deny aws-legacy-tripwire issue-id-tripwire npmmirror-tripwire secrets docs frontend-lint frontend-test schema-drift skill-drift sync-skill version-check eval-tests eval-lint eval-verify provenance-check extension-test extension-integration desktop-smoke contributors frontend-build frontend-dev dev bundle-static bundle-desktop bundle-macos bundle-deb bundle-rpm bundle-appimage help
 
 ## Run all local CI quality-gate checks. Same gates as the "Test" job in
 ## ci.yml, but the invocations are not identical: `test` runs single-threaded
 ## (--test-threads=1, deterministic locally; CI runs the default parallelism)
 ## and `frontend-lint` uses `npm install` where CI uses `npm ci`.
-ci: fmt clippy build test schema-drift skill-drift version-check audit deny aws-legacy-tripwire issue-id-tripwire npmmirror-tripwire secrets docs frontend-lint eval-tests eval-lint extension-test
+ci: fmt clippy build test schema-drift skill-drift version-check audit deny aws-legacy-tripwire issue-id-tripwire npmmirror-tripwire secrets docs frontend-lint eval-tests eval-lint provenance-check extension-test
 
 fmt:
 	cargo fmt -- --check
@@ -111,6 +111,13 @@ eval-lint:
 ## 100% hash integrity in eval/review/evidence.jsonl and expert reviewer sign-off.
 eval-verify:
 	python3 eval/scripts/verify_gold.py
+
+## Publication-artifact provenance gate (#1305): validates the provenance
+## manifest is well-formed and FAILS CLOSED when a publication-facing report
+## under docs/superpowers/plans/ carries a measured number with no provenance
+## entry. Regenerate the manifest with `--emit` after pinning a new build.
+provenance-check:
+	python3 eval/benchmarks/provenance_manifest.py --check
 
 ## Run frontend Playwright e2e tests (needs the Rust server; see ci.yml).
 frontend-test:
