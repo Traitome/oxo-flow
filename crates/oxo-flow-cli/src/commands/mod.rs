@@ -414,6 +414,7 @@ pub mod cluster;
 pub mod completions;
 pub mod config_comments;
 pub mod diagnostics;
+pub mod export_dsl;
 pub mod import;
 pub mod info;
 pub mod infra;

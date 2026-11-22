@@ -455,6 +455,23 @@ pub enum Commands {
         )]
         output: Option<PathBuf>,
     },
+    /// Export a .oxoflow workflow back to Nextflow DSL2 (round-trip subset).
+    ExportDsl {
+        #[arg(value_name = "WORKFLOW", help = "Path to the .oxoflow workflow file")]
+        workflow: PathBuf,
+        #[arg(
+            long,
+            value_name = "FORMAT",
+            help = "Target format: 'nextflow' (default; the only implemented target — anything else is refused, never guessed)"
+        )]
+        format: Option<String>,
+        #[arg(
+            short = 'o',
+            long,
+            help = "Output .nf file (prints to stdout if omitted)"
+        )]
+        output: Option<PathBuf>,
+    },
     /// Query the embedded knowledge base (Bioconda, nf-core, skills, docs).
     Knowledge {
         #[command(subcommand)]
@@ -1407,6 +1424,9 @@ fn json_supported(command: &Commands) -> bool {
         // `import --json` emits one machine-readable translation document
         // (issue #1332).
         Commands::Import { .. } => true,
+        // `export-dsl --json` emits one machine-readable export document
+        // (issue #1319), mirroring the import document's shape.
+        Commands::ExportDsl { .. } => true,
         // `diff --json` emits one machine-readable diff document (issue #1330).
         Commands::Diff { .. } => true,
         Commands::Provenance { action } => matches!(
@@ -1950,6 +1970,18 @@ async fn main() -> Result<()> {
             crate::commands::import::handle_import(
                 &source,
                 parsed_from,
+                output.as_deref(),
+                cli.json,
+            )?;
+        }
+        Commands::ExportDsl {
+            workflow,
+            format,
+            output,
+        } => {
+            crate::commands::export_dsl::handle_export_dsl(
+                &workflow,
+                format.as_deref(),
                 output.as_deref(),
                 cli.json,
             )?;

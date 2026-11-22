@@ -192,3 +192,7 @@ running it; the playbook is guidance, not a version-matched specification.
   `publishDir` behavior.
 - A successful import is a structural starting point; scientific correctness
   still requires review plus the validate → lint → dry-run → pilot sequence.
+- The reverse lane exists for leaving again: `oxo-flow export-dsl` emits a
+  parsed workflow back to Nextflow DSL2 over the same subset the importer
+  accepts (see [export-dsl](../commands/export-dsl.md)); constructs outside
+  it are hard errors, never silent loss.
