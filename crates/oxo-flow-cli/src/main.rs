@@ -74,7 +74,8 @@ pub struct Cli {
     /// Output machine-readable JSON to stdout (human-readable logs stay on stderr).
     /// Implemented by run, dry-run, validate, lint, test, status, wait, batch,
     /// resume, info, knowledge, diagnostics, schema, verify-data, license,
-    /// provenance verify, ai, graph, runs gc, diff, import, env list/check,
+    /// provenance verify, provenance diff, ai, graph, runs gc, diff (the
+    /// workflow text diff), import, env list/check,
     /// and the cluster status/cancel/logs monitors;
     /// every other command rejects the flag instead of silently ignoring it.
     /// For info and knowledge, an explicit `--format text` takes precedence
@@ -1579,9 +1580,9 @@ async fn main() -> Result<()> {
              Drop --json to run it normally, or use a command whose JSON \
              document is implemented (run, dry-run, validate, lint, test, \
              status, wait, batch, resume, info, knowledge, diagnostics, \
-             schema, license, ai, provenance verify, verify-data, graph, \
-             runs gc, import, diff, env list/check, cluster \
-             status/cancel/logs)."
+             schema, license, ai, provenance verify, provenance diff, \
+             verify-data, graph, runs gc, import, diff (the workflow text \
+             diff), env list/check, cluster status/cancel/logs)."
         );
     }
     // A background run never executes the workflow in the foreground

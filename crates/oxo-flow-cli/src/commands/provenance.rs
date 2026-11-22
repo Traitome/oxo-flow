@@ -276,11 +276,16 @@ fn parse_checksum_map(
 /// (issue #315 F2 / #1320) — the same call `report --diff` makes — so the two
 /// surfaces can never classify the same input pair differently.
 ///
-/// When the checkpoint carries neither an embedded `checksums` object nor a
-/// malformed one, fall back to the legacy companion `checkpoint.checksums.json`
-/// file, exactly as `provenance verify` does (issue #1320). Without this
-/// fallback `diff` would report FALSE agreement (exit 0) against a checkpoint
-/// whose hashes live only in the companion file.
+/// The companion-file fallback applies ONLY when the embedded `checksums` key
+/// is absent. This deliberately DIVERGES from `provenance verify` (issue
+/// #1320), which also falls back to the companion when the key is present but
+/// not a JSON object: `diff` hard-errors there instead (fail-closed — a
+/// malformed embedded map must never read as agreement), while `verify` keeps
+/// its legacy lenient companion fallback. Both sides of the divergence are
+/// pinned by tests (`verify_falls_back_to_companion_on_non_object_checksums`,
+/// `diff_loader_hard_errors_on_non_object_checksums_even_with_companion`).
+/// Without the companion fallback `diff` would report FALSE agreement
+/// (exit 0) against a checkpoint whose hashes live only in the companion file.
 fn load_checkpoint_checksums(path: &Path) -> Result<BTreeMap<String, String>> {
     let content = std::fs::read_to_string(path)
         .with_context(|| format!("failed to read checkpoint {}", path.display()))?;
@@ -300,10 +305,14 @@ fn load_checkpoint_checksums(path: &Path) -> Result<BTreeMap<String, String>> {
     ))
 }
 
-/// Read the legacy companion `<checkpoint>.checksums.json` file if present,
-/// mirroring `provenance verify`'s fallback exactly. Absent file → empty map
-/// (a checkpoint with no recorded checksums is legitimate); a present but
-/// unreadable/malformed companion is a hard error naming the file.
+/// Read the legacy companion `<checkpoint>.checksums.json` file if present.
+/// Absent file → empty map (a checkpoint with no recorded checksums is
+/// legitimate); a present but unreadable/malformed companion is a hard error
+/// naming the file — the same companion handling `provenance verify` has.
+/// `diff` reaches this helper only when the embedded `checksums` key is
+/// absent; on a present-but-non-object key it hard-errors instead of falling
+/// back (see `load_checkpoint_checksums` for the deliberate divergence from
+/// `verify`).
 fn load_companion_checksums(checkpoint_path: &Path) -> Result<BTreeMap<String, String>> {
     let companion = checkpoint_path.with_extension("checksums.json");
     if !companion.exists() {
@@ -914,5 +923,50 @@ mod tests {
 
         let merged = load_checkpoint_checksums(&cp).unwrap();
         assert_eq!(merged.get("a.txt").map(String::as_str), Some("sha256:aa"));
+    }
+
+    #[test]
+    fn diff_loader_hard_errors_on_non_object_checksums_even_with_companion() {
+        // Issue #1353 parity pin (diff side): with `"checksums":"x"` present,
+        // `load_checkpoint_checksums` must hard-error even though a valid
+        // companion file sits next to the checkpoint — fail-closed, never a
+        // silent fallthrough that could read as agreement.
+        let dir = tempfile::tempdir().unwrap();
+        let cp = dir.path().join("checkpoint.json");
+        fs::write(&cp, r#"{"checksums":"x"}"#).unwrap();
+        let companion = dir.path().join("checkpoint.checksums.json");
+        fs::write(&companion, r#"{"a.txt":"sha256:aa"}"#).unwrap();
+
+        let err = load_checkpoint_checksums(&cp).unwrap_err();
+        assert!(
+            err.to_string().contains("not a JSON object"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn verify_falls_back_to_companion_on_non_object_checksums() {
+        // Issue #1353 parity pin (verify side): `provenance verify` deliberately
+        // DIVERGES from `provenance diff` here — given a present-but-non-object
+        // embedded `checksums` key plus a valid companion file, verify falls
+        // back to the companion (legacy lenient behavior) and proceeds, while
+        // diff hard-errors (`diff_loader_hard_errors_on_non_object_checksums_even_with_companion`).
+        // The comment on `load_checkpoint_checksums` documents this divergence;
+        // this test keeps the verify half of it true instead of asserted.
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("out.txt");
+        fs::write(&out, "hello\n").unwrap();
+        let sha = oxo_flow_core::executor::checkpoint::compute_file_checksum(&out).unwrap();
+
+        let cp = dir.path().join("checkpoint.json");
+        fs::write(&cp, r#"{"checksums":"x"}"#).unwrap();
+        let companion = dir.path().join("checkpoint.checksums.json");
+        fs::write(&companion, format!(r#"{{"out.txt":"{sha}"}}"#)).unwrap();
+
+        // No `workdir` recorded in the checkpoint, so output paths resolve
+        // against the checkpoint's parent (this tempdir). The companion entry
+        // matches the file on disk, so verify must return Ok — reaching it at
+        // all proves the non-object embedded key did not abort the command.
+        provenance_verify_command(cp, false).unwrap();
     }
 }

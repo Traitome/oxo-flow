@@ -3,9 +3,9 @@
 > **Status**: broadened truth set. This supersedes the 18-case first set in
 > [`biotype-truth-set-2026-11-19.md`](biotype-truth-set-2026-11-19.md) as the
 > current measured state, and replaces the *claim* "broad truth-set validation"
-> with a *number*: a **53-case** set run through the real `oxo-flow validate
-> --json` surface, yielding **31 true-accept, 0 false-accept, 22 true-reject, 0
-> false-reject**, with a diagnostic-code cross-check of **53/53**. It is a
+> with a *number*: a **54-case** set run through the real `oxo-flow validate
+> --json` surface, yielding **32 true-accept, 0 false-accept, 22 true-reject, 0
+> false-reject**, with a diagnostic-code cross-check of **54/54**. It is a
 > *breadth* improvement over N=18 but is still **not** the full governed
 > campaign: the pre-registration threshold `τ_FA` remains UNDECIDED, so no
 > governed POSITIVE/NEGATIVE decision is claimed.
@@ -20,7 +20,7 @@
 ## 1. What was measured
 
 The BioType checker (`.oxoflow` `[rules.types]` / `[types.*]` contracts) was
-exercised against a 53-case truth set authored **independently of the checker**
+exercised against a 54-case truth set authored **independently of the checker**
 and run through the real CLI validation surface, `oxo-flow validate <case>
 --json`. For every case the *expected* verdict (accept / reject, and the
 TYPE-* code set when reject) and a one-line rationale were recorded in a header
@@ -45,11 +45,13 @@ Three case sources:
   BioFormat enum variants (`gff3`/`h5ad`/`rds`/`parquet`/`tsv`) and driving two
   new construct classes (a `transform.*` scatter/combine GENERATED typed edge,
   and a type contributed across an `[[include]]` boundary).
-- **Real repository examples (7)** — `examples/gallery/{13_simple_variant_calling,
+- **Real repository examples (8)** — `examples/gallery/{13_simple_variant_calling,
   06_rnaseq_quantification,09_single_cell_rnaseq,07_wgs_germline,
   08_multiomics_integration,14_paired_experiment_control,16_16s_qiime2_amplicon}.
  oxoflow`, files **not written for the checker** (all untyped, so all expected
-  accept); they prove the checker does not disturb the shipped example corpus.
+  accept), plus `examples/gallery/17_typed_variant_calling.oxoflow` — the real
+  typed pipeline added by #1272 (expected accept). They prove the checker does
+  not disturb the shipped example corpus, including its one typed pipeline.
 
 The EXPECT table in the harness is the single mechanical source of truth, so the
 matrix is computed, not transcribed.
@@ -58,15 +60,15 @@ matrix is computed, not transcribed.
 
 | Field | Value |
 | :--- | :--- |
-| hostname | `shixiangwangdeiMac.local` |
-| `uname -srm` | `Darwin 25.6.0 arm64` |
+| hostname | `ShixiangWang-WorkSpacedeMacBook-Pro.local` |
+| `uname -srm` | `Darwin 27.0.0 arm64` |
 | arch | `arm64` (Apple silicon) |
 | rustc | `1.98.0 (88d9e12ae 2026-08-18)` |
 | oxo-flow | `0.32.0`, built from the branch worktree |
-| commit (branch HEAD at run) | `1dd70d4f94e3e95a1c66b3ba1179932a8b7e61bb` |
-| branch | `research/1163-biotype-truth-set` |
+| commit (branch HEAD at run) | `b7a75ed23e1e37f8b8e9ccfceaa894784ddc82a9` |
+| branch | `fix/evidence-integrity` |
 | binary | `target/debug/oxo-flow` (debug build) |
-| run timestamp (UTC) | `2026-11-19T18:18:11Z` |
+| run timestamp (UTC) | `2026-11-22T12:22:32Z` |
 
 Single arm; no cross-architecture contrast is claimed (unlike #1166). The
 checker is platform-independent pure Rust, so a single arm is the correct design
@@ -129,7 +131,7 @@ as the 18-case report so it cannot be fitted to the result).**
 
 **Result: 0 false-accepts, 0 false-rejects — the operational criterion PASSES.**
 
-**Scope caveat filed up front.** Even a perfect 53-case matrix does not by
+**Scope caveat filed up front.** Even a perfect 54-case matrix does not by
 itself clear the full WF-04 exit criterion (see §9 for the excluded
 constructs); the criterion governs *correctness of this set*, not roadmap
 closure.
@@ -143,11 +145,11 @@ one-sided upper bounds are reported as the two-sided interval's upper limit:
 | Endpoint | Count | Point estimate | Exact 95% CI (Clopper-Pearson) |
 | :--- | :--- | :--- | :--- |
 | False-accept rate `FA/(FA+TR)` | 0/22 | 0.0% | **[0.0%, 15.4%]** |
-| False-reject rate `FR/(FR+TA)` | 0/31 | 0.0% | **[0.0%, 11.2%]** |
+| False-reject rate `FR/(FR+TA)` | 0/32 | 0.0% | **[0.0%, 10.9%]** |
 
 Computation (false-accept, x = 0, n = 22): upper = `Beta.ppf(0.975, 1, 22)`
-= 0.1544 → **[0.0%, 15.4%]**. False-reject (x = 0, n = 31): upper =
-`Beta.ppf(0.975, 1, 31)` = 0.1122 → **[0.0%, 11.2%]**. The upper bounds are
+= 0.1544 → **[0.0%, 15.4%]**. False-reject (x = 0, n = 32): upper =
+`Beta.ppf(0.975, 1, 32)` = 0.1089 → **[0.0%, 10.9%]**. The upper bounds are
 still wide, which is itself the point PR-06 §0.1
 step 5 makes: a zero count bounds the true rate only loosely, and even a
 0-false-accept result with U ≈ 15.4% cannot decide a governed verdict without a
@@ -158,16 +160,16 @@ fixed `τ_FA`.
 ```
   2x2 confusion matrix (rows = expected, cols = actual) — VERDICT scoring:
                      accept   reject
-    EXPECT-ACCEPT    31       0
+    EXPECT-ACCEPT    32       0
     EXPECT-REJECT    0        22
 
-  true-accept=31  false-accept=0  true-reject=22  false-reject=0
+  true-accept=32  false-accept=0  true-reject=22  false-reject=0
 ```
 
-53/53 cases (100%) match their pre-registered verdict.
+54/54 cases (100%) match their pre-registered verdict.
 
 **Diagnostic-code cross-check (expected-code set == actual-code set, asserted):**
-`codes-correct=53  codes-fail=0  (of 53)`. The ACTUAL code set is the union of
+`codes-correct=54  codes-fail=0  (of 54)`. The ACTUAL code set is the union of
 the `TYPE-NNN` codes seen on `validate --json` and on `lint --json`, compared
 for **set-equality** against the EXPECT table (the lint surface is load-bearing
 because the advisory codes `TYPE-008`/`009`/`010` are filtered out of
@@ -178,7 +180,7 @@ matches the actual set exactly.
 This is an operational pass on *this* set, not a governed campaign verdict
 (§4), and the breadth boundary in §9 still applies.
 
-## 6. Per-case summary (53 cases)
+## 6. Per-case summary (54 cases)
 
 Verdicts are read from the CLI JSON; `codes` is the asserted code set. Full
 per-case rows (verdict, expected-codes, actual-codes, note) are in the
@@ -284,7 +286,7 @@ drive):
   `WorkflowConfig::from_file` (→ `resolve_includes`), which is the surface the
   harness drives.
 
-### 6.4 Real repository examples (7)
+### 6.4 Real repository examples (8)
 
 | case | expected | actual | correct? |
 | :--- | :---: | :---: | :---: |
@@ -295,6 +297,7 @@ drive):
 | `examples/gallery/08_multiomics_integration` | accept | accept | yes |
 | `examples/gallery/14_paired_experiment_control` | accept | accept | yes |
 | `examples/gallery/16_16s_qiime2_amplicon` | accept | accept | yes |
+| `examples/gallery/17_typed_variant_calling` (typed, #1272) | accept | accept | yes |
 
 ## 7. The one defect surfaced — a DOCUMENTATION defect (b18)
 
@@ -329,11 +332,11 @@ case is what caught a wrong claim in the reference text.
 
 ## 8. Verdict
 
-- **Correctness of this 53-case set vs the pre-registered operational
-  criterion: PASS** (0 false-accepts, 0 false-rejects; codes 53/53). Not a
+- **Correctness of this 54-case set vs the pre-registered operational
+  criterion: PASS** (0 false-accepts, 0 false-rejects; codes 54/54). Not a
   governed verdict: `τ_FA` is UNDECIDED in the frozen pre-registration
   (PR-06 §C1), so no POSITIVE/NEGATIVE/INCONCLUSIVE decision is claimed.
-- **Breadth:** 2.9× the first set (53 vs 18 cases) and it now drives every
+- **Breadth:** 3.0× the first set (54 vs 18 cases) and it now drives every
   `BioFormat` enum variant except `Generic`, plus the named-table path, the
   index-kind boundary, the advisory TYPE-009 path, a `transform.*`
   scatter/combine GENERATED edge, and an `[[include]]`-contributed type — but
@@ -342,7 +345,7 @@ case is what caught a wrong claim in the reference text.
   corrected in this change. No checker defect was exposed, so no checker fix
   and no new issue were required.
 - **Roadmap:** WF-04's "broad truth-set validation" exit criterion moves from
-  UNMET (N=18) toward met (N=53, 0/0, exclusions enumerated) but stays gated on
+  UNMET (N=18) toward met (N=54, 0/0, exclusions enumerated) but stays gated on
   the governed `τ_FA`, so the label is not closed outright. See the ledger
   update and §9.
 
@@ -371,13 +374,14 @@ Reported with its exclusions, as the exit gate requires:
   `examples/gallery/17_typed_variant_calling.oxoflow`. It was accepted by the
   real admission surface and shown load-bearing (a one-sided edit fails
   `TYPE-001`); see [`typed-pipeline-evidence-2026-11-20.md`](typed-pipeline-evidence-2026-11-20.md).
-  The full-case run *below* still rests on hand-authored cases for breadth; that
-  addendum closes only this "no real typed pipeline" clause, not the breadth
-  boundary.
+  The full-case run now also includes the real typed pipeline as its 8th
+  real-repo case (§6.4); breadth beyond it still rests on hand-authored cases,
+  so that addendum closes only this "no real typed pipeline" clause, not the
+  breadth boundary.
 - **Single arm, single toolchain** (macOS arm64, rustc 1.98.0). No
   cross-platform or cross-version contrast intended or performed.
 - **Not the governed campaign.** `τ_FA` remains UNDECIDED (PR-06 §C1), so even
-  this 53-case, 0/0 result cannot be scored POSITIVE/NEGATIVE/INCONCLUSIVE; the
+  this 54-case, 0/0 result cannot be scored POSITIVE/NEGATIVE/INCONCLUSIVE; the
   exact 95% upper bound on the false-accept rate is still ≈15.4% at N=22.
 - **The examples were validated, not executed** — no real data was staged and no
   bioinformatics tool was run.
@@ -394,8 +398,8 @@ Reported with its exclusions, as the exit gate requires:
   `docs/superpowers/audits/data/biotype-truth-set-results.json`
   (`{generated_at, commit, binary, cases:[…], confusion_matrix, codes_correct,
   codes_fail, cases_total}`).
-- Real examples: `examples/gallery/*.oxoflow` (7 files listed in §6.3).
-- Full matrix reproduced by re-running the harness at commit `1dd70d4f`.
+- Real examples: `examples/gallery/*.oxoflow` (8 files listed in §6.4).
+- Full matrix reproduced by re-running the harness at commit `b7a75ed2`.
 
 ## 11. References
 

@@ -1,6 +1,6 @@
 {
-  "generated_at": "2026-11-21T00:49:42Z",
-  "commit": "e855fa6a71631237d5973041caf95664af23590d",
+  "generated_at": "2026-11-22T12:22:32Z",
+  "commit": "b7a75ed23e1e37f8b8e9ccfceaa894784ddc82a9",
   "binary": "target/debug/oxo-flow",
   "cases": [
     {"case": "tests/truthset/biotype/cases/t01_star_bam_to_featurecounts.oxoflow", "expected": "accept", "actual": "accept", "verdict_correct": "yes", "expected_codes": "-", "actual_codes": "-", "codes_correct": "yes", "note": "nextflow STAR->featureCounts edge"},

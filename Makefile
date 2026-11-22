@@ -1,10 +1,10 @@
-.PHONY: ci fmt clippy build test coverage bench bench-macro bench-compare audit deny aws-legacy-tripwire issue-id-tripwire npmmirror-tripwire secrets docs frontend-lint frontend-test schema-drift skill-drift sync-skill version-check eval-tests eval-lint eval-verify provenance-check extension-test extension-integration desktop-smoke contributors frontend-build frontend-dev dev bundle-static bundle-desktop bundle-macos bundle-deb bundle-rpm bundle-appimage help
+.PHONY: ci fmt clippy build test coverage bench bench-macro bench-compare audit deny aws-legacy-tripwire issue-id-tripwire npmmirror-tripwire truthset-stamp secrets docs frontend-lint frontend-test schema-drift skill-drift sync-skill version-check eval-tests eval-lint eval-verify provenance-check extension-test extension-integration desktop-smoke contributors frontend-build frontend-dev dev bundle-static bundle-desktop bundle-macos bundle-deb bundle-rpm bundle-appimage help
 
 ## Run all local CI quality-gate checks. Same gates as the "Test" job in
 ## ci.yml, but the invocations are not identical: `test` runs single-threaded
 ## (--test-threads=1, deterministic locally; CI runs the default parallelism)
 ## and `frontend-lint` uses `npm install` where CI uses `npm ci`.
-ci: fmt clippy build test schema-drift skill-drift version-check audit deny aws-legacy-tripwire issue-id-tripwire npmmirror-tripwire secrets docs frontend-lint eval-tests eval-lint provenance-check extension-test
+ci: fmt clippy build test schema-drift skill-drift version-check audit deny aws-legacy-tripwire issue-id-tripwire npmmirror-tripwire truthset-stamp secrets docs frontend-lint eval-tests eval-lint provenance-check extension-test
 
 fmt:
 	cargo fmt -- --check
@@ -75,6 +75,16 @@ npmmirror-tripwire:
 	else \
 	  echo "npmmirror-tripwire: lockfile resolved URLs all point at registry.npmjs.org"; \
 	fi
+
+## Truth-set stamp drift gate (#1348): the `commit` stamped in
+## docs/superpowers/audits/data/biotype-truth-set-results.json is the commit
+## whose tree produced the measured results — it must be an ancestor of HEAD
+## and contain every case (and [[include]] fixture) the results list, so the
+## artifact stays reproducible as stamped. The stamp is harness-written:
+## re-run scripts/biotype-truth-set.sh at HEAD and commit its output when
+## this gate fails.
+truthset-stamp:
+	@bash scripts/check-truthset-stamp.sh
 
 ## Secret-scanning gate over the git history and working tree (config in
 secrets:
