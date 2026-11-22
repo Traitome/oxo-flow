@@ -149,7 +149,7 @@ route contract:
   (`POST /api/auth/login`, logout, OAuth), user/role management
   (`POST /api/users`, `DELETE /api/users/{id}`), machine-key changes
   (`POST /api/auth/keys`, `DELETE /api/auth/keys/{id}`), run lifecycle
-  control (`POST /api/runs` and `/{cancel,pause,resume,retry,resume-checkpoint,clean}`),
+  control (`POST /api/runs` and `/{cancel,pause,resume,retry,resume-checkpoint,clean,apply-repair}`),
   pipeline deletion and share grants
   (`DELETE /api/pipelines/{id}`, `POST /api/pipelines/{id}/share`), AI
   provider key changes (`POST /api/ai/config`, `PUT /api/ai/config/server`,
@@ -562,7 +562,7 @@ it, not from a saved pipeline); `max_jobs`, `dry_run`, `keep_going`,
 `pipeline_id`, `cluster_id`, `samples`, `targets`, `include_files`,
 `config_overrides`, and `allow_protected_drift` are top-level fields
 (not nested under a `config` object). Run-mutating endpoints
-(create/cancel/pause/resume/retry/clean/resume-checkpoint) require the
+(create/cancel/pause/resume/retry/clean/resume-checkpoint/apply-repair) require the
 `user` role or above — the viewer role is read-only — and a `pipeline_id`
 must be readable by the acting user. This flat shape is the typed
 `CreateRunRequest` schema — the OpenAPI spec declares it as the endpoint's
@@ -980,6 +980,97 @@ failed/cancelled rule in its upstream target set (those re-execute too,
 since they have no success checkpoint record), and `will_skip` contains the
 remaining completed rules — the same set the engine will execute at run
 start.
+
+### Apply Reviewed Repair
+```
+POST /api/runs/{id}/apply-repair
+Content-Type: application/json
+
+{"patch": "<complete repaired .oxoflow workflow TOML>"}
+```
+Applies a **reviewed** repair patch to a terminal FAILED run's workflow
+(issue #1302, ROADMAP 12.3 remediation continuity). The `patch` is a whole
+`.oxoflow` workflow document — the exact shape the CLI's verified-repair path
+writes (`run --apply-patch`, see [Reviewed-patch repair](../commands/run.md#reviewed-patch-repair-apply-patch));
+there is no diff grammar. The web layer validates that the patch parses as a
+workflow through the shared core parser (`400 INVALID_PATCH` otherwise), but it
+**never writes the workflow itself**: the patch is staged into the run workdir
+at `.oxo-flow/reviewed-repair-<run_id>.oxoflow` and the spawned CLI's apply
+path (shape validation → archive → atomic write) is the only workflow mutator,
+so a patch that would drop rules or sections is refused by the same gate the
+CLI surface uses — never blind-written.
+
+The endpoint shells the **same CLI invocation the extension command and the
+cross-surface parity harness** (`tests/remediation_continuity.rs`) run —
+`run <workflow> --workdir <workdir> --apply-patch <patch>` through the web
+executor's spawn machinery (same env allowlist, exit-code wrapper, and log
+capture as every other web-spawned run). The patch applies only when a rule
+fails during the re-attempt; then one bounded `--resume-failed` rerun verifies
+it. The original run's `config_overrides` are replayed so the re-attempt
+re-derives the same configuration (same rule fingerprints), exactly like
+retry.
+
+The request is a REAL run and pays the same budgets as create/retry: the run
+rate limiter, the durable quota admission, and the atomic workdir/pipeline
+claim (a second live run on the same workdir answers `409 RUN_NOT_TERMINAL`).
+It continues the predecessor run's workdir — the third and last path allowed
+to do so, alongside retry and resume-checkpoint — because the CLI apply path's
+verification rerun is checkpoint-driven. The audit middleware records the
+mutation with **required** durability (same class as retry/cancel).
+
+Returns:
+
+```json
+{
+  "run_id": "<new run id>",
+  "repair_source_run": "<the failed run>",
+  "patch_path": "<workdir>/.oxo-flow/reviewed-repair-<run_id>.oxoflow",
+  "note": "Run <new run id> re-attempts the failed workflow with the reviewed patch..."
+}
+```
+
+The `REPAIR_APPLIED` / `REPAIR_RERUN_*` outcome is produced **during** the
+spawned run (the verification rerun executes real rules), so this endpoint
+returns the new run handle; read the record with the GET below once the run
+goes terminal. Errors: `404 NOT_FOUND` (unknown/foreign run), `409
+RUN_NOT_TERMINAL` (run still active, or another run is live on its
+workdir/pipeline), `409 RUN_NOT_FAILED` (a completed/cancelled run has
+nothing to repair — the patch applies only to a failed re-attempt; retry the
+run first if a repair is genuinely wanted), `404 NO_WORKDIR` (legacy row
+without a workdir), `404 NO_CHECKPOINT` (no checkpoint under the workdir),
+`400 INVALID_PATCH` (the patch is not a parseable workflow document), `503`
+when runs are not available on this backend.
+
+### Repair Record
+```
+GET /api/runs/{id}/repair
+```
+Reads the checkpoint's `repair_record` — the same
+`REPAIR_APPLIED` / `REPAIR_RERUN_*` contract the CLI narrates and persists,
+served verbatim through the engine's own checkpoint loader:
+
+```json
+{
+  "run_id": "<id>",
+  "checkpoint_present": true,
+  "repair_record": {
+    "applied": true,
+    "session_id": "reviewed-patch",
+    "rerun_attempted": true,
+    "rerun_succeeded": true,
+    "detail": "verification rerun completed the workflow",
+    "timestamp": "<rfc3339>"
+  }
+}
+```
+
+`repair_record` is `null` when no repair was ever applied (legacy
+checkpoints load with `None`); `checkpoint_present: false` distinguishes "no
+checkpoint to read" from "no repair yet". The read-only endpoint works for
+every surface's repair — a CLI-applied `--apply-patch` or AI-recovery repair
+lands in the same field, so the web client can verify and audit a repair
+that happened anywhere. Errors: `404 NOT_FOUND` (unknown/foreign run), `503`
+when runs are not available on this backend.
 
 ### Cancel
 ```
