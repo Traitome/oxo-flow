@@ -63,7 +63,7 @@ oxo-flow env list --json
   "backends": [
     { "name": "system", "available": true },
     { "name": "conda", "available": true, "resolved_binary": "conda" },
-    { "name": "docker", "available": false }
+    { "name": "venv", "available": true }
   ],
   "rules": []
 }
