@@ -1,11 +1,13 @@
 """Hermetic tests for the execution-equivalence runner (#1300).
 
-Covers the two load-bearing pieces of scripts/import_execution_equivalence_run.py
+Covers the load-bearing pieces of scripts/import_execution_equivalence_run.py
 without any network or real runtime:
 
   * EXPECT-table parsing -- supported fixtures come from the shared truth table.
   * skip-vs-drift verdict logic -- a fixture whose runtime/backend is absent is
     SKIPPED, never MATCHED; only two genuinely-executed arms can MATCH or DRIFT.
+  * #1349 hardening -- empty == empty is NO_ARTIFACTS, never MATCHED; an
+    interpreter below the tomllib (3.11) floor refuses to run with exit 2.
 
 No network, no container, no nextflow/snakemake: every dependency is faked.
 """
@@ -137,6 +139,28 @@ class ClassifyVerdictTests(unittest.TestCase):
         })
         self.assertEqual(verdict, "SKIPPED")
 
+    def test_both_arms_run_but_produce_nothing_is_no_artifacts_never_matched(self):
+        # The #1349 false-PASS vector: both arms exited 0 yet wrote nothing,
+        # so the empty dicts compare equal. That must be an explicit honest
+        # verdict, never MATCHED.
+        verdict, reason = runner.classify({
+            "source": self._arm(True, {}),
+            "imported": self._arm(True, {}),
+        })
+        self.assertEqual(verdict, "NO_ARTIFACTS")
+        self.assertNotEqual(verdict, "MATCHED")
+        self.assertIn("no artifacts", reason)
+
+    def test_one_arm_empty_other_has_artifacts_is_drifted(self):
+        # The guard must not over-trigger: one genuinely-produced artifact
+        # against an empty set is still a real comparison -> DRIFTED.
+        verdict, detail = runner.classify({
+            "source": self._arm(True, {}),
+            "imported": self._arm(True, {"out/a.txt": "abc"}),
+        })
+        self.assertEqual(verdict, "DRIFTED")
+        self.assertIn("only-imported", detail)
+
 
 class MeasureEndToEndStubTests(unittest.TestCase):
     """Drive measure()/collect_artifacts end-to-end with stub arms (no real
@@ -147,15 +171,18 @@ class MeasureEndToEndStubTests(unittest.TestCase):
     def _write_stub(self, path, out_content):
         # argv[1] == 'import' -> write a minimal (rule-less) TOML document;
         # otherwise (a 'run' invocation) -> write out.txt with out_content.
-        path.write_text(
+        # out_content=None writes nothing on run: a runtime that exits 0
+        # while producing zero artifacts (#1349).
+        body = (
             "#!/usr/bin/env python3\n"
             "import sys\n"
             "a = sys.argv[1:]\n"
             "if a and a[0] == 'import':\n"
             "    open(a[a.index('-o') + 1], 'w').write('# imported\\n')\n"
-            "else:\n"
-            "    open('out.txt', 'w').write(%r)\n" % out_content
         )
+        if out_content is not None:
+            body += "else:\n    open('out.txt', 'w').write(%r)\n" % out_content
+        path.write_text(body)
         path.chmod(0o755)
 
     def _measure(self, src_content, imp_content):
@@ -196,6 +223,14 @@ class MeasureEndToEndStubTests(unittest.TestCase):
         verdict, _ = self._measure(src_content="same\n", imp_content="same\n")
         self.assertEqual(verdict, "MATCHED")
 
+    def test_zero_output_arms_are_no_artifacts_not_matched(self):
+        # End-to-end regression of the #1349 false-PASS vector: both stub arms
+        # exit 0 but write nothing, so the artifact sets are equal AND empty.
+        # That must be an explicit NO_ARTIFACTS verdict, never MATCHED.
+        verdict, reason = self._measure(src_content=None, imp_content=None)
+        self.assertEqual(verdict, "NO_ARTIFACTS")
+        self.assertIn("no artifacts", reason)
+
 
 class StrictExitCodeTests(unittest.TestCase):
     """The P2 finding: main() must return non-zero on drift so the wrapper's
@@ -219,6 +254,40 @@ class StrictExitCodeTests(unittest.TestCase):
                 contextlib.redirect_stdout(buf):
             rc = runner.main(["prog", "/tmp/ROOT", "/bin/true", "/tmp/t"])
         self.assertEqual(rc, 0)
+
+    def test_main_refuses_below_tomllib_floor(self):
+        # #1349 gap 1: an interpreter without tomllib (Python < 3.11) used to
+        # die mid-run with a traceback that report-only mode swallowed into a
+        # silent-green empty result. It must instead refuse to start with an
+        # explicit message and a non-zero exit.
+        import contextlib
+        import io
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(runner, "tomllib", None), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = runner.main(["prog", "/tmp/ROOT", "/bin/true", "/tmp/t"])
+        self.assertEqual(rc, 2)
+        self.assertIn("3.11", err.getvalue())
+        self.assertIn("tomllib", err.getvalue())
+        self.assertNotIn("RESULT", out.getvalue())
+
+    def test_no_artifacts_counts_as_executed_and_exits_zero(self):
+        # #1349 gap 2 at the tally level: NO_ARTIFACTS is an honest verdict --
+        # counted under executed (both arms ran), never under matched, and it
+        # does not flip the exit code (only DRIFTED does).
+        import contextlib
+        import io
+        buf = io.StringIO()
+        with mock.patch.object(
+                runner, "measure",
+                return_value=("NO_ARTIFACTS",
+                              "both arms ran but produced no artifacts")), \
+                contextlib.redirect_stdout(buf):
+            rc = runner.main(["prog", "/tmp/ROOT", "/bin/true", "/tmp/t"])
+        self.assertEqual(rc, 0)
+        self.assertIn("  no_artifacts: ", buf.getvalue())
+        self.assertNotIn('"NO_ARTIFACTS": 0', buf.getvalue())
+        self.assertIn('"MATCHED": 0', buf.getvalue())
 
     def test_runner_process_exits_zero_when_nothing_executed(self):
         # End-to-end on this host: a stub binary that fails every import leaves

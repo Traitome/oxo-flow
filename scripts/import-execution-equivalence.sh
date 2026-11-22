@@ -4,10 +4,14 @@
 # runs the SOURCE workflow and the IMPORTED workflow on identical inputs and
 # compares the produced output-artifact sets (checksums).
 #
-# HARD RULE: a fixture is MATCHED only when BOTH arms genuinely executed. Any
-# missing runtime / container / conda backend makes its verdict SKIPPED with
-# the reason -- never MATCHED. Report-only by default; --strict fails on drift
-# for fixtures that actually executed.
+# HARD RULE: a fixture is MATCHED only when BOTH arms genuinely executed AND
+# produced artifacts. Any missing runtime / container / conda backend makes
+# its verdict SKIPPED with the reason; two arms that exit 0 while writing
+# nothing make it NO_ARTIFACTS -- never MATCHED (issue #1349). Requires
+# Python >= 3.11 (tomllib): an older interpreter exits 2 with an explicit
+# message, and report-only mode warns instead of swallowing it silently.
+# Report-only by default; --strict fails on drift for fixtures that actually
+# executed.
 #
 # Usage: scripts/import-execution-equivalence.sh [--strict] [--bin <path>]
 set -euo pipefail
@@ -50,7 +54,13 @@ trap 'rm -rf "$tmp"' EXIT
 rc=0
 python3 "$ROOT/scripts/import_execution_equivalence_run.py" "$ROOT" "$BIN" "$tmp" || rc=$?
 
-if [ "$STRICT" -eq 1 ] && [ "$rc" -ne 0 ]; then
-  exit "$rc"
+if [ "$rc" -ne 0 ]; then
+  if [ "$STRICT" -eq 1 ]; then
+    exit "$rc"
+  fi
+  # Report-only mode still never fails the build, but a runner failure
+  # (drift, or an interpreter below the 3.11 floor) must not stay silent
+  # behind exit 0 (issue #1349).
+  echo "warning: runner exited rc=$rc in report-only mode -- see messages above; use --strict to fail" >&2
 fi
 exit 0
