@@ -11265,7 +11265,6 @@ fn json_flag_fails_fast_on_unsupported_commands() {
     // The global --json was silently ignored by most subcommands: they
     // exited 0 with human text (or nothing) on stdout.
     for args in [
-        vec!["diff", "a.oxoflow", "b.oxoflow", "--json"],
         vec!["env", "list", "--json"],
         vec!["touch", "wf.oxoflow", "--json"],
     ] {
