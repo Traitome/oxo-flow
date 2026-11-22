@@ -6,8 +6,50 @@ use anyhow::{Context, Result};
 use colored::Colorize;
 use oxo_flow_core::config::WorkflowConfig;
 use oxo_flow_core::executor::checkpoint::CheckpointState;
+use serde::Serialize;
 use std::path::PathBuf;
 
+/// The `resume --json` document (issue #1334): one machine-readable
+/// description of what a `resume` invocation was asked to do and how it
+/// ended. Field order is fixed by the struct declaration, so repeated runs
+/// over the same checkpoint emit key-ordered JSON (AGENTS.md
+/// order-independence invariant).
+///
+/// The counts are the checkpoint's own state exactly as the human banner
+/// reports them (`completed`/`failed`/`remaining`); no field is fabricated.
+/// `remaining` is what this resume will actually execute (the nodes it
+/// "resumes"), `completed` is what the checkpoint already had — the two
+/// halves the "resumed vs already-complete" question asks for.
+#[derive(Serialize)]
+struct ResumeJson {
+    command: &'static str,
+    workflow: String,
+    checkpoint: String,
+    /// `nothing_to_resume` | `completed` | `failed`.
+    status: &'static str,
+    completed: usize,
+    failed: usize,
+    remaining: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    skipped_by_when: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    running: Option<usize>,
+}
+
+impl ResumeJson {
+    fn emit(&self) {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(self).expect("resume JSON is serializable")
+        );
+    }
+}
+
+/// `resume[-- <args>]` entry point. Wraps [`resume_command_inner`] so the
+/// `--json` error envelope is emitted for the early hard-fail paths (a
+/// malformed checkpoint, a workflow that no longer exists) that bail before
+/// the success document is built — a JSON consumer must never receive empty
+/// stdout (same contract as `status`, issue #859).
 #[allow(clippy::too_many_arguments)]
 pub async fn resume_command(
     checkpoint: PathBuf,
@@ -18,8 +60,50 @@ pub async fn resume_command(
     timeout: String,
     workdir: Option<PathBuf>,
     no_report_snapshot: bool,
+    json: bool,
 ) -> Result<()> {
-    // resume does not produce structured JSON output
+    let checkpoint_for_error = checkpoint.clone();
+    let mut json_written = false;
+    let result = resume_command_inner(
+        checkpoint,
+        jobs,
+        ai_recover,
+        ai_max_retries,
+        keep_going,
+        timeout,
+        workdir,
+        no_report_snapshot,
+        json,
+        &mut json_written,
+    )
+    .await;
+    if json
+        && !json_written
+        && let Err(error) = &result
+    {
+        crate::commands::json_error::emit(
+            "resume",
+            crate::commands::json_error::code_for(error, "CHECKPOINT"),
+            &format!("{error:#}"),
+            serde_json::json!({"checkpoint": checkpoint_for_error.display().to_string()}),
+        );
+    }
+    result
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn resume_command_inner(
+    checkpoint: PathBuf,
+    jobs: usize,
+    ai_recover: bool,
+    ai_max_retries: Option<u32>,
+    keep_going: bool,
+    timeout: String,
+    workdir: Option<PathBuf>,
+    no_report_snapshot: bool,
+    json: bool,
+    json_written: &mut bool,
+) -> Result<()> {
     print_banner();
 
     // Load checkpoint state
@@ -68,6 +152,10 @@ pub async fn resume_command(
         );
     }
 
+    // Names captured before the paths move into the RunRequest below.
+    let workflow_display = workflow_path.display().to_string();
+    let checkpoint_display = checkpoint.display().to_string();
+
     let completed = state.completed_rules.len();
     // Issue #690: don't count stale when-gated entries as failures in the
     // resume banner either — they are skips, and the executor will re-judge
@@ -75,6 +163,10 @@ pub async fn resume_command(
     let (failed, skipped_when_false) =
         reconcile_failed_rules(&state.failed_rules, &state.when_verdicts);
     let failed = failed.len();
+    let skipped_count = skipped_when_false.len();
+    // Issue #685: entries persisting in the running set mean the prior run
+    // died mid-flight; run_command clears them (with a warning) on start.
+    let running_count = state.running_rules().len();
 
     eprintln!(
         "{} Resuming workflow '{}'",
@@ -104,13 +196,11 @@ pub async fn resume_command(
             }
         );
     }
-    // Issue #685: entries persisting in the running set mean the prior run
-    // died mid-flight; run_command clears them (with a warning) on start.
-    if !state.running_rules().is_empty() {
+    if running_count > 0 {
         eprintln!(
             "  Note: {} {} still running when the previous run died; they will re-run.",
-            state.running_rules().len(),
-            if state.running_rules().len() == 1 {
+            running_count,
+            if running_count == 1 {
                 "rule was"
             } else {
                 "rules were"
@@ -123,6 +213,21 @@ pub async fn resume_command(
             "  {} No rules have been executed yet. Use 'oxo-flow run' instead.",
             "Note:".yellow()
         );
+        if json {
+            ResumeJson {
+                command: "resume",
+                workflow: workflow_display,
+                checkpoint: checkpoint_display,
+                status: "nothing_to_resume",
+                completed,
+                failed,
+                remaining,
+                skipped_by_when: (skipped_count > 0).then_some(skipped_count),
+                running: (running_count > 0).then_some(running_count),
+            }
+            .emit();
+            *json_written = true;
+        }
         return Ok(());
     }
 
@@ -146,7 +251,7 @@ pub async fn resume_command(
             .unwrap_or_else(|| "(workflow directory)".to_string())
     );
 
-    run_command(RunRequest {
+    let outcome = run_command(RunRequest {
         workflow: Some(workflow_path),
         jobs,
         keep_going,
@@ -168,7 +273,9 @@ pub async fn resume_command(
         cache_dir: None,
         // checkpoint already has checksums
         provenance: false,
-        // resume defaults to human-readable
+        // resume delegates to the run loop, which narrates to stderr; the
+        // `resume` document is the one emitted below, so the run summary
+        // would be a competing `{"command":"run"}` document.
         json: false,
         // resume reuses checkpoint state
         cli_args: Vec::new(),
@@ -198,5 +305,27 @@ pub async fn resume_command(
         // flag (issue #1302), not a `resume` one.
         apply_patch: None,
     })
-    .await
+    .await;
+
+    if json {
+        ResumeJson {
+            command: "resume",
+            workflow: workflow_display,
+            checkpoint: checkpoint_display,
+            status: if outcome.is_ok() {
+                "completed"
+            } else {
+                "failed"
+            },
+            completed,
+            failed,
+            remaining,
+            skipped_by_when: (skipped_count > 0).then_some(skipped_count),
+            running: (running_count > 0).then_some(running_count),
+        }
+        .emit();
+        *json_written = true;
+    }
+
+    outcome
 }

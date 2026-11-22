@@ -70,6 +70,46 @@ marker existed) is treated as compatible. See the cross-version contract in
 | `--timeout <SECS>` | — | Timeout per job in seconds (0 = disabled), or a duration like `1h`/`30m` |
 | `--no-report-snapshot` | — | Skip the automatic report snapshot after the resumed run (same flag as `run`) |
 | `--background` / `--detach` | — | Detach the resumed run into a background process and exit 0 immediately (see [Background runs (--background)](run.md#background-runs-background)); `--detach` is an alias |
+| `--json` | — | Emit one machine-readable JSON document to stdout (human logs stay on stderr); see [JSON output](#json-output) |
+
+## JSON output
+
+`--json` (the global flag) emits a single JSON document to stdout. Human
+narration — the banner, the `Resume:` line, execution progress — stays on
+stderr, so a monitor can parse stdout without scrubbing prose. This is the
+same contract as [`status`](status.md) and the rest of the run-lifecycle
+family ([`run`](run.md#json-output)).
+
+```json
+{
+  "command": "resume",
+  "workflow": "/abs/path/w.oxoflow",
+  "checkpoint": "/abs/path/.oxo-flow/checkpoint.json",
+  "status": "completed",
+  "completed": 3,
+  "failed": 0,
+  "remaining": 1,
+  "skipped_by_when": 2
+}
+```
+
+| Field | Meaning |
+|-------|---------|
+| `command` | Always `"resume"` |
+| `workflow` | The workflow path recorded in (and re-checked against) the checkpoint |
+| `checkpoint` | The checkpoint file that was loaded |
+| `status` | `nothing_to_resume` (nothing executed yet; exit 0, nothing re-run), `completed`, or `failed` |
+| `completed` | Rules already complete in the checkpoint (the "already-complete" half) |
+| `failed` | Rules recorded as failed and retried by this resume |
+| `remaining` | Rules this resume will execute (workflow rule count minus `completed`; wildcards expand later) |
+| `skipped_by_when` | Present when rules were skipped by a `when` gate; re-judged on this resume |
+| `running` | Present when the checkpoint recorded rules still running (the prior run died mid-flight); they re-run |
+
+The non-`--json` path is unchanged: exit codes and output are byte-identical
+to prior releases. A malformed checkpoint or a missing workflow still fails
+with a non-zero exit and, under `--json`, the shared structured error
+envelope (`{"command":"resume","errors":[{"code":...,"message":...}]}`)
+instead of empty stdout.
 
 ## Examples
 
@@ -79,6 +119,9 @@ oxo-flow resume .oxo-flow/checkpoint.json
 
 # Resume with 4 parallel jobs
 oxo-flow resume .oxo-flow/checkpoint.json -j 4
+
+# Machine-readable resume status
+oxo-flow resume .oxo-flow/checkpoint.json --json
 ```
 
 ## Notes
