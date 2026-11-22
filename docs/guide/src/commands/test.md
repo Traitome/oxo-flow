@@ -71,6 +71,7 @@ Deep check summary: 1 error, 3 warnings
 | `D003` | warning | System-backend binaries are in `PATH` | PATH is machine-specific (HPC module systems, containers) |
 | `D004` | warning | Reference data exists (path-like `[config]` values used in commands, `reference_dir`-derived tool indexes, `[[references]]` outputs) | Data can arrive later — see incremental arrival |
 | `D005` | warning | Biological header contract matches `[rules.types]` annotations (only for files that exist and are declared with a `[types.*]` spec or a type expression — e.g. FASTQ read groups, BAM sort order, VCF reference build) | Header introspection is evidence-based; a mismatch is a data-level contract violation, not a workflow error |
+| `D006` | warning | A `[[reference_db]]` entry's declared `checksum` matches the reference file on disk (only when the entry declares a `checksum` and a local `source` path that exists) | A declared checksum that no longer matches the file is a silent reproducibility/provenance failure |
 
 All relative paths resolve against the workflow file's directory (or
 `--workdir`), the same base the executor runs rules from. `{config.x}`
@@ -80,7 +81,7 @@ are skipped and reported by `validate`/`dry-run` instead.
 ### When-gated rules
 
 A rule whose `when` gate is statically false under the current `[config]`
-never executes, so deep checks **skip it entirely** — no D001–D005
+never executes, so deep checks **skip it entirely** — no D001–D006
 findings for paths only a skipped rule would touch, and its shell tokens
 do not trigger the `reference_dir`-derived tool-index probes (the gate
 verdict comes from the engine's own condition evaluator, the same call
