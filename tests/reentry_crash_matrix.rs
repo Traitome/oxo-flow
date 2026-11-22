@@ -15,6 +15,9 @@
 //!     read-only preview degrades with a warning and plans everything.
 //!   * unknown / older engine-version field — harmless (schema-additive):
 //!     the checkpoint loads and completed rules still skip.
+//!   * NEWER format version — a `checkpoint_format_version` past this
+//!     engine's own: Execute refuses, the read-only preview degrades
+//!     (issue #1309; the one direction additive-serde cannot guard itself).
 //!   * checkpoint missing a required field — treated as corrupt → refuses.
 //!
 //! See the `NOT_VALIDATED` list at the bottom for cases that cannot be
@@ -277,6 +280,53 @@ fn unknown_and_missing_fields_are_handled_fail_safe() {
     assert!(
         String::from_utf8_lossy(&out.stderr).contains("refusing to start"),
         "must refuse, not silently re-run"
+    );
+}
+
+#[test]
+fn newer_format_version_checkpoint_refuses_execute_and_degrades_preview() {
+    // Cross-version compatibility (issue #1309): a checkpoint written by a
+    // NEWER engine records a `checkpoint_format_version` this build cannot
+    // prove compatible. The re-entry contract forbids silently trusting its
+    // completed-rule set, so Execute must refuse and the read-only preview
+    // must degrade (plan everything) with a warning.
+    let dir = tempfile::tempdir().unwrap();
+    write_quick_workflow(dir.path());
+    let out = run(dir.path(), &[]);
+    assert!(out.status.success());
+
+    // Simulate a future build: bump the marker well past this engine's.
+    let mut ck = checkpoint(dir.path());
+    ck["checkpoint_format_version"] = serde_json::json!(9999);
+    std::fs::write(
+        dir.path().join(".oxo-flow/checkpoint.json"),
+        serde_json::to_string_pretty(&ck).unwrap(),
+    )
+    .unwrap();
+
+    // Execute: fail safe — refuse, never silently skip on untrusted state.
+    let out = run(dir.path(), &[]);
+    assert!(
+        !out.status.success(),
+        "Execute must refuse a newer-format checkpoint"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("NEWER oxo-flow build") && stderr.contains("refusing to start"),
+        "must name the newer format and refuse: {stderr}"
+    );
+
+    // Read-only preview: degrade with a warning, keep dry-run usable.
+    let out = Command::new(workspace_bin("oxo-flow"))
+        .args(["dry-run", "wf.oxoflow"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "dry-run must still succeed");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("NEWER oxo-flow build") && stderr.contains("never"),
+        "preview must warn and plan everything: {stderr}"
     );
 }
 

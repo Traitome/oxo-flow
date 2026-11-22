@@ -9,7 +9,8 @@ use oxo_flow_core::config::WorkflowConfig;
 use oxo_flow_core::config_impact::{ConfigChangeReport, config_value_string};
 use oxo_flow_core::dag::WorkflowDag;
 use oxo_flow_core::executor::{
-    CheckpointState, ExecutorConfig, LocalExecutor, WorkdirLock, output_tail_bytes_from_env,
+    CHECKPOINT_FORMAT_VERSION, CheckpointCompat, CheckpointState, ExecutorConfig, LocalExecutor,
+    WorkdirLock, output_tail_bytes_from_env,
 };
 use oxo_flow_core::rule::{Rule, parse_duration_secs};
 use std::collections::{HashMap, HashSet};
