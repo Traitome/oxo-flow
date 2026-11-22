@@ -1,7 +1,10 @@
 //! Workflow transpilation modules for Nextflow and Snakemake conversion.
 
 pub mod nextflow;
+pub mod nextflow_export;
 pub mod snakemake;
+
+pub use nextflow_export::export_nextflow;
 
 use crate::error::Result;
 use serde::{Deserialize, Serialize};

@@ -182,6 +182,7 @@ nav:
       - env: commands/env.md
       - runs: commands/runs.md
       - export: commands/export.md
+      - export-dsl: commands/export-dsl.md
       - format: commands/format.md
       - graph: commands/graph.md
       - import: commands/import.md

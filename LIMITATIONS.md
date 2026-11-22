@@ -48,6 +48,15 @@ WDL, and no importers for those formats are currently available.
   `validate` → `lint` → `dry-run` gates. Semantic-equivalence testing across a
   representative corpus is still open work (see ROADMAP.md Phase 12.3), and
   `nextflow.config` profiles/labels/`publishDir` behavior is not imported.
+- **Nextflow DSL2 export covers the round-trip subset only, one direction** —
+  `oxo-flow export-dsl` emits a parsed `.oxoflow` workflow back to Nextflow
+  DSL2 over the same documented subset the importer accepts
+  (`docs/guide/src/commands/export-dsl.md`). Everything outside it is a
+  **hard error naming the construct** — never silent loss — and there is no
+  Snakemake/CWL/WDL export. The measured round trip over the import fixture
+  corpus is byte-identical for the Nextflow fixtures; workflow name/version
+  and `sample_pattern` travel as comments because the importer re-derives
+  them, and `types` contracts are re-derived from tool-name/IO inference.
 - **No built-in cloud object storage streaming** — oxo-flow supports
   `s3://` and `gs://` URIs via feature flags (`s3-storage`, `gcs-storage`),
   but data is fully downloaded before execution rather than streamed.
