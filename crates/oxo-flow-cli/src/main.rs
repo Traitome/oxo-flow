@@ -260,6 +260,16 @@ pub enum Commands {
         /// solution).
         #[arg(long)]
         strict_envs: bool,
+        /// Apply a repaired workflow document from FILE when a rule fails:
+        /// the file is a WHOLE workflow (the same shape `apply_fix` writes),
+        /// applied through the identical verified-repair path the AI-decided
+        /// fix uses (validate -> archive -> atomic write -> ONE verification
+        /// rerun -> REPAIR_APPLIED / REPAIR_RERUN_* checkpoint contract).
+        /// Surface-agnostic remediation (issue #1302): a human or another
+        /// tool can review a patch and hand it to the engine. Mutually
+        /// exclusive with `--ai-recover` (fail closed).
+        #[arg(long = "apply-patch", value_name = "FILE")]
+        apply_patch: Option<PathBuf>,
     },
     /// Resume an interrupted workflow from a checkpoint.
     Resume {
@@ -1597,6 +1607,7 @@ async fn main() -> Result<()> {
             allow_protected_drift,
             from_rule,
             strict_envs,
+            apply_patch,
         } => {
             // ── Background runs (issue #158) ─────────────────────────────
             // The foreground process never executes the workflow: it spawns
@@ -1765,6 +1776,7 @@ async fn main() -> Result<()> {
                 checkpoint_override: checkpoint,
                 allow_protected_drift,
                 strict_envs,
+                apply_patch,
             })
             .await?
         }
@@ -2308,6 +2320,8 @@ async fn main() -> Result<()> {
                         from_rule: None,
                         // test keeps the graceful env fallback
                         strict_envs: false,
+                        // test applies no reviewed patch
+                        apply_patch: None,
                     })
                     .await
                 );
