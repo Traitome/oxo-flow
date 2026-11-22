@@ -265,6 +265,15 @@ own run loop and does not fire these hooks yet. Placeholders: every
 `[config]` key is available as `{config.<key>}`, plus `{succeeded}`,
 `{failed}`, `{skipped}`, and `{workdir}`. Unknown keys stay literal.
 
+The cluster submission paths (`oxo-flow run --profile <name>` and
+`oxo-flow cluster submit`) do **not** run these hooks — the job script
+generator renders only the rule command and never enters the CLI run
+loop. A workflow that declares `on_complete`/`on_error` is **rejected at
+plan time** on the cluster path (issue #1340) rather than silently
+dropped; remove the hooks or run the workflow locally
+(`oxo-flow run`). The rule-level hooks below are rejected on the cluster
+path the same way.
+
 **Cross-run chaining.** A command in `on_complete` runs synchronously
 inside the finishing run (bounded by `OXO_FLOW_HOOK_TIMEOUT_SECS`, default
 300 s), so a downstream `oxo-flow run` started there keeps the upstream
@@ -1109,6 +1118,14 @@ retries = 3
 - **`on_failure`**: Runs if the main command fails, *after* all `retries` have been exhausted.
 
 Hook commands support the same `{config.x}` / `{input}` / `{output}` placeholder expansion as `shell`.
+
+**Cluster submission does not run these hooks.** The cluster job
+generators (`oxo-flow run --profile <name>`, `oxo-flow cluster submit`)
+render only the rule command, so a declared rule hook never reaches the
+scheduler. A workflow that declares `pre_exec`/`on_success`/`on_failure`
+is **rejected at plan time** on the cluster path (issue #1340) — the same
+for workflow-level `on_complete`/`on_error` — rather than silently
+dropped. Remove the hooks or run the workflow locally (`oxo-flow run`).
 
 Hooks are bounded like rule shells: their stdout/stderr is captured through the same
 capped collector (a chatty hook can no longer grow the engine's memory without

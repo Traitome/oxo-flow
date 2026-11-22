@@ -370,11 +370,7 @@ pub fn undefined_config_refs(rule: &Rule, config: &WorkflowConfig) -> Vec<Diagno
     if let Some(ref output_pattern) = rule.output_pattern {
         check("output_pattern", output_pattern, &mut diagnostics);
     }
-    for (field, hook) in [
-        ("pre_exec", &rule.pre_exec),
-        ("on_success", &rule.on_success),
-        ("on_failure", &rule.on_failure),
-    ] {
+    for (field, hook) in rule.lifecycle_hooks() {
         if let Some(hook) = hook {
             check(field, hook, &mut diagnostics);
         }

@@ -372,6 +372,50 @@ fn reject_unbound_placeholders(
     ))
 }
 
+/// Lifecycle hooks (rule-level `pre_exec` / `on_success` / `on_failure`,
+/// workflow-level `on_complete` / `on_error`) are run by the local executor
+/// only. The cluster script generators take just the bare shell command, so
+/// a workflow that fires hooks locally would silently no-op them on a
+/// scheduler with no diagnostic (issue #1340). Reject at plan time, naming
+/// every offending rule and hook field, and point at the local path.
+///
+/// The hook fields are enumerated by `Rule::lifecycle_hooks` /
+/// `WorkflowMeta::lifecycle_hooks` in core — the same definitions the local
+/// executor's placeholder gate uses — so the set cannot drift (reuse, never
+/// retype).
+fn reject_lifecycle_hooks(
+    plan: &ScheduledPlan,
+    config: &WorkflowConfig,
+    to_run: &HashSet<String>,
+) -> Result<()> {
+    let mut offenders: Vec<String> = Vec::new();
+    for name in to_run {
+        let Some(sr) = plan.rules.get(name) else {
+            continue; // not schedulable — skipped later, nothing to submit
+        };
+        for (field, hook) in sr.rule.lifecycle_hooks() {
+            if hook.is_some() {
+                offenders.push(format!("{name}: `{field}`"));
+            }
+        }
+    }
+    for (field, hook) in config.workflow.lifecycle_hooks() {
+        if hook.is_some() {
+            offenders.push(format!("(workflow): `{field}`"));
+        }
+    }
+    if offenders.is_empty() {
+        return Ok(());
+    }
+    Err(anyhow::anyhow!(
+        "lifecycle hooks are not supported on the cluster path yet — the job \
+         script generator renders only the command, so these hooks would be \
+         silently dropped on the scheduler; remove them or run the workflow on \
+         the local path (`oxo-flow run`) instead:\n  {}",
+        offenders.join("\n  ")
+    ))
+}
+
 /// Create `.oxo-flow/runs/<timestamp>/` and repoint the `latest` symlink.
 ///
 /// The timestamp is the directory name so runs sort chronologically with
@@ -832,6 +876,7 @@ pub(crate) async fn run_on_cluster(
     reject_localrules(&plan, &to_run)?;
     reject_scratch_rules(&plan, &to_run)?;
     reject_unbound_placeholders(&plan, args.config, &to_run)?;
+    reject_lifecycle_hooks(&plan, args.config, &to_run)?;
 
     let driver_defaults = DriverConfig::default();
     let mut max_submitted = args
@@ -1064,6 +1109,7 @@ mod tests {
     use super::cluster_env_cache_dir;
     use super::plan_submissions;
     use super::reject_checkpoint_reentry;
+    use super::reject_lifecycle_hooks;
     use super::reject_localrules;
     use super::reject_scratch_rules;
     use super::reject_unbound_placeholders;
@@ -1555,6 +1601,127 @@ shell = "mkdir -p out/S1 && echo started > out/S1/done.txt && sleep 45 && echo d
             reject_unbound_placeholders(&plan, &config, &to_run).is_ok(),
             "[engine] strict_placeholders = false must restore warn-only mode"
         );
+    }
+
+    /// A plan whose single rule declares a rule-level lifecycle hook.
+    fn rule_hook_plan(
+        workdir: &std::path::Path,
+        hook_field: &str,
+    ) -> (WorkflowConfig, ScheduledPlan) {
+        let toml = format!(
+            "[workflow]\nname = \"hooks\"\n[[rules]]\nname = \"align\"\n\
+             {hook_field} = \"echo hooked\"\nshell = \"true\"\noutput = [\"out.txt\"]\n"
+        );
+        let path = workdir.join("wf.oxoflow");
+        std::fs::write(&path, toml).unwrap();
+        let mut config = WorkflowConfig::from_file(&path).unwrap();
+        config.apply_defaults();
+        config.expand_wildcards().unwrap();
+        let dag = WorkflowDag::from_rules(&config.rules).unwrap();
+        let plan = ScheduledPlan::build(
+            &config,
+            &dag,
+            workdir,
+            &EnvironmentResolver::new(),
+            &HashMap::new(),
+        )
+        .unwrap();
+        (config, plan)
+    }
+
+    /// A plan whose `[workflow]` declares a terminal lifecycle hook.
+    fn workflow_hook_plan(
+        workdir: &std::path::Path,
+        hook_field: &str,
+    ) -> (WorkflowConfig, ScheduledPlan) {
+        let toml = format!(
+            "[workflow]\nname = \"hooks\"\n{hook_field} = \"echo done\"\n\
+             [[rules]]\nname = \"align\"\nshell = \"true\"\noutput = [\"out.txt\"]\n"
+        );
+        let path = workdir.join("wf.oxoflow");
+        std::fs::write(&path, toml).unwrap();
+        let mut config = WorkflowConfig::from_file(&path).unwrap();
+        config.apply_defaults();
+        config.expand_wildcards().unwrap();
+        let dag = WorkflowDag::from_rules(&config.rules).unwrap();
+        let plan = ScheduledPlan::build(
+            &config,
+            &dag,
+            workdir,
+            &EnvironmentResolver::new(),
+            &HashMap::new(),
+        )
+        .unwrap();
+        (config, plan)
+    }
+
+    #[test]
+    fn rule_lifecycle_hooks_are_rejected_on_the_cluster_plan() {
+        // Issue #1340: rule-level hooks run under the local executor only —
+        // the cluster script generator renders just the command, so a hook
+        // would be silently dropped. The gate must reject, naming the rule
+        // and the hook field, before anything leaves for the scheduler.
+        for field in ["pre_exec", "on_success", "on_failure"] {
+            let dir = tempfile::tempdir().unwrap();
+            let (config, plan) = rule_hook_plan(dir.path(), field);
+            let to_run: std::collections::HashSet<String> = plan.order.iter().cloned().collect();
+            let msg = reject_lifecycle_hooks(&plan, &config, &to_run)
+                .unwrap_err()
+                .to_string();
+            assert!(
+                msg.contains("align") && msg.contains(field) && msg.contains("oxo-flow run"),
+                "the rejection must name the rule, the `{field}` hook, and the local path: {msg}"
+            );
+        }
+    }
+
+    #[test]
+    fn workflow_lifecycle_hooks_are_rejected_on_the_cluster_plan() {
+        // Issue #1340: workflow-level terminal hooks are owned by the CLI run
+        // loop, which the cluster path does not enter.
+        for field in ["on_complete", "on_error"] {
+            let dir = tempfile::tempdir().unwrap();
+            let (config, plan) = workflow_hook_plan(dir.path(), field);
+            let to_run: std::collections::HashSet<String> = plan.order.iter().cloned().collect();
+            let msg = reject_lifecycle_hooks(&plan, &config, &to_run)
+                .unwrap_err()
+                .to_string();
+            assert!(
+                msg.contains(field) && msg.contains("oxo-flow run"),
+                "the rejection must name the `{field}` hook and the local path: {msg}"
+            );
+        }
+    }
+
+    #[test]
+    fn lifecycle_hook_gate_passes_plain_workflows() {
+        // No hooks declared => cluster submit behavior is byte-identical.
+        let dir = tempfile::tempdir().unwrap();
+        let toml = "[workflow]\nname = \"clean\"\n[[rules]]\nname = \"align\"\n\
+                    shell = \"true\"\noutput = [\"out.txt\"]\n";
+        let path = dir.path().join("clean.oxoflow");
+        std::fs::write(&path, toml).unwrap();
+        let mut config = WorkflowConfig::from_file(&path).unwrap();
+        config.apply_defaults();
+        config.expand_wildcards().unwrap();
+        let dag = WorkflowDag::from_rules(&config.rules).unwrap();
+        let plan = ScheduledPlan::build(
+            &config,
+            &dag,
+            dir.path(),
+            &EnvironmentResolver::new(),
+            &HashMap::new(),
+        )
+        .unwrap();
+        let to_run: std::collections::HashSet<String> = plan.order.iter().cloned().collect();
+        assert!(reject_lifecycle_hooks(&plan, &config, &to_run).is_ok());
+    }
+
+    #[test]
+    fn lifecycle_hook_gate_ignores_rules_outside_this_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let (config, plan) = rule_hook_plan(dir.path(), "pre_exec");
+        assert!(reject_lifecycle_hooks(&plan, &config, &std::collections::HashSet::new()).is_ok());
     }
 
     #[test]

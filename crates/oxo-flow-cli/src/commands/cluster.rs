@@ -915,6 +915,22 @@ pub async fn cluster_command(action: ClusterAction, json: bool) -> Result<()> {
             )
             .with_secret_refs(oxo_flow_core::backend::secret_refs_from_env());
 
+            // Workflow-level terminal hooks (on_complete/on_error) are owned by
+            // the CLI run loop, which `cluster submit` never enters, so they
+            // would be silently dropped (issue #1340). Reject before rendering
+            // any script. The hook fields come from the shared
+            // `WorkflowMeta::lifecycle_hooks` definition.
+            for (field, hook) in config.workflow.lifecycle_hooks() {
+                if hook.is_some() {
+                    return Err(anyhow::anyhow!(
+                        "workflow-level lifecycle hook `{field}` is not supported by \
+                         `cluster submit` — the CLI run loop that fires it is not entered on the \
+                         cluster path, so the hook would be silently dropped; remove it or run \
+                         the workflow on the local path (`oxo-flow run`) instead"
+                    ));
+                }
+            }
+
             for rule_name in &order {
                 let rule = config
                     .get_rule(rule_name)
@@ -931,6 +947,23 @@ pub async fn cluster_command(action: ClusterAction, json: bool) -> Result<()> {
                          would leave this machine the moment its script is submitted; remove \
                          `localrule = true` or run the workflow on the local path (`oxo-flow run`) instead"
                     ));
+                }
+
+                // Lifecycle hooks are run by the local executor only. `cluster
+                // submit` renders just the command, so a declared rule hook
+                // would be silently dropped (issue #1340). Refuse to render a
+                // script, naming the rule and the hook field, rather than
+                // no-op it. The hook fields come from the shared
+                // `Rule::lifecycle_hooks` definition (reuse, never retype).
+                for (field, hook) in rule.lifecycle_hooks() {
+                    if hook.is_some() {
+                        return Err(anyhow::anyhow!(
+                            "lifecycle hook `{field}` on rule '{rule_name}' is not supported by \
+                             `cluster submit` — the job script renders only the command, so the \
+                             hook would be silently dropped on the scheduler; remove it or run \
+                             the workflow on the local path (`oxo-flow run`) instead"
+                        ));
+                    }
                 }
 
                 let shell_cmd = match oxo_flow_core::executor::process::build_execution_command(

@@ -348,6 +348,23 @@ pub struct WorkflowMeta {
     pub profile_mode: Option<ProfileMode>,
 }
 
+impl WorkflowMeta {
+    /// The workflow-level terminal hooks, each paired with its TOML field
+    /// name (issue #1340): `on_complete`, `on_error`.
+    ///
+    /// One definition shared by the local terminal-hook runner and the
+    /// cluster plan-time hook gate so the set of workflow-level hook fields
+    /// cannot drift between them. Only the local run loop runs these hooks;
+    /// the cluster path drops them.
+    #[must_use]
+    pub fn lifecycle_hooks(&self) -> [(&'static str, Option<&str>); 2] {
+        [
+            ("on_complete", self.on_complete.as_deref()),
+            ("on_error", self.on_error.as_deref()),
+        ]
+    }
+}
+
 fn default_version() -> String {
     "0.1.0".to_string()
 }
