@@ -1,0 +1,49 @@
+# Execution-equivalence fixture: expand_filter (Snakemake arm).
+# Expand over samples -> per-sample score -> fan-in threshold filter.
+# Same pinned container digest, same relative output paths.
+#
+# Container is a config knob: registry host uses the pinned docker URL
+# (default); air-gapped host passes a SIF built FROM the same digest:
+#   snakemake --use-singularity --config container=/path/to/python.sif
+SAMPLES = ["s1", "s2", "s3"]
+IMAGE = config.get(
+    "container",
+    "docker://python@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+)
+
+rule all:
+    input:
+        "results/kept.tsv"
+
+rule score:
+    input:
+        "data/{sample}.fastq"
+    output:
+        "quant/{sample}.sf"
+    container:
+        IMAGE
+    shell:
+        r"""
+        export LC_ALL=C
+        mkdir -p quant
+        reads=$(grep -c '^@' {input})
+        bases=$(awk 'NR%4==2 {{n+=length($0)}} END {{print n+0}}' {input})
+        gc=$(awk 'NR%4==2 {{g+=gsub(/[GCgc]/,"")}} END {{print g+0}}' {input})
+        score=$((gc * 10 / bases + reads))
+        echo "sample: {wildcards.sample}" > {output}
+        echo "score: $score" >> {output}
+        """
+
+rule filter:
+    input:
+        expand("quant/{sample}.sf", sample=SAMPLES)
+    output:
+        "results/kept.tsv"
+    container:
+        IMAGE
+    shell:
+        r"""
+        export LC_ALL=C
+        mkdir -p results
+        awk -F': ' '/^sample:/ {{s=$2}} /^score:/ {{if ($2+0 >= 7) print s}}' {input} | sort > {output}
+        """
