@@ -1,10 +1,10 @@
-.PHONY: ci fmt clippy build test coverage bench bench-macro bench-compare audit deny aws-legacy-tripwire issue-id-tripwire npmmirror-tripwire truthset-stamp secrets docs frontend-lint frontend-test schema-drift skill-drift sync-skill version-check eval-tests eval-lint eval-verify provenance-check extension-test extension-integration desktop-smoke contributors frontend-build frontend-dev dev bundle-static bundle-desktop bundle-macos bundle-deb bundle-rpm bundle-appimage help
+.PHONY: ci fmt clippy build test coverage bench bench-macro bench-compare audit deny aws-legacy-tripwire issue-id-tripwire npmmirror-tripwire truthset-stamp secrets docs frontend-lint frontend-test schema-drift skill-drift sync-skill version-check eval-tests eval-lint eval-verify provenance-check reports-regen extension-test extension-integration desktop-smoke contributors frontend-build frontend-dev dev bundle-static bundle-desktop bundle-macos bundle-deb bundle-rpm bundle-appimage help
 
 ## Run all local CI quality-gate checks. Same gates as the "Test" job in
 ## ci.yml, but the invocations are not identical: `test` runs single-threaded
 ## (--test-threads=1, deterministic locally; CI runs the default parallelism)
 ## and `frontend-lint` uses `npm install` where CI uses `npm ci`.
-ci: fmt clippy build test schema-drift skill-drift version-check audit deny aws-legacy-tripwire issue-id-tripwire npmmirror-tripwire truthset-stamp secrets docs frontend-lint eval-tests eval-lint provenance-check extension-test
+ci: fmt clippy build test schema-drift skill-drift version-check audit deny aws-legacy-tripwire issue-id-tripwire npmmirror-tripwire truthset-stamp secrets docs frontend-lint eval-tests eval-lint provenance-check reports-regen extension-test
 
 fmt:
 	cargo fmt -- --check
@@ -128,6 +128,19 @@ eval-verify:
 ## entry. Regenerate the manifest with `--emit` after pinning a new build.
 provenance-check:
 	python3 eval/benchmarks/provenance_manifest.py --check
+
+## Regeneration gate for the publication-facing reports' generator outputs
+## (#1305): re-runs the four generators (provider-free) and byte-diffs the
+## markdown outputs / selective-key diffs the JSON outputs against the
+## committed snapshots in eval/benchmarks/snapshots/, failing closed on drift.
+## Host-dependent fields (hardware host inventory, cohort wall-time latency)
+## are excluded BY NAME in eval/benchmarks/reports_regen.py — never silently —
+## and an unexpected new generator field fails the gate. The hand-authored
+## report bodies themselves are NOT generator output (ledger wave-5 honesty
+## finding); their attribution is gated by provenance-check above. Refresh a
+## snapshot after a deliberate generator change with --emit, review, commit.
+reports-regen:
+	python3 eval/benchmarks/reports_regen.py --check
 
 ## Run frontend Playwright e2e tests (needs the Rust server; see ci.yml).
 frontend-test:

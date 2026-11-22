@@ -51,12 +51,16 @@ The final report must include:
 ## 4. Generator Relationship (provenance note)
 
 This report is a **hand-authored status document**. It contains no measured
-numbers, so it carries no provenance entry in
-`eval/benchmarks/provenance_manifest.py`. The generator
-`eval/benchmarks/sus_survey_analysis.py` refuses to render anything but a
-synthetic "Synthetic Human-Factors Harness Check" table; it cannot regenerate
-this file byte-for-byte and does not produce study results. The generator
-produces the raw harness-check table, the report states the evidence status.
+numbers; its machine-readable provenance record is the key
+`docs/superpowers/plans/sus-survey-report.md` in
+`eval/benchmarks/provenance_manifest.json` (validated by `make provenance-check`),
+which pins the generator run behind the committed snapshot, not a measurement.
+The generator `eval/benchmarks/sus_survey_analysis.py` refuses to render
+anything but a synthetic "Synthetic Human-Factors Harness Check" table; it
+cannot regenerate this file byte-for-byte and does not produce study results.
+The generator produces the raw harness-check table (snapshot-committed at
+`eval/benchmarks/snapshots/sus_survey_harness_check.md` and byte-gated by
+`make reports-regen`), the report states the evidence status.
 
 ## 5. Current Decision
 
