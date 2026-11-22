@@ -575,7 +575,14 @@ pub fn set_run_rate_limit_for_tests(limit: u32) {
 /// the CLI's checkpoint lives there, and two CLIs on one checkpoint corrupt
 /// it. The helper is shared by create, retry, and resume so all three paths
 /// declare the SAME admission policy instead of each hand-rolling one.
-async fn claim_run_row(
+///
+/// A rejected claim is reported as `Ok(false)` (zero affected rows), the sole
+/// input the retry/resume arms map to `409 RUN_NOT_TERMINAL`. Exposed
+/// `#[doc(hidden)] pub` so the backend-parity harness
+/// (`tests/admission_backend_parity.rs`) can drive the SAME helper against
+/// both backends and assert identical verdicts.
+#[doc(hidden)]
+pub async fn claim_run_row(
     backend: &dyn crate::infra::db::StorageBackend,
     run: &models::RunRow,
 ) -> Result<bool, String> {

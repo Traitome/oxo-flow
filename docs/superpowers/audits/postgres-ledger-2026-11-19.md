@@ -154,12 +154,21 @@ mid-transaction), and two-instance sharing, on one `postgres:16` server.
 - **Not production-scale.** N=16/32 on a 4-core host with a handful of rows.
   **Production row counts, large tables, and index degradation are NOT
   measured.** The `page_total=9` pagination check is correctness, not scale.
-- **SQLite re-check NOT done.** This run measures **PostgreSQL only**. The
-  behavioral parity of the SQLite backend's equivalent guard was **not**
-  re-measured here. "Parity" in the ROADMAP row refers to the PostgreSQL path
-  matching the documented `StorageBackend` contract (already pinned by
+- **This run measures PostgreSQL only.** The behavioral parity of the SQLite
+  backend's equivalent guard was **not** re-measured here. "Parity" in the
+  ROADMAP row refers to the PostgreSQL path matching the documented
+  `StorageBackend` contract (already pinned by
   `postgres_storage_contract.rs`), not to a fresh SQLite-vs-PostgreSQL
-  differential on this ledger.
+  differential on this ledger. **Follow-up (issue #1312,
+  `tests/admission_backend_parity.rs`):** the SQLite-vs-PostgreSQL differential
+  this section names now exists — one shared scenario driver (workdir/pipeline
+  serialization, concurrent double-claim, terminal release, `Ok(false)`
+  rejection) is run through the production `claim_run_row` helper against both
+  backends and each backend's verdict vector is compared to one canonical
+  contract. It is a same-host, single-process verdict comparison; it does not
+  supersede the N-way concurrency, crash-recovery, or two-instance measurements
+  above, and it does **not** close the pool-exhaustion / network-partition /
+  multi-instance gaps below.
 - **Pool exhaustion NOT exercised.** The concurrency run stays within the pool's
   connection budget; saturation/timeout behavior under a tiny pool is **NOT**
   measured. (Only "the pool still hands out a connection afterwards" is
@@ -173,8 +182,10 @@ mid-transaction), and two-instance sharing, on one `postgres:16` server.
   found.
 
 **What would move it forward**: a remote PostgreSQL, a large seeded table for
-index/plan evidence, pool-saturation and network-partition injection, and a
-SQLite-vs-PostgreSQL differential on the same guard.
+index/plan evidence, pool-saturation and network-partition injection. (The
+SQLite-vs-PostgreSQL differential on the same guard this list once named now
+exists — `tests/admission_backend_parity.rs`, issue #1312 — but it is a
+same-host verdict comparison, not a remote/scale measurement.)
 
 ## 8. Raw-data lineage
 
@@ -184,6 +195,7 @@ SQLite-vs-PostgreSQL differential on the same guard.
 | Harness (bash) | `scripts/postgres-ledger-campaign.sh` |
 | Guard implementation | `crates/oxo-flow-web/src/infra/db/postgres.rs` (`insert_run_guarded`, partial indexes) |
 | Contract baseline | `crates/oxo-flow-web/tests/postgres_storage_contract.rs` |
+| Backend-parity differential | `crates/oxo-flow-web/tests/admission_backend_parity.rs` (issue #1312) |
 | baseline commit | `1face885104d24af95b213d52b90ed68373ab957` (`origin/main` at branch point) |
 | Repo commit measured | `923ea6a4606087cbbc91f08abd74e288a5f01a8f` (this PR's head — harness/test/script live here) |
 | Host | `VM-4-4-ubuntu`, 4 CPU, 3.6 GiB RAM, `postgres:16` (16.16) container |
