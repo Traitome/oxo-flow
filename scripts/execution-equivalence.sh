@@ -21,6 +21,9 @@
 #   EQ_NEXTFLOW_BIN, EQ_NEXTFLOW_PROFILE (-with-docker | -profile apptainer)
 #   EQ_SNAKEMAKE_BIN, EQ_SNAKEMAKE_CONTAINER (a .sif path or docker://...)
 #   EQ_SNAKEMAKE_EXTRA
+#   EQ_RECORDS_PATH — copy the raw per-run records JSON here (ledger §8 raw
+#     run-level data). Unset keeps them ephemeral (the scratch dir is removed
+#     on exit); a measured campaign must set it to a committed location.
 #
 # OXO_FLOW_BIN overrides --bin; default resolves target/debug then PATH.
 set -euo pipefail

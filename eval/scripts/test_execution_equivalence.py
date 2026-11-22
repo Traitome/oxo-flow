@@ -15,6 +15,7 @@ scripts/execution_equivalence_run.py:
 import contextlib
 import importlib.util
 import io
+import json
 import os
 import subprocess
 import sys
@@ -199,6 +200,69 @@ class RunnerProcessStubTests(unittest.TestCase):
                 capture_output=True, text=True, env=env)
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertIn("SKIPPED=3", p.stdout)
+
+
+class PerRunRecordingTests(unittest.TestCase):
+    # Issue #1304 deliverable: per-run recording of engine version, peak RSS,
+    # and disk I/O — added AFTER the first recorded campaign (the audit doc's
+    # §8 amendment states this), so the harness records them for every future
+    # run even though the committed 2026-11-21 campaign predates the fields.
+
+    def test_engine_version_captured_from_version_flag(self):
+        with tempfile.TemporaryDirectory() as d:
+            stub = Path(d) / "stub-engine"
+            stub.write_text("#!/bin/sh\necho 'stub-engine 9.9.9'\n")
+            stub.chmod(0o755)
+            self.assertEqual(runner.engine_version([str(stub), "--version"]),
+                             "stub-engine 9.9.9")
+
+    def test_engine_version_none_when_engine_cannot_answer(self):
+        self.assertIsNone(
+            runner.engine_version(["definitely-not-a-binary-1304", "--version"]))
+
+    def test_run_returns_usage_with_exactly_documented_keys(self):
+        rc, secs, tail, usage = runner.run(
+            ["/bin/sh", "-c", "exit 0"], os.getcwd(), dict(os.environ))
+        self.assertEqual(rc, 0)
+        self.assertEqual(
+            set(usage),
+            {"peak_rss_rusage_maxrss", "block_io_in_delta",
+             "block_io_out_delta", "block_io_units"})
+        self.assertIsInstance(usage["peak_rss_rusage_maxrss"], int)
+        self.assertIsInstance(usage["block_io_in_delta"], int)
+        self.assertIsInstance(usage["block_io_out_delta"], int)
+        # Block-I/O deltas can be 0 (macOS does not fill ru_inblock/ru_oublock;
+        # Linux does) but never negative — a negative would mean the delta was
+        # computed across concurrent children, which the sequential runner
+        # forbids.
+        self.assertGreaterEqual(usage["block_io_in_delta"], 0)
+        self.assertGreaterEqual(usage["block_io_out_delta"], 0)
+        # The units note must carry the high-water honesty caveat verbatim.
+        self.assertIn("HIGH-WATER", usage["block_io_units"].upper())
+
+    def test_records_persisted_via_eq_records_path(self):
+        with tempfile.TemporaryDirectory() as d:
+            stub = Path(d) / "oxo-flow-stub"
+            stub.write_text("#!/bin/sh\nexit 1\n")
+            stub.chmod(0o755)
+            keep = Path(d) / "nested" / "records.json"
+            scratch = Path(d) / "scratch"
+            env = dict(os.environ)
+            env["EQ_NEXTFLOW_BIN"] = "absent-1304"
+            env["EQ_SNAKEMAKE_BIN"] = "absent-1304"
+            env["EQ_RECORDS_PATH"] = str(keep)
+            p = subprocess.run(
+                [sys.executable, str(RUNNER), str(ROOT), str(stub), str(scratch)],
+                capture_output=True, text=True, env=env)
+            self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+            self.assertIn("raw records persisted: %s" % keep, p.stdout)
+            records = json.loads(keep.read_text())
+            # Every arm record carries the new per-run fields, even when the
+            # arm did not run (None values recorded, never silently dropped).
+            for fixture in records["fixtures"].values():
+                for rec in fixture.values():
+                    self.assertIn("engine_version", rec)
+                    self.assertIn("usage", rec)
 
 
 if __name__ == "__main__":
