@@ -1094,6 +1094,40 @@ pub async fn create_run(
         if let Some(resolved) = admission_config.as_ref() {
             quota_usage = quota_usage_for_config(resolved);
         }
+        // E005 undefined-config gate (issue #1289, audit RB-04 residual): the
+        // CLI hard-fails `run`/`dry-run` BEFORE the DAG builds when a rule
+        // references an undefined `{config.<key>}`. The web must run the SAME
+        // canonical gate on the RESOLVED config (includes merged) AFTER
+        // `config_overrides` are applied, so it can never persist a run row the
+        // spawned CLI would refuse. Fail closed with the layer's 400 RUN_ERROR
+        // shape and create no row (RB-03) — placed before the workdir claim
+        // below like every other 400-producing gate.
+        let mut gate_config = match admission_config.as_ref() {
+            Some(resolved) => resolved.clone(),
+            None => oxo_flow_core::config::WorkflowConfig::parse(toml)
+                .map_err(|e| err(StatusCode::BAD_REQUEST, "RUN_ERROR", format!("Parse: {e}")))?,
+        };
+        if !validated_overrides.is_empty() {
+            let overrides: std::collections::HashMap<String, String> = validated_overrides
+                .iter()
+                .filter_map(|kv| {
+                    kv.split_once('=')
+                        .map(|(k, v)| (k.trim_start_matches('-').to_string(), v.to_string()))
+                })
+                .collect();
+            gate_config.apply_config_overrides(&overrides);
+        }
+        let e005 = oxo_flow_core::format::undefined_config_findings(&gate_config);
+        if !e005.is_empty() {
+            return Err(err(
+                StatusCode::BAD_REQUEST,
+                "RUN_ERROR",
+                format!(
+                    "workflow references undefined config variables — fix before running:\n  {}",
+                    e005.join("\n  ")
+                ),
+            ));
+        }
         if let Some(resolved_config) = admission_config {
             let resolved_dag = oxo_flow_core::dag::WorkflowDag::from_rules_with_config(
                 &resolved_config.rules,

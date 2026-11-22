@@ -650,19 +650,9 @@ pub(crate) fn run_group_title(group: Option<&str>) -> String {
 /// and `dry-run`, so the three surfaces can never disagree about a typo'd
 /// key. Returns the human-readable findings (rule, key, fix) or empty.
 pub(crate) fn undefined_config_findings(config: &WorkflowConfig) -> Vec<String> {
-    config
-        .rules
-        .iter()
-        .flat_map(|rule| oxo_flow_core::format::undefined_config_refs(rule, config))
-        .map(|d| {
-            format!(
-                "rule '{}': {} ({})",
-                d.rule.as_deref().unwrap_or("<unknown>"),
-                d.message,
-                d.suggestion.unwrap_or_default()
-            )
-        })
-        .collect()
+    // Shaping lives in core so the web admission path (issue #1289) reports
+    // the exact same findings — reuse, never retype.
+    oxo_flow_core::format::undefined_config_findings(config)
 }
 
 /// Fail-fast gate for EXTERNAL source inputs: a required input pattern that

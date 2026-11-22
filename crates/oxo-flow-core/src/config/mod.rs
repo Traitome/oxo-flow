@@ -129,6 +129,36 @@ impl WorkflowConfig {
         crate::config_impact::config_placeholder_map(&self.config)
     }
 
+    /// Declared `[config]` keys — the set a CLI/API override key
+    /// canonicalizes onto (issue #794) and the set the undefined-config
+    /// (E005) gate treats as already defined.
+    #[must_use]
+    pub fn declared_config_keys(&self) -> std::collections::HashSet<String> {
+        self.config.keys().cloned().collect()
+    }
+
+    /// Apply parsed `KEY=VALUE` config overrides onto this config, mirroring
+    /// the CLI's `apply_cli_overrides` injection (issue #62): a declared key
+    /// spelled with hyphens canonicalizes onto its declared spelling
+    /// (issue #794); every key is inserted as a string value so
+    /// `{config.<key>}` resolves. Undeclared keys are inserted literally, the
+    /// same as the CLI. Shared by the CLI override phase and the web
+    /// run-admission undefined-config gate (issue #1289) so both surfaces see
+    /// the identical post-override config.
+    pub fn apply_config_overrides(
+        &mut self,
+        overrides: &std::collections::HashMap<String, String>,
+    ) {
+        let declared = self.declared_config_keys();
+        for (k, v) in overrides {
+            let key = if declared.contains(k) {
+                k.clone()
+            } else {
+                canonicalize_override_key(k, &declared).unwrap_or_else(|| k.clone())
+            };
+            self.config.insert(key, toml::Value::String(v.clone()));
+        }
+    }
     /// Validate the workflow configuration for internal consistency.
     #[must_use = "validation returns a Result that must be checked"]
     pub fn validate(&self) -> Result<()> {
@@ -955,6 +985,37 @@ impl WorkflowConfig {
                     .is_some_and(|values| values.is_empty()),
             }
         })
+    }
+}
+
+/// Resolve a config-override key that does not exactly match a declared
+/// `[config]` key by normalizing hyphens to underscores (issue #794). Returns
+/// the declared key only when the normalization is unambiguous — a normalized
+/// form that maps to two declared keys is left alone (the caller then applies
+/// issue #62/#71 semantics to the literal spelling). The single source of
+/// truth shared by the CLI override parser and
+/// [`WorkflowConfig::apply_config_overrides`] (web admission, issue #1289).
+/// Callers invoke this only after an exact-match check, so a key reaching here
+/// always contains a hyphen and the result never equals the input.
+#[must_use]
+pub fn canonicalize_override_key(
+    key: &str,
+    declared_config_keys: &std::collections::HashSet<String>,
+) -> Option<String> {
+    if !key.contains('-') {
+        return None;
+    }
+    let normalized = key.replace('-', "_");
+    if declared_config_keys.contains(&normalized) {
+        return Some(normalized);
+    }
+    let matches: Vec<&String> = declared_config_keys
+        .iter()
+        .filter(|d| d.replace('-', "_") == normalized)
+        .collect();
+    match matches.as_slice() {
+        [only] => Some((*only).clone()),
+        _ => None,
     }
 }
 

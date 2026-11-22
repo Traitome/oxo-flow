@@ -293,17 +293,19 @@ Required exit evidence:
 
 **Severity**: P1
 
-**Maturity**: Partial (2026-11-19, #1216) — admission resolves the staged include graph through the canonical loader and runs the same core checker as CLI preflight; overrides are not yet applied to the admission graph
+**Maturity**: Partial (2026-11-21, #1289) — admission resolves the staged include graph through the canonical loader and runs the same core checker as CLI preflight; the E005 undefined-config gate now also runs on the resolved+overridden config, but the BioType type pass is still evaluated without `config_overrides` applied
 
 Web run creation stages the workflow and all `include_files` sources, re-parses through the
 canonical `from_file` path (the same machinery CLI preflight uses — the old text-scan
 `TYPED_ADMISSION_UNSUPPORTED` gate is gone), and runs `validate_workflow_types` on the merged
 config. Typed declarations are detected structurally from the parsed document (table and inline
-forms); unrelated staged assets do not participate. The remaining parity gap: the admission graph
-is built from the workflow file's `[config]` table WITHOUT `config_overrides` applied, while the
-CLI applies overrides before its identical gate — a typed workflow whose routing depends on
-overridden `{config.*}` values is admitted on a different graph than the one the CLI later
-executes (the CLI's own preflight still gates the real run, so this is parity, not safety).
+forms); unrelated staged assets do not participate. Undefined `{config.*}` references are
+rejected pre-persistence by the shared E005 gate on the resolved+overridden config (#1289). The
+remaining parity gap: the BioType type pass is built from the workflow file's `[config]` table
+WITHOUT `config_overrides` applied, while the CLI applies overrides before its identical type
+gate — a typed workflow whose routing depends on overridden `{config.*}` values is admitted on a
+different type graph than the one the CLI later executes (the CLI's own preflight still gates the
+real run, so this is parity, not safety).
 
 Evidence:
 
@@ -311,13 +313,13 @@ Evidence:
 - `crates/oxo-flow-core/src/format.rs:1108`
 - `crates/oxo-flow-web/src/domains/execution/service.rs` (`validate_workflow_types` call and focused tests)
 - `crates/oxo-flow-web/src/domains/execution/handlers.rs` (resolved-admission path: stage → `from_file` → `validate_workflow_types`)
-- `crates/oxo-flow-web/tests/api_contract_hardening.rs` (`create_run_rejects_invalid_biotypes_before_persistence`, `create_run_accepts_a_compatible_typed_workflow`, `create_run_accepts_typed_workflows_with_overrides`, `create_run_accepts_include_that_declares_types`, `create_run_ignores_unrelated_staged_toml_that_declares_types`, `create_run_fails_closed_when_a_reachable_include_is_unstaged`, `create_run_fails_closed_for_an_unstaged_include_without_optional_fields`, `create_run_fails_closed_for_a_git_include_without_optional_fields`, `create_run_accepts_direct_types_with_an_unrelated_staged_asset`, `create_run_rejects_a_dot_alias_of_the_main_workflow_key`, `create_run_rejects_duplicate_canonical_include_keys`, `create_run_rejects_case_insensitive_duplicate_include_keys`, `create_run_detects_types_through_a_dot_alias_include_key`)
+- `crates/oxo-flow-web/tests/api_contract_hardening.rs` (`create_run_rejects_invalid_biotypes_before_persistence`, `create_run_accepts_a_compatible_typed_workflow`, `create_run_accepts_typed_workflows_with_overrides`, `create_run_rejects_undefined_config_ref_before_persistence`, `create_run_admits_workflow_when_config_ref_is_overridden`, `create_run_accepts_include_that_declares_types`, `create_run_ignores_unrelated_staged_toml_that_declares_types`, `create_run_fails_closed_when_a_reachable_include_is_unstaged`, `create_run_fails_closed_for_an_unstaged_include_without_optional_fields`, `create_run_fails_closed_for_a_git_include_without_optional_fields`, `create_run_accepts_direct_types_with_an_unrelated_staged_asset`, `create_run_rejects_a_dot_alias_of_the_main_workflow_key`, `create_run_rejects_duplicate_canonical_include_keys`, `create_run_rejects_case_insensitive_duplicate_include_keys`, `create_run_detects_types_through_a_dot_alias_include_key`)
 
 Required exit evidence:
 
 - Direct invalid declared types receive a structured `400` before run-row persistence; unit and API tests cover this boundary.
-- Undefined config references must receive the same pre-persistence rejection.
-- CLI and web admission must evaluate the same resolved workflow and invoke the same canonical checker — includes are resolved; `config_overrides` must be applied to the admission graph to complete parity.
+- Undefined config references must receive the same pre-persistence rejection. — MET (2026-11-21, #1289): admission runs the CLI's plan-time E005 gate (`oxo_flow_core::format::undefined_config_findings`, the same function the CLI wrapper calls) on the resolved config AFTER `config_overrides` are applied, and fails closed with `400 RUN_ERROR` before the workdir/row claim. Arms (a)/(b) in `create_run_rejects_undefined_config_ref_before_persistence` / `create_run_admits_workflow_when_config_ref_is_overridden` (`crates/oxo-flow-web/tests/api_contract_hardening.rs`): the undefined reference is rejected with `COUNT(*) FROM runs` == 0, and the otherwise-identical workflow with the key supplied through `config_overrides` is admitted.
+- CLI and web admission must evaluate the same resolved workflow and invoke the same canonical checker — includes are resolved; `config_overrides` must be applied to the admission graph to complete parity. — PARTIAL: the E005 undefined-config gate now evaluates the resolved+overridden config (above), but the BioType `validate_workflow_types` pass still runs on the resolved config WITHOUT `config_overrides` applied (the spawned CLI re-runs the identical type gate with overrides before executing, so this stays parity, not a safety gap).
 - Declaration detection must be parser-derived and table-driven across every supported TOML spelling; an uninspectable source must fail closed.
 - The remote-include policy must be explicit and fail closed, with tests for network access, pinned repository includes, cycles, and path aliases.
 
