@@ -246,6 +246,45 @@ class StubToolTests(unittest.TestCase):
         self.assertEqual(res.returncode, 1)
         self.assertIn("disk", res.stderr)
 
+    def test_simtool_cpu_ulimit_libload_modes(self):
+        # Three distinct repairable fault classes beyond OOM/timeout/disk,
+        # each parameterized by its own [config] key so a resource change
+        # flips it to success.
+        res = self._run(
+            "simtool", "cpushare", "--need-cpu", "8", "--have-cpu", "2", "-o", "a.txt"
+        )
+        self.assertEqual(res.returncode, 1)
+        self.assertIn("CPU time limit", res.stderr)
+        self.assertFalse((self.workdir / "a.txt").is_file())
+        res = self._run(
+            "simtool", "cpushare", "--need-cpu", "8", "--have-cpu", "8", "-o", "a.txt"
+        )
+        self.assertEqual(res.returncode, 0)
+        self.assertTrue((self.workdir / "a.txt").is_file())
+
+        self.workdir.joinpath("a.txt").unlink()
+        res = self._run(
+            "simtool", "fdpool", "--need-fd", "4096", "--have-fd", "1024", "-o", "b.vcf"
+        )
+        self.assertEqual(res.returncode, 1)
+        self.assertIn("too many open files", res.stderr)
+        res = self._run(
+            "simtool", "fdpool", "--need-fd", "4096", "--have-fd", "4096", "-o", "b.vcf"
+        )
+        self.assertEqual(res.returncode, 0)
+        self.assertTrue((self.workdir / "b.vcf").is_file())
+
+        res = self._run(
+            "simtool", "libload", "--need-abi", "7", "--have-abi", "3", "-o", "r.txt"
+        )
+        self.assertEqual(res.returncode, 127)
+        self.assertIn("error while loading shared libraries", res.stderr)
+        res = self._run(
+            "simtool", "libload", "--need-abi", "7", "--have-abi", "7", "-o", "r.txt"
+        )
+        self.assertEqual(res.returncode, 0)
+        self.assertTrue((self.workdir / "r.txt").is_file())
+
     def test_seeded_command_strings_do_not_carry_code_tokens(self):
         # Stage-1 static detection must be engine-grounded, not a coincidence
         # of the fault-seed text: the simtool subcommand names deliberately

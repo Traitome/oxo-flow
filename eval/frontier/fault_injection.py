@@ -50,6 +50,9 @@ Controlled Fault Categories:
   * INFRA_OOM_SIGNAL: Task terminated via SIGKILL / exit code 137 (OOM Killer).
   * INFRA_TIMEOUT_SIGNAL: Task terminated via SIGXCPU (signal 24; shell exit 152 = 128+24).
   * INFRA_DISK_PRESSURE: Temporary scratch volume capacity exhaustion (ENOSPC).
+  * INFRA_CPU_STARVATION: CPU-time-limit / EAGAIN thread starvation.
+  * INFRA_OPEN_FILE_LIMIT: Open-file descriptor budget exhaustion (EMFILE).
+  * INFRA_MISSING_SHARED_LIB: Exit 127 missing shared-library dependency.
 
 Usage:
   python3 eval/frontier/fault_injection.py [--binary /path/to/oxo-flow]
@@ -656,6 +659,133 @@ output = ["temp_output.dat"]
 shell = "simtool bigscratch --need-gb 10 --free-gb {config.scratch_gb} -o temp_output.dat"
 """,
     ),
+    FaultCase(
+        fault_id="infra_cpu_thread_starvation",
+        category="infrastructure",
+        description=(
+            "Thread-starved tool aborts with a CPU-time-limit / EAGAIN "
+            "error; the thread allocation is a declared [config] key so a "
+            "resource-change repair genuinely fixes the fault"
+        ),
+        target_rule="thread_heavy_step",
+        expected_diagnostic_code="cpu_limit",
+        expected_repair_action="ScaleResources",
+        runtime_class="rule_failure",
+        executability_note=(
+            "fault is parameterized by [config] cpu_threads (2) against a "
+            "workload needing 8 threads; raising the allocation re-runs to "
+            "success against the simtool stub"
+        ),
+        toml_template="""[workflow]
+name = "fault_test_cpu"
+
+[config]
+cpu_threads = 2
+
+[[rules]]
+name = "thread_heavy_step"
+output = ["align_summary.txt"]
+shell = "simtool cpushare --need-cpu 8 --have-cpu {config.cpu_threads} -o align_summary.txt"
+
+[rules.resources]
+threads = 2
+""",
+        repaired_toml="""[workflow]
+name = "fault_test_cpu"
+
+[config]
+cpu_threads = 8
+
+[[rules]]
+name = "thread_heavy_step"
+output = ["align_summary.txt"]
+shell = "simtool cpushare --need-cpu 8 --have-cpu {config.cpu_threads} -o align_summary.txt"
+
+[rules.resources]
+threads = 8
+""",
+    ),
+    FaultCase(
+        fault_id="infra_open_file_limit",
+        category="infrastructure",
+        description=(
+            "Tool exhausts its open-file descriptor budget and aborts with "
+            "EMFILE (too many open files); the descriptor budget is a "
+            "declared [config] key so a resource-change repair genuinely "
+            "fixes the fault"
+        ),
+        target_rule="many_files_step",
+        expected_diagnostic_code="ulimit",
+        expected_repair_action="ScaleResources",
+        runtime_class="rule_failure",
+        executability_note=(
+            "fault is parameterized by [config] fd_limit (1024) against a "
+            "workload needing 4096 descriptors; raising the budget re-runs "
+            "to success against the simtool stub"
+        ),
+        toml_template="""[workflow]
+name = "fault_test_nofile"
+
+[config]
+fd_limit = 1024
+
+[[rules]]
+name = "many_files_step"
+output = ["merged.vcf"]
+shell = "simtool fdpool --need-fd 4096 --have-fd {config.fd_limit} -o merged.vcf"
+""",
+        repaired_toml="""[workflow]
+name = "fault_test_nofile"
+
+[config]
+fd_limit = 4096
+
+[[rules]]
+name = "many_files_step"
+output = ["merged.vcf"]
+shell = "simtool fdpool --need-fd 4096 --have-fd {config.fd_limit} -o merged.vcf"
+""",
+    ),
+    FaultCase(
+        fault_id="infra_missing_shared_library",
+        category="infrastructure",
+        description=(
+            "Tool aborts with exit 127 loading a missing shared library; "
+            "the required ABI level is a declared [config] key so a "
+            "configuration-change repair genuinely fixes the fault"
+        ),
+        target_rule="library_dependent_step",
+        expected_diagnostic_code="shared_library",
+        expected_repair_action="InsertBridgeRule",
+        runtime_class="rule_failure",
+        executability_note=(
+            "fault is parameterized by [config] abi_level (3) against a "
+            "toolchain requiring ABI level 7; raising the level re-runs to "
+            "success against the simtool stub"
+        ),
+        toml_template="""[workflow]
+name = "fault_test_libdep"
+
+[config]
+abi_level = 3
+
+[[rules]]
+name = "library_dependent_step"
+output = ["report.txt"]
+shell = "simtool libload --need-abi 7 --have-abi {config.abi_level} -o report.txt"
+""",
+        repaired_toml="""[workflow]
+name = "fault_test_libdep"
+
+[config]
+abi_level = 7
+
+[[rules]]
+name = "library_dependent_step"
+output = ["report.txt"]
+shell = "simtool libload --need-abi 7 --have-abi {config.abi_level} -o report.txt"
+""",
+    ),
 ]
 
 
@@ -752,8 +882,8 @@ need=""; have=""; out=""
 prev=""
 for a in "$@"; do
     case "$prev" in
-        --need-mb|--need-min|--need-gb) need="$a";;
-        --have-mb|--have-min|--free-gb) have="$a";;
+        --need-*) need="$a";;
+        --have-*|--free-*) have="$a";;
         -o) out="$a";;
     esac
     prev="$a"
@@ -778,6 +908,15 @@ case "$mode" in
     bigscratch)
         echo "No space left on device (disk): workload requires ${need}G scratch, ${have}G free" >&2
         exit 1;;
+    cpushare)
+        echo "CPU time limit exceeded: workload needs $need threads, allocation $have (EAGAIN)" >&2
+        exit 1;;
+    fdpool)
+        echo "tool error: too many open files (EMFILE): workload requires $need descriptors, allocated $have" >&2
+        exit 1;;
+    libload)
+        echo "libtool: error while loading shared libraries: libbio.so.2: cannot open shared object file" >&2
+        exit 127;;
     *)
         echo "simtool: unknown mode '$mode'" >&2
         exit 1;;
