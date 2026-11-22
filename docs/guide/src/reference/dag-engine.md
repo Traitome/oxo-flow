@@ -316,6 +316,7 @@ Resolve by giving each rule distinct output paths (e.g., `caller_a/{sample}.vcf`
 | `Rule not found: 'name'` | `-t` target references a non-existent rule | Check spelling; try prefix matching (`-t al` may match `align`); use `oxo-flow graph` to list all rule names (unknown `depends_on` references are caught by `oxo-flow validate`) |
 | `resource budget too small for N rules` | A rule's request exceeds an explicit `--max-threads`/`--max-memory` budget | Increase the budget, lower the rule's declaration, or drop the flag (auto-detected capacity is soft — over-capacity rules are clamped and run alone) |
 | `resource exhausted: rule 'x' requires N of resource group 'g' (declared capacity: M)` | A rule's group requirement exceeds the declared `[resource_groups]` capacity | Raise the declared capacity or lower the rule's group requirement |
+| `resource busy: rule 'x' requires N of resource group 'g' which is at capacity right now (K free)` | The group is momentarily full and `[resource_groups.g] wait = "fail"` forbids waiting | Retry when the group frees, raise its `max`, or set `wait = "queue"` to wait for a slot instead of failing |
 
 ---
 

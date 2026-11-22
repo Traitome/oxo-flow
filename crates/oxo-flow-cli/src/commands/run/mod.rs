@@ -1168,6 +1168,14 @@ async fn run_command_inner(
             .iter()
             .map(|(k, v)| (k.clone(), v.max))
             .collect(),
+        // Wait policy per group (issue #1346): previously dropped, so a
+        // declared `wait = "fail"` was a silent no-op. Propagating it lets
+        // the executor fail fast instead of queueing when the group is busy.
+        resource_group_wait: config
+            .resource_groups
+            .iter()
+            .map(|(k, v)| (k.clone(), v.wait))
+            .collect(),
         skip_env_setup,
         cache_dir: cache_dir.clone(),
         interpreter_map: config.workflow.interpreter_map.clone(),

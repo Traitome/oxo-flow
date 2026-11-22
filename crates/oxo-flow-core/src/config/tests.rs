@@ -11330,3 +11330,36 @@ fn engine_dispatch_order_defaults_to_rule_and_parses_sample() {
         "an unknown dispatch_order must fail to parse"
     );
 }
+
+// issue #1346: the `[resource_groups.<name>] wait` key is typed (not a
+// free-form string), so a typo cannot silently fall back to the default
+// (historically the value was accepted, stored, and dropped).
+#[test]
+fn resource_group_wait_policy_parses_and_rejects_unknown_values() {
+    let fail = WorkflowConfig::parse(&format!(
+        "{MINIMAL_WORKFLOW}\n[resource_groups.api]\nmax = 2\nwait = \"fail\"\n"
+    ))
+    .expect("wait = \"fail\" must parse");
+    assert_eq!(
+        fail.resource_groups.get("api").map(|g| g.wait),
+        Some(crate::config::WaitPolicy::Fail)
+    );
+
+    let queue = WorkflowConfig::parse(&format!(
+        "{MINIMAL_WORKFLOW}\n[resource_groups.api]\nmax = 2\n"
+    ))
+    .expect("a group with no wait key must parse");
+    assert_eq!(
+        queue.resource_groups.get("api").map(|g| g.wait),
+        Some(crate::config::WaitPolicy::Queue),
+        "the default wait strategy is queue"
+    );
+
+    assert!(
+        WorkflowConfig::parse(&format!(
+            "{MINIMAL_WORKFLOW}\n[resource_groups.api]\nmax = 2\nwait = \"bogus\"\n"
+        ))
+        .is_err(),
+        "an unknown wait value must fail to parse, not silently default"
+    );
+}
