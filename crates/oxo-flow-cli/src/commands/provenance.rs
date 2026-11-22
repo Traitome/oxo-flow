@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use colored::Colorize;
 use serde::Serialize;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -188,6 +189,41 @@ pub fn provenance_verify_command(checkpoint_path: PathBuf, json: bool) -> Result
     if let Some(path) = checkpoint.get("workflow_path").and_then(|v| v.as_str()) {
         eprintln!("  {} workflow path: {}", "•".dimmed(), path);
     }
+
+    // Environment-lock identity (issue #1274, design bet 4): the per-rule
+    // resolved container digest / env lock hash / explicit sentinel recorded
+    // at run start. Surfaced so a cross-arch comparison can read it and assert
+    // (or deny) environment-lock equality instead of assuming it. Read-only —
+    // verification of the checksums below is unaffected.
+    let env_lock_identity: BTreeMap<String, String> = checkpoint
+        .get("env_lock_identity")
+        .and_then(|v| v.as_object())
+        .map(|obj| {
+            obj.iter()
+                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                .collect()
+        })
+        .unwrap_or_default();
+    if !env_lock_identity.is_empty() {
+        let resolved = env_lock_identity
+            .values()
+            .filter(|v| oxo_flow_core::env_lock::env_lock_is_resolved(v))
+            .count();
+        eprintln!(
+            "  {} environment-lock identity: {}/{} rule(s) resolved",
+            "•".dimmed(),
+            resolved,
+            env_lock_identity.len()
+        );
+        for (rule, value) in &env_lock_identity {
+            let mark = if oxo_flow_core::env_lock::env_lock_is_resolved(value) {
+                "•".dimmed()
+            } else {
+                "!".yellow()
+            };
+            eprintln!("    {mark} {rule}: {value}");
+        }
+    }
     eprintln!();
 
     // Try embedded checksums first, then companion file. Non-string values
@@ -284,6 +320,7 @@ pub fn provenance_verify_command(checkpoint_path: PathBuf, json: bool) -> Result
                         "missing": 0,
                         "cleaned": 0,
                         "entries": [],
+                        "env_lock_identity": env_lock_identity,
                         "note": "No stored checksums found. Run workflow with --provenance to enable tracking.",
                     },
                 });
@@ -305,6 +342,7 @@ pub fn provenance_verify_command(checkpoint_path: PathBuf, json: bool) -> Result
                     "missing": 0,
                     "cleaned": 0,
                     "entries": [],
+                    "env_lock_identity": env_lock_identity,
                     "note": "No completed rules or checksums found in the checkpoint.",
                 },
             });
@@ -384,6 +422,7 @@ pub fn provenance_verify_command(checkpoint_path: PathBuf, json: bool) -> Result
                 "missing": missing,
                 "cleaned": cleaned,
                 "entries": entries,
+                "env_lock_identity": env_lock_identity,
             },
         });
         println!("{}", serde_json::to_string_pretty(&output)?);

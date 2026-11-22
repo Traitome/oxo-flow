@@ -639,6 +639,21 @@ pub struct CheckpointState {
     /// whenever no repair was applied.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repair_record: Option<RepairRecord>,
+
+    /// Environment-lock identity per rule (issue #1274, design bet 4): the
+    /// resolved environment identity the rule actually ran under, recorded so
+    /// a future cross-architecture comparison can PROVE OR DENY that both
+    /// observation arms shared an identical environment lock instead of
+    /// assuming it. Value shape is the self-describing `"<kind>|<value>"`
+    /// string produced by [`crate::env_lock::compute_env_lock_identity`] —
+    /// e.g. `docker|repo@sha256:...` (resolved image digest), `pixi|sha256:...`
+    /// (key-ordered lock hash), or an explicit sentinel
+    /// (`...|unresolved` / `...|unavailable`) a caller can test with
+    /// [`crate::env_lock::env_lock_is_resolved`]. Never a fabricated digest.
+    /// Legacy checkpoints load with an empty map.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub env_lock_identity: BTreeMap<String, String>,
 }
 
 /// Canonical on-the-wire form: template → combos → key-sorted
@@ -773,6 +788,7 @@ impl CheckpointState {
             protected_tree_baselines: BTreeMap::new(),
             env_repro_degraded: false,
             repair_record: None,
+            env_lock_identity: BTreeMap::new(),
         }
     }
 
@@ -954,6 +970,15 @@ impl CheckpointState {
             let key = format!("{}@{} {}", p.repo, p.git_ref, p.path);
             self.include_resolutions.insert(key, p.resolved_sha.clone());
         }
+    }
+
+    /// Record the per-rule environment-lock identity (issue #1274, design bet
+    /// 4). The map is keyed by rule name and each value is the self-describing
+    /// `"<kind>|<value>"` string from
+    /// [`crate::env_lock::compute_env_lock_identity`]. Overwrites the whole
+    /// map: it is recomputed once at run start from the resolved workflow.
+    pub fn set_env_lock_identity(&mut self, identity: BTreeMap<String, String>) {
+        self.env_lock_identity = identity;
     }
 
     /// Resolve the HEAD commit SHA of the git repository containing
