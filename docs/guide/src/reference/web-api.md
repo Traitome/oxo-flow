@@ -679,12 +679,12 @@ by staging `workflow.oxoflow` and all `include_files` sources on disk, then
 re-parsing through the canonical `from_file` path (the same machinery the
 CLI preflight uses) and running `validate_workflow_types` on the merged
 config. This covers typed workflows with local include graphs and typed
-includes (issue #1018). Scope note: the admission graph is built from the
-workflow file's `[config]` table without `config_overrides` applied — the
-CLI's own preflight re-runs the identical gate with overrides applied before
-anything executes, so a workflow whose routing depends on an overridden
-value fails at the spawned CLI, not silently (issue #1152 remaining gap).
-Unresolvable includes
+includes (issue #1018). `config_overrides` are resolved and applied to that
+admission graph through the same shared `oxo-flow-core::config` helpers the
+CLI preflight uses, **before** the DAG is built and `validate_workflow_types`
+runs — so a workflow whose routing depends on an overridden `{config.*}`
+value is admitted on the same resolved graph the CLI later executes
+(issue #1277, closing the RB-04 parity gap). Unresolvable includes
 (`repo = ...` git includes, missing files) surface as
 `400 {"code":"RUN_ERROR"}` from the canonical parser — not a blanket
 typed-admission rejection. Only the host workflow and locally staged sources
@@ -735,12 +735,16 @@ Execution flags are forwarded to the CLI executor:
 - `config_overrides` (array of strings, optional) passes CLI config
   overrides through to the spawned run as `--arg=KEY=VALUE` entries. Each
   entry must be a non-empty `KEY=VALUE` string (`400
-  INVALID_CONFIG_OVERRIDE` otherwise); full override semantics
-  (canonicalization, unknown keys, declared-key value checks) are enforced
-  by the CLI — it **warns on unknown keys** (they change nothing) and
-  **hard-fails on an invalid value for a declared key** (e.g.
-  `config 'min_quality' expects an integer`). A typo in an override key is
-  therefore only a warning, not a run failure.
+  INVALID_CONFIG_OVERRIDE` otherwise). Overrides are resolved through the
+  shared `oxo-flow-core::config` resolver and applied to the admission graph
+  itself before the DAG is built and `validate_workflow_types` runs, so the
+  typed-admission check sees the same resolved workflow the spawned CLI
+  executes (issue #1277). The spawned CLI additionally enforces unknown keys
+  (it **warns on unknown keys**, which change nothing) and **hard-fails on an
+  invalid value for a declared key** (e.g. `config 'min_quality' expects an
+  integer`); those validation failures now also surface at admission as `400
+  RUN_ERROR`. A typo in an override key is therefore only a warning, not a
+  run failure.
   Cluster (`cluster_id`) runs carry the same overrides into the remote
   wrapper command. Overrides and include-file keys are validated **before**
   the run row is persisted, so a `400` never leaves a ghost `queued` run
