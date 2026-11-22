@@ -611,6 +611,16 @@ impl DiagnosticsEngine {
         GLOBAL.get_or_init(Self::new)
     }
 
+    /// Identifiers of every registered pattern, in declaration order.
+    ///
+    /// Exposed so out-of-module corpus tests can assert coverage and compute
+    /// a per-pattern confusion matrix over the *real* pattern table without
+    /// retyping it (issue #1316). Read-only view; changes no matching behavior.
+    #[must_use]
+    pub fn pattern_ids(&self) -> Vec<&'static str> {
+        self.patterns.iter().map(|p| p.id).collect()
+    }
+
     /// Analyze log output and optional exit code for a given rule.
     pub fn analyze(
         &self,

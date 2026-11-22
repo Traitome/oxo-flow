@@ -1,0 +1,41 @@
+# Real-tool benign handshake / banner lines that MUST NOT fire any pattern.
+# Each block is a blank-line-separated realistic multi-line stdout tail from a
+# successful tool run (STAR/BWA/samtools/conda/pixi/docker/fastqc). These carry
+# tool vocabulary ("version", "supported", "library", "so.") that error patterns
+# must not misread. See crates/oxo-flow-core/tests/diagnostic_corpus.rs.
+
+STAR --runThreadN 8 --genomeDir ref --readFilesIn R1.fq.gz R2.fq.gz
+STAR version: 2.7.11b compiled: 2023-05-25T15:00:00
+Genome version: GRCh38.p14
+Started job on |	Nov 21 10:00:00
+Number of reads: 42000000
+
+bwa mem -t 8 ref.fa R1.fq.gz R2.fq.gz
+[M::bwa_idx_load_from_disk] read 0 ALT contigs
+[M::mem_process_seqs] Processed 100000 reads in 12.5 CPU sec, 1.6 real sec
+
+samtools sort -@ 4 -o sample.sorted.bam sample.bam
+[bam_sort_core] merging from 0 files and 4 in-memory blocks...
+real	1m20.5s
+
+conda activate rnaseq
+conda 24.1.2 activated environment: rnaseq
+Loading library dependencies ... done
+Reading so. many records took a while.
+
+docker version 24.0.7, build afdd53b
+docker run -v "$PWD:/data" foo/bar:latest multiqc /data
+Report is ready.
+
+fastqc --version
+FastQC v0.12.1
+Analysis complete for sample_R1.fastq
+Per base sequence quality	PASS
+
+pixi run samtools flagstat sample.bam
+pixi 0.24.2
+Loading library dependencies ... done
+Input files found: 6
+INFO: processing 4 samples with 8 threads
+The zoom level was set to 5.
+bwa 0.7.17-r1188 is also supported here.
