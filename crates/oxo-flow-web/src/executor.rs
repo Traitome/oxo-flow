@@ -742,7 +742,9 @@ pub fn spawn_background_run_with_args(
             payload.push("-u".into());
             payload.push(os_user.into());
         }
-        payload.push(oxo_bin.into_os_string());
+        // Cloned so the sandbox configuration below can still read the
+        // resolved binary path (grants + self-binary injection).
+        payload.push(oxo_bin.clone().into_os_string());
         payload.extend(oxo_args);
 
         // Wrap the payload in `sh -c` so the CLI's exit code is persisted to
@@ -812,6 +814,34 @@ pub fn spawn_background_run_with_args(
                 }
             }
         }
+
+        // RB-01 (#1129): the opt-in OS-level tenant boundary. The sandbox may
+        // inject per-run defaults into `spawn_envs` (per-run scratch dir,
+        // self-binary pin) and, when enabled, installs a Landlock ruleset in
+        // a pre_exec hook so the CLI and every rule shell it spawns can only
+        // reach the granted paths. Fail-closed: a configuration or kernel
+        // error refuses the spawn — a run never proceeds unsandboxed when the
+        // operator asked for the sandbox.
+        let sandbox_plan = match crate::sandbox::configure(
+            &run_dir,
+            &mut spawn_envs,
+            auth_type == "sudo",
+            &oxo_bin,
+        ) {
+            Ok(plan) => plan,
+            Err(e) => {
+                error!(
+                    "Sandbox configuration failed for run {run_id} — refusing to spawn \
+                     (fail-closed): {e}"
+                );
+                let _ = std::fs::write(
+                    run_dir.join("execution.log"),
+                    format!("run failed before spawn: sandbox unavailable: {e}\n"),
+                );
+                mark_run_failed(&run_id).await;
+                return;
+            }
+        };
         oxo_flow_core::executor::apply_rule_env_allowlist(&mut cmd, &spawn_envs, false);
 
         // RB-09 (#1133) + RB-01a (#1129): enforce the run's declared memory
@@ -819,6 +849,13 @@ pub fn spawn_background_run_with_args(
         // plus the operator's CPU/process ceilings. Applied before the spawn
         // below; a no-op off Linux (see the helper).
         apply_run_rlimits(&mut cmd, memory_limit_mb, cpu_limit_secs(), nproc_limit());
+
+        // RB-01 (#1129): attach the opt-in Landlock sandbox (filesystem +
+        // TCP network) to the same pre-exec chain. Off by default; a no-op
+        // when `configure` returned None.
+        if let Some(plan) = &sandbox_plan {
+            plan.attach(&mut cmd);
+        }
 
         // Transient fork failures (EAGAIN/ENOMEM under full-workspace
         // parallel test load, issue #120) must not permanently fail the run

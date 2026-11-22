@@ -79,20 +79,25 @@ This ledger combines static review, local tests, and command-level simulations. 
 
 **Severity**: P0
 
-**Maturity**: Partial (2026-11-19) — the environment-exposure and unbounded-CPU/process dimensions are fixed on the web spawn path (issue #1129, RB-01a); no filesystem/network namespace, uid boundary, or per-run container exists yet, so cross-tenant path-guessing reads remain possible
+**Maturity**: Partial (2026-11-23, dimensional) — on the web spawn path the environment dimension is enforced always, CPU/memory/process are rlimit-enforced on Linux (opt-in knobs), and the filesystem dimension is kernel-enforced by the opt-in `OXO_FLOW_WEB_SANDBOX=landlock` Landlock sandbox (Linux 5.13+) with TCP denial on kernel 6.7+ (ABI v4) and abstract-socket/signal scoping on 6.10+/6.12+; the sandbox is OFF by default, non-Linux hosts and UDP/ICMP/PID-namespace/uid/container dimensions remain unenforced, so cross-tenant path-guessing reads remain possible wherever the operator does not enable the sandbox
 
-Normal users can submit arbitrary workflow shell commands executed under the server account. Before RB-01a the executor inherited the server environment, so documented secrets such as `DATABASE_URL`, `OXO_FLOW_MASTER_KEY`, and provider credentials reached every rule shell. Directory confinement is still not a process, filesystem, network, or credential boundary.
+Normal users can submit arbitrary workflow shell commands executed under the server account. Before RB-01a the executor inherited the server environment, so documented secrets such as `DATABASE_URL`, `OXO_FLOW_MASTER_KEY`, and provider credentials reached every rule shell. Directory confinement alone is not a process, filesystem, network, or credential boundary.
 
-Fixed on the web spawn path (issue #1129, RB-01a):
+Fixed on the web spawn path (issue #1129, RB-01a then RB-01):
 
 - The spawned CLI no longer inherits the server environment: `spawn_background_run_with_args` reuses the engine's own rule-shell policy (`oxo_flow_core::executor::apply_rule_env_allowlist`) plus a small operator-knob allowlist, so `DATABASE_URL`, `OXO_FLOW_MASTER_KEY`, provider credentials (`ANTHROPIC_*`/`OPENAI_*`/`OLLAMA_*`/`DEEPSEEK_*`), `OXO_FLOW_AI_API_KEY`, MCP tokens, and the sign-in passwords never reach a tenant-authored shell.
 - Operator-wide `RLIMIT_CPU` (`OXO_FLOW_WEB_RLIMIT_CPU_SECS`) and `RLIMIT_NPROC` (`OXO_FLOW_WEB_RLIMIT_NPROC`) ceilings are installed alongside the existing `RLIMIT_DATA` on the spawned process tree (Linux; a no-op elsewhere — Darwin rejects these `setrlimit` calls).
 - A two-tenant adversarial test (`crates/oxo-flow-web/tests/rb01_tenant_isolation.rs`) asserts the server secrets are ABSENT from a rule shell's environment and that a CPU-spinning rule is killed; removing the allowlist call fails the test (non-vacuity recorded in PR #1241).
+- **Filesystem + TCP network (issue #1129, RB-01)**: `OXO_FLOW_WEB_SANDBOX=landlock` installs a kernel Landlock ruleset in a `pre_exec` hook (`crates/oxo-flow-web/src/sandbox.rs`): the spawned tree may read+execute system dirs and the engine binary and write only the run workdir, the per-run scratch dir, and the operator's engine dirs; `/proc` (so `/proc/<server-pid>/environ` cannot re-leak the env allowlist's omissions), `/sys`, `/etc`, the server `$HOME`, the workspace root, and other tenants' workdirs are kernel-denied, with `truncate(2)` and device ioctls handled; TCP bind/connect is denied on kernel 6.7+ (`OXO_FLOW_WEB_SANDBOX_NET=require` fails closed on older kernels). Fail-closed: an unhonorable sandbox request (kernel without Landlock, relative grant paths, unparseable knob, `require` on ABI < 4, legacy `sudo` payload) refuses the spawn and marks the run failed.
+- A second two-tenant adversarial suite (`crates/oxo-flow-web/tests/rb01_sandbox_adversarial.rs`) drives the REAL spawn path (control run sandbox-off → every probe leaks; sandbox run → tenant-B workspace read AND write denied, `/etc`, server `$HOME`, `/proc/<server>/environ` denied, TCP connect to a live listener denied on ABI ≥ 4, while the run's own workdir writes and system-binary execution still work; plus a real-engine leg where the actual `oxo-flow` CLI runs under the sandbox and a `cat <B's file>` rule fails the run). It skips with a named reason off Linux and gates the TCP-deny assertion on ABI ≥ 4.
 
-Still NOT enforced (residual — see the web API reference and the PR body):
+Still NOT enforced (residual — see the web API reference for the full matrix and the PR body):
 
-- No filesystem namespace, `unshare`/bubblewrap, uid separation, or per-run container: a malicious workflow that guesses another tenant's absolute path can still read and write it. The test asserts only that a run does not mutate tenant B's seeded file, never that B's files are unreachable.
+- The sandbox is opt-in: with `OXO_FLOW_WEB_SANDBOX` unset (the default), a malicious workflow that guesses another tenant's absolute path can still read and write it.
+- No per-run uid (the legacy `sudo` payload branch is dead — every spawn site passes `auth_type="none"`), no PID/mount namespace, no per-tenant container: same-uid shared scratch trees (`OXO_FLOW_MODULE_CACHE`/`OXO_FLOW_ENV_STORE`/write paths) remain a cross-run channel, and the run shares the kernel process table (mitigated, not eliminated, by the `/proc` denial under the sandbox).
+- Network: TCP only (Landlock ABI v4 scope); UDP and ICMP are not covered by the kernel ABI on 6.x kernels.
 - No cgroup write for memory/CPU; the ceilings are rlimits on the spawned tree, not a scheduler-enforced container.
+- The adversarial suite has NOT been executed on a Linux host yet (compile-verified via cross-check; the coordinator's Linux run is the pending execution evidence).
 
 Evidence (pre-fix):
 
@@ -103,9 +108,9 @@ Evidence (pre-fix):
 
 Required exit evidence:
 
-- A two-tenant adversarial test proves workflows cannot read another tenant's workspace, the server database, host credentials, or arbitrary host files. (Partially met: environment-secret isolation and resource ceilings are proven; filesystem reachability is not.)
+- A two-tenant adversarial test proves workflows cannot read another tenant's workspace, the server database, host credentials, or arbitrary host files. (Met under `OXO_FLOW_WEB_SANDBOX=landlock` on Linux by `rb01_sandbox_adversarial.rs` — pending execution on a Linux host; NOT met with the sandbox off, which stays today's behavior.)
 - The runner clears or allowlists the environment. (Met on the web spawn path — issue #1129.)
-- CPU, memory, process, filesystem, and network limits are enforced by an OS or container boundary. (Partially met: CPU/memory/process are rlimit-enforced on Linux; filesystem and network are not.)
+- CPU, memory, process, filesystem, and network limits are enforced by an OS or container boundary. (Partially met: CPU/memory/process are rlimit-enforced on Linux; filesystem is kernel-enforced by the opt-in Landlock sandbox; network is TCP-only on kernel 6.7+ — UDP/ICMP and namespaces remain residual.)
 
 ### RB-02: Saved-pipeline runs do not have immutable artifact snapshots
 
@@ -944,7 +949,7 @@ workflow-trust decision: do not run workflows you do not trust. Pinned by
 
 | ID | Severity | Finding | Current maturity | Evidence and remediation |
 | :--- | :---: | :--- | :--- | :--- |
-| WEB-01 | P0 | No OS-level tenant execution boundary. | Partially fixed (#1129) | RB-01. The web spawn path now clears/allowlists the child environment (server secrets — `DATABASE_URL`, `OXO_FLOW_MASTER_KEY`, provider/MCP credentials — no longer reach a tenant-authored rule shell) and installs operator-wide `RLIMIT_CPU`/`RLIMIT_NPROC` alongside `RLIMIT_DATA` on Linux. Filesystem namespace, uid separation, per-run container, and network limits remain unenforced — cross-tenant path-guessing reads are still possible. |
+| WEB-01 | P0 | No OS-level tenant execution boundary. | Partially fixed (#1129) | RB-01. The web spawn path now clears/allowlists the child environment (server secrets — `DATABASE_URL`, `OXO_FLOW_MASTER_KEY`, provider/MCP credentials — no longer reach a tenant-authored rule shell), installs operator-wide `RLIMIT_CPU`/`RLIMIT_NPROC` alongside `RLIMIT_DATA` on Linux, and — behind the opt-in `OXO_FLOW_WEB_SANDBOX=landlock` flag — kernel-enforces a Landlock filesystem grant set (run workdir + engine dirs; `/proc`, `/etc`, server `$HOME`, and other tenants' workdirs denied) with TCP bind/connect denied on kernel 6.7+. Per-run uid separation, namespaces, per-tenant containers, and UDP/ICMP remain unenforced, and the boundary requires the operator to enable the sandbox — cross-tenant path-guessing reads are still possible with the default configuration. |
 | WEB-02 | P0 | No immutable per-run artifact snapshot. | Fixed (#1130) | Every create-run executes in its own `runs/<run_id>/` workdir (never the persistent pipeline dir; retry/resume continue a lineage by design), allocated only after validation so rejected creates leave no orphan dir. Admission is `INSERT ... WHERE NOT EXISTS ... ON CONFLICT DO NOTHING` backed by partial unique indexes on live `pipeline_id`/`workdir` in both SQLite and PostgreSQL (409 on the loser; proven on live PostgreSQL by the CI smoke concurrency tests); the pipeline slot is global across readers. Tests: `sequential_runs_from_one_saved_pipeline_are_isolated`, `run_executes_the_snapshot_not_a_mutated_pipeline`, `concurrent_creates_from_one_saved_pipeline_admit_exactly_one`, `shared_pipeline_slot_is_global_across_identities`, `validation_rejected_create_leaves_no_run_directory`, `pipeline_guard_*`, `live_admission_indexes_*`, `test_concurrent_*admission*`. See RB-02. |
 | WEB-03 | P1 | Non-atomic create/stage/persist/spawn. | Fixed (#1131, 2026-11-19) | Every pre-spawn staging step is fatal and compensates (`compensate_failed_run`, `delete_run`); fault injection `pre_spawn_fault_no_spawn.rs` proves no spawn and no orphan. See RB-03. |
 | WEB-04 | P1 | Lifecycle transitions can contradict process state. | Fixed (#1116) | Resume refuses a run with no live process group (`409 RUN_NOT_RESUMABLE`) and no longer fabricates `running`; pause/resume roll back the process freeze when the status write fails. See RB-07. |

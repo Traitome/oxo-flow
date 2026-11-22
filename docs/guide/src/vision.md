@@ -97,7 +97,7 @@ The honesty charter, so the above can be trusted:
 - Type contracts detect declared state mismatches; they do not prove biological correctness.
 - Provenance anchors reproducibility evidence; bitwise reproduction across all tools and hardware is not guaranteed.
 - Repair proposals are experimental until independently verified by a successful rerun — in the seeded fault-injection campaign that loop currently closes 3/10 cases end-to-end (all 3 repairable infra faults; the other 7 are blocked upstream of the loop — measured evidence in `eval/frontier/PILOT_FINDINGS.md`).
-- PostgreSQL storage parity, cloud-batch executors, and tenant isolation carry explicit unproven/prototype labels (ROADMAP Stage 12.1).
+- PostgreSQL storage parity, cloud-batch executors, and tenant isolation carry explicit unproven/prototype labels (ROADMAP Stage 12.1). The tenant-isolation label is now dimensional, not wholesale: the environment allowlist and the CPU/memory/process rlimits are enforced on every web-spawned run (Linux rlimits where available), and — behind the opt-in `OXO_FLOW_WEB_SANDBOX=landlock` flag on Linux 5.13+ — filesystem isolation is kernel-enforced (TCP denial on kernel 6.7+), with the enforced dimensions adversarially tested through the real spawn path (`rb01_sandbox_adversarial.rs`). UDP/ICMP, PID namespaces, per-run uid identities, per-tenant containers, and the boundary itself when the operator leaves the sandbox off remain unenforced — the residual matrix in the web API reference is the source of truth.
 
 ## Citing
 

@@ -541,15 +541,22 @@ weak `W/"7"` form, a multi-token list, or `*` — is rejected with
 > backend-agnostic: if no storage backend is initialized at all, these
 > endpoints return
 > `503 {"code": "RUNS_REQUIRE_STORAGE_BACKEND", "message", "detail", "suggestion"}`.
-> Team/HPC execution also lacks an OS-level tenant boundary and must not be
-> exposed to untrusted workflow authors. Issue #1129 (RB-01a) hardens the web
-> spawn path — the child environment is allowlisted, so server secrets
-> (`DATABASE_URL`, `OXO_FLOW_MASTER_KEY`, provider/MCP credentials) no longer
-> reach a tenant-authored rule shell, and operator-wide `RLIMIT_CPU`/`RLIMIT_NPROC`
-> ceilings join the existing `RLIMIT_DATA` on Linux. There is still NO
-> filesystem namespace, uid boundary, or per-run container: a malicious workflow
-> that guesses another tenant's absolute path can still read (and write) it.
-> Treat the boundary as partial, not complete.
+> Team/HPC execution must not be exposed to untrusted workflow authors
+> without the tenant boundary below. Issue #1129 (RB-01a, then RB-01) hardens
+> the web spawn path along four axes: the child environment is allowlisted, so
+> server secrets (`DATABASE_URL`, `OXO_FLOW_MASTER_KEY`, provider/MCP
+> credentials) never reach a tenant-authored rule shell; operator-wide
+> `RLIMIT_CPU`/`RLIMIT_NPROC` ceilings join the existing `RLIMIT_DATA` on
+> Linux; and the opt-in `OXO_FLOW_WEB_SANDBOX=landlock` mode installs a
+> kernel Landlock ruleset so the spawned tree can only reach the run's own
+> workdir and an explicit grant set (other tenants' workspaces, the server
+> database, the operator's `$HOME`, `/proc`, and `/etc` are denied by the
+> kernel; TCP bind/connect is denied on kernel 6.7+). The enforcement is
+> **opt-in and Linux-only** — with the sandbox off, a workflow that guesses
+> another tenant's absolute path can still read (and write) it, and the
+> residual matrix in [Tenant isolation and the run
+> sandbox](#tenant-isolation-and-the-run-sandbox) says exactly what remains
+> unenforced. Treat the boundary as real but conditional, not complete.
 
 ```
 POST /api/runs
@@ -1846,6 +1853,78 @@ Declared resources are enforced, not only counted:
   Linux run (rlimit vs. scheduler budget) but both cap the same declared
   total; the remote path additionally applies a thread ceiling, which the
   local web path does not (the engine auto-detects there).
+
+### Tenant isolation and the run sandbox
+
+Directory confinement to a per-user workspace is not an OS boundary: without
+kernel help, a tenant-authored rule shell can open any path the *server
+account* can open. `OXO_FLOW_WEB_SANDBOX=landlock` (issue #1129, RB-01; Linux
+5.13+) installs a kernel **Landlock** ruleset in a `pre_exec` hook on the
+web spawn path, so the `oxo-flow` CLI — and every rule shell it spawns, by
+inheritance — is restricted by the kernel itself, regardless of uid. The
+grant set is:
+
+- **read + execute**: `/usr`, `/bin`, `/sbin`, `/lib`, `/lib32`, `/lib64`
+  (system binaries, dynamic libraries, locale data), the resolved engine
+  binary and its parent directory, plus `OXO_FLOW_SANDBOX_READ_PATHS`
+  (operator data/tool trees).
+- **read + write + create**: the run workdir, the run scratch dir
+  (`OXO_FLOW_TMPDIR`, defaulted to `<workdir>/.oxo-flow/tmp` per run),
+  `OXO_FLOW_MODULE_CACHE` / `OXO_FLOW_ENV_STORE` when the operator set them,
+  the engine's env-create lock dir (`$HOME/.oxo-flow/locks`), and
+  `OXO_FLOW_SANDBOX_WRITE_PATHS`. Grant trees are shared across the server
+  account's runs — grant data trees, never another tenant's workspace.
+- **everything else is denied**: `/proc` (so the server's own environment
+  cannot be re-read through `/proc/<pid>/environ` — the env allowlist alone
+  would not survive that bypass), `/sys`, `/etc`, the server's `$HOME`, the
+  workspace root, and other tenants' workdirs. `truncate(2)` and device
+  ioctls are handled too, so neither is a bypass.
+- **network (kernel 6.7+, Landlock ABI v4)**: TCP `bind`/`connect` are
+  denied outright (`OXO_FLOW_WEB_SANDBOX_NET=require` fails the spawn on
+  kernels too old to deny TCP; `deny` — the default — warns and proceeds
+  filesystem-only). On kernels 6.10+/6.12+ (ABI v5/v6) abstract-UNIX-socket
+  and cross-process signal scoping is additionally handled, so a sandboxed
+  run cannot signal the server or sibling runs.
+
+The mechanism is **fail-closed**: a requested sandbox that cannot be honored
+(kernel without Landlock, relative grant paths, unparseable knob values,
+`require`-mode on an ABI < 4 kernel, or the legacy `sudo` payload which
+`no_new_privs` would break) refuses the spawn and marks the run failed with
+the precise reason — it never silently runs unsandboxed. The sandbox also
+injects `OXO_FLOW_TMPDIR` (per-run scratch) and, when the server resolved an
+absolute engine binary, `OXO_FLOW_BIN` into the child, because
+`/proc/self/exe` is denied inside the sandbox and the engine's
+repair-verification rerun resolves its binary through `OXO_FLOW_BIN`.
+
+**Enforced vs residual, per dimension** (the adversarial suite
+`crates/oxo-flow-web/tests/rb01_sandbox_adversarial.rs` proves the enforced
+rows through the real spawn path, with an unsandboxed control run proving
+every probe would catch a regression):
+
+| Dimension | Enforced by | When |
+|---|---|---|
+| Environment/credentials | `apply_rule_env_allowlist` (RB-01a) | always, all platforms |
+| CPU | `RLIMIT_CPU` (`OXO_FLOW_WEB_RLIMIT_CPU_SECS`) | Linux, knob set |
+| Memory | `RLIMIT_DATA` (declared `[rules.resources] memory`) | Linux, workflow declares memory |
+| Process count | `RLIMIT_NPROC` (`OXO_FLOW_WEB_RLIMIT_NPROC`) | Linux, knob set |
+| Filesystem reachability | Landlock ruleset (`OXO_FLOW_WEB_SANDBOX=landlock`) | Linux 5.13+, sandbox enabled |
+| TCP network | Landlock handled-net, all TCP denied | kernel 6.7+, sandbox enabled |
+| Signals to outside processes / abstract UNIX sockets | Landlock scoped | kernel 6.10+/6.12+ |
+
+Not enforced (residual, honest list): with the sandbox **off** (default),
+none of the filesystem/network rows apply — today's behavior is unchanged;
+on non-Linux platforms the sandbox is unavailable (a requested mode fails
+closed); UDP and ICMP are outside the Landlock ABI on 6.x kernels; there is
+no PID namespace (the run shares the kernel process table — mitigated,
+not eliminated, by the `/proc` denial); already-open inherited file
+descriptors (the execution-log handle) stay writable; a granted
+`OXO_FLOW_MODULE_CACHE`/`OXO_FLOW_ENV_STORE`/write path is a shared
+same-uid channel across all runs; git-based remote `[[include]]` needs
+`OXO_FLOW_MODULE_CACHE` set and may still fail reading the operator's
+`~/.gitconfig` (vendored includes are the sandboxed pattern); per-run uid
+isolation (`sudo`-prefixed spawns) and per-tenant containers remain
+deployment modes, not enforced features. Remote (cluster) runs execute on
+the cluster host under the cluster's own controls, outside this boundary.
 
 ## Cluster Connections & Remote Execution
 
