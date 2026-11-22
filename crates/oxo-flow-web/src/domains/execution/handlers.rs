@@ -3921,6 +3921,17 @@ pub async fn verify_run_provenance(
         .get("note")
         .and_then(|v| v.as_str())
         .map(String::from);
+    // Workflow-file re-hash verdict (issue #1350): absent (JSON null) for
+    // legacy checkpoints that record no content digest. A `changed` verdict
+    // is a drift finding on the same footing as output checksum drift —
+    // the CLI exits 1 for it, so `ok` must not say otherwise.
+    let workflow_content_check: Option<ProvenanceWorkflowContentCheck> = verify
+        .get("workflow_content_check")
+        .filter(|v| !v.is_null())
+        .and_then(|v| serde_json::from_value(v.clone()).ok());
+    let workflow_content_drift = workflow_content_check
+        .as_ref()
+        .is_some_and(|c| c.status == "changed");
     Ok(Json(ProvenanceVerifyResponse {
         checkpoint: checkpoint.display().to_string(),
         matched,
@@ -3929,8 +3940,9 @@ pub async fn verify_run_provenance(
         cleaned,
         entries,
         note,
+        workflow_content_check,
         // Mirror the CLI exit policy: drift found = not ok.
-        ok: mismatched == 0 && missing == 0,
+        ok: mismatched == 0 && missing == 0 && !workflow_content_drift,
     }))
 }
 

@@ -32,14 +32,33 @@ move.
   workflow is committed.
 - The HEAD SHA alone cannot distinguish two runs of the **same**
   uncommitted workflow file. When `workflow_git_dirty` is `true`, the
-  recorded `workflow_content_hash` is the authoritative identity: it
-  changes with every edit, so two runs of a dirty file never collide on
-  provenance even though `workflow_git_sha` is identical.
-- `oxo-flow provenance verify` prints the recorded SHA, content hash, and
-  dirty marker alongside the workflow path (see
-  [provenance](../commands/provenance.md)); the JSON fields
-  (`workflow_git_sha`, `workflow_content_hash`, `workflow_git_dirty`) are
-  there for programmatic use.
+  recorded `workflow_content_hash` is the authoritative record of *which
+  bytes* executed: it changes with every edit, so two runs of a dirty file
+  never collide on provenance even though `workflow_git_sha` is identical.
+- Neither the HEAD SHA nor the raw content digest can separate two runs of
+  the same file invoked with **different `--arg KEY=VALUE` overrides** —
+  both digests are override-blind by construction. The checkpoint
+  therefore also records `workflow_resolved_hash`, a `sha256:<hex>` over
+  the canonical JSON of the raw content digest combined with the engine's
+  resolved config snapshot (the same order-independent map that drives
+  config-change invalidation: built after CLI overrides, profile merge,
+  and wildcard expansion; engine-injected keys excluded; sensitive values
+  stored as digests). Two override-driven runs of one file always differ
+  on this fingerprint; it is an identity label for run-to-run comparison
+  — re-deriving it at verify time would need the full invocation context —
+  not a verified claim.
+- `oxo-flow provenance verify` now **re-checks the raw content digest**: it
+  re-hashes the workflow file named in the checkpoint and compares it with
+  the recorded `workflow_content_hash`. A workflow edited after the run is
+  a verification finding (exit 1; JSON
+  `workflow_content_check.status = "changed"`); a file missing or
+  unreadable at its recorded path (e.g. a relocated checkpoint) is
+  reported as `unverifiable` without failing the audit. Verify prints the
+  recorded SHA, content hash, and dirty marker alongside the workflow path
+  (see [provenance](../commands/provenance.md)); the JSON fields
+  (`workflow_git_sha`, `workflow_content_hash`, `workflow_resolved_hash`,
+  `workflow_content_check`, `workflow_git_dirty`) are there for
+  programmatic use.
 - The version travels with every run artifact, closing the audit chain:
   the **run log** (`.oxo-flow/logs/oxo-flow.log`, rotated per run, see
   [run](../commands/run.md#run-logs)) carries the SHA, content hash, and

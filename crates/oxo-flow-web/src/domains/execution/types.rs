@@ -234,11 +234,28 @@ pub struct ProvenanceVerifyEntry {
     pub note: Option<String>,
 }
 
+/// Re-hash verdict for the workflow file behind a verified checkpoint
+/// (issue #1350) — mirrors the CLI's `workflow_content_check` object.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct ProvenanceWorkflowContentCheck {
+    /// `matched` (file re-hashes to the recorded digest), `changed` (the
+    /// file's bytes moved since the run — a drift finding that drives
+    /// `ok: false`), or `unverifiable` (missing/unreadable at its recorded
+    /// path — reported without failing).
+    pub status: String,
+    /// The digest recorded at run start.
+    pub recorded: String,
+    /// The digest recomputed from disk (absent for unverifiable files).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actual: Option<String>,
+}
+
 /// Response of `GET /api/runs/{id}/provenance-verify` — the parsed CLI
 /// `--json` document (`provenance verify`, issue #276). Read-only over the
 /// run's recorded output checksums: HTTP 200 even with drift (a non-zero
-/// `mismatched`/`missing` count IS the finding); the `ok` flag collapses
-/// the CLI's exit code (1 = drift found). HTTP errors are reserved for
+/// `mismatched`/`missing` count, or a workflow file that no longer matches
+/// its recorded digest, IS the finding); the `ok` flag collapses the CLI's
+/// exit code (1 = drift found). HTTP errors are reserved for
 /// infrastructure failures (spawn, parse of the CLI output) and a missing
 /// run.
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
@@ -256,8 +273,13 @@ pub struct ProvenanceVerifyResponse {
     /// `--provenance`) or no completed rules — mirrors the CLI's `note`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+    /// Workflow-file re-hash verdict (issue #1350); `None` when the
+    /// checkpoint records no content digest (legacy checkpoints).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow_content_check: Option<ProvenanceWorkflowContentCheck>,
     /// True when no drift was found (mirrors the CLI exit code: 1 =
-    /// mismatched or missing > 0).
+    /// mismatched or missing > 0, or the workflow file changed since the
+    /// run).
     pub ok: bool,
 }
 

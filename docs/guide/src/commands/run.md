@@ -1176,9 +1176,23 @@ top-level file only — the complete identity is that file plus the
 separately recorded include resolutions (`include_resolutions`, the
 per-include checkout SHAs). The HEAD
 SHA alone cannot tell two runs of the same uncommitted file apart — when
-the tree is dirty, the content hash is the authoritative identity, and it
-changes with every edit. The run log header
+the tree is dirty, the content hash is the authoritative record of which
+bytes executed, and it changes with every edit. The run log header
 (`.oxo-flow/logs/oxo-flow.log`) carries all three values.
+
+Two runs of the same file invoked with **different `--arg KEY=VALUE`
+overrides** share that raw digest (it hashes bytes, not the resolved
+workflow), so the checkpoint additionally records an **override-aware
+fingerprint** (`workflow_resolved_hash`, issue #1350): a `sha256:<hex>`
+over the raw digest combined with the engine's resolved config snapshot
+(the same order-independent map that drives config-change invalidation —
+post-override, post-profile, post-expansion; engine-injected keys
+excluded; sensitive values stored as digests). Override-driven runs of one
+file never collide on it. It is a run-to-run identity label, not a
+re-derived claim: `provenance verify` re-checks the raw content digest
+(an edited workflow is a verification failure), while reproducing the
+fingerprint would need the full invocation context. See
+[Workflow Versioning](../reference/versioning.md) for the full model.
 
 The lookup is best-effort — running outside a git repository simply omits
 the SHA and dirty fields and never fails the run. Commit your workflow
