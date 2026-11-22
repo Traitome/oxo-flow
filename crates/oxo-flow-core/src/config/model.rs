@@ -1884,19 +1884,33 @@ impl SampleMetadata {
     }
 }
 
+/// Wait strategy for a [`ResourceGroupConfig`] when the group is at capacity.
+///
+/// Mirrors the `wait` key of `[resource_groups.<name>]`. Only the two
+/// schema-documented values are accepted; any other string is a parse error,
+/// so a typo can never silently fall back to the default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WaitPolicy {
+    /// Default: a rule that needs a busy group parks in the FIFO wait loop
+    /// until a slot frees.
+    #[default]
+    Queue,
+    /// Fail fast: a rule that needs a group already at capacity errors out
+    /// immediately instead of queueing.
+    Fail,
+}
+
 /// Resource group configuration for limiting shared resources like API rate
 /// limits or database connections.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct ResourceGroupConfig {
     /// Maximum capacity of the resource (e.g., 10 for 10 concurrent connections).
     pub max: u32,
-    /// Optional wait strategy: "queue" (default) or "fail".
-    #[serde(default = "default_wait_strategy")]
-    pub wait: String,
-}
-
-fn default_wait_strategy() -> String {
-    "queue".to_string()
+    /// Wait strategy when the group is at capacity: `queue` (default) parks the
+    /// rule until a slot frees, `fail` errors the rule out immediately.
+    #[serde(default)]
+    pub wait: WaitPolicy,
 }
 
 /// Complete workflow configuration parsed from an `.oxoflow` file.

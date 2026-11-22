@@ -161,6 +161,21 @@ pub enum OxoFlowError {
         available: u32,
     },
 
+    /// Resource group busy under the `wait = "fail"` policy - the rule needs
+    /// the named group now, but the group is legitimately at capacity (its
+    /// declared maximum is not exceeded, so this is contention, not an
+    /// impossible request). Unlike [`Self::ResourceGroupExhausted`], waiting
+    /// could satisfy it - the workflow simply asked to fail fast instead.
+    #[error(
+        "resource busy: rule '{rule}' requires {required} of resource group '{group}' which is at capacity right now ({available} free); [resource_groups.{group}] declares wait = \"fail\""
+    )]
+    ResourceGroupBusy {
+        rule: String,
+        group: String,
+        required: u32,
+        available: u32,
+    },
+
     /// The run received an interrupt signal (Ctrl-C / SIGTERM / SIGHUP) and
     /// cancelled its in-flight work. Carries the interrupted job records so
     /// the caller can persist them before exiting — dropping them would lose
@@ -302,6 +317,9 @@ impl OxoFlowError {
                 ..
             } => Some(format!(
                 "reduce the '{group}' requirement from {required} to {available} or lower, or declare a larger capacity in [resource_groups]"
+            )),
+            OxoFlowError::ResourceGroupBusy { group, .. } => Some(format!(
+                "retry when the '{group}' group is free, raise its capacity in [resource_groups], or set [resource_groups.{group}] wait = \"queue\" to wait for a slot instead of failing"
             )),
             _ => None,
         }

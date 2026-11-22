@@ -1,3 +1,4 @@
+use crate::config::WaitPolicy;
 use crate::environment::{EnvironmentResolver, external_bind_mounts_for};
 use crate::error::{OxoFlowError, Result};
 use crate::rule::{FilePatterns, Rule};
@@ -331,6 +332,11 @@ pub struct ExecutorConfig {
     /// `min(explicit_or_detected, cap)`.
     pub memory_cap_mb: Option<u64>,
     pub resource_groups: HashMap<String, u32>,
+    /// Per-group wait strategy mirrored from `[resource_groups.<name>].wait`
+    /// (issue #1346): a group absent here defaults to [`WaitPolicy::Queue`],
+    /// preserving the historical block-until-free behavior. Only consulted by
+    /// the executor's resource-admission check.
+    pub resource_group_wait: HashMap<String, WaitPolicy>,
     /// Force re-execution of every rule selected for this run, even when
     /// outputs are up to date (CLI `--rerun`). Checkpoint records for
     /// rules outside this run are untouched.
@@ -422,6 +428,7 @@ impl Default for ExecutorConfig {
             thread_cap: None,
             memory_cap_mb: None,
             resource_groups: HashMap::new(),
+            resource_group_wait: HashMap::new(),
             force_rerun: false,
             force_rules: std::collections::HashSet::new(),
             skip_env_setup: false,
@@ -1938,6 +1945,38 @@ impl LocalExecutor {
                     required,
                     available,
                 });
+            }
+
+            // Wait-policy gate (issue #1346): `wait = "fail"` asks for
+            // fail-fast. The requirement fits the declared capacity (checked
+            // above), so this is contention, not impossibility: if the group
+            // is currently short of the request, error out now instead of
+            // parking in the wait loop below. The default `Queue` policy
+            // skips this branch and blocks exactly as before.
+            if matches!(
+                self.config
+                    .resource_group_wait
+                    .get(group_name)
+                    .copied()
+                    .unwrap_or(WaitPolicy::Queue),
+                WaitPolicy::Fail
+            ) {
+                let free = self
+                    .resource_pool
+                    .lock()
+                    .await
+                    .groups
+                    .get(group_name)
+                    .copied()
+                    .unwrap_or(0);
+                if free < required {
+                    return Err(OxoFlowError::ResourceGroupBusy {
+                        rule: rule.name.clone(),
+                        group: group_name.clone(),
+                        required,
+                        available: free,
+                    });
+                }
             }
         }
 
@@ -9022,6 +9061,105 @@ Error:   × failed to fetch python-3.12.16-hDEADBEEF_0_cpython.conda
         assert!(
             !cause.trim().is_empty(),
             "the captured setup stderr must reach the error message (H2): {message:?}"
+        );
+    }
+
+    // issue #1346: `[resource_groups.gpu] wait = "fail"` must fail the rule
+    // immediately when the group is momentarily busy, instead of parking in
+    // the wait loop. The requirement (1) fits the declared capacity (2), so
+    // this is contention, not an impossible request.
+    #[tokio::test]
+    async fn check_resources_fail_policy_errors_fast_when_group_busy() {
+        let config = ExecutorConfig {
+            resource_groups: HashMap::from([("gpu".to_string(), 2)]),
+            resource_group_wait: HashMap::from([("gpu".to_string(), WaitPolicy::Fail)]),
+            ..Default::default()
+        };
+        let ex = LocalExecutor::new(config);
+        // Occupy the whole group so nothing is free right now.
+        let holder = Rule {
+            name: "holder".to_string(),
+            resources: Resources {
+                groups: HashMap::from([("gpu".to_string(), 2)]),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        {
+            let mut pool = ex.resource_pool.lock().await;
+            pool.reserve(&holder, ex.system_threads, ex.system_memory_mb);
+        }
+        let rule = Rule {
+            name: "gpu_job".to_string(),
+            resources: Resources {
+                groups: HashMap::from([("gpu".to_string(), 1)]),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        // Bound the call: with the fail policy honored it returns at once; a
+        // neutered gate would instead park in the wait loop, and the timeout
+        // turns that regression into a clean assertion failure rather than a
+        // hung test.
+        let err =
+            tokio::time::timeout(std::time::Duration::from_secs(2), ex.check_resources(&rule))
+                .await
+                .expect("fail policy must resolve immediately, not park")
+                .unwrap_err();
+        match err {
+            OxoFlowError::ResourceGroupBusy {
+                group,
+                required,
+                available,
+                ..
+            } => {
+                assert_eq!(group, "gpu");
+                assert_eq!(required, 1);
+                assert_eq!(available, 0);
+            }
+            other => panic!("expected ResourceGroupBusy, got {other}"),
+        }
+    }
+
+    // Control for issue #1346: with NO wait policy declared, the default
+    // (`queue`) must keep the historical block-until-free behavior — the rule
+    // parks rather than erroring. A short timeout proves it is still waiting
+    // instead of returning the fail-policy error.
+    #[tokio::test]
+    async fn check_resources_queue_policy_waits_instead_of_failing() {
+        let config = ExecutorConfig {
+            resource_groups: HashMap::from([("gpu".to_string(), 2)]),
+            ..Default::default()
+        };
+        let ex = LocalExecutor::new(config);
+        let holder = Rule {
+            name: "holder".to_string(),
+            resources: Resources {
+                groups: HashMap::from([("gpu".to_string(), 2)]),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        {
+            let mut pool = ex.resource_pool.lock().await;
+            pool.reserve(&holder, ex.system_threads, ex.system_memory_mb);
+        }
+        let rule = Rule {
+            name: "gpu_job".to_string(),
+            resources: Resources {
+                groups: HashMap::from([("gpu".to_string(), 1)]),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let outcome = tokio::time::timeout(
+            std::time::Duration::from_millis(150),
+            ex.check_resources(&rule),
+        )
+        .await;
+        assert!(
+            outcome.is_err(),
+            "queue-policy rule must block on the busy group, not return early"
         );
     }
 }

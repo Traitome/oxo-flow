@@ -3896,7 +3896,7 @@ rate-limited external resources (APIs, database connections).
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `max` | Integer | Yes | — | Pool capacity — the maximum number of slots that can be held concurrently across all rules |
-| `wait` | String | No | `"queue"` | Declared wait strategy — `"queue"` or `"fail"`. The engine queues rules that cannot get a slot (FIFO fair dispatch, see below); a declared `"fail"` does not change that behavior today |
+| `wait` | String | No | `"queue"` | Wait strategy when the pool is at capacity — `"queue"` or `"fail"`. `"queue"` blocks the rule in the FIFO wait loop until a slot frees (see below); `"fail"` errors the rule out immediately with `ResourceGroupBusy` instead of waiting. Any other value is a parse error |
 
 Semantics at run time:
 
@@ -3904,9 +3904,12 @@ Semantics at run time:
   undeclared group) **hard-fails immediately** with
   `ResourceGroupExhausted` — it can never be satisfied, so no wait is
   attempted.
-- Otherwise a rule that cannot get a slot **waits**: the scheduler
-  dispatches queued rules FIFO with priority aging, so starvation is
-  impossible — see
+- When the pool is at capacity but the requirement fits its declared maximum,
+  the `wait` strategy decides: `"queue"` (the default) **waits** — the
+  scheduler dispatches queued rules FIFO with priority aging, so starvation is
+  impossible — while `"fail"` **hard-fails immediately** with
+  `ResourceGroupBusy`, naming the group, the request, and the currently-free
+  slot count. See
   [DAG Engine → "Rules print Running but never spawn a process"](./dag-engine.md#rules-print-running-but-never-spawn-a-process)
   for the full fairness contract and the invisible-waiting diagnostic.
 
