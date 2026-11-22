@@ -100,7 +100,7 @@ pub fn audit_durability_for(method: &str, path: &str) -> AuditDurability {
     }
 }
 
-/// `/api/runs/{id}/{cancel|pause|resume|retry|resume-checkpoint|clean}`.
+/// `/api/runs/{id}/{cancel|pause|resume|retry|resume-checkpoint|clean|apply-repair}`.
 fn run_control_path(path: &str) -> bool {
     const CONTROL_SUFFIXES: &[&str] = &[
         "cancel",
@@ -109,6 +109,10 @@ fn run_control_path(path: &str) -> bool {
         "retry",
         "resume-checkpoint",
         "clean",
+        // Issue #1302: applying a reviewed repair rewrites the run's
+        // workflow snapshot and spawns a real run — a security-relevant
+        // lifecycle control like retry/resume.
+        "apply-repair",
     ];
     let Some(rest) = path.strip_prefix("/api/runs/") else {
         return false;
@@ -603,6 +607,9 @@ mod tests {
             ("POST", "/api/runs/abc/resume", Required),
             ("POST", "/api/runs/abc/retry", Required),
             ("POST", "/api/runs/abc/resume-checkpoint", Required),
+            // Issue #1302: applying a reviewed repair rewrites the run's
+            // workflow snapshot and spawns a real run — lifecycle control.
+            ("POST", "/api/runs/abc/apply-repair", Required),
             ("POST", "/api/runs/abc/clean", Required),
             // Destructive pipeline actions and access grants.
             ("DELETE", "/api/pipelines/abc", Required),

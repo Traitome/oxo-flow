@@ -51,6 +51,8 @@ const ALL_ROUTES: &[&str] = &[
     "/api/runs/{id}/instances",
     "/api/runs/{id}/clean",
     "/api/runs/{id}/resume-checkpoint",
+    "/api/runs/{id}/apply-repair",
+    "/api/runs/{id}/repair",
     "/api/runs/{id}/logs",
     "/api/runs/{id}/results",
     "/api/runs/{id}/retry",

@@ -4098,6 +4098,322 @@ pub async fn resume_checkpoint(
     })))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/runs/{id}/apply-repair",
+    tag = "runs",
+    request_body = ApplyRepairRequest,
+    responses(
+        (status = 200, description = "Repair apply-and-verify run created", body = ApplyRepairResponse),
+        (status = 400, description = "Error", body = ApiError),
+        (status = 404, description = "Error", body = ApiError),
+        (status = 409, description = "Error", body = ApiError),
+    )
+)]
+/// POST /api/runs/{id}/apply-repair — apply a REVIEWED repair patch to a
+/// failed run's workflow (issue #1302, ROADMAP 12.3 remediation continuity).
+///
+/// Contract (the smallest honest one):
+///
+/// - `run_id` must be a terminal FAILED run with a workdir and a checkpoint:
+///   the CLI apply path re-attempts the workflow, applies the reviewed patch
+///   only when a rule fails again, and verifies it with one bounded
+///   `--resume-failed` rerun. On a completed run there is nothing to repair;
+///   on an active run a second CLI would race the checkpoint (same hazard
+///   retry/resume guard).
+/// - `patch` is a WHOLE workflow document (the exact shape the CLI's
+///   `apply_fix` writes). The web layer validates it parses as a workflow
+///   through the SHARED core parser (`400 INVALID_PATCH` otherwise) but
+///   NEVER writes the workflow itself — the patch is staged as a file and
+///   the spawned CLI's apply path (`validate_fix` -> archive -> atomic
+///   write) is the only workflow mutator, so a patch that would drop rules
+///   or sections is refused by the same gate the CLI surface uses, never
+///   blind-written.
+/// - The spawn is a REAL run and pays the same budgets as create/retry
+///   (rate limiter, durable quota admission, atomic workdir/pipeline claim).
+///   It reuses the predecessor run's workdir — the checkpoint-driven
+///   semantics the CLI apply path expects — exactly like retry and
+///   resume-checkpoint, the only two other paths allowed to continue a
+///   predecessor's workdir.
+/// - The `REPAIR_APPLIED` / `REPAIR_RERUN_*` outcome is produced DURING the
+///   spawned run (the verification rerun executes real rules), so this
+///   endpoint returns the new run handle; the record itself is read from the
+///   checkpoint via `GET /api/runs/{run_id}/repair`.
+pub async fn apply_repair_run(
+    authenticated: Option<Extension<CurrentUser>>,
+    limiter: Option<Extension<Arc<RunRateLimiter>>>,
+    Path(id): Path<String>,
+    ApiJson(req): ApiJson<ApplyRepairRequest>,
+) -> ApiResult<ApplyRepairResponse> {
+    let backend = get_backend()?;
+    let user = current_user::resolve(authenticated.as_ref());
+    // Applying a repair rewrites the workflow snapshot and spawns a real
+    // run — mutate-gated like create/retry/cancel (viewers are read-only).
+    require_run_mutator(&user)?;
+    let run = load_owned_run(backend.as_ref(), &user, &id).await?;
+
+    // An active run would put two CLIs on one checkpoint concurrently (the
+    // exact hazard retry_run guards against) — only terminal runs proceed.
+    if matches!(run.status.as_str(), "running" | "queued" | "paused") {
+        return Err(err(
+            StatusCode::CONFLICT,
+            "RUN_NOT_TERMINAL",
+            format!(
+                "Run {id} is still {} — wait for it to finish (or cancel it) before applying a repair",
+                run.status
+            ),
+        ));
+    }
+    // The CLI apply path applies the reviewed patch when a rule FAILS during
+    // the re-attempt and verifies it with a resume-failed rerun. A completed
+    // run has nothing to repair (the re-attempt would skip everything and
+    // never reach the apply branch); a cancelled run keeps the user's last
+    // word — retry it first if a repair is genuinely wanted.
+    if run.status != "failed" {
+        return Err(err(
+            StatusCode::CONFLICT,
+            "RUN_NOT_FAILED",
+            format!(
+                "apply-repair targets a failed run — run {id} is {} and has nothing to repair",
+                run.status
+            ),
+        ));
+    }
+
+    let workdir = run.workdir.clone().ok_or_else(|| {
+        err(
+            StatusCode::NOT_FOUND,
+            "NO_WORKDIR",
+            "Run has no workdir".into(),
+        )
+    })?;
+
+    let checkpoint = std::path::Path::new(&workdir)
+        .join(".oxo-flow")
+        .join("checkpoint.json");
+    if !checkpoint.exists() {
+        return Err(err(
+            StatusCode::NOT_FOUND,
+            "NO_CHECKPOINT",
+            format!("No checkpoint at {}", checkpoint.display()),
+        ));
+    }
+
+    // Pre-flight only: the patch must parse as a workflow through the SAME
+    // core parser the CLI apply branch runs first. The deeper shape gate
+    // (rules/sections must survive) is the CLI's `validate_fix` at apply
+    // time — the single source of truth the web layer deliberately does not
+    // mirror. A patch that passes here but fails there fails the spawned
+    // run visibly instead of mutating the workflow.
+    if let Err(e) = oxo_flow_core::config::WorkflowConfig::parse(&req.patch) {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "INVALID_PATCH",
+            format!("patch is not a valid workflow document: {e}"),
+        ));
+    }
+
+    // The apply-and-verify spawn is a REAL run — same budgets as
+    // create/retry (#519): rate limiter, durable quota admission, claim.
+    let quota_usage = quota_usage_for_run(&run);
+    check_run_rate_limit(limiter.as_ref().map(|Extension(l)| &**l), &user.id)?;
+
+    let new_run_id = uuid::Uuid::new_v4().to_string();
+    let now = now_iso();
+    // The original run's config overrides are replayed (same rule as retry,
+    // PR #930 NIT-8): the re-attempt must re-derive the same config — and
+    // therefore the same rule fingerprints — or the repair would invalidate
+    // every config-referencing rule.
+    let repair_overrides: Vec<String> = run
+        .config_overrides
+        .as_deref()
+        .and_then(|json| serde_json::from_str(json).ok())
+        .unwrap_or_default();
+    let new_run = models::RunRow {
+        id: new_run_id.clone(),
+        user_id: user.id.clone(),
+        pipeline_id: run.pipeline_id.clone(),
+        pipeline_snapshot: run.pipeline_snapshot.clone(),
+        workflow_name: run.workflow_name.clone(),
+        status: "queued".to_string(),
+        phase: "repairing".to_string(),
+        dry_run: run.dry_run,
+        pid: None,
+        workdir: Some(workdir.clone()),
+        config_overrides: run.config_overrides.clone(),
+        artifacts_incomplete: None,
+        // The repair re-executes locally, so the new row carries no cluster
+        // routing fact (issue #1257 / audit RB-05).
+        cluster_id: None,
+        started_at: None,
+        finished_at: None,
+        created_at: now.clone(),
+    };
+    // RB-09 (#1133): atomic durable admission before the claim.
+    admit_spawn_budget(backend.as_ref(), &new_run_id, &user.id, quota_usage).await?;
+
+    // Same TOCTOU as retry/resume: claim the admission scope atomically at
+    // insert (pipeline for saved-pipeline runs, workdir otherwise).
+    let claim = claim_run_row(backend.as_ref(), &new_run).await;
+    match claim {
+        Ok(true) => {}
+        Ok(false) => {
+            release_spawn_budget(backend.as_ref(), &new_run_id).await;
+            return Err(err(
+                StatusCode::CONFLICT,
+                "RUN_NOT_TERMINAL",
+                format!(
+                    "another run is already active for this {} — wait for it to \
+                     finish before applying a repair to run {id}",
+                    if new_run.pipeline_id.is_some() {
+                        "saved pipeline"
+                    } else {
+                        "workdir"
+                    }
+                ),
+            ));
+        }
+        Err(e) => {
+            tracing::error!("DB error inserting apply-repair run {new_run_id}: {e}");
+            release_spawn_budget(backend.as_ref(), &new_run_id).await;
+            return Err(err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "DB_ERROR",
+                "Internal database error".into(),
+            ));
+        }
+    }
+
+    // Stage the reviewed patch into the run workdir (audit evidence beside
+    // the workflow it may rewrite; the workdir is the repair's own scope).
+    // The shared staged-write discipline keeps a crash from leaving a torn
+    // patch file. NOTE: the shared workdir is the PREDECESSOR's — on failure
+    // this path must release the budget and delete the NEW row but never
+    // remove the workdir (unlike create_run's RB-03 compensation, whose dir
+    // is the failing run's own).
+    let patch_path = std::path::Path::new(&workdir)
+        .join(".oxo-flow")
+        .join(format!("reviewed-repair-{new_run_id}.oxoflow"));
+    if let Some(parent) = patch_path.parent()
+        && let Err(e) = tokio::fs::create_dir_all(parent).await
+    {
+        tracing::error!("Could not ensure {} exists: {e}", parent.display());
+        release_spawn_budget(backend.as_ref(), &new_run_id).await;
+        let _ = backend.delete_run(&new_run_id).await;
+        return Err(err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "RUN_ERROR",
+            format!("Failed to prepare patch staging directory for run {new_run_id}"),
+        ));
+    }
+    if let Err(e) = write_run_source_atomic(patch_path.clone(), req.patch.clone()).await {
+        tracing::error!("Could not stage reviewed patch for run {new_run_id}: {e}");
+        release_spawn_budget(backend.as_ref(), &new_run_id).await;
+        let _ = backend.delete_run(&new_run_id).await;
+        return Err(err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "RUN_ERROR",
+            format!("Failed to stage reviewed patch for run {new_run_id}"),
+        ));
+    }
+
+    // The SAME CLI invocation the extension command and the parity harness
+    // run: `run <workflow> --workdir <workdir> --apply-patch <patch>` —
+    // one engine, three surfaces. Overrides ride the shared `--arg` flag in
+    // equals form (mirrors build_cli_args).
+    let workflow_file = std::path::Path::new(&workdir).join("workflow.oxoflow");
+    let mut args: Vec<std::ffi::OsString> = vec![
+        "run".into(),
+        workflow_file.into_os_string(),
+        "--workdir".into(),
+        workdir.clone().into(),
+        "--apply-patch".into(),
+        patch_path.clone().into_os_string(),
+    ];
+    for kv in &repair_overrides {
+        args.push(format!("--arg={kv}").into());
+    }
+    crate::executor::spawn_background_run_with_args(
+        new_run_id.clone(),
+        user.id.clone(),
+        "none".to_string(),
+        "local".to_string(),
+        Some(std::path::PathBuf::from(&workdir)),
+        args,
+        quota_usage.1,
+    );
+
+    Ok(Json(ApplyRepairResponse {
+        run_id: new_run_id.clone(),
+        repair_source_run: id,
+        patch_path: patch_path.display().to_string(),
+        note: format!(
+            "Run {new_run_id} re-attempts the failed workflow with the reviewed patch: the \
+             patch applies only if a rule fails again, then one bounded rerun verifies it. \
+             Poll GET /api/runs/{new_run_id}/repair for the REPAIR_* checkpoint record."
+        ),
+    }))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/runs/{id}/repair",
+    tag = "runs",
+    responses(
+        (status = 200, description = "Success", body = RepairRecordResponse),
+        (status = 404, description = "Error", body = ApiError),
+    )
+)]
+/// GET /api/runs/{id}/repair — read the checkpoint's `repair_record`
+/// (issue #1302): the same `REPAIR_APPLIED` / `REPAIR_RERUN_*` contract the
+/// CLI narrates and persists, served verbatim through the engine's own
+/// checkpoint loader. Read-only; polls alongside the run-status endpoint
+/// after `POST /api/runs/{id}/apply-repair`.
+pub async fn get_run_repair(
+    authenticated: Option<Extension<CurrentUser>>,
+    Path(id): Path<String>,
+) -> ApiResult<RepairRecordResponse> {
+    let backend = get_backend()?;
+    let user = current_user::resolve(authenticated.as_ref());
+    let run = load_owned_run(backend.as_ref(), &user, &id).await?;
+
+    let run_workdir = run.workdir.clone();
+    // The checkpoint read is synchronous file I/O on a polled path — same
+    // blocking-pool rule as get_run_status (#268 item 4).
+    let (checkpoint_present, repair_record) = blocking_checkpoint_io(move || {
+        let Some(workdir) = run_workdir else {
+            return (false, None);
+        };
+        // The engine's canonical loader (the same parse every run-lifecycle
+        // endpoint reads through): a legacy checkpoint loads with
+        // `repair_record: None`; an unreadable one reports honestly as
+        // absent rather than fabricating a record.
+        match oxo_flow_core::executor::CheckpointState::load_from_file(
+            &oxo_flow_core::executor::CheckpointState::default_path(std::path::Path::new(&workdir)),
+        ) {
+            Ok(state) => {
+                // `None` serializes to Value::Null — normalize it back to a
+                // real None so the wire contract never carries a null-vs-absent
+                // ambiguity.
+                let record = match serde_json::to_value(state.repair_record) {
+                    Ok(v) if v.is_null() => None,
+                    Ok(v) => Some(v),
+                    Err(_) => None,
+                };
+                (true, record)
+            }
+            Err(_) => (false, None),
+        }
+    })
+    .await;
+
+    Ok(Json(RepairRecordResponse {
+        run_id: id,
+        checkpoint_present,
+        repair_record,
+    }))
+}
+
 #[cfg(test)]
 mod bounded_subprocess_tests {
     use super::*;

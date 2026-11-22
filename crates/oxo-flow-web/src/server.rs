@@ -472,6 +472,14 @@ fn build_router_with_limiter(
             post(execution::handlers::resume_checkpoint),
         )
         .route(
+            "/api/runs/{id}/apply-repair",
+            post(execution::handlers::apply_repair_run),
+        )
+        .route(
+            "/api/runs/{id}/repair",
+            get(execution::handlers::get_run_repair),
+        )
+        .route(
             "/api/runs/{id}/logs",
             get(execution::handlers::get_run_logs),
         )

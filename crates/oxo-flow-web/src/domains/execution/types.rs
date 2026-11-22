@@ -503,6 +503,53 @@ pub struct RetryResponse {
     pub note: Option<String>,
 }
 
+/// Body of `POST /api/runs/{id}/apply-repair` (issue #1302): the reviewed
+/// repair document — a WHOLE `.oxoflow` workflow in the exact shape the CLI's
+/// verified-repair path writes (`apply_fix`). The web layer never writes the
+/// workflow itself; it stages this document into the run workdir and the
+/// spawned CLI applies it through the SAME validated path `--apply-patch`
+/// uses (validate -> archive -> atomic write), so a patch that would drop
+/// sections of the stored workflow is refused by the CLI, not blind-written.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct ApplyRepairRequest {
+    /// The reviewed repair document (complete workflow TOML).
+    pub patch: String,
+}
+
+/// Response of `POST /api/runs/{id}/apply-repair`: the handle of the run
+/// that applies-and-verifies the patch. The `REPAIR_*` outcome is a
+/// checkpoint record produced DURING that run (the verification rerun
+/// executes real rules), so it is read back afterwards via
+/// `GET /api/runs/{run_id}/repair` rather than returned inline.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct ApplyRepairResponse {
+    /// The new run that re-attempts the failed workflow with the reviewed
+    /// patch; poll it like any other run.
+    pub run_id: String,
+    /// The failed run whose repair is being applied.
+    pub repair_source_run: String,
+    /// Workdir-relative path the patch was staged at (audit evidence).
+    pub patch_path: String,
+    /// What this request actually did and what happens next.
+    pub note: String,
+}
+
+/// Response of `GET /api/runs/{id}/repair` (issue #1302): the checkpoint's
+/// `repair_record` — the same `REPAIR_APPLIED` / `REPAIR_RERUN_*` contract
+/// the CLI narrates and persists, served verbatim from the run workdir's
+/// checkpoint. `repair_record` is `null` when no repair was ever applied
+/// (or the checkpoint predates the field); `checkpoint_present` distinguishes
+/// "no repair yet" from "no checkpoint to read".
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct RepairRecordResponse {
+    pub run_id: String,
+    /// Whether a readable checkpoint exists in the run workdir.
+    pub checkpoint_present: bool,
+    /// The engine's `RepairRecord` — `{applied, session_id, rerun_attempted,
+    /// rerun_succeeded, detail, timestamp}` — or `null`.
+    pub repair_record: Option<serde_json::Value>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

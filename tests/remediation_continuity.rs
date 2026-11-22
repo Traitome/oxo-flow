@@ -8,23 +8,25 @@
 //! `REPAIR_APPLIED` / `REPAIR_RERUN_*` checkpoint outcome (`repair_record`
 //! in checkpoint.json).
 //!
-//! This first cut pins the contract on the CLI engine itself:
+//! Legs:
 //!
 //! - **A — CLI apply**: `oxo-flow run <wf> --apply-patch <patch>` (the
 //!   direct CLI surface).
+//! - **B — Web apply**: `POST /api/runs/{id}/apply-repair` against a real
+//!   `oxo-flow-web` server. The route stages the patch and shells the SAME
+//!   CLI path through the web executor's spawn machinery.
 //! - **C — Extension apply**: the exact argv the VS Code command builds
-//!   (`run <wf> --apply-patch <patch> --workdir <dir>`).
-//!
-//! The web adapter lands with its own leg (B — `POST
-//! /api/runs/{id}/apply-repair` against a real `oxo-flow-web` server), and
-//! the VS Code command's argv shape is pinned by
-//! `editors/vscode/src/test/unit/cliArgs.test.ts` (`applyRepairArgs`).
+//!   (`run <wf> --apply-patch <patch> --workdir <dir>`; pinned by the
+//!   extension's own unit test on `applyRepairArgs`).
 //!
 //! Parity honesty (issue #1302 scope note): leg C shells the CLI binary —
 //! the extension path IS the CLI path by construction, so this leg proves
 //! the CLI path a second time under the extension's exact argv (including
-//! `--workdir`), not the TypeScript surface itself. No cross-surface
-//! equality is claimed beyond what each leg actually proves.
+//! `--workdir`), not the TypeScript surface itself. The TS-side argv shape
+//! is pinned separately by `editors/vscode/src/test/unit/cliArgs.test.ts`.
+//! No three-way equality is claimed beyond what these legs actually prove:
+//! A == B end-to-end (byte-identical workflow + repair record), C == A/B on
+//! the same facts via the extension's argv.
 //!
 //! Falsifiability: breaking any surface's routing to the shared
 //! `apply_and_verify_repair` path (a rewritten workflow that diverges, a
@@ -34,10 +36,11 @@
 #[path = "common/mod.rs"]
 mod common;
 
-use common::{oxo_flow_cmd, workspace_bin};
+use common::{api_get, api_post, oxo_flow_cmd, spawn_web_server, workspace_bin};
 use serde_json::{Value, json};
 use std::path::Path;
 use std::process::Output;
+use std::time::{Duration, Instant};
 
 /// The seeded repairable fault: `boom` always fails after `prepare`
 /// succeeds. Both surfaces start from this exact manifest.
@@ -234,6 +237,159 @@ fn leg_extension_argv() -> Outcome {
     observe_cli_leg(dir.path(), &out)
 }
 
+/// Poll a JSON GET until `done` says stop; panics with the server log tail
+/// when the deadline expires so a stalled run is diagnosable.
+async fn poll_until<F>(base: &str, path: &str, log_path: &Path, mut done: F) -> Value
+where
+    F: FnMut(&Value) -> bool,
+{
+    let deadline = Instant::now() + Duration::from_secs(180);
+    loop {
+        assert!(
+            Instant::now() < deadline,
+            "timed out polling GET {path}\n{}",
+            std::fs::read_to_string(log_path).unwrap_or_else(|_| "(no server log)".into())
+        );
+        let (status, body) = api_get(base, path, None).await;
+        assert_eq!(status.as_u16(), 200, "GET {path} failed: {body}");
+        if done(&body) {
+            return body;
+        }
+        tokio::time::sleep(Duration::from_millis(400)).await;
+    }
+}
+
+/// Leg B — the web surface: `POST /api/runs/{id}/apply-repair` against a
+/// real server. The seeded fault is created THROUGH the web (the same way a
+/// UI user would), the run fails, and the reviewed patch is applied via the
+/// route; the outcome is read back through `GET /api/runs/{id}/repair` and
+/// the applied workflow bytes from the run workdir.
+async fn leg_web(dir: &Path) -> Outcome {
+    let ws = dir.join("ws");
+    let port = common::free_port();
+    let server = spawn_web_server(dir, port, &[("OXO_FLOW_WORKSPACE", ws.to_str().unwrap())]);
+    let base = server.base.clone();
+
+    // 1. Seed the fault through the web: create the run from the poisoned
+    //    manifest and wait for it to fail.
+    let (status, created) = api_post(
+        &base,
+        "/api/runs",
+        None,
+        json!({"toml_content": POISONED_RULES}),
+    )
+    .await;
+    assert_eq!(status.as_u16(), 200, "create run must succeed: {created}");
+    let seed_run = created["run_id"]
+        .as_str()
+        .or_else(|| created["id"].as_str())
+        .expect("create response carries the run id")
+        .to_string();
+    let failed = poll_until(
+        &base,
+        &format!("/api/runs/{seed_run}"),
+        &server.log_path,
+        |b| matches!(b["status"].as_str(), Some("failed")),
+    )
+    .await;
+    let workdir = failed["workdir"]
+        .as_str()
+        .expect("failed run carries its workdir")
+        .to_string();
+
+    // 2. Failure-path first: a patch that is not a workflow document must be
+    //    refused BEFORE anything is staged or spawned.
+    let (status, body) = api_post(
+        &base,
+        &format!("/api/runs/{seed_run}/apply-repair"),
+        None,
+        json!({"patch": "not [toml at all"}),
+    )
+    .await;
+    assert_eq!(
+        status.as_u16(),
+        400,
+        "a non-workflow patch must be rejected: {body}"
+    );
+    assert_eq!(
+        body["code"], "INVALID_PATCH",
+        "structured error code: {body}"
+    );
+
+    // 3. Apply the reviewed patch.
+    let (status, applied) = api_post(
+        &base,
+        &format!("/api/runs/{seed_run}/apply-repair"),
+        None,
+        json!({"patch": REVIEWED_PATCH}),
+    )
+    .await;
+    assert_eq!(
+        status.as_u16(),
+        200,
+        "apply-repair must stage and spawn: {applied}"
+    );
+    let repair_run = applied["run_id"]
+        .as_str()
+        .expect("apply-repair response carries the new run id")
+        .to_string();
+
+    // 4. Wait for the apply-and-verify run to reach a terminal state. The
+    //    patch applies only when `boom` fails again, then the bounded
+    //    verification rerun completes the workflow — so the run COMPLETES.
+    poll_until(
+        &base,
+        &format!("/api/runs/{repair_run}"),
+        &server.log_path,
+        |b| {
+            matches!(
+                b["status"].as_str(),
+                Some("completed") | Some("failed") | Some("cancelled")
+            )
+        },
+    )
+    .await;
+
+    // 5. Honesty guard: a repair on a run with nothing to repair is refused.
+    let (status, body) = api_post(
+        &base,
+        &format!("/api/runs/{repair_run}/apply-repair"),
+        None,
+        json!({"patch": REVIEWED_PATCH}),
+    )
+    .await;
+    assert_eq!(
+        status.as_u16(),
+        409,
+        "a completed run has nothing to repair: {body}"
+    );
+    assert_eq!(
+        body["code"], "RUN_NOT_FAILED",
+        "structured error code: {body}"
+    );
+
+    // 6. Read the REPAIR_* record from the checkpoint through the GET route.
+    let (_, repair_doc) = api_get(&base, &format!("/api/runs/{repair_run}/repair"), None).await;
+    assert_eq!(
+        repair_doc["checkpoint_present"], true,
+        "the repaired run's checkpoint must be readable: {repair_doc}"
+    );
+    let rec = &repair_doc["repair_record"];
+    let applied_log =
+        std::fs::read_to_string(Path::new(&workdir).join("execution.log")).unwrap_or_default();
+    Outcome {
+        applied_workflow: trim_end(
+            &std::fs::read_to_string(Path::new(&workdir).join("workflow.oxoflow")).unwrap(),
+        ),
+        applied: rec["applied"].as_bool(),
+        session_id: rec["session_id"].as_str().map(str::to_string),
+        rerun_attempted: rec["rerun_attempted"].as_bool(),
+        rerun_succeeded: rec["rerun_succeeded"].as_bool(),
+        narrated_applied: applied_log.contains("REPAIR_APPLIED session_id=reviewed-patch"),
+        narrated_rerun_succeeded: applied_log.contains("REPAIR_RERUN_SUCCEEDED "),
+    }
+}
+
 /// The parity assertion: every surface lands the SAME reviewed patch
 /// (byte-identical applied workflow) with the SAME REPAIR_* checkpoint
 /// outcome.
@@ -294,14 +450,18 @@ fn assert_parity(legs: &[(&str, Outcome)]) {
 }
 
 /// One test on purpose: the legs share the patch contract and run
-/// sequentially (the web leg will spawn a real server).
-#[test]
-fn reviewed_patch_applies_identically_on_every_surface() {
+/// sequentially (the web leg spawns a real server; `OXO_FLOW_BIN` and the
+/// workspace root are process-global).
+#[tokio::test]
+async fn reviewed_patch_applies_identically_on_every_surface() {
     // CLI leg first (fast, no server): establishes the parity baseline.
     let cli = leg_cli();
     // Extension-argv leg: same CLI binary under the extension's invocation.
     let extension = leg_extension_argv();
-    assert_parity(&[("cli", cli), ("extension-argv", extension)]);
+    // Web leg: the full route path through a real server.
+    let dir = tempfile::tempdir().unwrap();
+    let web = leg_web(dir.path()).await;
+    assert_parity(&[("cli", cli), ("extension-argv", extension), ("web", web)]);
 }
 
 /// The binaries this harness needs — a clearer panic than the generic
