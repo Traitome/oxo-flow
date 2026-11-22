@@ -313,3 +313,162 @@ fn output_file_keeps_stdout_clean_for_pipes() {
         "file holds the DOT body:\n{written}"
     );
 }
+
+/// `graph --json` emits the same machine-readable DAG document shape as the
+/// web API, built from the shared core primitives.
+///
+/// Falsifiable: the pinned `critical_path_length`/`node_count`/`edge_count`
+/// are exact values for the two-rule chain `generate_data → transform`. If
+/// the JSON branch is neutered (returns empty, drops metrics, or
+/// hand-recomputes them wrong) the assertions below fail; the non-JSON run
+/// in the same test guards that the diagram path is untouched.
+#[test]
+fn json_emits_web_shaped_dag_document() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = write_workflow(dir.path(), "w.oxoflow", two_step());
+
+    // The human/diagram path is unchanged: no `--json` renders ASCII, not JSON.
+    let (ok, ascii, _) = run_graph(dir.path(), &wf, &[]);
+    assert!(ok);
+    assert!(
+        !ascii.trim_start().starts_with('{'),
+        "the default format must stay a diagram, not JSON:\n{ascii}"
+    );
+
+    let (ok, stdout, stderr) = run_graph(dir.path(), &wf, &["--json"]);
+    assert!(ok, "graph --json failed: {stderr}");
+    assert!(
+        stderr.is_empty() || !stderr.contains("graph.json"),
+        "no save notice when writing to stdout:\n{stderr}"
+    );
+
+    let doc: serde_json::Value =
+        serde_json::from_str(&stdout).expect("--json must emit one valid JSON document");
+
+    // Top-level key set matches the web `DagJsonResponse` exactly.
+    let obj = doc.as_object().unwrap();
+    let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys,
+        vec![
+            "critical_path",
+            "edges",
+            "metrics",
+            "nodes",
+            "parallel_groups"
+        ],
+        "top-level key set must match the web DAG JSON"
+    );
+
+    // Node shape: {id, label, color, environment, rule}.
+    let nodes = doc["nodes"].as_array().unwrap();
+    assert_eq!(nodes.len(), 2);
+    let ids: Vec<&str> = nodes.iter().map(|n| n["id"].as_str().unwrap()).collect();
+    assert_eq!(
+        ids,
+        vec!["generate_data", "transform"],
+        "nodes are sorted by id and carry the rule names"
+    );
+    for node in nodes {
+        for key in ["id", "label", "color", "environment", "rule"] {
+            assert!(
+                node.get(key).is_some(),
+                "node missing '{key}' (web DagJsonNode shape): {node}"
+            );
+        }
+    }
+
+    // Edge shape: {from, to, kind}.
+    let edges = doc["edges"].as_array().unwrap();
+    assert_eq!(edges.len(), 1);
+    assert_eq!(edges[0]["from"], "generate_data");
+    assert_eq!(edges[0]["to"], "transform");
+    assert_eq!(edges[0]["kind"], "file", "inferred from input/output match");
+
+    // Metrics: exact values for the two-rule chain, from core DagMetrics.
+    let metrics = &doc["metrics"];
+    assert_eq!(metrics["node_count"], 2);
+    assert_eq!(metrics["edge_count"], 1);
+    assert_eq!(metrics["max_depth"], 2);
+    assert_eq!(metrics["max_width"], 1);
+    assert_eq!(
+        metrics["critical_path_length"], 2,
+        "pinned: the chain's critical path is 2 rules long"
+    );
+    assert_eq!(metrics["parallel_group_count"], 2);
+    let mut metric_keys: Vec<&str> = metrics
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    metric_keys.sort_unstable();
+    assert_eq!(
+        metric_keys,
+        vec![
+            "critical_path_length",
+            "edge_count",
+            "max_depth",
+            "max_width",
+            "node_count",
+            "parallel_group_count"
+        ],
+        "metrics key set must match the web DagMetrics"
+    );
+
+    // parallel_groups / critical_path come from the core primitives.
+    assert_eq!(
+        doc["critical_path"],
+        serde_json::json!(["generate_data", "transform"])
+    );
+    assert_eq!(
+        doc["parallel_groups"],
+        serde_json::json!([["generate_data"], ["transform"]])
+    );
+}
+
+/// The document is byte-stable across runs (sorted nodes/edges; petgraph
+/// neighbour order is not deterministic) — AGENTS.md order-independence.
+#[test]
+fn json_output_is_deterministic() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = write_workflow(dir.path(), "w.oxoflow", two_step());
+    let (ok1, first, _) = run_graph(dir.path(), &wf, &["--json"]);
+    let (ok2, second, _) = run_graph(dir.path(), &wf, &["--json"]);
+    assert!(ok1 && ok2);
+    assert_eq!(
+        first, second,
+        "graph --json must be byte-identical run to run"
+    );
+}
+
+/// `--json` is a document, not a diagram: an explicit diagram format (or a
+/// metro granularity) is rejected rather than silently ignored.
+#[test]
+fn json_rejects_diagram_format_options() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = write_workflow(dir.path(), "w.oxoflow", two_step());
+    let (ok, stdout, stderr) = run_graph(dir.path(), &wf, &["--json", "-f", "dot"]);
+    assert!(!ok, "combining --json with -f must fail");
+    assert!(stdout.is_empty());
+    assert!(
+        stderr.contains("--json"),
+        "the error must name the conflicting flag:\n{stderr}"
+    );
+}
+
+/// `-o FILE` writes the JSON document to a file and leaves stdout empty.
+#[test]
+fn json_output_file_keeps_stdout_clean() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = write_workflow(dir.path(), "w.oxoflow", two_step());
+    let target = dir.path().join("dag.json");
+    let (ok, stdout, stderr) =
+        run_graph(dir.path(), &wf, &["--json", "-o", target.to_str().unwrap()]);
+    assert!(ok, "{stderr}");
+    assert!(stdout.is_empty(), "stdout reserved for pipes:\n{stdout}");
+    let written = std::fs::read_to_string(&target).unwrap();
+    let doc: serde_json::Value = serde_json::from_str(&written).unwrap();
+    assert_eq!(doc["metrics"]["critical_path_length"], 2);
+}

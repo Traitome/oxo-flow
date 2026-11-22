@@ -73,7 +73,7 @@ pub struct Cli {
     /// Output machine-readable JSON to stdout (human-readable logs stay on stderr).
     /// Implemented by run, dry-run, validate, lint, test, status, wait, batch,
     /// info, knowledge, schema, verify-data, license, provenance verify, ai,
-    /// runs gc, import, and the cluster status/cancel/logs monitors;
+    /// graph, runs gc, import, and the cluster status/cancel/logs monitors;
     /// every other command rejects the flag instead of silently ignoring it.
     /// For info and knowledge, an explicit `--format text` takes precedence
     /// over `--json`.
@@ -1376,6 +1376,10 @@ fn json_supported(command: &Commands) -> bool {
         Commands::Provenance { action } => matches!(action, ProvenanceAction::Verify { .. }),
         Commands::VerifyData { .. } => true,
         Commands::Runs { .. } => true,
+        // `graph --json` emits the machine-readable DAG document (nodes,
+        // edges, parallel_groups, critical_path, metrics) shared with the
+        // web API; the diagram formats are unaffected.
+        Commands::Graph { .. } => true,
         // The monitoring half of the family emits JSON documents; `submit`
         // still generates scripts and has no document to emit.
         Commands::Cluster { action } => matches!(
@@ -1532,7 +1536,7 @@ async fn main() -> Result<()> {
              Drop --json to run it normally, or use a command whose JSON \
              document is implemented (run, dry-run, validate, lint, test, \
              status, wait, batch, info, knowledge, schema, license, ai, \
-             provenance verify, verify-data, runs gc, import, cluster \
+             provenance verify, verify-data, graph, runs gc, import, cluster \
              status/cancel/logs)."
         );
     }
@@ -2033,7 +2037,7 @@ async fn main() -> Result<()> {
             output,
             expanded,
             granularity,
-        } => handle_graph(workflow, format, output, expanded, granularity)?,
+        } => handle_graph(workflow, format, output, expanded, granularity, cli.json)?,
         Commands::Status {
             checkpoint,
             workdir,

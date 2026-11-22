@@ -369,9 +369,12 @@ pub fn diff_workflows(toml_a: &str, toml_b: &str) -> Result<DiffResponse, String
 // ---------------------------------------------------------------------------
 
 /// One owner for the DAG-visualisation JSON assembly (nodes/edges/colors/
-/// metrics) shared by `parse_pipeline` and `build_dag` — the hand-copied
-/// duplicates are what let the two surfaces drift (reuse, never retype).
-fn dag_json(config: &WorkflowConfig, dag: &WorkflowDag) -> DagJsonResponse {
+/// metrics) shared by `parse_pipeline`, `build_dag`, and the CLI
+/// `graph --json` path — the hand-copied duplicates are what let the two
+/// surfaces drift (reuse, never retype). Public so the CLI can build the
+/// identical document from an already-constructed DAG (e.g. one that
+/// honours `graph --expanded`).
+pub fn dag_json(config: &WorkflowConfig, dag: &WorkflowDag) -> DagJsonResponse {
     let nodes: Vec<DagJsonNode> = config
         .rules
         .iter()

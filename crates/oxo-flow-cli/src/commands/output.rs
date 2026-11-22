@@ -64,6 +64,7 @@ pub fn handle_graph(
     output: Option<PathBuf>,
     expanded: bool,
     granularity: Option<MetroArg>,
+    json: bool,
 ) -> Result<()> {
     // `--granularity` is a metro-only zoom. A non-metro format silently
     // ignoring it would look like the zoom applied, so fail fast before
@@ -76,6 +77,17 @@ pub fn handle_graph(
         anyhow::bail!(
             "--granularity '{}' only applies to the metro format; pass -f metro or drop the option",
             level.get_name()
+        );
+    }
+    // `--json` is a document, not a diagram: combining it with an explicit
+    // `-f <diagram>` (or a metro `--granularity`) would otherwise silently
+    // ignore the requested format. Reject the combination instead of
+    // emitting JSON the caller did not ask for.
+    if json && (format != GraphFormat::Ascii || granularity.is_some()) {
+        anyhow::bail!(
+            "--json emits the machine-readable DAG document and cannot be combined with \
+             -f/--format or --granularity; drop the format option (or drop --json to render \
+             a diagram)"
         );
     }
     print_banner();
@@ -105,6 +117,27 @@ pub fn handle_graph(
         // An empty export (bare "graph LR") is indistinguishable from a
         // successful render downstream — fail loudly instead.
         anyhow::bail!("workflow '{}' has no rules to graph", workflow.display());
+    }
+
+    // Machine-readable document: the SAME assembly the web API returns
+    // (`{nodes, edges, parallel_groups, critical_path, metrics}`), built from
+    // the SAME core primitives via the one shared owner in the web service —
+    // never a hand-recomputed depth/width/critical path (reuse, never retype).
+    if json {
+        let doc = oxo_flow_web::domains::workflow::service::dag_json(&config, &dag);
+        // Persisted artifacts are order-independent (AGENTS.md): sort the
+        // node/edge lists so the document is byte-stable across runs and
+        // platforms (petgraph neighbour order is not deterministic).
+        let text = render_graph_json(doc)?;
+        match output {
+            Some(path) if path.as_os_str() == "-" => println!("{text}"),
+            Some(path) => {
+                std::fs::write(&path, format!("{text}\n"))?;
+                eprintln!("{} Graph saved to {}", "✓".green(), path.display());
+            }
+            None => println!("{text}"),
+        }
+        return Ok(());
     }
 
     let result = match format {
@@ -161,6 +194,24 @@ pub fn handle_graph(
     }
 
     Ok(())
+}
+
+/// Render the machine-readable `graph --json` document as stable, sorted
+/// pretty JSON. Node and edge lists are sorted so the output is byte-stable
+/// across runs and platforms (petgraph neighbour order is not deterministic;
+/// AGENTS.md "persisted artifacts are order-independent").
+fn render_graph_json(
+    doc: oxo_flow_web::domains::workflow::types::DagJsonResponse,
+) -> Result<String> {
+    let mut doc = doc;
+    doc.nodes.sort_by(|a, b| a.id.cmp(&b.id));
+    doc.edges.sort_by(|a, b| {
+        a.from
+            .cmp(&b.from)
+            .then_with(|| a.to.cmp(&b.to))
+            .then_with(|| a.kind.cmp(&b.kind))
+    });
+    Ok(serde_json::to_string_pretty(&doc)?)
 }
 
 /// Whether the workflow carries module structure the metro module tier can
