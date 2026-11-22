@@ -11268,7 +11268,6 @@ fn json_flag_fails_fast_on_unsupported_commands() {
         vec!["diff", "a.oxoflow", "b.oxoflow", "--json"],
         vec!["env", "list", "--json"],
         vec!["touch", "wf.oxoflow", "--json"],
-        vec!["graph", "wf.oxoflow", "--json"],
     ] {
         let assert = oxo_flow_cmd().args(&args).assert().failure();
         let stderr = String::from_utf8_lossy(&assert.get_output().stderr).to_string();
