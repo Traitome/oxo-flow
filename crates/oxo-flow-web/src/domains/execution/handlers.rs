@@ -1203,15 +1203,13 @@ pub async fn create_run(
             if let Err(type_errors) =
                 oxo_flow_core::types::validate_workflow_types(&resolved_config, &resolved_dag)
             {
-                let findings = type_errors
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-                    .join("; ");
+                // Shared core formatter (issue #1352 F1): the marker phrase is
+                // ONE constant owned by the gate, never retyped — the CLI
+                // repair loop greps the exact phrase.
                 return Err(err(
                     StatusCode::BAD_REQUEST,
                     "TYPE_CONTRACT_VIOLATION",
-                    format!("declared biological type contracts are violated: {findings}"),
+                    oxo_flow_core::types::type_admission_error_message(&type_errors),
                 ));
             }
         }

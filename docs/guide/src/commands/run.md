@@ -1818,7 +1818,13 @@ When a required rule aborts the run and recovery is active:
    could not be resolved).
 5. The outcome is recorded in the checkpoint's `repair_record`:
    `{applied, session_id, rerun_attempted, rerun_succeeded, detail,
-   timestamp}`. Legacy checkpoints without the field load unchanged, and
+   timestamp}`. The write is a load-preserve **append** onto the checkpoint
+   file: a checkpoint already present at the run's checkpoint path (a reused
+   workdir's previous-run ledger, including a type-admission abort that ran
+   no rule) keeps every prior field — only the record is added — and an
+   existing-but-unreadable checkpoint is never overwritten by the record
+   write (the evidence survives for the next run's refuse-to-start gate).
+   Legacy checkpoints without the field load unchanged, and
    the report's `ai-repair` section surfaces the record (see
    [`report`](report.md)).
 

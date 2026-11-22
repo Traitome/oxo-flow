@@ -529,6 +529,31 @@ pub fn validate_workflow_types(
     }
 }
 
+/// Marker phrase identifying the BioType type-admission bail (issue #1265).
+///
+/// The CLI repair loop recognizes the preflight bail by this marker and
+/// routes it through the verified-repair machinery; the web admission errors
+/// carry the same phrase; the eval harness greps it too, so the wording is a
+/// contract: do not reword it. ONE constant, owned here next to
+/// [`validate_workflow_types`] — the gate that produces the findings — so the
+/// CLI and the web surfaces import it instead of hand-retyping the phrase
+/// (reuse, never retype; issue #1352 F1).
+pub const TYPE_ADMISSION_MARKER: &str = "declared biological type contracts are violated";
+
+/// The one-line admission error text shared by the web admission surfaces
+/// (issue #1352 F1): [`TYPE_ADMISSION_MARKER`] + the findings joined with
+/// `"; "`. The CLI preflight bail deliberately uses a multi-line layout
+/// (`{marker} — fix before running:\n  …`) for human stderr; this one-line
+/// form is the HTTP error shape both web call sites emit.
+pub fn type_admission_error_message(type_errors: &[TypeDiagnostic]) -> String {
+    let findings = type_errors
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("; ");
+    format!("{TYPE_ADMISSION_MARKER}: {findings}")
+}
+
 fn resolve_type_spec(
     name_or_inline: &str,
     config: &WorkflowConfig,

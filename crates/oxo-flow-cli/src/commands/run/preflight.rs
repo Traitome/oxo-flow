@@ -10,10 +10,13 @@ use oxo_flow_core::rule::Rule;
 use std::path::Path;
 
 /// Marker phrase identifying the BioType type-admission bail (issue
-/// #1265). The repair loop recognizes this bail by the marker and routes it
-/// through the verified-repair machinery; the eval harness greps the phrase
-/// too, so the wording is a contract: do not reword it.
-pub(crate) const TYPE_ADMISSION_MARKER: &str = "declared biological type contracts are violated";
+/// #1265). Owned by `oxo-flow-core::types` next to the gate that produces
+/// the findings, so the CLI and the web admission errors share ONE phrase
+/// instead of hand-retyped copies (issue #1352 F1). The repair loop
+/// recognizes this bail by the marker and routes it through the
+/// verified-repair machinery; the eval harness greps the phrase too, so the
+/// wording is a contract: do not reword it.
+pub(crate) use oxo_flow_core::types::TYPE_ADMISSION_MARKER;
 
 /// The shared pre-DAG gate `run` and `dry-run` both apply (issue #142 H1,
 /// #112): a typo'd `{config.*}` key or an unknown `--module` must abort

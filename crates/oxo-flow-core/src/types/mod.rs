@@ -21,8 +21,8 @@ mod tests;
 pub mod type_codes;
 
 pub use checker::{
-    ADVISORY_TYPE_CODES, TypeDiagnostic, check_workflow_types, is_advisory_type_code,
-    validate_workflow_types,
+    ADVISORY_TYPE_CODES, TYPE_ADMISSION_MARKER, TypeDiagnostic, check_workflow_types,
+    is_advisory_type_code, type_admission_error_message, validate_workflow_types,
 };
 pub use inspect::{
     IntrospectError, IntrospectedBioType, introspect_bytes, introspect_file,
