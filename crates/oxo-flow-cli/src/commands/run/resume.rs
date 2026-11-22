@@ -130,6 +130,15 @@ async fn resume_command_inner(
             }
         })?;
 
+    // Fail-safe format gate (issue #1309): the standalone `resume` command
+    // refuses a checkpoint written by a NEWER build at its OWN load, before
+    // narrating a banner or a `--json` document from the untrusted completion
+    // counts. The delegated `run_command` below re-applies the same gate in
+    // Execute mode; gating here keeps the resume banner and its early
+    // `nothing_to_resume` return honest too — no surface reads a newer
+    // format's completion state without refusing first.
+    let state = super::gate_checkpoint_format(state, &checkpoint, CheckpointLoadMode::Execute)?;
+
     // Get workflow path from checkpoint
     let workflow_path = match &state.workflow_path {
         Some(p) => PathBuf::from(p),

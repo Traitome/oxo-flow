@@ -51,10 +51,14 @@ recorded is **newer** than the running engine's — i.e. the checkpoint was
 written by a future oxo-flow build whose completed-rule set this engine cannot
 prove it understands — `resume` (and `run`'s auto-resume path) **refuses to
 start** and says so, rather than silently trusting state it cannot verify.
-`--resume-failed` and all Execute paths refuse; a read-only preview
-(`dry-run`) instead warns and plans as if every rule had never completed, so
-the preview stays usable. A checkpoint with **no** marker (written before the
-marker existed) is treated as compatible. See the cross-version contract in
+The standalone `resume` command refuses at its own load, before printing its
+banner or any `--json` counts, so no output is narrated from untrusted state;
+`--resume-failed` and every other Execute path refuse the same way. A
+read-only preview (`dry-run`) instead warns and plans as if every rule had
+never completed, so the preview stays usable, and `status` still shows the
+recorded listing but prints the same trust warning. A checkpoint with **no**
+marker (written before the marker existed) is treated as compatible. See the
+cross-version contract in
 [docs/superpowers/audits/reentry-2026-11.md](https://github.com/traitome/oxo-flow/blob/main/docs/superpowers/audits/reentry-2026-11.md)
 (§5.2/§5.3).
 

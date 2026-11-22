@@ -436,6 +436,26 @@ async fn handle_status_inner(
         )
     })?;
 
+    // Issue #1309: `status` is a read-only viewer — it still SHOWS a
+    // checkpoint written by a NEWER build (inspection is its purpose, and
+    // hiding the listing would defeat it), but the recorded completion state
+    // must not be presented silently: this engine cannot prove the format
+    // compatible, so the listing carries the trust warning. (The Execute
+    // surfaces — `run`, `--resume-failed`, standalone `resume` — refuse
+    // outright via the shared format gate.)
+    if let CheckpointCompat::Newer = state.compat() {
+        eprintln!(
+            "{} checkpoint at {} was written by a NEWER oxo-flow build \
+             (format v{} > v{}) — showing its recorded state, but this \
+             engine cannot prove that format compatible; `run`/`resume` \
+             will refuse it",
+            "⚠".yellow(),
+            checkpoint_path.display(),
+            state.checkpoint_format_version,
+            CHECKPOINT_FORMAT_VERSION,
+        );
+    }
+
     // Issue #849: `status` reads a snapshot, not live state — surface how
     // fresh the snapshot is (the flush lag observed on a live 561-rule run
     // was ~1–2 min and completely invisible to operators). Sourced from the

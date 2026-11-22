@@ -115,7 +115,9 @@ safe**.
 | **truncated checkpoint (read-only preview)** | same corrupt file, `dry-run` | degrades with a warning ("corrupt … planning as if every rule never completed") | plan is the full set (nothing silently treated as done) | **PASS** |
 | **unknown / older engine-version field** | inject `engine_version = "0.0.1-ancient"`, `schema_version = 1` | checkpoint loads (schema-additive; unknown JSON keys ignored); a genuinely-completed rule still skips ("already completed") | resume **skips** completed rules — correct, nothing was lost | **PASS** |
 | **checkpoint missing a required field** | remove `benchmarks` | treated as **corrupt** → Execute refuses ("refusing to start") | — (fail-closed; never silently re-runs or silently skips) | **PASS** |
-| **NEWER checkpoint format version** (issue #1309) | set `checkpoint_format_version = 9999` (past this engine's own) | Execute refuses: names the newer build and prints **"refusing to start"** | — (fail-closed by design); `dry-run` degrades with a warning and plans everything | **PASS** |
+| **NEWER checkpoint format version** (issue #1309) | set `checkpoint_format_version = 9999` (past this engine's own) | Execute refuses: names the newer build and prints **"refusing to start"** — on `run`, on `--resume-failed`, and on the standalone `resume` command, the latter **at its own load, before its trusting banner** | — (fail-closed by design); `dry-run` degrades with a warning and plans everything; `status` still lists the recorded state but prints the trust warning | **PASS** |
+| **NEWER format version — standalone `resume`** (issue #1309) | same injection, `resume .oxo-flow/checkpoint.json` | exit non-zero, names the newer build, **"refusing to start"**, and the `Resuming workflow …` banner is NOT printed first | — (fail-closed by design) | **PASS** |
+| **ABSENT version marker (legacy writer) — resume** (issue #1309) | delete `checkpoint_format_version` from the JSON | checkpoint loads (serde default 0 ≤ this engine's); `resume` exits 0 and narrates **"already completed"** for the genuinely-completed rule — nothing re-runs | legacy checkpoints must not hard-break resume for existing users | **PASS** |
 
 Key invariant confirmed: a checkpoint is only **skipped** when it genuinely
 completed; every uncertain state (truncated, missing required field, stale
@@ -139,15 +141,20 @@ with the reason (also recorded as a comment block at the bottom of
   cross-version binary matrix is out of scope for this campaign. Conversely, a
   checkpoint with *extra/unknown* fields is proven harmless (§5.2).
 - **The reader-newer-than-writer direction of the format gate** (issue #1309).
-  The `checkpoint_format_version` marker plus the `compat()` gate now covers the
-  direction the additive-serde model cannot guard itself — an engine reading a
-  checkpoint written by a *newer* build (§5.2 row above). What is still
-  **NOT_VALIDATED** is a genuine two-binary matrix (cold-run on build A, resume
-  on a real older/newer build B): the CI test injects the version marker into a
-  checkpoint rather than shipping two pinned binaries. A third boundary follows
-  from the gate's own design: a build that *predates* the marker has no gate to
-  fire, so an old binary reading a new checkpoint is unguarded — the marker only
-  protects readers built at or after the version that introduced it.
+  The `checkpoint_format_version` marker plus the shared `compat()` gate now
+  covers the direction the additive-serde model cannot guard itself — an engine
+  reading a checkpoint written by a *newer* build (§5.2 rows above). Every
+  checkpoint-consuming surface is pinned: `run` and `--resume-failed` and the
+  standalone `resume` command **refuse** (the latter at its own load, before
+  its banner narrates counts from untrusted state), `dry-run` **degrades** to
+  plan-everything with a warning, and `status` (read-only viewer) **warns**
+  while still listing. What is still **NOT_VALIDATED** is a genuine two-binary
+  matrix (cold-run on build A, resume on a real older/newer build B): the CI
+  test injects the version marker into a checkpoint rather than shipping two
+  pinned binaries. A third boundary follows from the gate's own design: a build
+  that *predates* the marker has no gate to fire, so an old binary reading a
+  new checkpoint is unguarded — the marker only protects readers built at or
+  after the version that introduced it.
 - **SIGTERM/SIGKILL arriving in the narrow window before signal handlers are
   installed** (between `exec` and `run`'s select loop). Covered in spirit by the
   SIGKILL case (which needs no handler) but not separately pinned.
@@ -163,7 +170,9 @@ with the reason (also recorded as a comment block at the bottom of
   truncated checkpoint, unknown/older engine-version, missing required field),
   each demonstrated **fail-safe**. A **checkpoint format-version gate** (issue
   #1309) additionally fails safe when the recorded format version is *newer* than
-  the running engine's.
+  the running engine's — on every consuming surface: `run`/`--resume-failed` and
+  the standalone `resume` command refuse (resume before its own banner),
+  `dry-run` degrades, `status` warns.
 - The remaining boundaries (real mid-rename power cut; a real two-binary
   cross-version matrix; a pre-marker old binary reading a new checkpoint) are
   **explicitly NOT_VALIDATED** (§5.3) and are not claimed.
@@ -188,5 +197,6 @@ through the real CLI binary on the host in §3.
   as "every crash class proven".
 - **No production re-entry change.** This campaign adds tests + a harness + this
   doc; the one production change is the additive `checkpoint_format_version`
-  marker + fail-safe gate added later for issue #1309 (§5.2 NEWER row), which
-  never alters the completed-rule merge logic.
+  marker + fail-safe format gate (shared by `run`, `dry-run`, `resume`, and
+  `status`) added later for issue #1309 (§5.2 NEWER rows), which never alters
+  the completed-rule merge logic.

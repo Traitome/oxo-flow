@@ -16,7 +16,9 @@
 //!   * unknown / older engine-version field — harmless (schema-additive):
 //!     the checkpoint loads and completed rules still skip.
 //!   * NEWER format version — a `checkpoint_format_version` past this
-//!     engine's own: Execute refuses, the read-only preview degrades
+//!     engine's own: Execute refuses (`run`, `--resume-failed`, and the
+//!     standalone `resume` command, the latter before its own trusting
+//!     banner), the read-only preview degrades, and `status` warns
 //!     (issue #1309; the one direction additive-serde cannot guard itself).
 //!   * checkpoint missing a required field — treated as corrupt → refuses.
 //!
@@ -327,6 +329,99 @@ fn newer_format_version_checkpoint_refuses_execute_and_degrades_preview() {
     assert!(
         stderr.contains("NEWER oxo-flow build") && stderr.contains("never"),
         "preview must warn and plan everything: {stderr}"
+    );
+
+    // Read-only viewer: `status` still shows the recorded state (inspection
+    // is its purpose) but must not present untrusted completion state
+    // silently.
+    let out = Command::new(workspace_bin("oxo-flow"))
+        .args(["status"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "status must stay usable");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("NEWER oxo-flow build"),
+        "status must warn that the format is untrusted: {stderr}"
+    );
+}
+
+#[test]
+fn standalone_resume_refuses_newer_format_checkpoint_before_its_banner() {
+    // The standalone `resume` command loads the checkpoint itself for its
+    // banner and JSON counts — that load must carry the same fail-safe
+    // format gate (issue #1309): refuse BEFORE narrating a trusting
+    // "Resuming workflow / N completed" banner from state this engine
+    // cannot prove compatible.
+    let dir = tempfile::tempdir().unwrap();
+    write_quick_workflow(dir.path());
+    let out = run(dir.path(), &[]);
+    assert!(out.status.success());
+
+    let mut ck = checkpoint(dir.path());
+    ck["checkpoint_format_version"] = serde_json::json!(9999);
+    std::fs::write(
+        dir.path().join(".oxo-flow/checkpoint.json"),
+        serde_json::to_string_pretty(&ck).unwrap(),
+    )
+    .unwrap();
+
+    let out = Command::new(workspace_bin("oxo-flow"))
+        .args(["resume", ".oxo-flow/checkpoint.json"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        !out.status.success(),
+        "standalone resume must refuse a newer-format checkpoint"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("NEWER oxo-flow build") && stderr.contains("refusing to start"),
+        "must name the newer format and refuse: {stderr}"
+    );
+    assert!(
+        !stderr.contains("Resuming workflow"),
+        "the trusting banner must not narrate before the refusal: {stderr}"
+    );
+}
+
+#[test]
+fn resume_with_absent_version_marker_still_skips_completed_work() {
+    // A checkpoint WITHOUT the marker (written by a build that predates it)
+    // must not hard-break resume: the legacy format is the one every
+    // existing checkpoint uses, so absence is compatible by contract —
+    // and the genuinely-completed work is still skipped, nothing re-runs.
+    let dir = tempfile::tempdir().unwrap();
+    write_quick_workflow(dir.path());
+    let out = run(dir.path(), &[]);
+    assert!(out.status.success());
+
+    // Simulate the legacy writer: strip the version marker entirely.
+    let mut ck = checkpoint(dir.path());
+    ck.as_object_mut()
+        .unwrap()
+        .remove("checkpoint_format_version");
+    std::fs::write(
+        dir.path().join(".oxo-flow/checkpoint.json"),
+        serde_json::to_string_pretty(&ck).unwrap(),
+    )
+    .unwrap();
+
+    let out = Command::new(workspace_bin("oxo-flow"))
+        .args(["resume", ".oxo-flow/checkpoint.json"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "a marker-less (legacy) checkpoint must still resume"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("already completed"),
+        "the genuinely-completed rule must still skip on a legacy checkpoint: {stderr}"
     );
 }
 

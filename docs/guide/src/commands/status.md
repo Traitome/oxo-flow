@@ -286,6 +286,7 @@ The checkpoint file is JSON with the following structure:
 
 ```json
 {
+  "checkpoint_format_version": 1,
   "completed_rules": ["trim_reads", "align", "sort_bam"],
   "failed_rules": ["mark_duplicates"],
   "when_verdicts": {
@@ -331,6 +332,15 @@ The checkpoint file is JSON with the following structure:
   ]
 }
 ```
+
+`checkpoint_format_version` is the on-disk format marker the engine writes
+into every checkpoint. If the recorded version is **newer** than the running
+engine's, the checkpoint was written by a future build whose format this
+engine cannot prove it understands: `status` still shows the recorded listing
+(inspection is its purpose) but prints a trust warning, while the Execute
+surfaces (`run`, `--resume-failed`, `resume`) refuse outright — see
+[Checkpoint format version](resume.md#checkpoint-format-version). A checkpoint
+without the marker predates it and is treated as compatible.
 
 `config_snapshot` records the effective config values (sensitive keys stored
 as SHA-256 digests) and `rule_fingerprints` the structural fingerprints that
