@@ -834,6 +834,77 @@ ref = "v1"
 }
 
 #[tokio::test]
+async fn create_run_rejects_remote_url_include_with_400_no_row() {
+    // Issue #1285 (RB-04) case 5: web admission must reject a raw remote
+    // URL include with a structured 400 and persist NO run row. The core
+    // loader refuses the URL before any network I/O; the web path surfaces
+    // that as a 400 RUN_ERROR.
+    ensure_db().await;
+    let app = server::build_router("personal");
+    let toml = r#"
+[workflow]
+name = "web-remote-url-include-gate"
+
+[[include]]
+path = "https://example.com/remote/module.oxoflow"
+"#;
+
+    let (status, body) = post(
+        &app,
+        "/api/runs",
+        json!({"toml_content": toml, "dry_run": true}),
+    )
+    .await;
+    assert!(
+        !status.is_success(),
+        "remote URL include must be rejected, got {status}: {body}"
+    );
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["code"], "RUN_ERROR", "{body}");
+
+    let persisted: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM runs WHERE workflow_name = 'web-remote-url-include-gate'",
+    )
+    .fetch_one(oxo_flow_web::infra::db::sqlite::pool())
+    .await
+    .unwrap();
+    assert_eq!(persisted, 0, "rejected workflow must not create a run row");
+}
+
+#[tokio::test]
+async fn create_run_rejects_repo_include_without_ref_with_400_no_row() {
+    // Issue #1285 (RB-04) case 2 at the admission layer: a repo include
+    // with no pinned `ref` must also fail closed here, with no run row.
+    ensure_db().await;
+    let app = server::build_router("personal");
+    let toml = r#"
+[workflow]
+name = "web-repo-without-ref-gate"
+
+[[include]]
+path = "modules/qc.oxoflow"
+repo = "https://example.com/workflows.git"
+"#;
+
+    let (status, body) = post(
+        &app,
+        "/api/runs",
+        json!({"toml_content": toml, "dry_run": true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["code"], "RUN_ERROR", "{body}");
+
+    let persisted: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM runs WHERE workflow_name = 'web-repo-without-ref-gate'",
+    )
+    .fetch_one(oxo_flow_web::infra::db::sqlite::pool())
+    .await
+    .unwrap();
+    assert_eq!(persisted, 0, "rejected workflow must not create a run row");
+}
+
+#[tokio::test]
 async fn create_run_accepts_direct_types_with_an_unrelated_staged_asset() {
     ensure_db().await;
     let app = server::build_router("personal");
