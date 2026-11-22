@@ -244,6 +244,19 @@ fn assert_fixture_invariants(file_name: &str, toml: &str, config: &WorkflowConfi
             r#"input = ["{sample}.trimmed.fastq.gz"]"#,
             r#"output = ["{sample}.bam"]"#,
         ],
+        "samtools_sort.ok.nf" => &[
+            r#"input = ["data/{sample}.bam"]"#,
+            r#"output = ["{sample}.bam"]"#,
+            r#"memory = "8G""#,
+            r#"time_limit = "4h""#,
+            "samtools sort",
+        ],
+        "rseqc_stat.ok.smk" => &[
+            r#"input = ["results/star/{sample}-{unit}/Aligned.sortedByCoord.out.bam"]"#,
+            r#"output = ["results/qc/rseqc/{sample}-{unit}.stats.txt"]"#,
+            r#"environment = { conda = "../envs/rseqc.yaml" }"#,
+            "bam_stat.py",
+        ],
         other => panic!("{other} has no golden assertions"),
     };
     for needle in required {
