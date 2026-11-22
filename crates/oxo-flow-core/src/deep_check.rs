@@ -20,6 +20,14 @@
 //!   their `[types]` declarations (`crate::types`), so a header that will
 //!   fail the engine's BioTypes contract (format, sort order, read-group
 //!   tags, compression) is named before the run starts.
+//! - **D006 (warning)** — a `[[reference_db]]` entry's declared `checksum`
+//!   is verified against the reference file on disk (issue #1338). The
+//!   reference is hashed with the algorithm named by the checksum's
+//!   `"algo:"` prefix (`sha256:` / `md5:`), defaulting to sha256 for a bare
+//!   digest; a mismatch is the silent-reproducibility failure the declared
+//!   field exists to prevent. Only a local `source` path is hashed — a URL
+//!   source is never fetched. An entry with no `checksum`, no `source`, a
+//!   URL source, or an unexpanded placeholder reports nothing.
 //!
 //! All relative paths resolve against `base_dir` — the directory the
 //! executor runs rules from (the workflow file's directory, or `--workdir`).
@@ -41,7 +49,7 @@ use std::path::{Path, PathBuf};
 pub struct DeepFinding {
     /// Severity of the issue (D001 errors, the rest warnings).
     pub severity: Severity,
-    /// Diagnostic code for programmatic handling ("D001".."D004").
+    /// Diagnostic code for programmatic handling ("D001".."D006").
     pub code: String,
     /// Human-readable message.
     pub message: String,
@@ -60,7 +68,7 @@ pub struct DeepCheckReport {
     pub findings: Vec<DeepFinding>,
     /// Number of error-severity findings (D001).
     pub error_count: usize,
-    /// Number of warning-severity findings (D002/D003/D004).
+    /// Number of warning-severity findings (D002/D003/D004/D005/D006).
     pub warning_count: usize,
     /// Whether the workflow passed (no errors).
     pub passed: bool,
@@ -74,6 +82,9 @@ pub struct DeepCheckReport {
     pub references_checked: usize,
     /// Biological input headers evaluated against BioTypeSpec contracts.
     pub biological_headers_checked: usize,
+    /// Reference-database checksums actually compared against a hashed file
+    /// (a declared checksum whose local file was present and hashed).
+    pub reference_checksums_checked: usize,
 }
 
 /// Interpreters that announce a script path as their next plain argument.
@@ -369,8 +380,123 @@ pub fn compute_deep_check(config: &WorkflowConfig, base_dir: &Path) -> DeepCheck
         }
     }
 
+    // (d) `[[reference_db]]` declared checksums (D006, warning, issue #1338).
+    // The config has no dedicated local-path field, so `source` is treated as
+    // a path when it is not a URL and carries no unresolved placeholder; a URL
+    // source is never fetched (no external host). Entries outside this loop's
+    // reach report nothing (never a false failure).
+    for db in &config.reference_databases {
+        check_reference_db_checksum(&mut report, &mut seen, base_dir, db);
+    }
+
     report.passed = report.error_count == 0;
     report
+}
+
+/// Verify one `[[reference_db]]` entry's declared `checksum` against the file
+/// on disk (D006, warning). Reports only a *mismatch* (or an unreadable
+/// declared file); an entry that declares no checksum, no local source, a URL
+/// source, or an unresolved placeholder is silently skipped. The algorithm is
+/// taken from the checksum's `"algo:"` prefix via the shared
+/// [`OutputChecksumAlgorithm`](crate::executor::checkpoint::OutputChecksumAlgorithm),
+/// defaulting to sha256 for a bare digest — reusing the engine's hashing path
+/// so the comparison can never drift from `provenance verify` / checkpoint
+/// checksums.
+fn check_reference_db_checksum(
+    report: &mut DeepCheckReport,
+    seen: &mut HashSet<(String, String)>,
+    base_dir: &Path,
+    db: &crate::ReferenceDatabase,
+) {
+    use crate::executor::checkpoint::{OutputChecksumAlgorithm, hash_file_with_algorithm};
+
+    let Some(declared) = db.checksum.as_deref() else {
+        return;
+    };
+    let Some(source) = db.source.as_deref() else {
+        return;
+    };
+    // A URL source is not a local file; hashing it would need the network,
+    // which deep checks never reach.
+    if source.starts_with("http://") || source.starts_with("https://") {
+        return;
+    }
+    // Unresolved placeholders (`{sample}`, `{config.x}`) name no concrete
+    // file — the same `{`-guard every path probe here applies.
+    if !is_resolvable_path(source) {
+        return;
+    }
+    let resolved = resolve_path(source, base_dir);
+    // A missing file is D004's job (and the entry may legitimately arrive
+    // later); a checksum over absent data is not a mismatch.
+    if !resolved.is_file() {
+        return;
+    }
+    if !seen.insert(("D006".to_string(), source.to_string())) {
+        return;
+    }
+
+    // Algorithm from the declared prefix, defaulting to sha256. A supported
+    // `"<algo>:<hex>"` keeps its algorithm; a bare digest is treated as
+    // sha256; an unrecognised prefix is reported rather than guessed.
+    let (algorithm, expected_hex) = match declared.split_once(':') {
+        Some((algo, hex)) => match OutputChecksumAlgorithm::from_recorded_prefix(declared) {
+            Some(a) => (a, hex.to_string()),
+            None => {
+                report.findings.push(DeepFinding {
+                    severity: Severity::Warning,
+                    code: "D006".to_string(),
+                    message: format!(
+                        "reference_db '{}' declares an unsupported checksum algorithm '{}'",
+                        db.name, algo
+                    ),
+                    rule: None,
+                    suggestion: Some(
+                        "use a 'sha256:<hex>' or 'md5:<hex>' checksum (issue #1338)".to_string(),
+                    ),
+                    path: source.to_string(),
+                });
+                report.warning_count += 1;
+                return;
+            }
+        },
+        None => (OutputChecksumAlgorithm::Sha256, declared.to_string()),
+    };
+
+    let actual = match hash_file_with_algorithm(&resolved, algorithm) {
+        Ok(recorded) => recorded,
+        Err(_) => {
+            report.findings.push(DeepFinding {
+                severity: Severity::Warning,
+                code: "D006".to_string(),
+                message: format!("reference_db '{}': cannot checksum {}", db.name, source),
+                rule: None,
+                suggestion: Some("make the reference file readable and a regular file".to_string()),
+                path: source.to_string(),
+            });
+            report.warning_count += 1;
+            return;
+        }
+    };
+    report.reference_checksums_checked += 1;
+
+    if !actual.eq_ignore_ascii_case(&format!("{}:{}", algorithm.prefix(), expected_hex)) {
+        report.findings.push(DeepFinding {
+            severity: Severity::Warning,
+            code: "D006".to_string(),
+            message: format!(
+                "reference_db '{}' checksum mismatch: declared {}, actual {}",
+                db.name, declared, actual
+            ),
+            rule: None,
+            suggestion: Some(
+                "the reference file does not match the declared checksum — re-download or update `checksum`"
+                    .to_string(),
+            ),
+            path: source.to_string(),
+        });
+        report.warning_count += 1;
+    }
 }
 
 /// Check one script-file candidate: missing → D001 error.
@@ -1102,6 +1228,141 @@ mod tests {
              description = \"step b\"\nscript = \"scripts/shared.py\"\n");
         let report = deep_for(&toml, dir.path());
         assert_eq!(findings_of(&report, "D001").len(), 1);
+    }
+
+    // ── D006: reference-db checksum verification (issue #1338) ─────────────
+
+    /// sha256 of `bytes`, in the engine's recorded `"sha256:<hex>"` form.
+    fn sha256_record(bytes: &[u8]) -> String {
+        use crate::executor::checkpoint::{OutputChecksumAlgorithm, hash_file_with_algorithm};
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("blob");
+        std::fs::write(&p, bytes).unwrap();
+        hash_file_with_algorithm(&p, OutputChecksumAlgorithm::Sha256).unwrap()
+    }
+
+    /// A minimal workflow with one inert rule, so the `[[reference_db]]`
+    /// block stands alone (no rule-path findings interfere).
+    fn wf_with_rule() -> String {
+        wf("[[rules]]\nname = \"a\"\noutput = [\"results/a.txt\"]\n\
+             description = \"step\"\nshell = \"cat x > results/a.txt\"\n")
+    }
+
+    #[test]
+    fn refdb_correct_checksum_passes_and_is_counted() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("ref.fa"), b"ACGT").unwrap();
+        let checksum = sha256_record(b"ACGT");
+        let toml = format!(
+            "[[reference_db]]\nname = \"GRCh38\"\nsource = \"ref.fa\"\n\
+             checksum = \"{checksum}\"\n\n{}",
+            wf_with_rule()
+        );
+        let report = deep_for(&toml, dir.path());
+        assert!(
+            findings_of(&report, "D006").is_empty(),
+            "a matching checksum must not warn: {:?}",
+            findings_of(&report, "D006")
+        );
+        assert_eq!(report.reference_checksums_checked, 1);
+    }
+
+    #[test]
+    fn refdb_wrong_checksum_reports_d006_mismatch() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("ref.fa"), b"REAL-CONTENT").unwrap();
+        // The declared checksum is sha256 of DIFFERENT bytes -> must mismatch.
+        let wrong = sha256_record(b"OTHER-CONTENT");
+        let toml = format!(
+            "[[reference_db]]\nname = \"dbSNP\"\nsource = \"ref.fa\"\n\
+             checksum = \"{wrong}\"\n\n{}",
+            wf_with_rule()
+        );
+        let report = deep_for(&toml, dir.path());
+        let d006 = findings_of(&report, "D006");
+        assert_eq!(d006.len(), 1, "{d006:?}");
+        assert_eq!(d006[0].severity, Severity::Warning);
+        assert!(d006[0].message.contains("mismatch"), "{}", d006[0].message);
+        assert!(d006[0].message.contains("dbSNP"));
+        assert_eq!(report.reference_checksums_checked, 1);
+        // A mismatch is a warning: it never flips `passed`.
+        assert!(report.passed);
+    }
+
+    #[test]
+    fn refdb_bare_sha256_hex_is_accepted() {
+        // A checksum with no "algo:" prefix is treated as sha256.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("ref.fa"), b"ACGT").unwrap();
+        let hex = sha256_record(b"ACGT")
+            .split_once(':')
+            .unwrap()
+            .1
+            .to_string();
+        let toml = format!(
+            "[[reference_db]]\nname = \"x\"\nsource = \"ref.fa\"\n\
+             checksum = \"{hex}\"\n\n{}",
+            wf_with_rule()
+        );
+        let report = deep_for(&toml, dir.path());
+        assert!(findings_of(&report, "D006").is_empty());
+        assert_eq!(report.reference_checksums_checked, 1);
+    }
+
+    #[test]
+    fn refdb_no_checksum_or_url_source_reports_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("ref.fa"), b"ACGT").unwrap();
+        // (a) no checksum declared; (b) URL source (never fetched);
+        // (c) no source at all.
+        let toml = format!(
+            "[[reference_db]]\nname = \"a\"\nsource = \"ref.fa\"\n\n\
+             [[reference_db]]\nname = \"b\"\nsource = \"https://example.com/ref.fa\"\n\
+             checksum = \"sha256:00\"\n\n\
+             [[reference_db]]\nname = \"c\"\nchecksum = \"sha256:00\"\n\n{}",
+            wf_with_rule()
+        );
+        let report = deep_for(&toml, dir.path());
+        assert!(
+            findings_of(&report, "D006").is_empty(),
+            "{:?}",
+            findings_of(&report, "D006")
+        );
+        assert_eq!(report.reference_checksums_checked, 0);
+    }
+
+    #[test]
+    fn refdb_missing_local_file_reports_nothing() {
+        // A declared checksum over an absent file is D004's concern (data may
+        // arrive later) -- never reported as a checksum mismatch.
+        let dir = tempfile::tempdir().unwrap();
+        let toml = format!(
+            "[[reference_db]]\nname = \"x\"\nsource = \"absent.fa\"\n\
+             checksum = \"sha256:00\"\n\n{}",
+            wf_with_rule()
+        );
+        let report = deep_for(&toml, dir.path());
+        assert!(findings_of(&report, "D006").is_empty());
+        assert_eq!(report.reference_checksums_checked, 0);
+    }
+
+    #[test]
+    fn refdb_unsupported_algorithm_reports_d006() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("ref.fa"), b"ACGT").unwrap();
+        let toml = format!(
+            "[[reference_db]]\nname = \"x\"\nsource = \"ref.fa\"\n\
+             checksum = \"sha1:00\"\n\n{}",
+            wf_with_rule()
+        );
+        let report = deep_for(&toml, dir.path());
+        let d006 = findings_of(&report, "D006");
+        assert_eq!(d006.len(), 1, "{d006:?}");
+        assert!(
+            d006[0].message.contains("unsupported"),
+            "{}",
+            d006[0].message
+        );
     }
 
     // ── find_in_path ───────────────────────────────────────────────────────

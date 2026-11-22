@@ -631,6 +631,18 @@ fn print_deep_console(report: &oxo_flow_core::deep_check::DeepCheckReport) {
         finding_lines("D005");
     }
 
+    if report.reference_checksums_checked > 0 || has("D006") {
+        eprintln!("{}", "  Reference DB Checksums:".bold());
+        if report.reference_checksums_checked > 0 && !has("D006") {
+            eprintln!(
+                "    {} {} reference-db checksum(s) verified",
+                "✓".green().bold(),
+                report.reference_checksums_checked
+            );
+        }
+        finding_lines("D006");
+    }
+
     eprintln!(
         "\n{} {}, {}",
         "Deep check summary:".bold(),

@@ -3928,6 +3928,16 @@ depends on. Entries are recorded in the run's software-versions report
 (`name`, `version`, and `checksum`), so runs stay auditable against the
 reference data they consumed.
 
+When an entry declares a `checksum` and a local `source` path that exists
+on disk, `oxo-flow test --deep` verifies the file actually hashes to that
+value (deep-check code `D006`; a mismatch is a warning). The algorithm is
+taken from an `algo:` prefix when present — `sha256` (the default for a
+bare hex digest) and `md5` are supported — so a stale checksum surfaces as
+a finding instead of a silent reproducibility failure. Entries without a
+`checksum`, with a URL `source`, or whose file is not present locally are
+reported as nothing (never a false failure); see the [test command
+reference](../commands/test.md).
+
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `name` | String | Yes | Database identifier (e.g. `"GRCh38"`, `"dbSNP"`) |
