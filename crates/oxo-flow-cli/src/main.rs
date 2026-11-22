@@ -73,7 +73,7 @@ pub struct Cli {
     /// Output machine-readable JSON to stdout (human-readable logs stay on stderr).
     /// Implemented by run, dry-run, validate, lint, test, status, wait, batch,
     /// info, knowledge, schema, verify-data, license, provenance verify, ai,
-    /// runs gc, and the cluster status/cancel/logs monitors;
+    /// runs gc, import, and the cluster status/cancel/logs monitors;
     /// every other command rejects the flag instead of silently ignoring it.
     /// For info and knowledge, an explicit `--format text` takes precedence
     /// over `--json`.
@@ -1370,6 +1370,9 @@ fn json_supported(command: &Commands) -> bool {
         | Commands::Schema
         | Commands::License { .. }
         | Commands::Ai { .. } => true,
+        // `import --json` emits one machine-readable translation document
+        // (issue #1332).
+        Commands::Import { .. } => true,
         Commands::Provenance { action } => matches!(action, ProvenanceAction::Verify { .. }),
         Commands::VerifyData { .. } => true,
         Commands::Runs { .. } => true,
@@ -1529,7 +1532,7 @@ async fn main() -> Result<()> {
              Drop --json to run it normally, or use a command whose JSON \
              document is implemented (run, dry-run, validate, lint, test, \
              status, wait, batch, info, knowledge, schema, license, ai, \
-             provenance verify, verify-data, runs gc, cluster \
+             provenance verify, verify-data, runs gc, import, cluster \
              status/cancel/logs)."
         );
     }
@@ -1894,7 +1897,12 @@ async fn main() -> Result<()> {
                 ),
                 None => None,
             };
-            crate::commands::import::handle_import(&source, parsed_from, output.as_deref())?;
+            crate::commands::import::handle_import(
+                &source,
+                parsed_from,
+                output.as_deref(),
+                cli.json,
+            )?;
         }
         Commands::Knowledge { action, format } => knowledge_command(action, format)?,
         Commands::Init {
