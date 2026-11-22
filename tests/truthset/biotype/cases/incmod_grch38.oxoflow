@@ -1,0 +1,16 @@
+# incmod_grch38.oxoflow — include-module fixture for b31.
+# Pulled in via [[include]] by b31_include_contributed_type.oxoflow. Its
+# producing rule declares an inline [rules.types] output that must propagate
+# across the include boundary. This fixture is NOT a standalone case (no EXPECT
+# row of its own); it is exercised only through b31.
+
+[workflow]
+name = "incmod_grch38"
+
+[[rules]]
+name = "produce_gtf"
+output = ["genes.gtf"]
+shell = "make-gtf > genes.gtf"
+
+[rules.types]
+outputs = { default = "GTF[reference_build=GRCh38]" }

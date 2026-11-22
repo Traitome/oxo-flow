@@ -1,0 +1,25 @@
+# B21 — format-coverage accept control (GFF3). A GFF3 annotation feature file
+# feeds a GFF3 consumer. gff3 has NO coercion arm in the checker (only Sam/Bam,
+# Bam/Cram, Vcf/Bcf do), so the honest compatible case is a same-format pair;
+# the build attribute must still match.
+# Derivation: format enum variant Gff3 ("gff3" / "gff") driven on both sides.
+#
+# EXPECTED: accept — no TYPE diagnostic.
+
+[workflow]
+name = "b21"
+
+[[rules]]
+name = "filter_gff3"
+output = ["features.gff3"]
+shell = "grep -v '^#' raw.gff3 > features.gff3"
+[rules.types]
+outputs = { default = "GFF3[reference_build=GRCh38]" }
+
+[[rules]]
+name = "annotate_variants"
+input = ["features.gff3"]
+output = ["annotated.vcf.gz"]
+shell = "bcftools annotate -a features.gff3 -O z -o annotated.vcf.gz calls.vcf.gz"
+[rules.types]
+inputs = { default = "GFF3[reference_build=GRCh38]" }

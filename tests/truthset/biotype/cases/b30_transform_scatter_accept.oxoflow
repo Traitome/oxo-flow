@@ -1,0 +1,44 @@
+# B30 — transform.* scatter/combine GENERATED rule drives a typed edge (accept).
+# Same scatter/combine shape as B29, but the downstream consumer expects the
+# declared merged output type VCF[sort_order=coordinate] — the rule contract
+# matches across the scatter/combine boundary ⇒ no TYPE diagnostic. This is the
+# accept control that proves the transform path drives a typed edge end to end
+# (matching contracts do not trip the checker).
+# Derivation: transform-scattered typed edge, matching Vcf contract ⇒ accept.
+#
+# EXPECTED: accept — no TYPE diagnostic.
+
+[workflow]
+name = "b30"
+
+[config]
+chromosomes = ["chr1", "chr2"]
+
+[[rules]]
+name = "scatter_call"
+input = ["sample.bam"]
+output = ["calls.vcf.gz"]
+shell = "custom -o {output} {input}"
+
+[rules.types]
+inputs = { default = "BAM" }
+outputs = { default = "VCF[sort_order=coordinate]" }
+
+[rules.transform.split]
+by = "chr"
+values_from = "config.chromosomes"
+
+[rules.transform]
+map = "call -L {chr} -o {output} {input}"
+
+[rules.transform.combine]
+shell = "merge {chunks} -o {output}"
+
+[[rules]]
+name = "consume"
+input = ["calls.vcf.gz"]
+output = ["final.txt"]
+shell = "consume {input} > {output}"
+
+[rules.types]
+inputs = { default = "VCF[sort_order=coordinate]" }

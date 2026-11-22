@@ -1,0 +1,24 @@
+# B28 — format-coverage accept control (tsv). A tab-separated table (e.g. a
+# QC metrics summary) feeds a tsv consumer. tsv ("tsv" / "txt") has no coercion
+# arm, so the honest compatible case is a same-format pair.
+# Derivation: format enum variant Tsv ("tsv") driven on both sides.
+#
+# EXPECTED: accept — no TYPE diagnostic.
+
+[workflow]
+name = "b28"
+
+[[rules]]
+name = "qc_summary"
+output = ["qc.tsv"]
+shell = "multiqc -o . -f . && mv multiqc_data/multiqc_general_stats.txt qc.tsv"
+[rules.types]
+outputs = { default = "TSV" }
+
+[[rules]]
+name = "threshold"
+input = ["qc.tsv"]
+output = ["flagged.tsv"]
+shell = "awk -F'\t' '$3<30' qc.tsv > flagged.tsv"
+[rules.types]
+inputs = { default = "TSV" }
