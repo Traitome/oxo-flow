@@ -42,7 +42,7 @@ oxo-flow is a high-performance bioinformatics pipeline engine built in Rust. It 
 ```text
                     ┌────────────────────────────────────────┐
                     │            Interaction Layer           │
-                    │  CLI (36 subcommands) │ Web (React 19) │
+                    │  CLI (37 subcommands) │ Web (React 19) │
                     │  VS Code Extension    │ Desktop (Wry)  │
                     └──────────────────┬─────────────────────┘
                                        │
@@ -346,13 +346,13 @@ It provides `[[rules]]`-aware syntax highlighting (wildcards and `{input[0]}` pl
 
 ## CLI Commands
 
-The `oxo-flow` binary provides **36 subcommands** covering the complete workflow lifecycle. See the full [CLI Reference](https://traitome.github.io/oxo-flow/latest/commands/run/) for details.
+The `oxo-flow` binary provides **37 subcommands** covering the complete workflow lifecycle. See the full [CLI Reference](https://traitome.github.io/oxo-flow/latest/commands/run/) for details.
 
 | Category | Commands |
 |----------|----------|
 | **Execution** | `run`, `resume`, `dry-run` (alias `plan`), `test`, `batch` |
 | **Development** | `init`, `agent-docs`, `validate`, `format`, `lint`, `debug`, `template`, `import` |
-| **Inspection** | `graph`, `info`, `report`, `status`, `wait`, `config`, `diff`, `provenance`, `schema`, `verify-data` |
+| **Inspection** | `graph`, `info`, `report`, `status`, `wait`, `config`, `diff`, `provenance`, `schema`, `verify-data`, `diagnostics` |
 | **Knowledge** | `knowledge` (embedded Bioconda / nf-core / skills query) |
 | **Environment** | `env`, `runs`, `export`, `clean`, `touch` |
 | **Deployment** | `serve`, `cluster`, `publish`, `pull` |
@@ -378,7 +378,7 @@ oxo-flow/
 │   ├── oxo-flow-core/     # Core library: DAG engine, executor, environment mgmt,
 │   │                      # config parsing, scheduler, wildcard expansion, reporting
 │   ├── oxo-flow-ai/       # AI companion: provider abstraction, skill system, agents
-│   ├── oxo-flow-cli/      # CLI binary ("oxo-flow") — Clap-based, 36 subcommands
+│   ├── oxo-flow-cli/      # CLI binary ("oxo-flow") — Clap-based, 37 subcommands
 │   ├── oxo-flow-web/      # Web server ("oxo-flow-web") — axum REST API + frontend
 │   └── oxo-flow-desktop/  # Native desktop shell ("oxo-flow-desktop", wry + tao) —
 │                          # excluded from the workspace (own Cargo.toml)

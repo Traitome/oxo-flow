@@ -560,20 +560,14 @@ fn adversarial_table_positive_and_negatives() {
     }
 }
 
-/// The distinct `code: "SCI-…"` ids the engine can emit, parsed from the
-/// source at compile time so the id list is never retyped here.
+/// The distinct SCI-* codes the engine can emit, read from the shared
+/// catalog (`SCI_CATALOG`) — the single source of the code strings, which
+/// every `code: sci_codes::…` site in `scientific_preflight.rs` references.
 fn source_rule_ids() -> BTreeSet<String> {
-    let src = include_str!("../src/scientific_preflight.rs");
-    let mut ids = BTreeSet::new();
-    for part in src.split("code: \"").skip(1) {
-        if let Some(end) = part.find('"') {
-            let id = &part[..end];
-            if id.starts_with("SCI-") {
-                ids.insert(id.to_string());
-            }
-        }
-    }
-    ids
+    oxo_flow_core::scientific_catalog::SCI_CATALOG
+        .iter()
+        .map(|(code, _)| (*code).to_string())
+        .collect()
 }
 
 #[test]

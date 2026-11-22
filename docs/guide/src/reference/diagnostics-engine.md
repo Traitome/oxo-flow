@@ -14,9 +14,9 @@ The Diagnostics Engine analyzes failed pipeline runs and returns:
 
 It does NOT use AI. It matches error signatures (log keywords, exit codes)
 against a curated library of 31 error patterns (tool, resource, data,
-system, and config classes — see
-`crates/oxo-flow-core/src/diagnostics.rs` for the full list; the web
-domain re-exports the same table).
+system, and config classes), enumerated by `oxo-flow diagnostics list`
+(see the [command reference](../commands/diagnostics.md)); the web domain
+re-exports the same table.
 
 ## Matching semantics
 
@@ -32,9 +32,10 @@ domain re-exports the same table).
 ## Error Pattern Library
 
 31 patterns total across five categories — Tool (5), Resource (5), Data (7),
-System (6), Config (8). The tables below cover the most common; the
-authoritative list is `crates/oxo-flow-core/src/diagnostics.rs` (the web
-crate re-exports it via
+System (6), Config (8). The tables below cover the most common; enumerate the
+authoritative list at the command line with
+[`oxo-flow diagnostics list`](../commands/diagnostics.md), which reads the
+engine's own pattern table (the web crate re-exports it via
 `crates/oxo-flow-web/src/domains/execution/diagnostics.rs`).
 
 ### Tool Errors
@@ -265,7 +266,7 @@ When the checker synthesizes a concrete conversion command for a `TYPE-001`–`T
 
 ### Curated Scientific Preflight Catalog (`SCI-*`)
 
-Deterministic, evidence-backed rules covering genomics, transcriptomics, epigenomics, metagenomics, and DAG hardware execution.
+Deterministic, evidence-backed rules covering genomics, transcriptomics, epigenomics, metagenomics, and DAG hardware execution. Enumerate the authoritative list at the command line with [`oxo-flow diagnostics list scientific`](../commands/diagnostics.md), which reads the engine's own rule table.
 
 #### 1. Germline & Somatic Variant Calling
 

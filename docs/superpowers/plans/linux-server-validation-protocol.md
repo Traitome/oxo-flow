@@ -56,7 +56,7 @@ recorded as environment-limited, not product failures.
 
 ```bash
 OXO=target/debug/oxo-flow
-$OXO --version && $OXO --help          # subcommand count must equal 35
+$OXO --version && $OXO --help          # subcommand count must equal 37
 while IFS= read -r -d '' workflow; do
   "$OXO" validate "$workflow"
 done < <(find examples/gallery -maxdepth 1 -name '*.oxoflow' -print0)

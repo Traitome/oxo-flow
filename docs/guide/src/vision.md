@@ -82,7 +82,7 @@ Methodological claims are nothing without measurement infrastructure:
 
 The quantitative claims on this page were checked against `main@55dddf3c` on 2026-11-17; the cluster `--provenance` behavior was re-verified after #1096 (`main@3406208f`):
 
-- 35 CLI subcommands; 91 OpenAPI paths / 106 operations served by `GET /api/openapi.json` (default build, non-HPC mode).
+- 37 CLI subcommands; 91 OpenAPI paths / 106 operations served by `GET /api/openapi.json` (default build, non-HPC mode).
 - 31 built-in diagnostic patterns; biological type contracts firing on a deliberately mismatched workflow (`TYPE-001`–`TYPE-003` observed live, `TYPE-004`–`TYPE-010` covered by unit tests; `TYPE-008`/`TYPE-009`/`TYPE-010` are advisory unverifiable-edge codes).
 - 33 prebuilt cluster and re-entry integration tests passing on a Linux host.
 - Live `[engine] dispatch_order` (local execution), run-aware `cluster status --json` / `cluster logs`, interrupted-rule re-queue, `provenance verify`, and the strict-placeholder gate exercised on a mock-Slurm Linux host.
