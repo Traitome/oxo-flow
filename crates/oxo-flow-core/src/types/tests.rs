@@ -587,3 +587,88 @@ fn test_dag_type_checking_multi_channel_no_false_positive() {
         "multi-channel rules must not cross-compare mismatched channels: {diagnostics:?}"
     );
 }
+
+/// The BioTypes checker synthesizes a concrete `coercion_rule` for a fixable
+/// type mismatch; that exact command must survive all the way to the surfaced
+/// `format::Diagnostic` — both in the serialized JSON and the human `Display`
+/// line — instead of being silently dropped (issue #1322).
+#[test]
+fn test_surfaced_diagnostic_carries_synthesized_coercion_rule() {
+    let toml = r#"
+        [workflow]
+        name = "coercion_surface"
+
+        [types.raw_sam]
+        format = "sam"
+
+        [types.bam_in]
+        format = "bam"
+
+        [[rules]]
+        name = "align"
+        output = ["out.sam"]
+        shell = "touch out.sam"
+        [rules.types]
+        outputs = { default = "raw_sam" }
+
+        [[rules]]
+        name = "calibrate"
+        input = ["out.sam"]
+        output = ["out.bam"]
+        shell = "touch out.bam"
+        [rules.types]
+        inputs = { default = "bam_in" }
+    "#;
+
+    let config = WorkflowConfig::parse(toml).expect("valid workflow config");
+    let validation = crate::format::validate_format(&config);
+
+    let type001 = validation
+        .diagnostics
+        .iter()
+        .find(|d| d.code == "TYPE-001")
+        .expect("SAM -> BAM mismatch must produce a TYPE-001 diagnostic");
+
+    // The exact command the checker synthesized must reach the surfaced Diagnostic.
+    let expected = "samtools view -b -o {output} {input}";
+    assert_eq!(
+        type001.coercion_rule.as_deref(),
+        Some(expected),
+        "surfaced Diagnostic must carry the synthesized coercion_rule: {:?}",
+        type001
+    );
+
+    // JSON surface: the key must be present with the exact command.
+    let json = serde_json::to_value(type001).expect("Diagnostic serializes");
+    assert_eq!(
+        json.get("coercion_rule").and_then(|v| v.as_str()),
+        Some(expected),
+        "JSON Diagnostic must expose coercion_rule: {json}"
+    );
+
+    // Human/text surface: the Display line must render the command, labelled.
+    let text = type001.to_string();
+    assert!(
+        text.contains(&format!(" — coercion: {expected}")),
+        "human Diagnostic must render the coercion rule: {text}"
+    );
+
+    // An unrelated diagnostic (no synthesized rule) must NOT serialize the key.
+    let unrelated = crate::format::Diagnostic {
+        severity: crate::format::Severity::Warning,
+        message: "input path 'x' is an absolute path".to_string(),
+        rule: Some("align".to_string()),
+        code: "W017".to_string(),
+        suggestion: Some("use relative paths".to_string()),
+        coercion_rule: None,
+    };
+    let unrelated_json = serde_json::to_value(&unrelated).expect("Diagnostic serializes");
+    assert!(
+        unrelated_json.get("coercion_rule").is_none(),
+        "a None coercion_rule must be omitted from JSON (no snapshot churn): {unrelated_json}"
+    );
+    assert!(
+        !unrelated.to_string().contains("coercion:"),
+        "a None coercion_rule must not render in the human line: {unrelated}"
+    );
+}

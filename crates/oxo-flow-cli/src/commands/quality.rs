@@ -9,6 +9,39 @@ use crate::commands::print_banner;
 
 use oxo_flow_core::plural;
 
+/// Build the JSON object for a diagnostic, applying the SAME field policy as
+/// the serde `Diagnostic` — `coercion_rule` is emitted ONLY when `Some`, so a
+/// rule-less workflow's `--json` output stays byte-stable against the
+/// pre-BioTypes shape (issue #1322). Repeated `json!` maps had retyped the
+/// policy and leaked `"coercion_rule": null` on every finding. `include_severity`
+/// keeps the historical per-surface shape (validate omits it, lint carries it).
+fn diagnostic_json_value(
+    d: &oxo_flow_core::format::Diagnostic,
+    include_severity: bool,
+) -> serde_json::Value {
+    let mut map = serde_json::Map::new();
+    if include_severity {
+        map.insert(
+            "severity".into(),
+            serde_json::Value::from(format!("{:?}", d.severity).to_lowercase()),
+        );
+    }
+    map.insert("code".into(), serde_json::Value::from(d.code.clone()));
+    map.insert("message".into(), serde_json::Value::from(d.message.clone()));
+    map.insert(
+        "rule".into(),
+        serde_json::to_value(&d.rule).unwrap_or(serde_json::Value::Null),
+    );
+    map.insert(
+        "suggestion".into(),
+        serde_json::to_value(&d.suggestion).unwrap_or(serde_json::Value::Null),
+    );
+    if let Some(ref cr) = d.coercion_rule {
+        map.insert("coercion_rule".into(), serde_json::Value::from(cr.clone()));
+    }
+    serde_json::Value::Object(map)
+}
+
 pub async fn validate_command(
     workflow: PathBuf,
     as_include: bool,
@@ -93,6 +126,7 @@ pub async fn validate_command(
                             rule: Some(w.rule),
                             code: w.code,
                             suggestion: Some(w.suggestion),
+                            coercion_rule: None,
                         }),
                 );
             }
@@ -108,12 +142,7 @@ pub async fn validate_command(
                     }
                     error_count += 1;
                     if json {
-                        errors_json.push(serde_json::json!({
-                            "code": d.code,
-                            "message": d.message,
-                            "rule": d.rule,
-                            "suggestion": d.suggestion,
-                        }));
+                        errors_json.push(diagnostic_json_value(d, false));
                     } else {
                         eprintln!("  {} [{}]: {}", "error".red().bold(), d.code, d.message);
                         if let Some(ref rule) = d.rule {
@@ -121,6 +150,9 @@ pub async fn validate_command(
                         }
                         if let Some(ref suggestion) = d.suggestion {
                             eprintln!("    hint: {}", suggestion);
+                        }
+                        if let Some(ref coercion) = d.coercion_rule {
+                            eprintln!("    coercion: {}", coercion);
                         }
                     }
                 } else if d.code == "W042" {
@@ -182,14 +214,7 @@ pub async fn validate_command(
                         if json {
                             let warnings_json: Vec<serde_json::Value> = warnings
                                 .iter()
-                                .map(|d| {
-                                    serde_json::json!({
-                                        "code": d.code,
-                                        "message": d.message,
-                                        "rule": d.rule,
-                                        "suggestion": d.suggestion,
-                                    })
-                                })
+                                .map(|d| diagnostic_json_value(d, false))
                                 .collect();
                             let output = serde_json::json!({
                                 "command": "validate",
@@ -222,14 +247,7 @@ pub async fn validate_command(
             if json {
                 let warnings_json: Vec<serde_json::Value> = warnings
                     .iter()
-                    .map(|d| {
-                        serde_json::json!({
-                            "code": d.code,
-                            "message": d.message,
-                            "rule": d.rule,
-                            "suggestion": d.suggestion,
-                        })
-                    })
+                    .map(|d| diagnostic_json_value(d, false))
                     .collect();
                 let output = serde_json::json!({
                     "command": "validate",
@@ -434,6 +452,9 @@ pub async fn lint_command(workflow: PathBuf, strict: bool, json: bool, ai: bool)
         if let Some(ref suggestion) = d.suggestion {
             eprintln!("    hint: {}", suggestion);
         }
+        if let Some(ref coercion) = d.coercion_rule {
+            eprintln!("    coercion: {}", coercion);
+        }
     }
 
     eprintln!(
@@ -452,15 +473,7 @@ pub async fn lint_command(workflow: PathBuf, strict: bool, json: bool, ai: bool)
             .chain(lint_diags.iter())
             .chain(schema_diags.iter())
             .chain(secret_diags.iter())
-            .map(|d| {
-                serde_json::json!({
-                    "severity": format!("{:?}", d.severity).to_lowercase(),
-                    "code": d.code,
-                    "message": d.message,
-                    "rule": d.rule,
-                    "suggestion": d.suggestion,
-                })
-            })
+            .map(|d| diagnostic_json_value(d, true))
             .collect();
 
         let output = serde_json::json!({

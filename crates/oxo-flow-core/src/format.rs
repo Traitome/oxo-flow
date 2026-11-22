@@ -93,6 +93,11 @@ pub struct Diagnostic {
     /// Optional suggestion for how to fix the issue.
     #[serde(default)]
     pub suggestion: Option<String>,
+    /// Optional synthesized command that mechanically converts the produced
+    /// value into the expected one (BioTypes). Present only when the checker
+    /// could synthesize a concrete coercion rule; `None` otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coercion_rule: Option<String>,
 }
 
 impl std::fmt::Display for Diagnostic {
@@ -103,6 +108,9 @@ impl std::fmt::Display for Diagnostic {
         }
         if let Some(ref suggestion) = self.suggestion {
             write!(f, " — hint: {}", suggestion)?;
+        }
+        if let Some(ref coercion) = self.coercion_rule {
+            write!(f, " — coercion: {}", coercion)?;
         }
         Ok(())
     }
@@ -233,6 +241,7 @@ fn lint_regex_extract_calls(when: &str, rule: &Rule, diagnostics: &mut Vec<Diagn
                          (default 0 = whole match)"
                             .to_string(),
                     ),
+                    coercion_rule: None,
                 });
             }
             i = open + 1 + close + 1;
@@ -308,6 +317,7 @@ fn lint_when_bare_identifiers(when: &str, rule: &Rule, diagnostics: &mut Vec<Dia
                         suggestion: Some(format!(
                             "reference config keys as 'config.{ident}' (define them in [config]), or use a quoted literal, a {{...}} placeholder, or a built-in function (len/file_exists/regex_extract/reads_count/wc_lines/file_size)"
                         )),
+                        coercion_rule: None,
                     });
                 }
                 _ => i += 1,
@@ -337,6 +347,7 @@ pub fn undefined_config_refs(rule: &Rule, config: &WorkflowConfig) -> Vec<Diagno
                     rule: Some(rule.name.clone()),
                     code: "E005".to_string(),
                     suggestion: Some(format!("define '{key}' in the [config] section")),
+                    coercion_rule: None,
                 });
             }
         }
@@ -395,6 +406,7 @@ pub fn undefined_config_refs(rule: &Rule, config: &WorkflowConfig) -> Vec<Diagno
                         rule: Some(rule.name.clone()),
                         code: "E005".to_string(),
                         suggestion: Some(format!("define '{key}' in the [config] section")),
+                        coercion_rule: None,
                     });
                 }
             }
@@ -434,6 +446,7 @@ pub fn undefined_config_refs(rule: &Rule, config: &WorkflowConfig) -> Vec<Diagno
                     suggestion: Some(
                         "compare against a whole number, e.g. len(config.key) > 0".to_string(),
                     ),
+                    coercion_rule: None,
                 });
             }
         }
@@ -535,6 +548,7 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
             rule: None,
             code: "E001".to_string(),
             suggestion: Some("add a non-empty name to the [workflow] section".to_string()),
+            coercion_rule: None,
         });
     }
 
@@ -556,6 +570,7 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
                 rule: Some(rule.name.clone()),
                 code: "E002".to_string(),
                 suggestion: sugg,
+                coercion_rule: None,
             });
         }
 
@@ -592,6 +607,7 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
                     "add a non-empty shell or script — imported Nextflow processes need their `script:` block captured"
                         .to_string(),
                 ),
+                coercion_rule: None,
             });
         }
 
@@ -673,6 +689,7 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
                     rule: Some(rule.name.clone()),
                     code: "E003".to_string(),
                     suggestion: Some(format!("add '{{{{{}}}}}' to the rule's input patterns", wc)),
+                    coercion_rule: None,
                 });
             }
         }
@@ -689,6 +706,7 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
                 suggestion: Some(
                     "use a valid format like \"8G\", \"16384M\", or \"1T\"".to_string(),
                 ),
+                coercion_rule: None,
             });
         }
         // Also check resources.memory
@@ -703,6 +721,7 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
                 suggestion: Some(
                     "use a valid format like \"8G\", \"16384M\", or \"1T\"".to_string(),
                 ),
+                coercion_rule: None,
             });
         }
 
@@ -730,6 +749,7 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
                     "remove shell metacharacters from environment.{field} — image refs and \
                      module names may only contain [A-Za-z0-9._:/@-]"
                 )),
+                coercion_rule: None,
             });
         }
 
@@ -752,6 +772,7 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
                     "use the fully qualified reference (registry/name:tag) for reproducible pulls"
                         .to_string(),
                 ),
+                coercion_rule: None,
             });
         }
     }
@@ -771,6 +792,7 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
                 suggestion: Some(
                     "add `checkpoint_manifest = \"discover.toml\"` (the rule must write [reentry] sample = [...] to that file), or remove checkpoint = true".to_string(),
                 ),
+                coercion_rule: None,
             });
         }
     }
@@ -816,6 +838,7 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
                 suggestion: Some(
                     "move the wildcard into a downstream rule; the checkpoint rule itself runs once per round-0 plan".to_string(),
                 ),
+                coercion_rule: None,
             });
         }
     }
@@ -838,6 +861,7 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
                         "remove '{}' from its own depends_on list",
                         rule.name
                     )),
+                    coercion_rule: None,
                 });
             }
             if !rule_names.contains(dep.as_str()) {
@@ -850,6 +874,7 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
                         "ensure rule '{}' is defined in the workflow or remove it from depends_on",
                         dep
                     )),
+                    coercion_rule: None,
                 });
             }
         }
@@ -866,6 +891,7 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
                 rule: Some(rule.name.clone()),
                 code: "E008".to_string(),
                 suggestion: Some(format!("ensure rule '{}' is defined in the workflow", base)),
+                coercion_rule: None,
             });
         }
     }
@@ -887,6 +913,7 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
                     "Define [env_groups.{}] or remove env_group from rule",
                     group_name
                 )),
+                coercion_rule: None,
             });
         }
     }
@@ -945,6 +972,7 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
                             "remove dangerous shell constructs or use a script file instead"
                                 .to_string(),
                         ),
+                        coercion_rule: None,
                     });
                 }
 
@@ -977,6 +1005,7 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
                             "common in bioinformatics scripts; verify this is intentional"
                                 .to_string(),
                         ),
+                        coercion_rule: None,
                     });
                 }
             }
@@ -1073,6 +1102,7 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
                             }
                             .to_string(),
                         ),
+                        coercion_rule: None,
                     });
                 }
             }
@@ -1089,6 +1119,7 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
                         "avoid using '..' in input paths; define the external directory in [config] and reference it as {{config.name}}"
                             .to_string(),
                     ),
+                    coercion_rule: None,
                 });
             }
             // Check for absolute paths
@@ -1101,6 +1132,7 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
                     suggestion: Some(
                         "use relative paths within the workflow directory".to_string(),
                     ),
+                    coercion_rule: None,
                 });
             }
             // Check for home directory references
@@ -1113,6 +1145,7 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
                     suggestion: Some(
                         "use relative paths within the workflow directory".to_string(),
                     ),
+                    coercion_rule: None,
                 });
             }
         }
@@ -1132,6 +1165,7 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
                         "avoid using '..' in output paths; keep all outputs within the workflow directory"
                             .to_string(),
                     ),
+                    coercion_rule: None,
                 });
             }
             // Check for absolute paths
@@ -1144,6 +1178,7 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
                     suggestion: Some(
                         "use relative paths within the workflow directory".to_string(),
                     ),
+                    coercion_rule: None,
                 });
             }
             // Check for home directory references
@@ -1156,6 +1191,7 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
                     suggestion: Some(
                         "use relative paths within the workflow directory".to_string(),
                     ),
+                    coercion_rule: None,
                 });
             }
         }
@@ -1189,6 +1225,7 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
                         rule: Some(td.consumer_rule),
                         code: td.violation.code,
                         suggestion: td.violation.suggestion,
+                        coercion_rule: td.violation.coercion_rule,
                     });
                 }
             }
@@ -1200,6 +1237,7 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
                 rule: None,
                 code: "E006".to_string(),
                 suggestion: Some("check for circular dependencies between rules".to_string()),
+                coercion_rule: None,
             });
         }
     }
@@ -1224,6 +1262,7 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
             suggestion: Some(
                 "fix the regex in [wildcard_constraints] — patterns must be valid Rust regex syntax (see https://docs.rs/regex); a constraint that fails to compile blocks every fan-out that reads the wildcard".to_string(),
             ),
+            coercion_rule: None,
         });
     }
 
@@ -1266,6 +1305,7 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
                 suggestion: Some(
                     "move the constraint to the [wildcard_constraints] section as `name = \"regex\"` and keep the pattern as a plain '{name}' wildcard".to_string(),
                 ),
+                coercion_rule: None,
             });
         }
     }
@@ -1295,6 +1335,7 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
                          variable = \"chunk\")"
                             .to_string(),
                     ),
+                    coercion_rule: None,
                 });
             } else if config.scatter_fan_out_is_empty(rule) {
                 let variable = &scatter.variable;
@@ -1314,6 +1355,7 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
                          would silently remove this analysis branch"
                             .to_string(),
                     ),
+                    coercion_rule: None,
                 });
             }
         }
@@ -1335,6 +1377,7 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
                          by = \"chr\") and reference it as {chr} in transform.map"
                             .to_string(),
                     ),
+                    coercion_rule: None,
                 });
             }
             // Source checks follow the documented priority
@@ -1365,6 +1408,7 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
                                  or use split.values/split.n instead"
                                     .to_string(),
                             ),
+                            coercion_rule: None,
                         });
                     }
                 } else if let Some(n_str) = &split.n {
@@ -1384,6 +1428,7 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
                                  split.values/split.values_from"
                                     .to_string(),
                             ),
+                            coercion_rule: None,
                         });
                     }
                 } else if split.glob.is_none() {
@@ -1399,6 +1444,7 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
                         suggestion: Some(
                             "provide values, values_from, n, or glob in split config".to_string(),
                         ),
+                        coercion_rule: None,
                     });
                 }
             }
@@ -1425,6 +1471,7 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
                      dry-run/run still fail closed when no domain binds"
                         .to_string(),
                 ),
+                coercion_rule: None,
             });
         }
     }
@@ -1572,6 +1619,7 @@ fn lint_io_placeholder_range(rule: &Rule) -> Vec<Diagnostic> {
                             patterns.len()
                         )
                     }),
+                    coercion_rule: None,
                 });
             }
         }
@@ -1604,6 +1652,7 @@ fn lint_io_placeholder_range(rule: &Rule) -> Vec<Diagnostic> {
                              `{{{noun}[N]}}`"
                         )
                     }),
+                    coercion_rule: None,
                 });
             }
         }
@@ -1711,6 +1760,7 @@ fn lint_dotted_placeholders(rule: &Rule) -> Vec<Diagnostic> {
                     Some(hint) => format!("{hint} Recognized namespaces are: {namespace_list}."),
                     None => format!("recognized namespaces are: {namespace_list}."),
                 }),
+                coercion_rule: None,
             });
         }
     }
@@ -1750,6 +1800,7 @@ fn lint_unbound_sample_domain(rule: &Rule, config: &WorkflowConfig) -> Vec<Diagn
              read declare `singleton = true`"
                 .to_string(),
         ),
+        coercion_rule: None,
     }]
 }
 
@@ -1775,6 +1826,7 @@ pub fn lint_format(
             rule: None,
             code: "W001".to_string(),
             suggestion: Some("add description = \"...\" to the [workflow] section".to_string()),
+            coercion_rule: None,
         });
     }
 
@@ -1786,6 +1838,7 @@ pub fn lint_format(
             rule: None,
             code: "W002".to_string(),
             suggestion: Some("add author = \"...\" to the [workflow] section".to_string()),
+            coercion_rule: None,
         });
     }
 
@@ -1828,6 +1881,7 @@ pub fn lint_format(
                     "add description = \"Brief one-line description of what {} does\" to this rule",
                     rule.name
                 )),
+                coercion_rule: None,
             });
         }
 
@@ -1855,6 +1909,7 @@ pub fn lint_format(
                     "add a non-empty shell or script — `validate` reports the same condition as E022"
                         .to_string(),
                 ),
+                coercion_rule: None,
             });
         }
 
@@ -1871,6 +1926,7 @@ pub fn lint_format(
                 rule: Some(rule.name.clone()),
                 code: "W004".to_string(),
                 suggestion: Some(format!("add log = \"logs/{}.log\"", rule.name)),
+                coercion_rule: None,
             });
         }
 
@@ -1884,6 +1940,7 @@ pub fn lint_format(
                 suggestion: Some(
                     "add memory = \"32G\" or appropriate memory specification".to_string(),
                 ),
+                coercion_rule: None,
             });
         }
 
@@ -1905,6 +1962,7 @@ pub fn lint_format(
                      `resources.threads = N` / `resources.memory = \"8G\"` under this rule"
                         .to_string(),
                 ),
+                coercion_rule: None,
             });
         }
 
@@ -1933,6 +1991,7 @@ pub fn lint_format(
                 rule: Some(rule.name.clone()),
                 code: "W006".to_string(),
                 suggestion: Some(format!("rename to \"{}\"", rule.name.replace('-', "_"))),
+                coercion_rule: None,
             });
         }
 
@@ -1949,6 +2008,7 @@ pub fn lint_format(
                 rule: Some(rule.name.clone()),
                 code: "W007".to_string(),
                 suggestion: Some("add target = true to this rule".to_string()),
+                coercion_rule: None,
             });
         }
 
@@ -1969,6 +2029,7 @@ pub fn lint_format(
                     "declare an environment for this rule via [rules.<name>.environment] (conda, docker, pixi, …), or a shared [defaults.environment]"
                         .to_string(),
                 ),
+                coercion_rule: None,
             });
         }
 
@@ -1996,6 +2057,7 @@ pub fn lint_format(
                      docker/singularity/venv/modules) or remove env_group from rule '{}'",
                     rule.name
                 )),
+                coercion_rule: None,
             });
         }
 
@@ -2046,6 +2108,7 @@ pub fn lint_format(
                 suggestion: Some(
                     "declare output = [...] naming the files this rule produces, or add a depends_on entry for this rule to each rule that consumes its files".to_string(),
                 ),
+                coercion_rule: None,
             });
         }
 
@@ -2101,6 +2164,7 @@ pub fn lint_format(
                         "declare the glob in `input = [...]` (glob inputs are matched against producer outputs and create real DAG edges), or list the files via `expand_inputs` for gather steps"
                             .to_string(),
                     ),
+                    coercion_rule: None,
                 });
             }
         }
@@ -2126,6 +2190,7 @@ pub fn lint_format(
                     "declare the inputs statically (`input = [...]`, glob inputs, or `expand_inputs`) — dynamic input functions are not supported yet"
                         .to_string(),
                 ),
+                coercion_rule: None,
             });
         }
 
@@ -2156,6 +2221,7 @@ pub fn lint_format(
                     "declare enforced limits instead (resources.time_limit, resources.memory, resources.threads) — runtime and io_bound are reserved for future scheduler work"
                         .to_string(),
                 ),
+                coercion_rule: None,
             });
         }
 
@@ -2178,6 +2244,7 @@ pub fn lint_format(
                     "remove the directive, or rely on staging_mode = \"stream_fifo\" for real FIFO staging — format_hint is reserved for future I/O work"
                         .to_string(),
                 ),
+                coercion_rule: None,
             });
         }
 
@@ -2189,6 +2256,7 @@ pub fn lint_format(
                 rule: Some(rule.name.clone()),
                 code: "W009".to_string(),
                 suggestion: Some("add memory = \"64G\" or appropriate value for high-thread workloads".to_string()),
+                coercion_rule: None,
             });
         }
 
@@ -2203,6 +2271,7 @@ pub fn lint_format(
                     "add output files to the checkpoint rule, or remove checkpoint = true"
                         .to_string(),
                 ),
+                coercion_rule: None,
             });
         }
 
@@ -2217,6 +2286,7 @@ pub fn lint_format(
                 suggestion: Some(
                     "add retry_delay = \"10s\" to add a backoff between retry attempts".to_string(),
                 ),
+                coercion_rule: None,
             });
         }
 
@@ -2232,6 +2302,7 @@ pub fn lint_format(
                 suggestion: Some(
                     "consider adding retries = 1 or more before triggering on_failure".to_string(),
                 ),
+                coercion_rule: None,
             });
         }
 
@@ -2244,6 +2315,7 @@ pub fn lint_format(
                     rule: Some(rule.name.clone()),
                     code: "W014".to_string(),
                     suggestion: Some(format!("check that rule '{}' exists in the workflow", dep)),
+                    coercion_rule: None,
                 });
             }
         }
@@ -2258,6 +2330,7 @@ pub fn lint_format(
                 rule: Some(rule.name.clone()),
                 code: "W015".to_string(),
                 suggestion: Some(format!("check that rule '{}' exists in the workflow", base)),
+                coercion_rule: None,
             });
         }
 
@@ -2277,6 +2350,7 @@ pub fn lint_format(
                     "generate a lockfile with 'conda-lock -f {}' for reproducible builds",
                     conda_env
                 )),
+                coercion_rule: None,
             });
         }
         if let Some(ref pixi_env) = rule.environment.pixi
@@ -2289,6 +2363,7 @@ pub fn lint_format(
                 rule: Some(rule.name.clone()),
                 code: "W016".to_string(),
                 suggestion: Some("use 'pixi.lock' for reproducible builds".to_string()),
+                coercion_rule: None,
             });
         }
 
@@ -2313,6 +2388,7 @@ pub fn lint_format(
                         suggestion: Some(
                             "remove dangerous shell constructs from pre_exec hook".to_string(),
                         ),
+                        coercion_rule: None,
                     });
                     break;
                 }
@@ -2331,6 +2407,7 @@ pub fn lint_format(
                         suggestion: Some(
                             "remove dangerous shell constructs from on_success hook".to_string(),
                         ),
+                        coercion_rule: None,
                     });
                     break;
                 }
@@ -2349,6 +2426,7 @@ pub fn lint_format(
                         suggestion: Some(
                             "remove dangerous shell constructs from on_failure hook".to_string(),
                         ),
+                        coercion_rule: None,
                     });
                     break;
                 }
@@ -2384,6 +2462,7 @@ pub fn lint_format(
                     suggestion: Some(
                         "declare the key in a [[pairs]]/[[sample_groups]] metadata table or a [[values]] table, or check the spelling".to_string(),
                     ),
+                    coercion_rule: None,
                 });
             }
         }
@@ -2430,6 +2509,7 @@ pub fn lint_format(
                     suggestion: Some(
                         "declare a source for the wildcard (sample_pattern in [config], [[sample_groups]], [[pairs]], or a [[values]] table), or remove the placeholder".to_string(),
                     ),
+                    coercion_rule: None,
                 });
             }
         }
@@ -2510,6 +2590,7 @@ pub fn lint_format(
                             "add depends_on = [\"{}\"] to '{}' — script references form no DAG edges",
                             producer.name, rule.name
                         )),
+                        coercion_rule: None,
                     });
                 }
             }
@@ -2725,6 +2806,7 @@ pub fn lint_format(
                         "split '{}' into when-gated variants (see the multiqc/multiqc_pseudo idiom) or add a when gate matching '{producer_name}'",
                         consumer.name
                     )),
+                    coercion_rule: None,
                 });
             }
         }
@@ -2841,6 +2923,7 @@ pub fn lint_format(
                 rule: Some((*rule_a).to_string()),
                 code: "W033".to_string(),
                 suggestion: Some(suggestion),
+                coercion_rule: None,
             });
         }
     }
@@ -2890,6 +2973,7 @@ pub fn lint_format(
                 suggestion: Some(format!(
                     "declare it as {key} = {{ default = \"...\", sensitive = true }} so the value is env-routed and masked on disk"
                 )),
+                coercion_rule: None,
             });
         }
     }
@@ -3003,6 +3087,7 @@ pub fn verify_schema(toml_content: &str) -> ValidationResult {
                 rule: None,
                 code: "S001".to_string(),
                 suggestion: None,
+                coercion_rule: None,
             });
             return ValidationResult {
                 valid: false,
@@ -3020,6 +3105,7 @@ pub fn verify_schema(toml_content: &str) -> ValidationResult {
             rule: None,
             code: "S002".to_string(),
             suggestion: Some("add a [workflow] section with at least a name field".to_string()),
+            coercion_rule: None,
         });
     } else if let Some(wf) = table.get("workflow").and_then(|v| v.as_table()) {
         // S003: workflow.name is required
@@ -3032,6 +3118,7 @@ pub fn verify_schema(toml_content: &str) -> ValidationResult {
                 suggestion: Some(
                     "add name = \"my-workflow\" to the [workflow] section".to_string(),
                 ),
+                coercion_rule: None,
             });
         }
     }
@@ -3045,6 +3132,7 @@ pub fn verify_schema(toml_content: &str) -> ValidationResult {
                 rule: None,
                 code: "S004".to_string(),
                 suggestion: Some("use [[rules]] syntax for rule definitions".to_string()),
+                coercion_rule: None,
             });
         } else if let Some(arr) = rules.as_array() {
             for (i, item) in arr.iter().enumerate() {
@@ -3055,6 +3143,7 @@ pub fn verify_schema(toml_content: &str) -> ValidationResult {
                         rule: None,
                         code: "S004".to_string(),
                         suggestion: None,
+                        coercion_rule: None,
                     });
                 } else if let Some(t) = item.as_table()
                     && !t.contains_key("name")
@@ -3065,6 +3154,7 @@ pub fn verify_schema(toml_content: &str) -> ValidationResult {
                         rule: None,
                         code: "S005".to_string(),
                         suggestion: Some("add a name field to each [[rules]] entry".to_string()),
+                        coercion_rule: None,
                     });
                 }
             }
@@ -3085,6 +3175,7 @@ pub fn verify_schema(toml_content: &str) -> ValidationResult {
                 rule: None,
                 code: "S006".to_string(),
                 suggestion: Some(format!("remove or rename '{}' — it is not recognized", key)),
+                coercion_rule: None,
             });
         }
     }
@@ -3106,6 +3197,7 @@ pub fn verify_schema(toml_content: &str) -> ValidationResult {
                 "use format_version = \"{}\" or upgrade oxo-flow",
                 FORMAT_VERSION
             )),
+            coercion_rule: None,
         });
     }
 
@@ -3183,6 +3275,7 @@ pub fn scan_for_secrets(text: &str) -> Vec<Diagnostic> {
                 "Remove secrets from workflow files and use environment variables instead"
                     .to_string(),
             ),
+            coercion_rule: None,
         });
     };
     for (re, display, description) in TOKEN_PATTERNS.iter() {
@@ -4811,6 +4904,7 @@ shell = "echo {config.alpha} > {config.results}/done.txt"
             rule: Some("step1".to_string()),
             code: "E001".to_string(),
             suggestion: None,
+            coercion_rule: None,
         };
         let s = format!("{}", d);
         assert!(s.contains("E001"));
@@ -5220,6 +5314,7 @@ shell = "echo {config.alpha} > {config.results}/done.txt"
             rule: Some("test".to_string()),
             code: "W003".to_string(),
             suggestion: Some("add description field".to_string()),
+            coercion_rule: None,
         };
         let display = d.to_string();
         assert!(display.contains("hint: add description field"));
