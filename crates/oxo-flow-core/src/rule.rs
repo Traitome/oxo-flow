@@ -1677,6 +1677,23 @@ impl Rule {
         texts
     }
 
+    /// The rule's lifecycle hooks, each paired with its TOML field name
+    /// (issue #1340): `pre_exec`, `on_success`, `on_failure`.
+    ///
+    /// One definition shared by the E005 field scan, the cluster plan-time
+    /// hook gate, and the local hook runners so the set of rule-level hook
+    /// fields cannot drift between them (a hand-copied list silently misses a
+    /// future hook). Only the local executor runs these hooks; the cluster
+    /// path drops them.
+    #[must_use]
+    pub fn lifecycle_hooks(&self) -> [(&'static str, Option<&str>); 3] {
+        [
+            ("pre_exec", self.pre_exec.as_deref()),
+            ("on_success", self.on_success.as_deref()),
+            ("on_failure", self.on_failure.as_deref()),
+        ]
+    }
+
     /// Every free-text field lint W041 scans for sample-domain placeholders
     /// (issue #1078 F1): the fan-out trigger fields plus `log`, `script`,
     /// `benchmark`, the hooks, environment-variable values, and string

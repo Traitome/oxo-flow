@@ -529,6 +529,16 @@ instead of silently running those jobs in the shared workdir, where tools
 writing fixed filenames collide across concurrent instances. See
 [Scratch tier ladder](../reference/workflow-format.md#scratch-tier-ladder).
 
+**Lifecycle hooks are local-executor-only too.** The rule-level hooks
+`pre_exec` / `on_success` / `on_failure` and the workflow-level terminal
+hooks `on_complete` / `on_error` are run by the local executor and the CLI
+run loop; the cluster job generators render only the rule command and never
+enter that loop. A workflow that declares any of them is **rejected at plan
+time** on both submission paths (`run --profile <name>` and `cluster
+submit`), naming the offending rule and hook field (issue #1340), instead of
+silently dropping the hook on the scheduler. Remove the hooks or run the
+workflow locally (`oxo-flow run`).
+
 ### Job arrays
 
 Same-template instances that are ready together and agree on every

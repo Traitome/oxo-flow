@@ -637,6 +637,16 @@ prints a warning and the run proceeds (`-j` is dropped silently):
 construction: the reference-build step runs only on the local execution
 path, and `run --profile` never builds references itself.
 
+**Lifecycle hooks do not run on the cluster path.** Rule-level
+`pre_exec` / `on_success` / `on_failure` and workflow-level
+`on_complete` / `on_error` are run by the local executor and the CLI run
+loop, neither of which the cluster path enters. A workflow that declares
+any of them is **rejected at plan time** — before any job script is
+rendered — naming the offending rule and hook field (issue #1340), on
+both `run --profile <name>` and `cluster submit`, instead of silently
+dropping the hook on the scheduler. Remove the hooks or run the workflow
+locally (`oxo-flow run`).
+
 `--provenance` **is** honored on the cluster path (issue #1093): each rule's
 expanded outputs are hashed when the job settles and recorded into the
 checkpoint's `checksums` map, exactly like a local run — `provenance verify`
