@@ -1939,13 +1939,19 @@ impl StorageBackend for PostgresBackend {
         // keeps repeat audits of the same id race-tolerant. (SQLite
         // record_audit_log mirrors this with INSERT OR IGNORE — keep the
         // two in step.)
+        //
+        // The synthetic-user seed and the audit row commit together (issue
+        // #1311): a failure can no longer leave a seeded user with no audit
+        // row. `begin_audit_intent`/`finalize_audit_intent` below share this
+        // single-transaction discipline.
+        let mut tx = self.pool.begin().await.map_err(|e| e.to_string())?;
         sqlx::query(
             "INSERT INTO users (id, username, role, auth_type, os_user, created_at) VALUES ($1, $2, 'viewer', 'audit', NULL, $3) ON CONFLICT (id) DO NOTHING",
         )
         .bind(user_id)
         .bind(user_id)
         .bind(&now)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .map_err(|e| e.to_string())?;
 
@@ -1959,9 +1965,72 @@ impl StorageBackend for PostgresBackend {
         .bind(result)
         .bind(metadata)
         .bind(&now)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .map_err(|e| e.to_string())?;
+        tx.commit().await.map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    async fn begin_audit_intent(
+        &self,
+        id: &str,
+        user_id: &str,
+        action: &str,
+        target: &str,
+        metadata: Option<&str>,
+    ) -> Result<(), String> {
+        // Write-ahead audit intent (issue #1311): the `pending` row is
+        // committed BEFORE the handler runs, so a crash between the mutation
+        // and its outcome write leaves a durable row for the action — the
+        // trail is never shorter than the set of mutations. The synthetic
+        // user seed and the row share one transaction (see record_audit_log).
+        let now = Self::now();
+        let mut tx = self.pool.begin().await.map_err(|e| e.to_string())?;
+        sqlx::query(
+            "INSERT INTO users (id, username, role, auth_type, os_user, created_at) VALUES ($1, $2, 'viewer', 'audit', NULL, $3) ON CONFLICT (id) DO NOTHING",
+        )
+        .bind(user_id)
+        .bind(user_id)
+        .bind(&now)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+        sqlx::query(
+            "INSERT INTO audit_logs (id, user_id, action, target, result, metadata, timestamp) VALUES ($1, $2, $3, $4, 'pending', $5, $6)",
+        )
+        .bind(id)
+        .bind(user_id)
+        .bind(action)
+        .bind(target)
+        .bind(metadata)
+        .bind(&now)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+        tx.commit().await.map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    async fn finalize_audit_intent(
+        &self,
+        id: &str,
+        result: &str,
+        metadata: Option<&str>,
+    ) -> Result<(), String> {
+        // Replace the write-ahead intent's `pending` marker with the observed
+        // outcome. A missing row is an error: the intent was durably written,
+        // so its disappearance means the trail is broken (issue #1311).
+        let rows = sqlx::query("UPDATE audit_logs SET result = $1, metadata = $2 WHERE id = $3")
+            .bind(result)
+            .bind(metadata)
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        if rows.rows_affected() == 0 {
+            return Err(format!("audit intent row {id} not found to finalize"));
+        }
         Ok(())
     }
 

@@ -112,7 +112,7 @@ export default function Audit() {
                 <td>{e.action}</td>
                 <td>{e.resource}</td>
                 <td>
-                  <span className={`status-badge ${e.result === 'success' ? 'completed' : 'failed'}`}>
+                  <span className={`status-badge ${e.result === 'success' ? 'completed' : e.result === 'pending' ? 'pending' : 'failed'}`}>
                     {e.result}
                   </span>
                 </td>

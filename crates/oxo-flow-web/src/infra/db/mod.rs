@@ -432,6 +432,26 @@ pub trait StorageBackend: Send + Sync {
         result: &str,
         metadata: Option<&str>,
     ) -> Result<(), String>;
+    /// Write-ahead audit intent (issue #1311 / WEB-15 D1): durably insert a
+    /// `pending` audit row (id + actor + action + target) BEFORE the handler
+    /// mutates state, in one transaction with the synthetic-user seed.
+    async fn begin_audit_intent(
+        &self,
+        id: &str,
+        user_id: &str,
+        action: &str,
+        target: &str,
+        metadata: Option<&str>,
+    ) -> Result<(), String>;
+    /// Finalize an intent written by [`Self::begin_audit_intent`]: replace the
+    /// `pending` marker with the observed outcome (`success` / `failure`).
+    /// Errors when the row is gone.
+    async fn finalize_audit_intent(
+        &self,
+        id: &str,
+        result: &str,
+        metadata: Option<&str>,
+    ) -> Result<(), String>;
     async fn list_audit_logs(
         &self,
         cutoff: &str,

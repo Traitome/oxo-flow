@@ -383,7 +383,7 @@ only present when a handler supplies them (e.g. `429` bodies carry
 | `OAUTH_STATE_MISMATCH` | 400 | OAuth CSRF state was issued for a different provider, redirect URI, or browser (missing/mismatched binding cookie — issue #1197). A browser-binding mismatch does not disclose which component failed; provider/redirect mismatches name the expected value by design |
 | `OAUTH_REDIRECT_NOT_ALLOWED` | 400 | OAuth redirect target origin is not on the server-side allowlist |
 | `RATE_LIMITED` | 429 | Request rate exceeded |
-| `AUDIT_WRITE_FAILED` | 500 | A REQUIRED audit row for a security-relevant action could not be persisted; the request fails closed (WEB-15 / issue #1140) |
+| `AUDIT_WRITE_FAILED` | 500 | A REQUIRED audit row for a security-relevant action could not be persisted; the request fails closed. Audit rows are written ahead of the mutation (a durable `pending` intent before the handler, finalized after) so a crash cannot leave a committed change with no audit row (WEB-15 / issue #1140, write-ahead ordering issue #1311) |
 | `DB_ERROR` | 500 | Internal database error |
 
 Domain-specific codes (all 400) include `PARSE_ERROR`, `VALIDATE_ERROR`, `PREPARE_ERROR`, `DAG_ERROR`, `LINT_ERROR`, `STATS_ERROR`, `DIFF_ERROR`, `EXPORT_ERROR`, `RUN_ERROR`, `RETRY_ERROR`, `DATA_ERROR`, `REF_ERROR`, `PLUGIN_ERROR`, `AI_TRANSLATE_ERROR`, `CHAT_ERROR`, `INVALID_URL`.
