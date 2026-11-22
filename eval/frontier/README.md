@@ -3,11 +3,12 @@
 Measures the **quality/cost frontier** of the AI pipeline-generation paths
 against the engine's three deterministic static gates. Success is judged
 **only** by the gates — never by an LLM judge — so numbers are cheap and
-the judging is deterministic; the naive-prompt arm is pinned to
+the judging is deterministic; the `unconstrained` arm is pinned to
 temperature 0 where the provider honors it but is not fully reproducible
-across providers or runs. The `cli` arm runs the real binary and inherits
-the engine's `[ai] temperature` config (unset = provider default), so the
-two arms may sample at different temperatures.
+across providers or runs. The `syntax-only` and `full-contract` arms run
+the real binary and inherit the engine's `[ai] temperature` config
+(unset = provider default), so the arms may sample at different
+temperatures.
 
 This complements the gold-set evaluation in [`eval/`](../README.md) and
 [docs/guide/src/reference/ai-eval.md](https://traitome.github.io/oxo-flow/latest/reference/ai-eval/):
@@ -18,10 +19,15 @@ unification proposal and its TeamProfile tiers.
 
 ## Method
 
-| | variants |
+| | variants (pre-registered three-arm ablation, plan:109-111) |
 |---|---|
-| `cli` | full CLI path: `oxo-flow template --ai` — rich prompt + knowledge tools + tool-calling loop (the "strong" path) |
-| `naive-prompt` | single-shot naive prompt (7 generic rules, no tools, no knowledge injection) — a prompt-axis baseline, not a product path |
+| `unconstrained` | **Arm A** — direct LLM generation from a single-shot naive prompt (7 generic rules, no tools, no knowledge injection) — the unconstrained baseline |
+| `syntax-only` | **Arm B** — `oxo-flow template --ai` (PipelineGenAgent + knowledge tools + tool-calling loop) with TOML/DAG syntax + structural feedback only; BioTypes (`TYPE-*`) and scientific-preflight (`SCI-*`) / deep-check (`D00*`) feedback OFF |
+| `full-contract` | **Arm C** — same as Arm B plus the engine's BioTypes + scientific-preflight + deep-check contract feedback loop (`--ai-contract-feedback`) |
+
+Arm B and Arm C go through the SAME `template --ai` path and differ by an
+actual engine feedback toggle, not a label: `full-contract` passes
+`--ai-contract-feedback`, `syntax-only` does not (the CLI default).
 
 Gates (exit 0 = pass, machine-readable JSON captured per run):
 
@@ -29,8 +35,8 @@ Gates (exit 0 = pass, machine-readable JSON captured per run):
 2. `oxo-flow dry-run --json` — expansion preview, resource audit
 3. `oxo-flow lint --json` — best practices
 
-Token accounting: `cli` reads the AI session archive
-(`~/.oxo-flow/ai_sessions/*-template-*.json`); `naive-prompt` reads the
+Token accounting: `syntax-only` and `full-contract` read the AI session archive
+(`~/.oxo-flow/ai_sessions/*-template-*.json`); `unconstrained` reads the
 provider response usage. Cost is derived from the price table in
 `run_eval.py` (defaults mirror the repo constant in `oxo-flow-ai/src/types.rs`).
 
@@ -41,10 +47,10 @@ provider response usage. Cost is derived from the price table in
 # from env, or from ~/.oxo-flow/ai_config.json (never from shell rc files;
 # values are never printed)
 
-python3 run_eval.py                          # all 36 intents x naive-prompt,cli
+python3 run_eval.py                          # all 36 intents x unconstrained,syntax-only,full-contract
 python3 run_eval.py --filter rnaseq-star     # subset
 python3 run_eval.py --models deepseek-chat   # model axis (quality/cost frontier)
-python3 run_eval.py --variants naive-prompt  # cheapest full sweep
+python3 run_eval.py --variants unconstrained # cheapest sweep
 python3 run_eval.py --seeds 2                # 2 seeds per cell (variance)
 python3 run_eval.py --profile full           # Scientist Team roles (compact is default)
 python3 run_eval.py --binary /path/oxo-flow  # pin the binary for a whole campaign
@@ -72,13 +78,17 @@ tokens, cost, latency).
 ## Interpreting
 
 - `all-gates pass@1` is the headline quality metric (deterministic).
-- `naive-prompt` vs `cli` quantifies what the rich prompt + tool loop buy
-  over a bare prompt — the prompt/tool-loop axis behind the #342
-  unification. (Historical note: this arm was named `minimal` and
-  described as the web chat prompt before #948 P2-4; since #342 every
-  surface, web chat included, runs the unified `PipelineGenAgent`, so no
-  product path uses the naive prompt anymore — the rows in
-  PILOT_FINDINGS.md labelled `minimal` are this arm under its old name.)
+- `unconstrained` vs `syntax-only` vs `full-contract` is the pre-registered
+  matched three-arm ablation (plan:109-111). Arm B vs Arm A isolates the
+  rich prompt + tool loop over a bare prompt (the #342 prompt/tool-loop
+  axis); Arm C vs Arm B isolates the engine contract feedback loop
+  (BioTypes + scientific-preflight + deep-check). (Historical note: the
+  unconstrained arm was named `minimal` and described as the web chat
+  prompt before #948 P2-4; since #342 every product surface, web chat
+  included, runs the unified `PipelineGenAgent`, so no product path uses
+  the naive prompt anymore — the rows in PILOT_FINDINGS.md labelled
+  `minimal` are this arm under its old name, and the old `cli` label is
+  the `syntax-only` arm.)
 - The `model` axis gives a quality/cost frontier for the `TeamProfile`
   tiers (Full vs Compact) proposed in #342.
 - Gate failures carry structured error codes (e.g. `E017` unknown key),
@@ -89,19 +99,23 @@ tokens, cost, latency).
 - Intent set is 36 (3 of them deliberately vague); still small enough that
   single-seed absolute numbers wobble — quote the multi-seed aggregates.
 - Judging is deterministic (the three gates + substring fidelity), but
-  only the naive-prompt arm is pinned to temperature 0 — the `cli` arm
-  inherits the engine's `[ai] temperature` (unset = provider default), and
-  an Anthropic-compatible endpoint may still sample non-deterministically,
-  so identical reruns can produce different workflows. Naive-prompt numbers
-  in PILOT_FINDINGS.md were drawn at provider default temperature
-  (pre-pinning), so they are not strictly comparable to post-pinning runs.
+  only the unconstrained arm is pinned to temperature 0 — the
+  `syntax-only`/`full-contract` arms inherit the engine's `[ai]
+  temperature` (unset = provider default), and an Anthropic-compatible
+  endpoint may still sample non-deterministically, so identical reruns can
+  produce different workflows. Unconstrained numbers in PILOT_FINDINGS.md
+  were drawn at provider default temperature (pre-pinning), so they are
+  not strictly comparable to post-pinning runs.
 - Since the #342 unification, `--ai-max-retries` sizes the orchestrator's
   combined tool + correction-round budget, and engine validation feeds the
   loop; numbers above the unification marker in PILOT_FINDINGS.md were
   produced by the pre-unification paths.
 - `--profile full` measures the Scientist Team roles (contract, curator,
   review); each role's marginal value is only interpretable against the
-  compact profile on the SAME model, seeds, and ceilings.
+  compact profile on the SAME model, seeds, and ceilings. It is a product
+  feature, NOT an ablation arm — it does not select Arm C. The Arm B / Arm
+  C split is the `--ai-contract-feedback` engine toggle, independent of
+  `--profile`.
 
 ## Fault-injection repair benchmark (`fault_injection.py`, issue #1164)
 

@@ -12,10 +12,15 @@ Metrics:
 3. McNemar's paired test with continuity correction & two-tailed p-values.
 4. Token expenditure, cache hit ratios, and amortized computational costs.
 
-Comparison Arms:
-- Arm A: Naive Baseline (Single-shot prompt, zero domain knowledge, no static gates).
-- Arm B: CLI Agent (Multi-turn tool-calling loop, Bioconda/Bio.tools retrieval).
-- Arm C: Type-Directed Continuum (BioTypes static lattice and scientific preflight).
+Comparison Arms (pre-registered matched ablation, plan:109-111):
+- Arm A: unconstrained baseline (direct single-shot LLM generation, no compiler feedback).
+- Arm B: PipelineGenAgent with TOML/DAG syntax + structural feedback only; BioTypes
+  (``TYPE-*``), scientific preflight (``SCI-*``) and deep-check (``D00*``) feedback OFF.
+- Arm C: PipelineGenAgent with BioTypes (``TYPE-*``) + scientific_preflight (``SCI-*``)
+  + deep_check (``D00*``) feedback ON.
+
+The harness records these as the variants ``unconstrained`` (arm_a), ``syntax-only``
+(arm_b) and ``full-contract`` (arm_c); see ``run_eval.py --variants``.
 
 Usage:
   python3 eval/frontier/statistical_report.py --results-dir DIR [--out-json PATH] [--out-md PATH]
@@ -180,9 +185,9 @@ def generate_synthetic_benchmark_dataset(n_intents: int = 36) -> Dict[str, Any]:
     """Generate a deterministic test-double dataset for analysis-code tests."""
     rng = random.Random(12345)
 
-    arm_a_results = []  # Naive baseline
-    arm_b_results = []  # CLI agent
-    arm_c_results = []  # Type-directed continuum
+    arm_a_results = []  # Arm A: unconstrained baseline
+    arm_b_results = []  # Arm B: syntax + structural feedback only
+    arm_c_results = []  # Arm C: BioTypes + scientific preflight + deep-check
 
     for i in range(n_intents):
         # Arm A: ~30% pass rate (frequent syntax / biological typing errors)
@@ -190,7 +195,7 @@ def generate_synthetic_benchmark_dataset(n_intents: int = 36) -> Dict[str, Any]:
         tokens_a = rng.randint(800, 1600)
         cost_a = (tokens_a / 1_000_000) * 2.50
 
-        # Arm B: ~75% pass rate (tool search grounded, but lacks type unification)
+        # Arm B: ~75% pass rate (syntax is fixed, but contract checks are off)
         pass_b = rng.random() < 0.78
         tokens_b = rng.randint(3500, 8000)
         cost_b = (tokens_b / 1_000_000) * 2.50
@@ -229,17 +234,20 @@ def load_benchmark_results(results_dir: Path) -> Dict[str, Any]:
     Reads every ``results.json`` under *results_dir* (one per campaign
     stamp) and maps each run's ``variant`` to an arm:
 
-    - ``naive-prompt`` -> arm_a  (Naive Baseline)
-    - ``cli``          -> arm_b  (CLI Agent)
-    - ``full``         -> arm_c  (Type-Directed Continuum / Scientist Team)
+    - ``unconstrained`` -> arm_a  (unconstrained baseline, plan:109-111)
+    - ``syntax-only``   -> arm_b  (syntax/structural feedback only)
+    - ``full-contract`` -> arm_c  (BioTypes + scientific preflight + deep-check)
 
-    Runs whose variant is not recognised are skipped with a warning.
+    Runs whose variant is not recognised **fail loudly** (``AnalysisError``):
+    a silently skipped variant would starve an arm and let the analysis run on
+    a mislabelled set (issue #1315 - ``--profile full`` once masqueraded as
+    arm_c while recording the cli variant).
     """
     # variant -> (arm_key, arm_label)
     VARIANT_MAP = {
-        "naive-prompt": "arm_a",
-        "cli": "arm_b",
-        "full": "arm_c",
+        "unconstrained": "arm_a",
+        "syntax-only": "arm_b",
+        "full-contract": "arm_c",
     }
 
     results_files = sorted(results_dir.rglob("results.json"))
@@ -264,8 +272,10 @@ def load_benchmark_results(results_dir: Path) -> Dict[str, Any]:
             variant = run.get("variant", "")
             arm = VARIANT_MAP.get(variant)
             if arm is None:
-                print(f"  warning: skipping unknown variant '{variant}' in {rfile}")
-                continue
+                raise AnalysisError(
+                    f"unknown variant {variant!r} in {rfile}; "
+                    f"expected one of {sorted(VARIANT_MAP)}"
+                )
             tokens = run.get("input_tokens", 0) + run.get("output_tokens", 0)
             dataset[arm].append({
                 "intent_id": run.get("intent_id"),
@@ -321,9 +331,9 @@ def analyze_arms(dataset: Dict[str, Any], bootstrap_rounds: int = 2000) -> Dict[
     pair_keys = validate_paired_dataset(dataset)
     arms = ["arm_a", "arm_b", "arm_c"]
     arm_names = {
-        "arm_a": "Arm A (Naive Baseline)",
-        "arm_b": "Arm B (CLI Agent)",
-        "arm_c": "Arm C (Type-Directed Continuum)",
+        "arm_a": "Arm A (Unconstrained Baseline)",
+        "arm_b": "Arm B (Syntax + Structural Feedback Only)",
+        "arm_c": "Arm C (BioTypes + Scientific Preflight + Deep-Check)",
     }
 
     metrics = {}

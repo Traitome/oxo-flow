@@ -748,6 +748,11 @@ pub struct TemplateAiOptions {
     pub max_retries: Option<u32>,
     pub team_profile: Option<oxo_flow_ai::agent::team::TeamProfile>,
     pub attempts: u32,
+    /// Arm C contract feedback (issue #1315): when set, the generation
+    /// validator additionally feeds BioTypes (`TYPE-*`), scientific preflight
+    /// (`SCI-*`), and deep check (`D00*`) findings back to the model. Opt-in;
+    /// unset preserves the syntax/structural-only Arm B behavior.
+    pub contract_feedback: bool,
 }
 
 pub async fn template_command(
@@ -790,6 +795,7 @@ pub async fn template_command(
             options.max_retries,
             team_profile,
             options.attempts,
+            options.contract_feedback,
         )
         .await?;
         return Ok(());
