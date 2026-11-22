@@ -88,7 +88,7 @@ const EXPECTED: &[(&str, bool)] = &[
     ("pipeline independent", true),
     ("pipeline after-terminal", true),
     ("concurrent exactly-one", true),
-    ("rejection is Ok(false) not Err", true),
+    ("zero-affected-rows is Ok(false), the 409 input", true),
 ];
 
 fn unique_username() -> String {
@@ -218,13 +218,18 @@ async fn collect_verdicts(backend: &dyn StorageBackend) -> Vec<(&'static str, bo
     .count();
     out.push(("concurrent exactly-one", winners == 1));
 
-    // -- rejection is a verdict (Ok(false)), never a storage error ----------
+    // -- zero-affected-rows is the Ok(false) verdict the retry/resume arms
+    //    map to 409 RUN_NOT_TERMINAL — the shared mapping input, never a
+    //    storage error ----------------------------------------------------
     let r = claim_run_row(
         backend,
         &run_row(&Uuid::new_v4().to_string(), &user.id, None, &cd),
     )
     .await;
-    out.push(("rejection is Ok(false) not Err", matches!(r, Ok(false))));
+    out.push((
+        "zero-affected-rows is Ok(false), the 409 input",
+        matches!(r, Ok(false)),
+    ));
 
     out
 }
