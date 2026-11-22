@@ -1383,16 +1383,11 @@ fn print_checkpoint_diff(
     // `checksums` + `cleaned_checksums` (issue #315 F2): a chunk moved into
     // the cleaned bucket is a bookkeeping change, not a file change — and a
     // diff against a legacy checkpoint (whose chunks still sit under
-    // `checksums`) must not report spurious removals.
-    let merged = |cp: &oxo_flow_core::executor::checkpoint::CheckpointState| {
-        let mut map = cp.checksums.clone();
-        for (path, sha) in &cp.cleaned_checksums {
-            map.insert(path.clone(), format!("{sha} (cleaned by design)"));
-        }
-        map
-    };
-    let current_merged = merged(current);
-    let other_merged = merged(other);
+    // `checksums`) must not report spurious removals. The merge is SHARED with
+    // `provenance diff` (issue #1320, `merge_recorded_checksums`), so both
+    // surfaces classify the same input pair identically.
+    let current_merged = current.merged_checksums();
+    let other_merged = other.merged_checksums();
     for path in sorted_map_keys(&[&current_merged, &other_merged]) {
         match (current_merged.get(&path), other_merged.get(&path)) {
             (Some(_), None) => lines.push(('+', format!("checksum: {path}"))),

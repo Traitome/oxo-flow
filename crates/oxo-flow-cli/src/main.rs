@@ -23,7 +23,7 @@ use crate::commands::output::{
     GraphFormat, MetroArg, handle_diff, handle_export, handle_graph, handle_report,
 };
 use crate::commands::project::{init_command, template_command};
-use crate::commands::provenance::provenance_verify_command;
+use crate::commands::provenance::{provenance_diff_command, provenance_verify_command};
 use crate::commands::publish::publish_command;
 use crate::commands::quality::{format_command, lint_command, touch_command, validate_command};
 use crate::commands::run::{
@@ -1334,6 +1334,13 @@ pub enum ProvenanceAction {
         #[arg(value_name = "CHECKPOINT_PATH", help = "Path to the checkpoint file")]
         checkpoint: PathBuf,
     },
+    /// Compare the recorded output checksums of two checkpoints.
+    Diff {
+        #[arg(value_name = "LEFT_CHECKPOINT", help = "Path to the left checkpoint")]
+        left: PathBuf,
+        #[arg(value_name = "RIGHT_CHECKPOINT", help = "Path to the right checkpoint")]
+        right: PathBuf,
+    },
 }
 
 /// Emit the single `--json` document for `test`.
@@ -1401,7 +1408,10 @@ fn json_supported(command: &Commands) -> bool {
         Commands::Import { .. } => true,
         // `diff --json` emits one machine-readable diff document (issue #1330).
         Commands::Diff { .. } => true,
-        Commands::Provenance { action } => matches!(action, ProvenanceAction::Verify { .. }),
+        Commands::Provenance { action } => matches!(
+            action,
+            ProvenanceAction::Verify { .. } | ProvenanceAction::Diff { .. }
+        ),
         Commands::VerifyData { .. } => true,
         Commands::Runs { .. } => true,
         // `graph --json` emits the machine-readable DAG document (nodes,
@@ -2235,6 +2245,9 @@ async fn main() -> Result<()> {
         Commands::Provenance { action } => match action {
             ProvenanceAction::Verify { checkpoint } => {
                 provenance_verify_command(checkpoint, cli.json)?
+            }
+            ProvenanceAction::Diff { left, right } => {
+                provenance_diff_command(left, right, cli.json)?
             }
         },
         Commands::VerifyData { tree, from } => verify_data_command(tree, from, cli.json)?,

@@ -812,6 +812,16 @@ impl CheckpointState {
         }
     }
 
+    /// Merge this checkpoint's `checksums` and `cleaned_checksums` maps into
+    /// one `{path: cleaned-value}` map for diffing, cleaned entries winning on
+    /// collision. Delegates to the module-level [`merge_recorded_checksums`],
+    /// the single shared implementation both `report --diff` (issue #315 F2)
+    /// and `provenance diff` (issue #1320) call — so the two surfaces can
+    /// never disagree on the same input pair.
+    pub fn merged_checksums(&self) -> BTreeMap<String, String> {
+        merge_recorded_checksums(&self.checksums, &self.cleaned_checksums)
+    }
+
     /// Record the AI-repair loop outcome (issue #1164). `applied` is set
     /// when the fix is written; `rerun_attempted`/`rerun_succeeded` are
     /// updated after the verification rerun completes (or is skipped).
@@ -1339,6 +1349,29 @@ impl Default for CheckpointState {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Merge a checkpoint's `checksums` and `cleaned_checksums` maps into one
+/// `{path: value}` map for diffing, cleaned entries winning on collision.
+///
+/// This is the SINGLE shared implementation of the issue #315 F2 merge:
+/// `report --diff` (via [`CheckpointState::merged_checksums`]) and
+/// `provenance diff` (issue #1320) both call it, so the two surfaces can
+/// never disagree on the same input pair. A chunk moved into the cleaned
+/// bucket is a bookkeeping change, not a file change — and a diff against a
+/// legacy checkpoint whose chunks still sit under `checksums` must not report
+/// the artifact as a spurious add/remove. Annotating the cleaned value with a
+/// `" (cleaned by design)"` suffix makes such a mixed pair classify as a
+/// `changed`/`differing` artifact instead of silently matching.
+pub fn merge_recorded_checksums(
+    checksums: &BTreeMap<String, String>,
+    cleaned_checksums: &BTreeMap<String, String>,
+) -> BTreeMap<String, String> {
+    let mut merged = checksums.clone();
+    for (path, sha) in cleaned_checksums {
+        merged.insert(path.clone(), format!("{sha} (cleaned by design)"));
+    }
+    merged
 }
 
 /// Returns `true` if `source` is newer than `target` (Make-style freshness check).
