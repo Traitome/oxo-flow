@@ -5,7 +5,7 @@
 //! write cannot leave a committed state change with no audit row. These tests
 //! fail under the old "write the row AFTER the handler" order.
 //!
-//! Two independent probes:
+//! Four independent probes:
 //!
 //! 1. `audit_row_is_durable_before_the_handler_runs` — a handler that reads the
 //!    `audit_logs` table while it executes sees its own `pending` intent row
@@ -14,6 +14,11 @@
 //! 2. `crashed_intent_leaves_a_durable_pending_row` — an intent that is never
 //!    finalized (the crash simulation) stays on disk as `pending`, i.e. the
 //!    trail is never shorter than the set of mutations.
+//! 3. `healthy_router_records_a_finalized_row_per_mutation` — the healthy path
+//!    still ends with exactly one finalized row and no leftover `pending`.
+//! 4. `audit_metadata_json_payloads_are_key_ordered` — the persisted JSON
+//!    payload column (`metadata`) is order-independent: keys come out sorted
+//!    through both `record_audit_log` and `finalize_audit_intent`.
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -180,4 +185,88 @@ async fn healthy_router_records_a_finalized_row_per_mutation() {
             .await
             .unwrap();
     assert_eq!(pending.0, 0, "no leftover pending row on the healthy path");
+}
+
+/// The audit `metadata` column is a persisted JSON payload, so its byte form
+/// must be order-independent (repo invariant: persisted artifacts are
+/// order-independent): keys are serialized in sorted order regardless of the
+/// order the map literal happened to write them in. This fails the day
+/// `serde_json/preserve_order` enters the dependency graph — insertion order
+/// would then leak into the stored column and two processes could persist
+/// different bytes for the same logical payload.
+#[tokio::test]
+async fn audit_metadata_json_payloads_are_key_ordered() {
+    common::ensure_db().await;
+
+    use oxo_flow_web::infra::db::StorageBackend;
+    use oxo_flow_web::infra::db::sqlite::SqliteBackend;
+
+    let backend = SqliteBackend::new(common::db_url())
+        .await
+        .expect("backend connect");
+
+    // Insertion order is deliberately NOT sorted: under the default
+    // BTreeMap-backed serde_json map the serialized string is sorted anyway;
+    // under preserve_order it would be exactly the literal order below.
+    let metadata = serde_json::json!({
+        "status": 409,
+        "action": "retry",
+        "actor": "parity-probe",
+    })
+    .to_string();
+    backend
+        .record_audit_log(
+            "order-probe",
+            "POST /api/pipelines/order-probe",
+            "/api/pipelines/order-probe",
+            "success",
+            Some(&metadata),
+        )
+        .await
+        .expect("audit row write");
+
+    let pool = oxo_flow_web::infra::db::sqlite::pool();
+    let stored: (Option<String>,) =
+        sqlx::query_as("SELECT metadata FROM audit_logs WHERE target = ? LIMIT 1")
+            .bind("/api/pipelines/order-probe")
+            .fetch_one(pool)
+            .await
+            .expect("the metadata column is readable");
+    let stored = stored.0.expect("the metadata payload is persisted");
+    assert_eq!(
+        stored, r#"{"action":"retry","actor":"parity-probe","status":409}"#,
+        "persisted audit metadata must be key-ordered JSON: {stored}"
+    );
+
+    // The finalize path replaces the column with the observed outcome's
+    // payload — same ordering discipline there.
+    backend
+        .begin_audit_intent(
+            "order-probe-finalize",
+            "order-probe",
+            "POST /api/pipelines/order-probe",
+            "/api/pipelines/order-probe",
+            None,
+        )
+        .await
+        .expect("intent write");
+    backend
+        .finalize_audit_intent(
+            "order-probe-finalize",
+            "failure",
+            Some(&serde_json::json!({ "zz": 1, "aa": 2 }).to_string()),
+        )
+        .await
+        .expect("finalize overwrites the metadata payload");
+    let finalized: (Option<String>,) =
+        sqlx::query_as("SELECT metadata FROM audit_logs WHERE id = ?")
+            .bind("order-probe-finalize")
+            .fetch_one(pool)
+            .await
+            .expect("the finalized row is readable");
+    assert_eq!(
+        finalized.0.as_deref(),
+        Some(r#"{"aa":2,"zz":1}"#),
+        "finalized audit metadata must be key-ordered JSON too"
+    );
 }

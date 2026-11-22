@@ -180,7 +180,10 @@ If the write-ahead insert itself cannot be persisted the request degrades to
 the pre-#1311 ordering (the handler runs, then the row is written) — a
 storage outage that blocks the header write is the same outage the handler's
 own mutation hits, and the fail-closed / 5xx-preservation contract below is
-unchanged.
+unchanged. A `pending` row is never rewritten by any sweeper or recovery
+finalizer — by design it stays exactly what it is: the durable record that
+the request died mid-flight and its outcome is unknown. Reconcile such rows
+by inspecting the affected resource, not by assuming either outcome.
 
 A REQUIRED-audit failure still does **not** roll the action back: the pipeline
 may already be deleted, the run retry may already have spawned, the key
