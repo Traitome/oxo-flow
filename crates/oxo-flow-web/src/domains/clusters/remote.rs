@@ -590,12 +590,143 @@ fn decide_remote_finalize(
     run_id: &str,
     exit_code: i32,
     pull_result: &std::io::Result<()>,
+    outputs_result: &Result<(), String>,
 ) -> RemoteFinalize {
     match pull_result {
-        Ok(()) => RemoteFinalize::Finalize,
+        // A broken transfer dominates: the local workdir itself is stale.
         Err(e) => RemoteFinalize::FailArtifactsIncomplete(format!(
             "pulling results for {run_id} failed (remote exit code {exit_code}): {e}"
         )),
+        // Transfer intact — the remote engine's exit 0 is still not a
+        // contract on its own. Issue #1282 / audit CL-04+RB-05: a completed
+        // run whose declared outputs are absent from the pulled tree must
+        // fail, exactly like the truncated-stream case.
+        Ok(()) => match outputs_result {
+            Ok(()) => RemoteFinalize::Finalize,
+            Err(reason) => RemoteFinalize::FailArtifactsIncomplete(reason.clone()),
+        },
+    }
+}
+
+/// Re-verify that every declared output of every COMPLETED rule is present
+/// in the pulled workdir (issue #1282 / audit CL-04 + RB-05).
+///
+/// `extract_pulled_results` only checks the bookkeeping records every wrapper
+/// writes, so a remote engine that exits 0 without writing a declared output
+/// used to finalize as `completed`. This delegates the existence decision to
+/// the single oracle — `rule_outputs_exist_with_patterns`, the same call the
+/// CLI run loop and the reclaim gate use — so wildcard / `[[values]]`
+/// fan-out and `output_pattern` rules are covered instead of a naive
+/// exact-path check.
+///
+/// Only rules the pulled checkpoint records as completed carry an obligation;
+/// a rule that never ran has nothing to prove. `config_values` resolves
+/// `{config.*}` left in the declared paths after wildcard expansion. Returns
+/// `Err` naming the first rule and its missing declared output(s).
+fn remote_outputs_complete(
+    config: &oxo_flow_core::config::WorkflowConfig,
+    checkpoint: &oxo_flow_core::executor::CheckpointState,
+    workdir: &Path,
+) -> Result<(), String> {
+    let config_values = config.config_placeholder_values();
+    for rule in &config.rules {
+        if !checkpoint.is_completed(&rule.name) {
+            continue;
+        }
+        if oxo_flow_core::executor::checkpoint::rule_outputs_exist_with_patterns(
+            rule,
+            workdir,
+            &config_values,
+            &checkpoint.output_pattern_domains,
+            &config.expansion_templates,
+        ) {
+            continue;
+        }
+        // The oracle owns the decision; name the gap for the persisted
+        // reason. `validate_outputs` lists concrete missing paths; for a
+        // pattern-only rule it returns nothing, so fall back to the raw
+        // declared outputs.
+        let missing =
+            oxo_flow_core::executor::checkpoint::validate_outputs(rule, workdir, &config_values);
+        let detail = if missing.is_empty() {
+            rule.output.join(", ")
+        } else {
+            missing.join(", ")
+        };
+        return Err(format!(
+            "remote run is missing declared output(s) of completed rule '{}': {}",
+            rule.name, detail
+        ));
+    }
+    Ok(())
+}
+
+/// Load the executed workflow (resolved snapshot, exactly as the other
+/// lifecycle paths do) plus the pulled checkpoint and run
+/// [`remote_outputs_complete`] on a blocking thread.
+///
+/// Degrades to `Ok(())` — logged, not fatal — when the workflow or the
+/// checkpoint cannot be resolved: with no oracle there is nothing to
+/// contradict the recorded exit code, and hard-failing there would break
+/// legitimate runs (a workdir whose snapshot predates the resolved-snapshot
+/// writer, a run that wrote no checkpoint). The verification only ever
+/// hard-fails on a concrete, declared, absent output.
+async fn verify_remote_outputs(run_id: &str, local_workdir: &Path) -> Result<(), String> {
+    let snapshot = match crate::infra::db::global_backend() {
+        Some(backend) => backend
+            .get_run(run_id)
+            .await
+            .ok()
+            .flatten()
+            .map(|row| row.pipeline_snapshot),
+        None => None,
+    };
+    let workdir = local_workdir.to_path_buf();
+    let run_id = run_id.to_string();
+    let task_run_id = run_id.clone();
+    let joined = tokio::task::spawn_blocking(move || {
+        let workdir_str = workdir.to_string_lossy();
+        let Some(mut config) = crate::domains::execution::handlers::load_run_workflow(
+            snapshot.as_deref().unwrap_or(""),
+            Some(workdir_str.as_ref()),
+        ) else {
+            tracing::warn!(
+                "remote output verification skipped for {task_run_id}: workflow not loadable"
+            );
+            return None;
+        };
+        // The resolved snapshot holds TEMPLATE rules; the checkpoint records
+        // INSTANCE names. Expand so names, `expansion_templates` and
+        // `instance_bindings` line up with the oracle — the same
+        // deterministic expansion the remote CLI run performed (superset-safe:
+        // a pre-expanded config would have failed parse-time validation).
+        if let Err(e) = config.expand_wildcards() {
+            tracing::warn!(
+                "remote output verification skipped for {task_run_id}: expand failed: {e}"
+            );
+            return None;
+        }
+        let checkpoint_path = oxo_flow_core::executor::CheckpointState::default_path(&workdir);
+        let checkpoint =
+            match oxo_flow_core::executor::CheckpointState::load_from_file(&checkpoint_path) {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::warn!(
+                        "remote output verification skipped for {task_run_id}: no checkpoint: {e}"
+                    );
+                    return None;
+                }
+            };
+        Some(remote_outputs_complete(&config, &checkpoint, &workdir))
+    })
+    .await;
+    match joined {
+        Ok(Some(result)) => result,
+        Ok(None) => Ok(()),
+        Err(e) => {
+            tracing::warn!("remote output verification task failed for {run_id}: {e}");
+            Ok(())
+        }
     }
 }
 
@@ -845,7 +976,19 @@ pub fn spawn_remote_run(run_id: String, username: String, cluster: ClusterRow, s
                     //    them like any other run.
                     let pull_result =
                         pull_directory(&cluster, &remote_dir, &local_workdir, &run_id).await;
-                    match decide_remote_finalize(&run_id, code, &pull_result) {
+                    // 4b. issue #1282 / audit CL-04 + RB-05: only once the
+                    //     transfer is intact, re-verify the declared outputs
+                    //     landed. A remote engine that exited 0 without
+                    //     writing a declared output must not finalize as
+                    //     completed — its local artifacts are incomplete.
+                    let outputs_result = if pull_result.is_ok() {
+                        verify_remote_outputs(&run_id, &local_workdir).await
+                    } else {
+                        // The pull error dominates the decision; skip the
+                        // (unreadable) workdir entirely.
+                        Ok(())
+                    };
+                    match decide_remote_finalize(&run_id, code, &pull_result, &outputs_result) {
                         RemoteFinalize::Finalize => {
                             crate::executor::finalize_run(
                                 &run_id,
@@ -1225,7 +1368,7 @@ mod tests {
         let err = std::io::Error::other("pulling results failed");
 
         // Act
-        let decision = decide_remote_finalize("run-1", 0, &Err(err));
+        let decision = decide_remote_finalize("run-1", 0, &Err(err), &Ok(()));
 
         // Assert — even a zero remote exit code cannot be finalized, and the
         // pull error text is surfaced in the reason.
@@ -1244,7 +1387,7 @@ mod tests {
     #[test]
     fn clean_pull_finalizes_with_the_recorded_exit_code() {
         assert_eq!(
-            decide_remote_finalize("run-1", 0, &Ok(())),
+            decide_remote_finalize("run-1", 0, &Ok(()), &Ok(())),
             RemoteFinalize::Finalize
         );
     }
@@ -1257,7 +1400,7 @@ mod tests {
     #[test]
     fn nonzero_remote_exit_stays_a_failure_after_a_clean_pull() {
         // Arrange / Act
-        let decision = decide_remote_finalize("run-1", 7, &Ok(()));
+        let decision = decide_remote_finalize("run-1", 7, &Ok(()), &Ok(()));
 
         // Assert
         assert_eq!(decision, RemoteFinalize::Finalize);
@@ -1359,8 +1502,14 @@ mod tests {
     /// cleanly and finalize the run as `completed` with `outputs/` absent.
     /// The completion record is written only after the whole tree, so a
     /// stream that stops before the output cannot carry it.
+    ///
+    /// Renamed from `result_extraction_fails_when_a_declared_output_is_missing`
+    /// (issue #1282): the assertion pins the ABSENT COMPLETION RECORD, not the
+    /// declared output — the stream `finish_unterminated()` drops the record
+    /// and the pull fails on that. The declared-output obligation is now
+    /// covered by [`verification_fails_when_a_declared_output_is_absent_from_the_pulled_tree`].
     #[test]
-    fn result_extraction_fails_when_a_declared_output_is_missing() {
+    fn result_extraction_fails_when_the_completion_record_is_missing() {
         // Arrange — exactly the probe: those two members and no terminator.
         let mut tree = RawTar::new();
         tree.add("./execution.log", b'0', "", b"run log");
@@ -1379,7 +1528,7 @@ mod tests {
             !dir.path().join("outputs/out.txt").exists(),
             "the declared output is absent from the extracted tree"
         );
-        match decide_remote_finalize(TEST_RUN_ID, 0, &Err(err)) {
+        match decide_remote_finalize(TEST_RUN_ID, 0, &Err(err), &Ok(())) {
             RemoteFinalize::FailArtifactsIncomplete(reason) => {
                 assert!(reason.contains(RESULT_SENTINEL), "got: {reason}");
             }
@@ -1421,7 +1570,7 @@ mod tests {
             "the completion record is bookkeeping, not a served artifact"
         );
         assert_eq!(
-            decide_remote_finalize(TEST_RUN_ID, 0, &pulled),
+            decide_remote_finalize(TEST_RUN_ID, 0, &pulled, &Ok(())),
             RemoteFinalize::Finalize
         );
     }
@@ -1492,5 +1641,170 @@ mod tests {
         assert!(captured.ends_with("TAIL-MARKER"));
         // A small stream passes through untouched.
         assert_eq!(drain_stderr_capped(&b"short"[..]), "short");
+    }
+
+    /// Minimal single-rule workflow: rule `greet` declares `hello.txt`, rule
+    /// `report` declares `report.txt`.
+    fn two_rule_config() -> oxo_flow_core::config::WorkflowConfig {
+        oxo_flow_core::config::WorkflowConfig::parse(
+            r#"
+[workflow]
+name = "verify-fixture"
+version = "1.0.0"
+
+[[rules]]
+name = "greet"
+output = ["hello.txt"]
+shell = "echo hi > {output[0]}"
+
+[[rules]]
+name = "report"
+output = ["report.txt"]
+shell = "echo done > {output[0]}"
+"#,
+        )
+        .expect("fixture parses")
+    }
+
+    /// Issue #1282 / audit CL-04 + RB-05, the genuinely new case: a pulled
+    /// tree that carries BOTH bookkeeping records AND the valid completion
+    /// record but OMITS a declared output of a completed rule. The transfer
+    /// layer is satisfied; only the declared-output oracle can catch it.
+    #[test]
+    fn verification_fails_when_a_declared_output_is_absent_from_the_pulled_tree() {
+        // Arrange — a workdir with the bookkeeping records but no `hello.txt`
+        // (the remote engine exited 0 without writing the declared output).
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("execution.log"), "run log").unwrap();
+        std::fs::write(dir.path().join(".exit-code"), "0\n").unwrap();
+        let config = two_rule_config();
+        let mut checkpoint = oxo_flow_core::executor::CheckpointState::new();
+        checkpoint.mark_completed_quiet("greet");
+
+        // Act
+        let err = remote_outputs_complete(&config, &checkpoint, dir.path())
+            .expect_err("a completed rule's absent declared output must fail verification");
+
+        // Assert — the rule and the missing path are named.
+        assert!(err.contains("greet"), "got: {err}");
+        assert!(
+            err.contains("hello.txt"),
+            "the missing path must be named: {err}"
+        );
+
+        // And the decision routes through the SAME failure path as a broken
+        // pull: no finalize on a completed-but-artifactless run.
+        match decide_remote_finalize(TEST_RUN_ID, 0, &Ok(()), &Err(err.clone())) {
+            RemoteFinalize::FailArtifactsIncomplete(reason) => {
+                assert!(reason.contains("hello.txt"), "got: {reason}");
+            }
+            RemoteFinalize::Finalize => {
+                panic!("a pulled tree missing a declared output must not finalize as completed")
+            }
+        }
+    }
+
+    /// Positive control: every declared output of every completed rule is
+    /// present, so verification passes and the clean decision still
+    /// Finalizes. A rule that never completed carries no obligation — its
+    /// absent output is not a failure.
+    #[test]
+    fn verification_passes_when_all_declared_outputs_are_present() {
+        // Arrange — `greet` completed and wrote its output; `report` never
+        // ran, so its absent `report.txt` is not the run's obligation.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("hello.txt"), "hi").unwrap();
+        let config = two_rule_config();
+        let mut checkpoint = oxo_flow_core::executor::CheckpointState::new();
+        checkpoint.mark_completed_quiet("greet");
+
+        // Act
+        let verified = remote_outputs_complete(&config, &checkpoint, dir.path());
+
+        // Assert
+        assert!(
+            verified.is_ok(),
+            "a complete tree must verify: {verified:?}"
+        );
+        assert_eq!(
+            decide_remote_finalize(TEST_RUN_ID, 0, &Ok(()), &verified),
+            RemoteFinalize::Finalize
+        );
+
+        // Boundary — mark the second rule completed too; now its missing
+        // output IS an obligation and verification must fail.
+        checkpoint.mark_completed_quiet("report");
+        let err = remote_outputs_complete(&config, &checkpoint, dir.path())
+            .expect_err("a newly-completed rule's absent output must fail");
+        assert!(err.contains("report"), "got: {err}");
+        assert!(err.contains("report.txt"), "got: {err}");
+    }
+
+    /// Wildcard / fan-out: `rule_outputs_exist_with_patterns` must be handed
+    /// the EXPANDED instances, so a `{sample}`-fan-out rule's per-sample
+    /// outputs are checked concretely — not skipped as a brace-carrying
+    /// template path.
+    #[test]
+    fn verification_covers_wildcard_fan_out_outputs() {
+        // Arrange — a `{sample}` fan-out over two samples.
+        let mut config = oxo_flow_core::config::WorkflowConfig::parse(
+            r#"
+[workflow]
+name = "fanout-fixture"
+version = "1.0.0"
+
+[[sample_groups]]
+name = "all"
+samples = ["sampleA", "sampleB"]
+
+[[rules]]
+name = "analyze"
+output = ["analysis/{sample}.stats.txt"]
+shell = "echo {sample} > {output[0]}"
+"#,
+        )
+        .expect("fan-out fixture parses");
+        config.expand_wildcards().expect("expansion succeeds");
+
+        // The checkpoint records the INSTANCE names exactly as the remote CLI
+        // run did (never the bare template).
+        assert!(
+            config.rules.len() >= 2,
+            "fan-out must yield per-sample instances"
+        );
+        let mut checkpoint = oxo_flow_core::executor::CheckpointState::new();
+        let mut outputs: Vec<String> = Vec::new();
+        for rule in &config.rules {
+            checkpoint.mark_completed_quiet(&rule.name);
+            for out in rule.output.iter() {
+                assert!(
+                    !out.contains('{'),
+                    "instance output must be concrete: {out}"
+                );
+                outputs.push(out.clone());
+            }
+        }
+        assert_eq!(outputs.len(), 2, "got: {outputs:?}");
+
+        let dir = tempfile::tempdir().unwrap();
+        for out in &outputs {
+            let path = dir.path().join(out);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, "stats").unwrap();
+        }
+
+        // Act / Assert — all per-sample outputs present → verifies.
+        assert!(remote_outputs_complete(&config, &checkpoint, dir.path()).is_ok());
+
+        // Remove ONE instance's output → verification names the missing
+        // per-sample path, proving fan-out is covered concretely.
+        std::fs::remove_file(dir.path().join(&outputs[0])).unwrap();
+        let err = remote_outputs_complete(&config, &checkpoint, dir.path())
+            .expect_err("a missing per-sample output must fail verification");
+        assert!(err.contains("analyze"), "got: {err}");
+        assert!(
+            err.contains(&outputs[0]),
+            "the missing per-sample path must be named: {err}"
+        );
     }
 }

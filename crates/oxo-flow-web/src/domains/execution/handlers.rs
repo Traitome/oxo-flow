@@ -232,7 +232,7 @@ fn dag_for_config(
 
 /// Path of the resolved workflow snapshot [`materialize_run_sources`]
 /// persists beside the staged sources.
-fn run_resolved_snapshot_path(workdir: &std::path::Path) -> std::path::PathBuf {
+pub(crate) fn run_resolved_snapshot_path(workdir: &std::path::Path) -> std::path::PathBuf {
     workdir.join(".oxo-flow").join("resolved-workflow.oxoflow")
 }
 
@@ -254,7 +254,7 @@ fn run_resolved_snapshot_path(workdir: &std::path::Path) -> std::path::PathBuf {
 ///    existed (their staged includes are on disk beside it). Repo-pinned
 ///    includes are only re-fetched here, never on the polled fast paths
 ///    above.
-fn load_run_workflow(
+pub(crate) fn load_run_workflow(
     snapshot: &str,
     workdir: Option<&str>,
 ) -> Option<oxo_flow_core::config::WorkflowConfig> {

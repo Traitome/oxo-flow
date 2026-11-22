@@ -1777,10 +1777,20 @@ the run is **not** finalized as a success — it is failed with the pull
 error and the run row records `artifacts_incomplete` (see
 [Run Detail](#run-detail)), because the local workdir the downstream
 endpoints read may be missing or stale (issue #1112 / audit RB-05).
-Because the pull does not re-derive the expanded output list locally,
-declared-output existence remains the remote engine's exit-0 contract.
-Cancel kills the wrapper's recorded process group, so the remote CLI and
-rule subprocesses stop rather than being orphaned. See
+A pulled run is finalized as a success only after its declared outputs are
+re-verified locally: once the transfer is intact, the server loads the run's
+resolved-snapshot workflow, expands its wildcards exactly as the remote CLI
+did, and checks every declared output of every **completed** rule through the
+engine's single output-existence oracle (`rule_outputs_exist_with_patterns`,
+so `{sample}` / `[[values]]` fan-out and `output_pattern` rules are covered
+concretely). A completed rule whose declared output is absent from the pulled
+tree fails the run through the same path as a broken pull — it is failed and
+the row records `artifacts_incomplete` naming the rule and the missing path —
+so the remote engine's exit-0 is no longer the sole contract (issue #1282 /
+audit CL-04 + RB-05). When the workflow or checkpoint cannot be resolved the
+re-check is skipped rather than failing a legitimate run. Cancel kills the
+wrapper's recorded process group, so the remote CLI and rule subprocesses stop
+rather than being orphaned. See
 [Run on a cluster](../how-to/run-on-cluster.md).
 
 ---
