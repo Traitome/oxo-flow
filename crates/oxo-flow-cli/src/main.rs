@@ -1538,7 +1538,7 @@ async fn main() -> Result<()> {
              Drop --json to run it normally, or use a command whose JSON \
              document is implemented (run, dry-run, validate, lint, test, \
              status, wait, batch, info, knowledge, schema, license, ai, \
-             provenance verify, verify-data, graph, runs gc, import, cluster \
+             provenance verify, verify-data, graph, runs gc, import, diff, cluster \
              status/cancel/logs)."
         );
     }
