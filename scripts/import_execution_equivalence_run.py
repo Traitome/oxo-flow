@@ -7,10 +7,16 @@ workflow? This is the companion to scripts/import_equivalence_run.py, which
 measures only the *declared* contract.
 
 HARD RULE: NEVER FABRICATE A MEASUREMENT. A fixture's verdict is MATCHED only
-when BOTH arms (source + imported) genuinely executed and their artifact sets
-agree. If either arm did not run -- missing runtime, missing container/conda
-backend, missing toolchain, or the arm errored -- the verdict is SKIPPED with
-the reason, never MATCHED. A green tally must mean runs happened.
+when BOTH arms (source + imported) genuinely executed AND each produced at
+least one artifact. If either arm did not run -- missing runtime, missing
+container/conda backend, missing toolchain, or the arm errored -- the verdict
+is SKIPPED with the reason, never MATCHED. If both arms ran but produced zero
+artifacts, the verdict is NO_ARTIFACTS, never MATCHED: a runtime that exits 0
+while writing nothing is not evidence of equivalence (issue #1349). A green
+tally must mean runs happened.
+
+Requires Python >= 3.11 (tomllib). On an older interpreter the harness exits 2
+with an explicit message instead of a silent-green empty result.
 
 Supported fixtures are enumerated from import_equivalence_expectations.py
 (status == "supported"); the source run command and the required runtime are
@@ -19,8 +25,9 @@ file does not restate the truth table.
 
 Usage:  import_execution_equivalence_run.py <ROOT> <BIN> <TMP>
 Exit 0 when nothing executed (or every executed fixture matched); exit 1 when
-any executed fixture drifted. The bash wrapper turns that 1 into a --strict
-failure and is report-only otherwise.
+any executed fixture drifted; exit 2 on an interpreter below the 3.11 floor.
+The bash wrapper turns 1 into a --strict failure and is report-only otherwise
+(with a stderr warning when the runner failed).
 """
 import hashlib
 import importlib.util
@@ -29,6 +36,11 @@ import os
 import shutil
 import subprocess
 import sys
+
+try:
+    import tomllib  # Python >= 3.11; guarded so old interpreters fail loudly (#1349)
+except ModuleNotFoundError:  # pragma: no cover - exercised via the tomllib=None test
+    tomllib = None
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 # Inputs planted before each arm so the bioinformatics tools have something to
@@ -109,7 +121,8 @@ def missing_reason(runtime_bin, backends, have):
 
 
 def classify(arms):
-    """Verdict from the two arm results. Never MATCHED unless both ran.
+    """Verdict from the two arm results. Never MATCHED unless both ran AND
+    produced at least one artifact.
 
     arms = {"source": {...}, "imported": {...}}; each has "ran" (bool),
     "reason" (str, when not ran) and "artifacts" (relpath -> sha256).
@@ -117,9 +130,15 @@ def classify(arms):
     for name in ("source", "imported"):
         if not arms.get(name, {}).get("ran"):
             return "SKIPPED", arms.get(name, {}).get("reason", "arm did not run")
-    if arms["source"]["artifacts"] == arms["imported"]["artifacts"]:
-        return "MATCHED", "artifact sets agree"
     a, b = arms["source"]["artifacts"], arms["imported"]["artifacts"]
+    if not a and not b:
+        # Two executed arms with equal EMPTY sets must not pass as MATCHED:
+        # a runtime that exits 0 while writing nothing is not evidence of
+        # equivalence (issue #1349).
+        return "NO_ARTIFACTS", ("both arms ran but produced no artifacts "
+                                "-- nothing to compare")
+    if a == b:
+        return "MATCHED", "artifact sets agree"
     only_src = sorted(set(a) - set(b))
     only_imp = sorted(set(b) - set(a))
     changed = sorted(k for k in set(a) & set(b) if a[k] != b[k])
@@ -202,8 +221,8 @@ def measure(rel, expect, bin_, tmp, have, timeout):
     runtime_bin, template = source_runtime(rel)
     if runtime_bin is None:
         return "SKIPPED", "no source runner for extension %s" % os.path.splitext(rel)[1]
-    # Import once to read the environment block; reuse the EXISTING importer.
-    import tomllib
+    # Read the imported workflow's environment block via the module-level
+    # tomllib (guarded: main() refuses to run below the 3.11 floor).
     imp_dir = os.path.join(tmp, rel.replace("/", "_"))
     os.makedirs(imp_dir, exist_ok=True)
     imported_wf = os.path.join(imp_dir, "W.oxoflow")
@@ -244,6 +263,20 @@ def measure(rel, expect, bin_, tmp, have, timeout):
 
 
 def main(argv):
+    if tomllib is None:
+        # Issue #1349: on an interpreter below the 3.11 floor the old code
+        # died mid-run with a traceback that report-only mode swallowed into
+        # a silent-green empty result. Fail loudly instead, before any row
+        # is printed.
+        print(
+            "ERROR: import-execution-equivalence requires Python >= 3.11 "
+            "(tomllib); this interpreter is Python %s. Without tomllib the "
+            "imported workflow's environment block cannot be read, so no "
+            "fixture can execute -- refusing to emit an empty green tally. "
+            "Re-run under python3.11+." % sys.version.split()[0],
+            file=sys.stderr,
+        )
+        return 2
     if len(argv) < 4:
         print("usage: import_execution_equivalence_run.py <ROOT> <BIN> <TMP>",
               file=sys.stderr)
@@ -257,27 +290,31 @@ def main(argv):
     print("# import-execution-equivalence run")
     print("# fixtures are enumerated from import_equivalence_expectations.py")
     print()
-    tally = {"EXECUTED": 0, "SKIPPED": 0, "MATCHED": 0, "DRIFTED": 0}
+    tally = {"EXECUTED": 0, "SKIPPED": 0, "MATCHED": 0, "DRIFTED": 0,
+             "NO_ARTIFACTS": 0}
     rows = []
     for rel in supported_fixtures(expect):
         verdict, reason = measure(rel, expect, bin_, tmp, have, timeout)
-        if verdict in ("MATCHED", "DRIFTED"):
+        if verdict == "SKIPPED":
+            tally["SKIPPED"] += 1
+        else:
+            # MATCHED / DRIFTED / NO_ARTIFACTS: both arms genuinely ran.
             tally["EXECUTED"] += 1
             tally[verdict] += 1
-        else:
-            tally["SKIPPED"] += 1
         rows.append((rel, verdict, reason))
         print("RESULT\t%s\t%s\t%s" % (rel, verdict, reason))
     print()
     print("EXECUTION-EQUIVALENCE TALLY (fixtures=%d)" % len(rows))
-    print("  executed : %d" % tally["EXECUTED"])
-    print("  skipped  : %d" % tally["SKIPPED"])
-    print("  matched  : %d" % tally["MATCHED"])
-    print("  drifted  : %d" % tally["DRIFTED"])
+    print("  executed    : %d" % tally["EXECUTED"])
+    print("  skipped     : %d" % tally["SKIPPED"])
+    print("  matched     : %d" % tally["MATCHED"])
+    print("  drifted     : %d" % tally["DRIFTED"])
+    print("  no_artifacts: %d" % tally["NO_ARTIFACTS"])
     print()
     print(json.dumps(tally))
     # Exit non-zero iff an executed fixture drifted, so the wrapper --strict
-    # branch is falsifiable; an all-SKIPPED (or all-MATCHED) run stays 0.
+    # branch is falsifiable; an all-SKIPPED (or all-MATCHED, or all
+    # NO_ARTIFACTS) run stays 0.
     return 1 if tally["DRIFTED"] else 0
 
 

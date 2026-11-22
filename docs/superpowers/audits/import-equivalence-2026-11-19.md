@@ -222,7 +222,10 @@ drifts from the declared-artifact corpus above.
 **The honesty rule this harness enforces.** A fixture is `MATCHED` only when
 BOTH arms genuinely executed (exit 0) and their artifact sets agree. Any missing
 runtime / container / conda backend, any non-zero arm, or any missing arm makes
-the verdict `SKIPPED` with the reason — never `MATCHED`. The two arms are made
+the verdict `SKIPPED` with the reason — never `MATCHED`. And two arms that both
+exit 0 while producing zero artifacts make the verdict `NO_ARTIFACTS` — also
+never `MATCHED`: equal empty sets are not evidence of equivalence (#1349). The
+two arms are made
 comparable by seeding each with its own workflow file (source arm: the fixture
 basename; imported arm: `W.oxoflow`) and dropping BOTH seed paths from the
 collected artifact set, so a wrapper that leaves its input seed behind cannot
@@ -232,11 +235,13 @@ masquerade as a one-sided artifact and a genuinely-equivalent run reports
 `--strict` is falsifiable, not a no-op: the runner exits non-zero iff an
 **executed** fixture drifted (`DRIFTED > 0`) and 0 when nothing executed, so
 `--strict` fails on drift for fixtures that actually executed and stays 0 on an
-all-`SKIPPED` run. A green tally therefore means runs happened and agreed; an
-all-`SKIPPED` tally means no run happened. The rule is exercised end-to-end by
+all-`SKIPPED` run. A green tally therefore means runs happened and every
+executed comparison agreed on non-empty artifact sets; an all-`SKIPPED` tally
+means no run happened. The rule is exercised end-to-end by
 `eval/scripts/test_import_execution_equivalence.py`: `MeasureEndToEndStubTests`
 drives `measure()`/`collect_artifacts` with two stub arms (identical output →
-`MATCHED`; differing output → `DRIFTED`) and `StrictExitCodeTests` proves the
+`MATCHED`; differing output → `DRIFTED`; two arms that exit 0 writing nothing →
+`NO_ARTIFACTS`) and `StrictExitCodeTests` proves the
 exit code is 1 on drift and 0 when nothing executed.
 
 **Measured result (2026-11-21).** `executed = 0`, `skipped = 4`, `matched = 0`,
@@ -247,7 +252,11 @@ equivalence remains unproven and is not claimed.** Two environments were tried:
   four fixtures `SKIPPED (no execution environment: missing …)`.
 - *Verification host* (`tx-ubuntu`: docker present, `nextflow` 26.10.6,
   `snakemake` 9.27.2 in a venv, no conda/mamba, no HPC `module`): still all four
-  `SKIPPED`. Raw per-arm evidence:
+  `SKIPPED`. Raw per-arm evidence (recorded by hand from the two runs' logs —
+  the harness itself emits only one `RESULT` line per fixture carrying the
+  first blocking arm's reason, and the backend probe fires before either arm
+  is invoked, so on a conda-less host both arms are never reached; this
+  per-arm matrix is curated prose, not harness output — #1349):
 
 | Fixture | SOURCE arm | IMPORTED arm |
 | :--- | :--- | :--- |
@@ -268,6 +277,26 @@ module-loaded envs) plus source fixtures that actually run standalone — a
 Snakemake `rule all` collecting concrete outputs, and Nextflow that the
 installed engine compiles. Until then this section stands as the boundary: the
 execution path is instrumented and falsifiable, and it reports zero executed.
+
+**#1349 harness hardening (2026-11-22; no re-measurement — the measured result
+above predates it and remains the latest real run).** Three non-blocking gaps
+from the #1303 adversarial review, closed without changing the honesty rule:
+
+- The runner requires Python ≥ 3.11 (`tomllib`) and now refuses to start on an
+  older interpreter with exit 2 and an explicit message, instead of dying
+  mid-run with a traceback that report-only mode swallowed into a
+  silent-green empty result; the bash wrapper also prints a stderr warning on
+  any non-zero runner exit in report-only mode (`--strict` still propagates it).
+- `classify()` never reports `MATCHED` for two executed arms with empty
+  artifact sets — that is an explicit `NO_ARTIFACTS` verdict, tallied under
+  `executed` (both arms ran) and printed in the tally, while only `DRIFTED`
+  flips the exit code.
+- The per-arm evidence table above is labeled **recorded by hand** (the
+  harness cannot emit it, as the note above states).
+
+All covered by new hermetic tests in
+`eval/scripts/test_import_execution_equivalence.py` (zero-output stub arms →
+`NO_ARTIFACTS`; `tomllib` floor refusal → exit 2; tally counting).
 
 **Raw-data lineage (execution half).**
 
