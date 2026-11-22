@@ -488,6 +488,8 @@ async fn run_command_inner(
         run_log,
         workflow_abs,
         workflow_git_sha,
+        workflow_content_hash,
+        workflow_git_dirty,
     } = start_run_log(
         &workflow,
         &config,
@@ -764,6 +766,12 @@ async fn run_command_inner(
         // (issue #115 pillar 1) — best-effort, never fails the run.
         if let Some(sha) = &workflow_git_sha {
             ck.set_workflow_git_sha(sha.clone());
+        }
+        if let Some(hash) = &workflow_content_hash {
+            ck.set_workflow_content_hash(hash.clone());
+        }
+        if let Some(dirty) = workflow_git_dirty {
+            ck.set_workflow_git_dirty(dirty);
         }
         // Record resolved include provenance (issue #899): per repo-include,
         // the repo@ref and the checkout's HEAD SHA at parse time. Empty for
