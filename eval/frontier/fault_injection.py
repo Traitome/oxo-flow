@@ -34,7 +34,8 @@ workflow executes to success with stubs (`executability_verified`).
 
 Controlled Fault Categories:
 - BioTypes Contract Violations (fault manifests as a type-admission abort
-  before rule execution; `--ai-recover` engages only on rule failure):
+  before rule execution; since #1265 that bail is routed through the same
+  verified-repair loop as a rule failure, so `--ai-recover` engages here):
   * TYPE_SORT_MISMATCH: Queryname-sorted BAM piped to coordinate consumer (TYPE-002).
   * TYPE_REF_BUILD_CONFLICT: Assembly build conflict (e.g., GRCh37 vs GRCh38) (TYPE-004).
   * TYPE_INDEX_MISSING: Missing companion index (.bai/.csi/.tbi) (TYPE-003).
@@ -92,8 +93,10 @@ class FaultCase:
     # 4-6 when the repair path cannot engage):
     #   "rule_failure"     — a rule exits non-zero; --ai-recover engages.
     #   "admission_abort"  — the BioType admission gate bails out before any
-    #                        rule executes; the rule-failure recovery path
-    #                        never runs.
+    #                        rule executes; since #1265 that bail is routed
+    #                        through the same verified-repair machinery as a
+    #                        rule failure (diagnose → patch → in-process
+    #                        re-admission), so --ai-recover engages here too.
     #   "advisory_warning" — the finding is advisory (warn, never abort); the
     #                        seeded workflow executes successfully, so there
     #                        is no failure for AI recovery to engage.
