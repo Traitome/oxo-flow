@@ -260,8 +260,9 @@ on_error = "notify 'run FAILED: {failed} failed' --tag {config.project} && tar c
 
 Both hooks run exactly once per `oxo-flow run` (the CLI) that reaches a
 terminal state (including `--keep-going` runs); `on_complete` fires only
-when no rule failed, `on_error` otherwise. The web UI executor has its
-own run loop and does not fire these hooks yet. Placeholders: every
+when no rule failed, `on_error` otherwise. A web-initiated run spawns the
+same `oxo-flow run` CLI as a subprocess (the web server has no run loop of
+its own), so these hooks fire there too. Placeholders: every
 `[config]` key is available as `{config.<key>}`, plus `{succeeded}`,
 `{failed}`, `{skipped}`, and `{workdir}`. Unknown keys stay literal.
 
