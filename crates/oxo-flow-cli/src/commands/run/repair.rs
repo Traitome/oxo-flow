@@ -355,17 +355,39 @@ pub(crate) async fn record_repair_rerun(
 /// would clobber the child's outcome, so only the loaded file's state gets
 /// the `repair_record` set and saved; the parent's in-memory copy is updated
 /// in place for in-process readers but is never written after the child ran.
+///
+/// Record-write semantics when a checkpoint already exists at
+/// `checkpoint_path` (issue #1352 F4): the file is loaded and the record is
+/// appended ADDITIVELY — every prior field (completion records, benchmarks,
+/// provenance) is preserved. The checkpoint at the run's checkpoint path is
+/// the workdir's run ledger, and a repair that patched the workflow is a real
+/// ledger event even when the gate aborted before any rule ran (the
+/// admission-abort path). An EXISTING but unreadable file is never clobbered:
+/// the write is skipped (record kept in the in-memory copy only) so a torn or
+/// corrupt checkpoint survives for the next run's refuse-to-start gate to
+/// surface, instead of being replaced by a synthetic state.
 async fn persist_repair_record(
     checkpoint: &Mutex<CheckpointState>,
     checkpoint_path: &Path,
     record: oxo_flow_core::executor::checkpoint::RepairRecord,
 ) {
-    // Load the authoritative file. When it cannot be read (no checkpoint on
-    // disk yet, or a torn write), the parent's in-memory copy is the best
-    // available baseline.
+    // Load the authoritative file. When it cannot be read:
+    //   * absent file → the caller's baseline is the fresh ledger;
+    //   * existing-but-unreadable file → never clobber evidence; keep the
+    //     record in the in-memory copy only.
     let mut authoritative = match CheckpointState::load_from_file(checkpoint_path) {
         Ok(ck) => ck,
-        Err(_) => checkpoint.lock().await.clone(),
+        Err(_) if !checkpoint_path.exists() => checkpoint.lock().await.clone(),
+        Err(load_err) => {
+            tracing::warn!(
+                error = %load_err,
+                checkpoint = %checkpoint_path.display(),
+                "checkpoint exists but cannot be loaded — repair_record kept out of the \
+                 file to avoid clobbering unreadable evidence"
+            );
+            checkpoint.lock().await.record_repair(record);
+            return;
+        }
     };
     authoritative.record_repair(record.clone());
     if let Err(e) = authoritative.save_to_file_async(checkpoint_path).await {
@@ -472,10 +494,28 @@ pub(crate) enum AdmissionRepair {
     },
 }
 
+/// The ONE recovery-authorization predicate (issue #1352 F2): recovery runs
+/// when the caller asked for it (`--ai-recover`) or the workflow's `[ai]
+/// enabled` auto-detect turns it on, and the `--no-ai-recover` loop guard is
+/// off. This exact expression used to live twice — `failure.rs`'s
+/// `should_recover` and [`admission_repair_enabled`]'s tail — so a future
+/// change to recovery authorization could update one site and not the other
+/// ("don't mirror semantics — share them"). `workflow_auto_enabled` is the
+/// precomputed `should_use_ai(Some(workflow), false)` so the predicate stays
+/// pure and unit-testable.
+pub(crate) fn ai_recovery_enabled(
+    ai_recover: bool,
+    no_ai_recover: bool,
+    workflow_auto_enabled: bool,
+) -> bool {
+    !no_ai_recover && (ai_recover || workflow_auto_enabled)
+}
+
 /// Pure eligibility gate for [admission repair] (issue #1265): the error must
-/// be the type-admission bail AND AI recovery must be enabled. Extracted so
-/// the "recovery off → unchanged" contract is unit-testable without a live
-/// provider.
+/// be the type-admission bail AND AI recovery must be enabled — the shared
+/// [`ai_recovery_enabled`] predicate, not a private re-expression of it.
+/// Extracted so the "recovery off → unchanged" contract is unit-testable
+/// without a live provider.
 pub(crate) fn admission_repair_enabled(
     error_message: &str,
     ai_recover: bool,
@@ -483,8 +523,7 @@ pub(crate) fn admission_repair_enabled(
     workflow_ai_enabled: bool,
 ) -> bool {
     error_message.contains(TYPE_ADMISSION_MARKER)
-        && !no_ai_recover
-        && (ai_recover || workflow_ai_enabled)
+        && ai_recovery_enabled(ai_recover, no_ai_recover, workflow_ai_enabled)
 }
 
 /// Route a BioType type-admission abort (issue #1265) through the SAME
@@ -525,10 +564,19 @@ pub(crate) async fn repair_admission_abort(
     ) {
         return AdmissionRepair::NotApplicable;
     }
-    // No `RerunContext` exists this early, so narrate without a run log; the
-    // repair record persists into a local checkpoint baseline (persist writes
-    // the file, matching the rule-failure path).
-    let checkpoint: Mutex<CheckpointState> = Mutex::new(CheckpointState::default());
+    // No `RerunContext` exists this early, so narrate without a run log. The
+    // in-memory baseline is the checkpoint FILE where one already exists —
+    // the gate aborted in preflight, no rule ran, and the baseline must never
+    // pretend otherwise or orphan a previous run's records. Semantics (issue
+    // #1352 F4): the checkpoint at `checkpoint_path` is the workdir's run
+    // ledger; the repair record is appended additively to whatever state is
+    // already there (exactly like the rule-failure path — see
+    // [`persist_repair_record`]), and a fresh ledger is started only when no
+    // checkpoint exists yet. An existing-but-unreadable file is never
+    // clobbered with this baseline.
+    let checkpoint: Mutex<CheckpointState> = Mutex::new(
+        CheckpointState::load_from_file(checkpoint_path).unwrap_or_else(|_| CheckpointState::new()),
+    );
     let run_log: Option<&SharedRunLog> = None;
 
     let Some(provider) = crate::commands::ai_template::try_resolve_ai(Some(workflow), true) else {
@@ -643,8 +691,28 @@ pub(crate) async fn repair_admission_abort(
 }
 
 /// Re-derive the plan from a just-patched workflow (issue #1265), mirroring
-/// the pre-seam prep block in `mod.rs`. Returns the rebuilt config, DAG, and
-/// resolved target list, or the gate error when the patch did not clear it.
+/// the pre-seam prep block in `mod.rs` (the parse → CLI overrides → samples
+/// filter → profile → defaults → runtime_workdir → expansion → DAG sequence).
+/// Every STEP calls the shared helper `mod.rs` calls — the helpers are
+/// borrowed, never retyped; the ORDER is the one deliberate second copy, and
+/// this doc comment is its divergence ledger (issue #1352 F3):
+///
+/// - **`warn_host_resource_fit` is omitted**: it is advisory narration about
+///   the SUBMIT host's capacity, already emitted for the original plan
+///   earlier in the same `run` invocation — re-emitting it after an in-process
+///   patch would double-warn the same facts, and a cluster-routed profile
+///   suppresses it there too.
+/// - **The `[resource_budget] max_jobs` `-j` clamp is omitted**: it mutates
+///   the caller's `jobs` variable, which happened BEFORE the type gate could
+///   abort (the clamp precedes `build_dag_and_targets` in `mod.rs`), so the
+///   repaired plan runs under the already-clamped concurrency; the seam does
+///   not own `-j` and cannot re-clamp it.
+/// - The samples-filter readiness section is also not re-printed: the plan
+///   rebuild is internal to the repair, and the section belongs to the
+///   user-facing planning output that already ran.
+///
+/// Returns the rebuilt config, DAG, and resolved target list, or the gate
+/// error when the patch did not clear it.
 #[allow(clippy::too_many_arguments)]
 fn rebuild_and_clear(
     workflow: &Path,
@@ -1032,6 +1100,81 @@ mod tests {
         let record = loaded.repair_record.expect("repair record persisted");
         assert_eq!(record.session_id, "sess-b2");
         assert!(record.rerun_succeeded);
+    }
+
+    /// Issue #1352 F4 regression: the admission-abort seam's record write is
+    /// a load-preserve APPEND onto an existing checkpoint — a reused workdir's
+    /// previous-run ledger (completed rules, benchmarks) must survive the
+    /// admission repair record exactly as the rule-failure path preserves the
+    /// verification rerun's records.
+    #[tokio::test]
+    async fn admission_repair_record_preserves_a_preexisting_checkpoint() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ck_path = tmp.path().join("checkpoint.json");
+
+        // A previous run's ledger on disk: `done` completed with a benchmark.
+        let mut prev = CheckpointState::new();
+        prev.completed_rules.insert("done".to_string());
+        prev.mark_completed(
+            "done",
+            oxo_flow_core::executor::BenchmarkRecord {
+                rule: "done".into(),
+                wall_time_secs: 1.0,
+                max_memory_mb: Some(32),
+                memory_limit_mb: None,
+                cpu_seconds: Some(0.5),
+                retries: 0,
+                recorded_as: None,
+            },
+        );
+        prev.save_to_file_async(&ck_path).await.unwrap();
+
+        // The admission seam's baseline (issue #1352 F4): loaded from the
+        // file, never a fresh default that would orphan the previous run's
+        // records.
+        let checkpoint = Mutex::new(
+            CheckpointState::load_from_file(&ck_path).unwrap_or_else(|_| CheckpointState::new()),
+        );
+        record_repair_applied(&checkpoint, &ck_path, "sess-admission").await;
+
+        let loaded = CheckpointState::load_from_file(&ck_path).unwrap();
+        assert!(
+            loaded.completed_rules.contains("done"),
+            "the previous run's completion records must survive the admission repair record"
+        );
+        assert!(
+            loaded.benchmarks.contains_key("done"),
+            "the previous run's benchmarks must survive the admission repair record"
+        );
+        let record = loaded
+            .repair_record
+            .expect("admission repair record appended");
+        assert_eq!(record.session_id, "sess-admission");
+        assert!(record.applied);
+    }
+
+    /// Issue #1352 F4 regression: an EXISTING but unreadable checkpoint is
+    /// never clobbered by the record write — the unreadable evidence survives
+    /// untouched for the next run's refuse-to-start gate to surface, and the
+    /// record is kept in the in-memory copy only.
+    #[tokio::test]
+    async fn repair_record_never_clobbers_an_unreadable_checkpoint() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ck_path = tmp.path().join("checkpoint.json");
+        let torn = "{\"completed_rules\": [\"done\""; // truncated mid-file
+        std::fs::write(&ck_path, torn).unwrap();
+
+        let checkpoint = Mutex::new(CheckpointState::new());
+        record_repair_applied(&checkpoint, &ck_path, "sess-torn").await;
+
+        let on_disk = std::fs::read_to_string(&ck_path).unwrap();
+        assert_eq!(
+            on_disk, torn,
+            "an unreadable checkpoint must never be overwritten by the record write"
+        );
+        let ck = checkpoint.lock().await;
+        let record = ck.repair_record.as_ref().expect("record kept in memory");
+        assert_eq!(record.session_id, "sess-torn");
     }
 
     /// Issue #1265: the type-admission bail is the ONLY abort routed through

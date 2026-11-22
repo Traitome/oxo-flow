@@ -269,10 +269,14 @@ pub(crate) async fn handle_run_failure_abort(
     // AI error recovery. `--no-ai-recover` (issue #1164 loop guard)
     // disables recovery entirely — including the workflow's `[ai] enabled`
     // auto-detect — so the repair loop's verification rerun can never start
-    // another repair cycle.
-    let should_recover = !ctx.no_ai_recover
-        && (ctx.ai_recover
-            || crate::commands::ai_template::should_use_ai(Some(ctx.workflow), false));
+    // another repair cycle. The predicate is the SHARED `ai_recovery_enabled`
+    // (issue #1352 F2): the admission-repair seam must authorize recovery
+    // identically, never via a mirrored re-expression.
+    let should_recover = ai_recovery_enabled(
+        ctx.ai_recover,
+        ctx.no_ai_recover,
+        crate::commands::ai_template::should_use_ai(Some(ctx.workflow), false),
+    );
     // The engine produced a bounded deterministic repair plan, but no
     // interactive key handlers exist — the old "[R] Auto-scale & resume"
     // menu promised keys that were never wired (false affordance). Point

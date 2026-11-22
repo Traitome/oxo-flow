@@ -71,15 +71,12 @@ pub fn create_run_from_config(
     // Web admission uses the same canonical biological contract gate as the
     // CLI preflight. Rejecting here prevents an invalid run from being
     // persisted or queued while deferring the failure to the spawned CLI.
+    // The error text comes from the shared core formatter (issue #1352 F1):
+    // the marker phrase is ONE constant owned by the gate, never retyped.
     if let Err(type_errors) = oxo_flow_core::types::validate_workflow_types(wf, &dag) {
-        let findings = type_errors
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join("; ");
-        return Err(CreateRunError::TypeContract(format!(
-            "declared biological type contracts are violated: {findings}"
-        )));
+        return Err(CreateRunError::TypeContract(
+            oxo_flow_core::types::type_admission_error_message(&type_errors),
+        ));
     }
 
     let execution_order = dag
