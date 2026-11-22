@@ -883,6 +883,33 @@ async fn run_command_inner(
         Some(&run_log),
     );
 
+    // ── Override-aware workflow fingerprint (issue #1350) ──────────────
+    // `workflow_content_hash` digests the workflow's RAW bytes, so two runs
+    // of the same file with different `--arg KEY=VALUE` overrides would
+    // record an identical identity (the "expand before deriving" gap).
+    // The resolved hash combines the raw digest with the engine's canonical
+    // config snapshot — the same order-independent map
+    // `detect_config_changes_with_replay` just rebuilt above from the
+    // post-override, post-profile, post-expansion config. It MUST run after
+    // that rebuild, and derives from the persisted snapshot itself — never
+    // a second expansion. Best-effort: recorded when the raw digest is
+    // available, with an eager save so even a fully-completed rerun (no
+    // later checkpoint writes) persists the fingerprint.
+    if let Some(raw_hash) = &workflow_content_hash {
+        let mut ck = checkpoint.lock().await;
+        let resolved = oxo_flow_core::executor::checkpoint::compute_workflow_resolved_hash(
+            raw_hash,
+            &ck.config_snapshot,
+        );
+        ck.set_workflow_resolved_hash(resolved);
+        if let Err(e) = ck.save_to_file(&checkpoint_path) {
+            tracing::warn!(
+                error = %e,
+                "failed to save checkpoint after recording the resolved workflow hash"
+            );
+        }
+    }
+
     // Issue #142 M1: rules whose fingerprint differed only in the
     // sample-derived input list are NOT invalidated — toggling --samples
     // must not re-run (and overwrite) cohort-level gather outputs. The

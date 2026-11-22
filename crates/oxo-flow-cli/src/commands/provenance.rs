@@ -69,6 +69,68 @@ impl VerifyEntry {
     }
 }
 
+/// Outcome of re-hashing the workflow file named in the checkpoint against
+/// the recorded `workflow_content_hash` (issue #1350: the digest was
+/// recorded but never verified). Machine-readable for `--json`.
+#[derive(Debug, Serialize)]
+struct WorkflowContentCheck {
+    /// `matched` (file re-hashes to the recorded digest), `changed` (the
+    /// file's bytes moved since the run — a verification finding), or
+    /// `unverifiable` (the file is missing/unreadable at its recorded path,
+    /// e.g. a relocated checkpoint — reported, not failed).
+    status: &'static str,
+    /// The digest recorded at run start.
+    recorded: String,
+    /// The digest recomputed from disk (absent for unverifiable files).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    actual: Option<String>,
+}
+
+impl WorkflowContentCheck {
+    fn changed(recorded: &str, actual: &str) -> Self {
+        Self {
+            status: "changed",
+            recorded: recorded.to_string(),
+            actual: Some(actual.to_string()),
+        }
+    }
+}
+
+/// Re-hash the workflow file the checkpoint names and compare it with the
+/// recorded content digest (issue #1350). `None` when the checkpoint
+/// records no digest (legacy checkpoints, or the best-effort read failed at
+/// run start) — nothing to check.
+///
+/// The RESOLVED fingerprint (`workflow_resolved_hash`) is deliberately NOT
+/// re-derived here: reproducing it needs the full invocation context (the
+/// exact `--arg` overrides, profile, and sample selection), which a
+/// checkpoint alone cannot supply. It is a run-to-run identity label, and
+/// the docs say so; the RAW bytes digest is the claim verify re-checks.
+fn check_workflow_content(checkpoint: &serde_json::Value) -> Option<WorkflowContentCheck> {
+    let recorded = checkpoint
+        .get("workflow_content_hash")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())?;
+    let workflow_path = checkpoint
+        .get("workflow_path")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)?;
+    match oxo_flow_core::executor::checkpoint::compute_file_checksum(&workflow_path) {
+        Ok(actual) if actual == recorded => Some(WorkflowContentCheck {
+            status: "matched",
+            recorded: recorded.to_string(),
+            actual: Some(actual),
+        }),
+        Ok(actual) => Some(WorkflowContentCheck::changed(recorded, &actual)),
+        Err(_) => Some(WorkflowContentCheck {
+            status: "unverifiable",
+            recorded: recorded.to_string(),
+            actual: None,
+        }),
+    }
+}
+
 /// Pure classification of recorded checksums against disk (unit-testable).
 ///
 /// `cleaned` entries are outputs the engine deleted by design at the end
@@ -453,6 +515,15 @@ pub fn provenance_verify_command(checkpoint_path: PathBuf, json: bool) -> Result
             )
         })?;
 
+    // Re-hash the workflow file against the recorded content digest
+    // (issue #1350): the digest was recorded but never verified, so an
+    // operator running verify got no signal that the workflow bytes moved
+    // since the run. Checked on EVERY path (checksum-verified or fallback)
+    // with the same exit semantics — a changed workflow is a finding, an
+    // unverifiable one (missing/unreadable at its recorded path, e.g. a
+    // relocated checkpoint) is reported without failing.
+    let workflow_content_check = check_workflow_content(&checkpoint);
+
     // Workflow provenance: the git HEAD SHA recorded at run start
     // (issue #115 pillar 1) — which workflow version produced these
     // results.
@@ -524,6 +595,32 @@ pub fn provenance_verify_command(checkpoint_path: PathBuf, json: bool) -> Result
         ),
         Some(false) => eprintln!("  {} workflow git tree: clean", "•".dimmed()),
         None => {}
+    }
+    // The verification verdict itself (issue #1350): narrated after the
+    // recorded values so the human report reads record → verdict.
+    if let Some(check) = &workflow_content_check {
+        match check.status {
+            "matched" => eprintln!(
+                "  {} workflow content check: {}",
+                "•".dimmed(),
+                format!("verified ({})", check.actual.as_deref().unwrap_or_default()).dimmed()
+            ),
+            "changed" => eprintln!(
+                "  {} workflow content check: {}",
+                "✗".red().bold(),
+                format!(
+                    "workflow changed since the run (recorded: {}, actual: {})",
+                    check.recorded,
+                    check.actual.as_deref().unwrap_or_default()
+                )
+                .red()
+            ),
+            _ => eprintln!(
+                "  {} workflow content check: {}",
+                "!".yellow(),
+                "unverifiable (workflow file not readable at its recorded path)".yellow()
+            ),
+        }
     }
     eprintln!();
 
@@ -624,11 +721,22 @@ pub fn provenance_verify_command(checkpoint_path: PathBuf, json: bool) -> Result
                         "env_lock_identity": env_lock_identity,
                         "workflow_git_sha": checkpoint.get("workflow_git_sha").cloned(),
                         "workflow_content_hash": checkpoint.get("workflow_content_hash").cloned(),
+                        "workflow_resolved_hash": checkpoint.get("workflow_resolved_hash").cloned(),
+                        "workflow_content_check": workflow_content_check,
                         "workflow_git_dirty": checkpoint.get("workflow_git_dirty").cloned(),
                         "note": "No stored checksums found. Run workflow with --provenance to enable tracking.",
                     },
                 });
                 println!("{}", serde_json::to_string_pretty(&output)?);
+            }
+            // Uniform exit semantics (issue #1350): a workflow whose bytes
+            // no longer match the recorded digest is a finding on every
+            // path, checksum coverage or not.
+            if workflow_content_check
+                .as_ref()
+                .is_some_and(|c| c.status == "changed")
+            {
+                std::process::exit(1);
             }
             return Ok(());
         }
@@ -649,11 +757,19 @@ pub fn provenance_verify_command(checkpoint_path: PathBuf, json: bool) -> Result
                     "env_lock_identity": env_lock_identity,
                     "workflow_git_sha": checkpoint.get("workflow_git_sha").cloned(),
                     "workflow_content_hash": checkpoint.get("workflow_content_hash").cloned(),
+                    "workflow_resolved_hash": checkpoint.get("workflow_resolved_hash").cloned(),
+                    "workflow_content_check": workflow_content_check,
                     "workflow_git_dirty": checkpoint.get("workflow_git_dirty").cloned(),
                     "note": "No completed rules or checksums found in the checkpoint.",
                 },
             });
             println!("{}", serde_json::to_string_pretty(&output)?);
+        }
+        if workflow_content_check
+            .as_ref()
+            .is_some_and(|c| c.status == "changed")
+        {
+            std::process::exit(1);
         }
         return Ok(());
     }
@@ -732,6 +848,8 @@ pub fn provenance_verify_command(checkpoint_path: PathBuf, json: bool) -> Result
                 "env_lock_identity": env_lock_identity,
                 "workflow_git_sha": checkpoint.get("workflow_git_sha").cloned(),
                 "workflow_content_hash": checkpoint.get("workflow_content_hash").cloned(),
+                "workflow_resolved_hash": checkpoint.get("workflow_resolved_hash").cloned(),
+                "workflow_content_check": workflow_content_check,
                 "workflow_git_dirty": checkpoint.get("workflow_git_dirty").cloned(),
             },
         });
@@ -741,7 +859,13 @@ pub fn provenance_verify_command(checkpoint_path: PathBuf, json: bool) -> Result
     // Missing files are a verification failure too: a vanished output is
     // exactly what integrity verification must catch. Exiting 0 there made
     // the path-resolution false-negative fully silent (issue #142 H7).
-    if mismatched > 0 || missing > 0 {
+    // The workflow content check joins the same policy (issue #1350): a
+    // workflow whose bytes moved since the run is a finding; an
+    // unverifiable one (missing/unreadable at the recorded path) is not.
+    let workflow_content_changed = workflow_content_check
+        .as_ref()
+        .is_some_and(|c| c.status == "changed");
+    if mismatched > 0 || missing > 0 || workflow_content_changed {
         std::process::exit(1);
     }
 
@@ -799,6 +923,58 @@ mod tests {
             verify_files(&HashMap::new(), &cleaned, dir.path());
         assert_eq!((matched, mismatched, missing, cleaned_n), (0, 0, 0, 1));
         assert_eq!(entries[0].status, "cleaned");
+    }
+
+    #[test]
+    fn workflow_content_check_classifies_matched_changed_and_unverifiable() {
+        // Issue #1350: the recorded content digest must be re-checked on
+        // verify. Same classification logic every --json consumer sees.
+        let dir = tempfile::tempdir().unwrap();
+        let wf = dir.path().join("wf.oxoflow");
+        fs::write(&wf, "bytes").unwrap();
+        let recorded = oxo_flow_core::executor::checkpoint::compute_file_checksum(&wf).unwrap();
+        let checkpoint = serde_json::json!({
+            "workflow_path": wf.display().to_string(),
+            "workflow_content_hash": recorded,
+        });
+        let matched = check_workflow_content(&checkpoint).unwrap();
+        assert_eq!(matched.status, "matched");
+        assert_eq!(matched.recorded, recorded);
+        assert_eq!(matched.actual.as_deref(), Some(recorded.as_str()));
+
+        // Post-run mutation.
+        fs::write(&wf, "edited").unwrap();
+        let changed = check_workflow_content(&checkpoint).unwrap();
+        assert_eq!(changed.status, "changed");
+        assert_ne!(changed.actual.as_deref(), Some(recorded.as_str()));
+
+        // Missing file at the recorded path (relocated checkpoint).
+        fs::remove_file(&wf).unwrap();
+        let unverifiable = check_workflow_content(&checkpoint).unwrap();
+        assert_eq!(unverifiable.status, "unverifiable");
+        assert!(unverifiable.actual.is_none());
+
+        // No recorded digest / no recorded path → nothing to check (legacy
+        // checkpoints stay check-free, not failed).
+        assert!(check_workflow_content(&serde_json::json!({})).is_none());
+        assert!(
+            check_workflow_content(&serde_json::json!({
+                "workflow_path": wf.display().to_string(),
+            }))
+            .is_none()
+        );
+        // The serialized shape is fixed: status/recorded always present,
+        // actual only when recomputed — deterministic JSON for consumers.
+        let doc = serde_json::to_value(&unverifiable).unwrap();
+        assert_eq!(
+            doc.as_object().unwrap().keys().collect::<Vec<_>>(),
+            vec!["recorded", "status"]
+        );
+        let doc = serde_json::to_value(&changed).unwrap();
+        assert_eq!(
+            doc.as_object().unwrap().keys().collect::<Vec<_>>(),
+            vec!["actual", "recorded", "status"]
+        );
     }
 
     fn map(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {

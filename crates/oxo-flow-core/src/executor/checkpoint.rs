@@ -504,6 +504,20 @@ pub struct CheckpointState {
     /// the file could not be read (best-effort, never fails the run).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workflow_content_hash: Option<String>,
+    /// Override-aware fingerprint of the executed workflow (issue #1350): a
+    /// SHA-256 over the canonical JSON of the raw content digest combined
+    /// with the engine's resolved config snapshot (`config_snapshot`, the
+    /// same order-independent map that drives config-change invalidation —
+    /// built after CLI `--arg` overrides, profile merge, and wildcard
+    /// expansion, with engine-injected keys excluded and sensitive values
+    /// stored as digests). Two runs of the SAME workflow file invoked with
+    /// different overrides share `workflow_content_hash` (raw bytes) but
+    /// never this value. It is an identity label for run-to-run comparison:
+    /// re-deriving it at verify time would need the full invocation
+    /// context, so `provenance verify` re-checks the raw content hash, not
+    /// this fingerprint. `None` when the raw digest could not be recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow_resolved_hash: Option<String>,
     /// Whether the workflow's git repository had uncommitted changes at run
     /// start (issue #1324), from `git status --porcelain`. `Some(true)`
     /// means the executed bytes did NOT come from any commit — the recorded
@@ -790,6 +804,7 @@ impl CheckpointState {
             workflow_path: None,
             workflow_git_sha: None,
             workflow_content_hash: None,
+            workflow_resolved_hash: None,
             workflow_git_dirty: None,
             include_resolutions: BTreeMap::new(),
             env_store_refs: BTreeMap::new(),
@@ -994,6 +1009,12 @@ impl CheckpointState {
     /// executed bytes change — including uncommitted edits.
     pub fn set_workflow_content_hash(&mut self, hash: String) {
         self.workflow_content_hash = Some(hash);
+    }
+
+    /// Record the override-aware workflow fingerprint (issue #1350) — see
+    /// [`CheckpointState::workflow_resolved_hash`].
+    pub fn set_workflow_resolved_hash(&mut self, hash: String) {
+        self.workflow_resolved_hash = Some(hash);
     }
 
     /// Record whether the workflow's git repository had uncommitted changes
@@ -1397,6 +1418,47 @@ pub fn file_is_newer(source: &Path, target: &Path) -> bool {
 /// or an error if the file cannot be read.
 pub fn compute_file_checksum(path: &Path) -> Result<String> {
     hash_file_with_algorithm(path, OutputChecksumAlgorithm::Sha256)
+}
+
+/// Override-aware workflow fingerprint (issue #1350): `sha256:<hex>` over
+/// the canonical JSON of the raw workflow content digest combined with the
+/// engine's resolved config snapshot.
+///
+/// The raw digest alone cannot tell two runs of the same file apart when
+/// they were invoked with different `--arg KEY=VALUE` overrides — it hashes
+/// bytes, not the resolved workflow. This fingerprint hashes the identity
+/// the engine ALREADY canonicalizes for config-change invalidation: the
+/// [`CheckpointState::config_snapshot`] map (post-CLI-override, post-
+/// profile, post-defaults, post-expansion; engine-injected keys excluded;
+/// sensitive values stored as digests, never plaintext). Callers pass that
+/// map as recorded — the fingerprint deliberately derives from the same
+/// structure instead of building a second expansion (expand before
+/// deriving; reuse, never retype).
+///
+/// Serialization is order-independent by construction: the snapshot is a
+/// `BTreeMap`, and `serde_json` emits its entries in sorted key order, so
+/// the same resolved state always hashes to the same digest regardless of
+/// insertion order. The `format` tag versions the canonical form, letting a
+/// future change to the snapshot shape coexist with old checkpoints.
+pub fn compute_workflow_resolved_hash(
+    workflow_content_hash: &str,
+    config_snapshot: &BTreeMap<String, String>,
+) -> String {
+    #[derive(serde::Serialize)]
+    struct ResolvedWorkflowIdentity<'a> {
+        format: &'static str,
+        workflow_content_hash: &'a str,
+        config_snapshot: &'a BTreeMap<String, String>,
+    }
+    let identity = ResolvedWorkflowIdentity {
+        format: "oxo-flow.resolved-workflow/v1",
+        workflow_content_hash,
+        config_snapshot,
+    };
+    let canonical = serde_json::to_vec(&identity)
+        .expect("serializing the resolved-workflow identity cannot fail");
+    use sha2::Digest;
+    format!("sha256:{}", hex::encode(sha2::Sha256::digest(&canonical)))
 }
 
 /// The digest algorithm a rule's outputs are checksummed with (issue #1013
@@ -4372,6 +4434,82 @@ mod tests {
         let json = CheckpointState::new().to_json().unwrap();
         assert!(!json.contains("workflow_content_hash"));
         assert!(!json.contains("workflow_git_dirty"));
+    }
+
+    #[test]
+    fn workflow_resolved_hash_roundtrip_and_legacy_default() {
+        // Issue #1350: the override-aware fingerprint survives a save/load
+        // roundtrip and is absent (skip_serializing_if) on a fresh
+        // checkpoint, so a pre-#1350 checkpoint stays byte-identical.
+        let mut state = CheckpointState::new();
+        state.set_workflow_resolved_hash("sha256:cafebabe".to_string());
+        let json = state.to_json().unwrap();
+        let loaded: CheckpointState = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            loaded.workflow_resolved_hash.as_deref(),
+            Some("sha256:cafebabe")
+        );
+        // A checkpoint without the field (legacy) loads as None.
+        let legacy = r#"{"completed_rules":[],"failed_rules":[],"benchmarks":{}}"#;
+        let loaded: CheckpointState = serde_json::from_str(legacy).unwrap();
+        assert!(loaded.workflow_resolved_hash.is_none());
+    }
+
+    #[test]
+    fn resolved_hash_is_byte_stable_and_formatted_like_a_recorded_digest() {
+        // Same inputs → byte-identical digest, `sha256:<hex>` shape. The
+        // canonical form is hashed twice to pin determinism (the same
+        // convention the output-checksum tests follow).
+        let snapshot: BTreeMap<String, String> = [("min_reads", "20000"), ("species", "hg38")]
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        let first = compute_workflow_resolved_hash("sha256:abc", &snapshot);
+        let second = compute_workflow_resolved_hash("sha256:abc", &snapshot);
+        assert_eq!(first, second);
+        assert!(first.starts_with("sha256:"));
+        assert_eq!(first["sha256:".len()..].len(), 64);
+    }
+
+    #[test]
+    fn resolved_hash_separates_runs_the_raw_digest_cannot() {
+        // The whole point (issue #1350): identical raw bytes + different
+        // resolved config → different fingerprint; identical raw bytes +
+        // identical resolved config → identical fingerprint; and a moved
+        // raw digest alone changes it too.
+        let mut snapshot: BTreeMap<String, String> = BTreeMap::new();
+        snapshot.insert("min_reads".to_string(), "20000".to_string());
+        let base = compute_workflow_resolved_hash("sha256:abc", &snapshot);
+        let mut overridden = snapshot.clone();
+        overridden.insert("min_reads".to_string(), "30000".to_string());
+        let overridden_hash = compute_workflow_resolved_hash("sha256:abc", &overridden);
+        assert_ne!(base, overridden_hash);
+        assert_eq!(
+            base,
+            compute_workflow_resolved_hash("sha256:abc", &snapshot)
+        );
+        assert_ne!(
+            base,
+            compute_workflow_resolved_hash("sha256:def", &snapshot)
+        );
+        // Key insertion order cannot leak into the digest: a snapshot built
+        // in reverse pair order hashes identically (BTreeMap canonicalizes).
+        let mut reversed: BTreeMap<String, String> = BTreeMap::new();
+        reversed.insert("species".to_string(), "hg38".to_string());
+        reversed.insert("min_reads".to_string(), "20000".to_string());
+        let mut forward: BTreeMap<String, String> = BTreeMap::new();
+        forward.insert("min_reads".to_string(), "20000".to_string());
+        forward.insert("species".to_string(), "hg38".to_string());
+        assert_eq!(
+            compute_workflow_resolved_hash("sha256:abc", &forward),
+            compute_workflow_resolved_hash("sha256:abc", &reversed)
+        );
+        // The empty snapshot is still a distinct identity (a workflow with
+        // no [config] keys hashes differently from one that has them).
+        assert_ne!(
+            compute_workflow_resolved_hash("sha256:abc", &BTreeMap::new()),
+            base
+        );
     }
 
     #[test]

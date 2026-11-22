@@ -862,12 +862,14 @@ Audit the output-file checksums a run recorded into its checkpoint (CLI→web pa
   "entries": [
     {"file": "gone.txt", "status": "missing"},
     {"file": "out.txt", "status": "matched", "expected": "sha256:…", "actual": "sha256:…"}
-  ]
+  ],
+  "workflow_content_check": {"status": "matched", "recorded": "sha256:…", "actual": "sha256:…"}
 }
 ```
 
 - `entries` — one per audited file, flat (the CLI nests them under `verify` in its `--json` document); `status` is `matched`, `mismatched`, `missing` (vanished output), or `cleaned` (temporary output swept by the end-of-run gate). Checksums use the CLI's `sha256:<hex>` form.
-- `ok` — `true` only when `mismatched == 0 && missing == 0` (mirrors the CLI's exit 1 = drift policy; drift is a 200 finding here, not an HTTP error).
+- `workflow_content_check` — the CLI's workflow-file re-hash verdict (issue #1350): `matched` (the workflow at its recorded path still hashes to the recorded digest), `changed` (bytes moved since the run — a drift finding that drives `ok: false` exactly like output drift), or `unverifiable` (missing/unreadable at its recorded path — reported without failing). `null` when the checkpoint records no content digest (legacy checkpoints).
+- `ok` — `true` only when `mismatched == 0 && missing == 0` and the workflow content check is not `changed` (mirrors the CLI's exit 1 = drift policy; drift is a 200 finding here, not an HTTP error).
 - `note` — present only when the checkpoint carries no stored checksums (the run was created without `provenance: true`): the CLI's hint to re-run with `--provenance`, plus `matched: 0` and empty `entries` (`ok: true`).
 
 Checksum tracking is opt-in: pass `"provenance": true` on Create Run (forwarded as the CLI's `--provenance`) so the run records `sha256` checksums of its outputs into the checkpoint. The endpoint is **read-only** — verification never mutates the checkpoint. The checkpoint lives in the run's own workdir (`runs/<run_id>/.oxo-flow/checkpoint.json`), which no later run writes to, so a run's recorded checksums stay auditable for the life of the run tree (issue #1130 / audit RB-02); only `retry` and `resume-checkpoint` continue in that directory, by design. Errors: `404 NOT_FOUND` (unknown/foreign run), `404 NO_WORKDIR` (run has no workdir), `404 NO_CHECKPOINT` (no checkpoint under the workdir), `400 INVALID_CHECKPOINT` (the CLI rejected the checkpoint as malformed), `500 PROVENANCE_VERIFY_ERROR` (CLI output unparseable — usually a stale binary; set `OXO_FLOW_BIN` to the current one), `503` when runs are not available on this backend.

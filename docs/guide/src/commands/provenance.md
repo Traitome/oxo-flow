@@ -27,10 +27,25 @@ covers only the top-level workflow file; for `[[include]]` workflows the
 identity is that file plus the separately recorded include resolutions
 (`include_resolutions`, their per-include checkout SHAs — see
 [Workflow Versioning](../reference/versioning.md)). When the file was
-dirty at run start, the content hash is the authoritative record: the HEAD
-SHA alone cannot tell two runs of the same uncommitted file apart. The same
-three values appear in the `--json` `verify` document
-(`workflow_git_sha`, `workflow_content_hash`, `workflow_git_dirty`).
+dirty at run start, the content hash is the authoritative record of which
+bytes executed: the HEAD SHA alone cannot tell two runs of the same
+uncommitted file apart.
+
+The content digest is also **verified**, not just recorded (issue #1350):
+verify re-hashes the workflow file named in the checkpoint and compares it
+with the recorded digest. A workflow edited after the run is a
+verification finding — `✗ workflow content check: workflow changed since
+the run …` and exit code 1, exactly like a drifted output checksum. A
+workflow missing or unreadable at its recorded path (e.g. a relocated
+checkpoint) is reported as unverifiable without failing, so the
+output-checksum audit stays usable. Two runs of the same file invoked with
+different `--arg` overrides share the raw digest but never the
+override-aware `workflow_resolved_hash` fingerprint also stored in the
+checkpoint — a run-to-run identity label (see
+[Workflow Versioning](../reference/versioning.md)). The same fields appear
+in the `--json` `verify` document (`workflow_git_sha`,
+`workflow_content_hash`, `workflow_resolved_hash`, `workflow_content_check`
+with `status` `matched`/`changed`/`unverifiable`, `workflow_git_dirty`).
 
 This is essential for reproducible, auditable analysis.
 
@@ -60,6 +75,9 @@ Provenance Verify .oxo-flow/checkpoint.json
 
   • workflow git HEAD: 3f2a1c9d8b7e6f5a4c3d2e1f0a9b8c7d6e5f4a3b
   • workflow path: /home/user/proj/pipeline.oxoflow
+  • workflow content hash: sha256:e3b0c442...
+  • workflow git tree: clean
+  • workflow content check: verified (sha256:e3b0c442...)
 
   ✓ output/sample1.vcf sha256:abc123...
   ✓ output/sample2.vcf sha256:def456...
@@ -80,6 +98,12 @@ Summary: 2 matched, 1 mismatched, 0 missing, 1 cleaned (by design)
   (BAM, FASTQ >100GB) without excessive memory usage.
 - Mismatches and missing files exit with code 1 (useful for CI/CD
   pipelines).
+- A workflow file whose bytes no longer match the recorded
+  `workflow_content_hash` also exits with code 1 (issue #1350): the
+  digest is re-checked on every verify path, checksum coverage or not. An
+  unverifiable file (missing/unreadable at its recorded path) is reported
+  without failing — the output-checksum audit stays usable on relocated
+  checkpoints.
 - Output paths are resolved against the checkpoint's recorded `workdir`
   (the directory the run executed in), not the checkpoint's own
   directory — so the checkpoint can live anywhere (e.g. `.oxo-flow/` on
@@ -102,7 +126,9 @@ When the checkpoint contains no checksums (the run was executed without
 note explaining that checksum tracking was not enabled and lists the
 completed rules from the checkpoint, then exits with code 0. This keeps
 `provenance verify` safe to run on any checkpoint while signaling clearly
-that integrity was not verified.
+that integrity was not verified. The workflow content check (issue #1350)
+is the one exception: it runs on this path too, and a workflow whose bytes
+no longer match the recorded digest still exits with code 1.
 
 ```
 Provenance Verify .oxo-flow/checkpoint.json
@@ -136,15 +162,24 @@ carries nothing else):
       {"file": "output/sample1.vcf", "status": "matched", "expected": "sha256:abc123...", "actual": "sha256:abc123..."},
       {"file": "output/report.html", "status": "mismatched", "expected": "sha256:xxx", "actual": "sha256:yyy"},
       {"file": ".oxo-flow/chunks/chr/chr1.g.vcf.gz", "status": "cleaned", "expected": "sha256:ccc..."}
-    ]
+    ],
+    "workflow_content_hash": "sha256:e3b0c442...",
+    "workflow_resolved_hash": "sha256:9f86d081...",
+    "workflow_content_check": {"status": "matched", "recorded": "sha256:e3b0c442...", "actual": "sha256:e3b0c442..."}
   }
 }
 ```
 
 `entries` is byte-stable: stored files first in sorted path order, then
-cleaned files in sorted path order. When the checkpoint has no stored
-checksums, the document is still emitted with a `note` field describing
-the degradation.
+cleaned files in sorted path order. `workflow_content_check` is `null`
+when the checkpoint records no content digest (legacy checkpoints);
+`status` is `matched` (file re-hashes to the recorded digest), `changed`
+(bytes moved since the run — exit code 1), or `unverifiable` (missing or
+unreadable at its recorded path — `actual` omitted, exit code 0).
+`workflow_resolved_hash` is the override-aware run-identity fingerprint
+described in [Workflow Versioning](../reference/versioning.md). When the
+checkpoint has no stored checksums, the document is still emitted with a
+`note` field describing the degradation.
 
 ## Comparing two checkpoints (`provenance diff`)
 

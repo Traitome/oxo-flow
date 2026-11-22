@@ -494,3 +494,179 @@ fn cli_run_records_workflow_content_hash_and_dirty_flag() {
     assert_eq!(git_head(dir.path()), head_before);
     assert_eq!(v["workflow_git_dirty"].as_bool(), Some(true));
 }
+
+/// Issue #1350: `workflow_content_hash` digests the workflow's RAW bytes,
+/// so two runs of the same file with different `--arg KEY=VALUE` overrides
+/// would collide on it. The override-aware `workflow_resolved_hash`
+/// separates them while the raw digest (kept for compatibility) stays put;
+/// identical invocations stay byte-stable on both.
+#[test]
+fn cli_run_records_override_aware_resolved_hash() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("override.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"override\"\nversion = \"1.0.0\"\n\n[config]\nthreshold = 1\n\n[[rules]]\nname = \"gen\"\noutput = [\"out.txt\"]\nshell = \"echo {config.threshold} > {output}\"\n",
+    )
+    .unwrap();
+    let cp = dir.path().join(".oxo-flow/checkpoint.json");
+    let read_checkpoint = || -> serde_json::Value {
+        serde_json::from_str(&fs::read_to_string(&cp).unwrap()).unwrap()
+    };
+
+    oxo_flow_cmd()
+        .args([
+            "run",
+            wf.to_str().unwrap(),
+            "--arg",
+            "threshold=1",
+            "--provenance",
+        ])
+        .current_dir(dir.path())
+        .assert()
+        .success();
+    let first = read_checkpoint();
+    let raw_hash = first["workflow_content_hash"].as_str().unwrap().to_string();
+    let resolved_1 = first["workflow_resolved_hash"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // Same file, different override: the raw digest MUST NOT move (the
+    // #1325 finding), the resolved fingerprint MUST.
+    oxo_flow_cmd()
+        .args([
+            "run",
+            wf.to_str().unwrap(),
+            "--arg",
+            "threshold=2",
+            "--provenance",
+        ])
+        .current_dir(dir.path())
+        .assert()
+        .success();
+    let second = read_checkpoint();
+    assert_eq!(
+        second["workflow_content_hash"].as_str().unwrap(),
+        raw_hash,
+        "raw-bytes digest is override-blind by construction and must stay put"
+    );
+    let resolved_2 = second["workflow_resolved_hash"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_ne!(
+        resolved_1, resolved_2,
+        "two override-driven runs of the same file must not share the resolved fingerprint"
+    );
+
+    // Back to the first invocation: the fingerprint is a deterministic
+    // function of (raw digest, resolved config) — byte-stable JSON
+    // identity, no timestamps in the derivation.
+    oxo_flow_cmd()
+        .args([
+            "run",
+            wf.to_str().unwrap(),
+            "--arg",
+            "threshold=1",
+            "--provenance",
+        ])
+        .current_dir(dir.path())
+        .assert()
+        .success();
+    let third = read_checkpoint();
+    assert_eq!(
+        third["workflow_resolved_hash"].as_str().unwrap(),
+        resolved_1,
+        "same file + same overrides must reproduce the identical fingerprint"
+    );
+}
+
+/// Issue #1350 finding 2: `provenance verify` re-hashes the workflow file
+/// named in the checkpoint and compares it with the recorded
+/// `workflow_content_hash`. A workflow edited after the run is a
+/// verification finding (exit 1, JSON `workflow_content_check.status =
+/// "changed"`); a relocated checkpoint whose workflow file is gone is
+/// reported as unverifiable WITHOUT failing (the output checksums stay the
+/// audit's subject).
+#[test]
+fn cli_provenance_verify_catches_workflow_mutation() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("mutated.oxoflow");
+    let v1 = "[workflow]\nname = \"mutated\"\nversion = \"1.0.0\"\n\n[[rules]]\nname = \"gen\"\noutput = [\"out.txt\"]\nshell = \"echo hi > {output}\"\n";
+    fs::write(&wf, v1).unwrap();
+
+    oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap(), "--provenance"])
+        .current_dir(dir.path())
+        .assert()
+        .success();
+    let cp = dir.path().join(".oxo-flow/checkpoint.json");
+
+    // Clean state: the file still hashes to the recorded digest.
+    let out = oxo_flow_cmd()
+        .args(["provenance", "verify", cp.to_str().unwrap(), "--json"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let check = &v["verify"]["workflow_content_check"];
+    assert_eq!(check["status"].as_str(), Some("matched"), "{v}");
+    assert_eq!(check["recorded"], v["verify"]["workflow_content_hash"]);
+    assert!(check["actual"].is_string(), "{v}");
+    assert!(v["verify"]["workflow_resolved_hash"].is_string(), "{v}");
+
+    // Post-run mutation: the recorded bytes no longer match the file —
+    // verify must say so and exit 1.
+    fs::write(&wf, format!("{v1}\n# post-run edit\n")).unwrap();
+    let out = oxo_flow_cmd()
+        .args(["provenance", "verify", cp.to_str().unwrap(), "--json"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "a changed workflow is a verification finding: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let check = &v["verify"]["workflow_content_check"];
+    assert_eq!(check["status"].as_str(), Some("changed"), "{v}");
+    assert_ne!(
+        check["actual"].as_str().unwrap(),
+        check["recorded"].as_str().unwrap()
+    );
+
+    // Relocated checkpoint (workflow file gone): unverifiable — reported,
+    // not failed, so the output-checksum audit stays usable.
+    fs::remove_file(&wf).unwrap();
+    let out = oxo_flow_cmd()
+        .args(["provenance", "verify", cp.to_str().unwrap(), "--json"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let check = &v["verify"]["workflow_content_check"];
+    assert_eq!(check["status"].as_str(), Some("unverifiable"), "{v}");
+    assert!(
+        check.get("actual").is_none() || check["actual"].is_null(),
+        "{v}"
+    );
+    // The output checksums were unaffected by the workflow mutation and the
+    // removal — they still verify.
+    assert_eq!(v["verify"]["matched"].as_u64(), Some(1), "{v}");
+    assert_eq!(v["verify"]["mismatched"].as_u64(), Some(0), "{v}");
+}
