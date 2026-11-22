@@ -776,7 +776,7 @@ mod tests {
 
     #[test]
     fn accepts_every_gallery_workflow() {
-        // The gallery is the compatibility floor: all 16 must stay E017-clean.
+        // The gallery is the compatibility floor: all 17 must stay E017-clean.
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/gallery");
         let mut checked = 0;
         for entry in std::fs::read_dir(&dir).expect("gallery directory exists") {
@@ -793,7 +793,7 @@ mod tests {
             );
             checked += 1;
         }
-        assert_eq!(checked, 16, "expected the full 16-workflow gallery");
+        assert_eq!(checked, 17, "expected the full 17-workflow gallery");
     }
 
     /// Convert parsed workflow TOML into a JSON value for schema validation.
@@ -862,7 +862,7 @@ mod tests {
             );
             checked += 1;
         }
-        assert_eq!(checked, 16, "expected the full 16-workflow gallery");
+        assert_eq!(checked, 17, "expected the full 17-workflow gallery");
     }
 
     #[test]
