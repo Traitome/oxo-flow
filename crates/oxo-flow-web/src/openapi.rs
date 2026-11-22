@@ -90,6 +90,8 @@ impl Modify for SecurityAddon {
         crate::domains::execution::handlers::get_run_instances,
         crate::domains::execution::handlers::clean_run,
         crate::domains::execution::handlers::resume_checkpoint,
+        crate::domains::execution::handlers::apply_repair_run,
+        crate::domains::execution::handlers::get_run_repair,
         crate::domains::execution::handlers::get_run_logs,
         crate::domains::execution::handlers::get_run_results,
         crate::domains::execution::handlers::retry_run,

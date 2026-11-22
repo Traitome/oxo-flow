@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  applyRepairArgs,
   cleanArgs,
   dryRunArgs,
   formatArgs,
@@ -60,6 +61,26 @@ test("graph/resume/template/format/schema args", () => {
   assert.deepEqual(formatArgs("p.oxoflow"), ["format", "p.oxoflow"]);
   assert.deepEqual(formatArgs("p.oxoflow", "out.oxoflow"), ["format", "p.oxoflow", "-o", "out.oxoflow"]);
   assert.deepEqual(schemaArgs(), ["schema"]);
+});
+
+// Issue #1302: the extension's apply-repair surface shells the SAME CLI path
+// the parity harness (tests/remediation_continuity.rs) proves end-to-end —
+// this test pins the exact argv shape that harness leg C replays.
+test("applyRepairArgs routes run --apply-patch with optional --workdir", () => {
+  assert.deepEqual(applyRepairArgs("p.oxoflow", "reviewed.oxoflow"), [
+    "run",
+    "p.oxoflow",
+    "--apply-patch",
+    "reviewed.oxoflow",
+  ]);
+  assert.deepEqual(applyRepairArgs("workflow.oxoflow", "reviewed.oxoflow", "runs/r1"), [
+    "run",
+    "workflow.oxoflow",
+    "--apply-patch",
+    "reviewed.oxoflow",
+    "--workdir",
+    "runs/r1",
+  ]);
 });
 
 test("cleanArgs/statusArgs", () => {

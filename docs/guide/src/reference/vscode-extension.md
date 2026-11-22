@@ -182,6 +182,7 @@ title bar.
 | Format Document | `oxo-flow format <file>` |
 | Show DAG Graph (<kbd>Cmd/Ctrl+Alt+G</kbd>) | `oxo-flow graph <file> [-f <format>]` — quick pick over `ascii`, `mermaid`, `dot`, `dot-clustered`, `tree`, `metro` (last choice remembered) |
 | Resume from Checkpoint | `oxo-flow resume <checkpoint>` (quick pick over `**/.oxo-flow/checkpoint.json`) |
+| Apply Reviewed Repair… | `oxo-flow run <workflow> --apply-patch <patch> --workdir <workdir>` — pick a failed run's checkpoint, then the reviewed patch file (see below) |
 | Show Run Status | `oxo-flow status <checkpoint> --timing` (quick pick over checkpoint files) |
 | Clean Outputs… | `oxo-flow clean <file> -n` preview → confirmation → `--force` (optionally `--orphans`) |
 | Generate Pipeline with AI… | CLI backend: `oxo-flow template "<description>" --ai -o <file>` as a task; editor-model backend: `oxo-flow validate` gate before writing (see [AI pipeline generation](#ai-pipeline-generation)) |
@@ -216,10 +217,38 @@ a dedicated terminal panel, re-run support, and `tasks.json` customization:
 ```
 
 `kind` selects the lifecycle: `run` (default), `dry-run`, `graph`,
-`resume`, or `generate`. For `resume`, `workflow` holds the checkpoint path
+`resume`, `generate`, or `apply-repair`. For `resume`, `workflow` holds the checkpoint path
 (e.g. `.oxo-flow/checkpoint.json`); for `generate`, the task runs
 `oxo-flow template "<description>" --ai -o <file>` with `extraArgs[0]` as
-the description.
+the description; for `apply-repair`, the task runs
+`oxo-flow run <workflow> --apply-patch <patch> --workdir <workdir>` with the
+`patch` and `workdir` definition fields.
+
+### Apply Reviewed Repair (remediation continuity)
+
+**Apply Reviewed Repair…** closes the third surface of the self-healing loop
+(issue #1302): a repair patch a human reviewed — or another surface produced —
+is applied through the SAME CLI verified-repair path everywhere, so the
+reviewed patch is the thing that actually runs, with the same
+`REPAIR_APPLIED` / `REPAIR_RERUN_*` narration and the same checkpoint
+`repair_record` on every surface. The command:
+
+1. Quick-picks a failed run's checkpoint (`**/.oxo-flow/checkpoint.json`).
+2. Resolves the workflow: the workdir's staged `workflow.oxoflow`
+   (web-created runs) when present, else the pipeline picker.
+3. Asks for the reviewed patch document — a whole `.oxoflow` workflow in the
+   exact shape the CLI's `apply_fix` writes (no diff grammar).
+4. Executes `oxo-flow run <workflow> --apply-patch <patch> --workdir
+   <workdir>` as a task.
+
+The extension shells the CLI binary, so the extension's apply path IS the
+CLI path by construction; the cross-surface parity harness
+(`tests/remediation_continuity.rs` in the repository) proves the applied
+workflow and the `REPAIR_*` checkpoint outcome converge across the CLI, the
+web route (`POST /api/runs/{id}/apply-repair`), and this extension argv.
+The patch applies only when a rule fails during the re-attempt, and the CLI
+validates it against the workflow it replaces before any write — a patch
+that would drop rules or sections is refused, never blind-written.
 
 ## Settings
 

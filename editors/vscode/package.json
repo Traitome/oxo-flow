@@ -168,6 +168,12 @@
         "icon": "$(debug-restart)"
       },
       {
+        "command": "oxo-flow.applyRepair",
+        "title": "Apply Reviewed Repair…",
+        "category": "oxo-flow",
+        "icon": "$(wrench)"
+      },
+      {
         "command": "oxo-flow.generate",
         "title": "Generate Pipeline with AI…",
         "category": "oxo-flow",
