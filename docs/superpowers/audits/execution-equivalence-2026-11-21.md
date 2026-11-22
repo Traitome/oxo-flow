@@ -236,7 +236,7 @@ authoring of the three-way sources.
 | Truth table (author-written) | `scripts/execution_equivalence_expectations.py` |
 | Hermetic tests | `eval/scripts/test_execution_equivalence.py` |
 | Fixtures | `tests/fixtures/execution-equivalence/{rnaseq_chain,qc_stats,expand_filter}/{workflow.oxoflow,main.nf,Snakefile,data/s{1,2,3}.fastq}` |
-| Raw records JSON | `execution-equivalence-records.json` written by the runner into its scratch dir (reproduce with §3) |
+| Raw records JSON | `execution-equivalence-records.json` written by the runner into its scratch dir (reproduce with §3); ephemeral for the recorded campaign unless `EQ_RECORDS_PATH` is set — see §9 |
 
 Fixture source-file SHA-256 (identity of what was executed):
 
@@ -259,3 +259,42 @@ Measurement host facts (`tx-ubuntu`, captured immediately around the run):
 Nextflow `26.10.6 build 15032`; Snakemake `9.27.2`; OpenJDK `21.0.11`;
 `Linux 6.8.0-137-generic x86_64`; Ubuntu `24.04.4 LTS`; 4 CPUs; oxo-flow
 `0.32.0`; container `python@sha256:5e2bdb…a4fa5b` (docker id `3617028275c0`).
+
+## 9. Instrument amendment (2026-11-22, post-campaign)
+
+The #1304 deliverable asks the harness to record per run: engine version,
+exact command, wall time, peak RSS, disk I/O, exit code, declared-output
+SHA-256 set equality, restart-into-cache behavior, and
+unsupported-construct/exclusion notes. The recorded campaign above (§2–§8)
+was produced by runner `2670c7f04071228ece8dfde7fe6d08c327169f4e5c4c8a35af3ffc0dfed1500a`
+and wrapper `b4440c72191e60435822a2ab355e9bff66e463a21a3a0a3de727a28d1b5d43a5`
+— those §2 pins remain the authoritative binding FOR THE RECORDED DATA, and
+the runner now on disk is a deliberate post-campaign extension of the same
+instrument, not the binary that produced §5:
+
+- **Added, per arm record**: `engine_version` (each arm's own
+  `--version`/`-version` answer, previously recorded only as campaign-level
+  host facts in §2/§8), and `usage` — `peak_rss_rusage_maxrss` (the
+  `RUSAGE_CHILDREN` high-water mark: OS-dependent units, KiB on Linux / bytes
+  on macOS, and exact per-run attribution only when a run exceeds its
+  predecessors — recorded as-is, never fabricated) plus
+  `block_io_in_delta` / `block_io_out_delta` (exact `ru_inblock`/`ru_oublock`
+  deltas over the reaped child tree; populated on Linux, 0 on macOS).
+- **Added, durability**: `EQ_RECORDS_PATH` — the raw per-run records JSON is
+  otherwise ephemeral (the wrapper deletes its scratch dir on exit, so the
+  §5 tables were the only durable record of the measured campaign). A
+  measured campaign must set it to a committed location.
+- **What the recorded campaign therefore still lacks**: per-run engine
+  version in the raw records, peak RSS, and disk I/O. These fields have NO
+  values in §5 — they did not exist when the triplet ran, and this macOS
+  host cannot re-run the three-engine campaign (no nextflow/snakemake).
+  The next `tx-ubuntu` campaign must re-run the extended instrument, populate
+  the fields, and persist the records; its pre-run manifest re-pins the
+  instrument hashes below.
+
+Extended instrument hashes (this amendment's tree): runner
+`e6421379bf7610e7d9099478725547a3740137dd0e6f48231ad3b44ae3d7d59d`, wrapper
+`647f272e45b831b16bce24c74a8d37835a75c9409bc1458b24743ff067cfe522`
+(truth table unchanged: `1362c93b66b601a140f16c87e9c7b93898815a6e2606fd8d9c3b83227c58e4f1`).
+Hermetic coverage of the new contracts: `eval/scripts/test_execution_equivalence.py`
+(`PerRunRecordingTests`).

@@ -25,6 +25,7 @@ Usage: execution_equivalence_run.py <repo_root> <oxo-flow-bin> <scratch-dir>
 import hashlib
 import json
 import os
+import resource
 import shlex
 import shutil
 import subprocess
@@ -70,25 +71,58 @@ def stage_arm(fixture_dir, dest):
 
 
 def run(cmd, cwd, env):
+    """Run one arm, returning (exit, seconds, tail, usage-delta).
+
+    The usage delta is measured around the child with
+    resource.getrusage(RUSAGE_CHILDREN): ru_inblock/ru_oublock are deltas over
+    exactly this child's reaped process tree (the runner is sequential), while
+    ru_maxrss is a HIGH-WATER mark across all reaped children so far -- a run
+    lighter than a predecessor cannot be attributed its own exact peak, so the
+    value is recorded as-is with that semantics documented, never fabricated.
+    """
+    before = resource.getrusage(resource.RUSAGE_CHILDREN)
     start = time.monotonic()
     try:
         proc = subprocess.run(cmd, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                               text=True, timeout=1800)
-        return proc.returncode, time.monotonic() - start, proc.stdout
+        rc = proc.returncode
+        tail = proc.stdout
     except subprocess.TimeoutExpired:
-        return 124, time.monotonic() - start, "TIMEOUT"
+        rc, tail = 124, "TIMEOUT"
     except FileNotFoundError as exc:
-        return 127, time.monotonic() - start, str(exc)
+        rc, tail = 127, str(exc)
+    after = resource.getrusage(resource.RUSAGE_CHILDREN)
+    usage = {
+        # ru_maxrss unit is OS-dependent (KiB on Linux, bytes on macOS).
+        "peak_rss_rusage_maxrss": after.ru_maxrss,
+        "block_io_in_delta": after.ru_inblock - before.ru_inblock,
+        "block_io_out_delta": after.ru_oublock - before.ru_oublock,
+        "block_io_units": "ru_inblock/ru_oublock deltas (blocks); "
+                          "peak_rss_rusage_maxrss is an OS-dependent-unit "
+                          "high-water across reaped children, not a per-run "
+                          "exact peak when a predecessor was heavier",
+    }
+    return rc, time.monotonic() - start, tail, usage
+
+
+def engine_version(cmd):
+    """Best-effort engine version string; None when the engine won't tell."""
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    line = (proc.stdout or proc.stderr or "").strip().splitlines()
+    return line[0].strip() if line else None
 
 
 def arm_plan(arm, fixture, dest, oxo_bin):
-    """(cmd, cwd, env, restart_cmd) for one arm, or None if unreachable."""
+    """(cmd, cwd, env, restart_cmd, version_cmd) for one arm, or None."""
     env = dict(os.environ)
     entry = EXP.ENTRY[arm]
     if arm == "oxo-flow":
         cmd = [oxo_bin, "run", entry, "-j", "2"]
-        return cmd, dest, env, list(cmd)
+        return cmd, dest, env, list(cmd), [oxo_bin, "--version"]
     if arm == "nextflow":
         nxf = os.environ.get("EQ_NEXTFLOW_BIN", "nextflow")
         if not which(nxf):
@@ -97,7 +131,7 @@ def arm_plan(arm, fixture, dest, oxo_bin):
         work = os.path.join(dest, "..", fixture + "-nxf-work")
         env["NXF_HOME"] = os.path.join(dest, "..", "nxf-home")
         base = [nxf, "run", entry, "-work-dir", work, "-ansi-log", "false"] + prof
-        return base, dest, env, base + ["-resume"]
+        return base, dest, env, base + ["-resume"], [nxf, "-version"]
     if arm == "snakemake":
         smk = os.environ.get("EQ_SNAKEMAKE_BIN", "snakemake")
         if not which(smk):
@@ -108,7 +142,7 @@ def arm_plan(arm, fixture, dest, oxo_bin):
                 "-j", "2"]
         extra = shlex.split(os.environ.get("EQ_SNAKEMAKE_EXTRA", ""))
         base += extra
-        return base, dest, env, list(base)
+        return base, dest, env, list(base), [smk, "--version"]
     raise KeyError(arm)
 
 
@@ -132,15 +166,17 @@ def run_arm(fixture_dir, fixture, arm, scratch, oxo_bin):
            "outputs": {}, "missing": list(EXP.get(fixture)["declared_outputs"]),
            "restart_exit": None, "restart_same": None,
            "notes": list(ARM_NOTES.get(arm, [])), "command": None,
-           "why": None}
+           "engine_version": None, "usage": None, "why": None}
     if plan is None:
         rec["why"] = "engine binary not reachable on PATH"
         return rec
-    cmd, cwd, env, restart_cmd = plan
+    cmd, cwd, env, restart_cmd, version_cmd = plan
     rec["command"] = " ".join(cmd)
-    rc, secs, tail = run(cmd, cwd, env)
+    rec["engine_version"] = engine_version(version_cmd)
+    rc, secs, tail, usage = run(cmd, cwd, env)
     rec["exit"] = rc
     rec["seconds"] = round(secs, 2)
+    rec["usage"] = usage
     outputs, missing = collect_outputs(dest, EXP.get(fixture)["declared_outputs"])
     rec["outputs"] = outputs
     rec["missing"] = missing
@@ -153,7 +189,7 @@ def run_arm(fixture_dir, fixture, arm, scratch, oxo_bin):
         return rec
     rec["ran"] = True
     # restart-into-cache: run again, expect exit 0 with unchanged outputs.
-    rrc, _rsecs, _tail = run(restart_cmd, cwd, env)
+    rrc, _rsecs, _tail, _rusage = run(restart_cmd, cwd, env)
     rec["restart_exit"] = rrc
     again, _m = collect_outputs(dest, EXP.get(fixture)["declared_outputs"])
     rec["restart_same"] = (again == outputs)
@@ -247,6 +283,17 @@ def main():
     with open(out_path, "w") as fh:
         json.dump(report, fh, indent=2, sort_keys=True)
     print("raw records: %s" % out_path)
+
+    # Durable records: the scratch dir is deleted by the wrapper on exit, so a
+    # campaign that wants its raw per-run records persisted (ledger §8 raw
+    # run-level data) sets EQ_RECORDS_PATH to a committed location. The
+    # default stays ephemeral: a host without the toolchain would otherwise
+    # litter SKIPPED-only records into the repo.
+    keep_path = os.environ.get("EQ_RECORDS_PATH", "")
+    if keep_path:
+        os.makedirs(os.path.dirname(os.path.abspath(keep_path)), exist_ok=True)
+        shutil.copyfile(out_path, keep_path)
+        print("raw records persisted: %s" % keep_path)
 
     return 1 if tally["DRIFTED"] else 0
 
