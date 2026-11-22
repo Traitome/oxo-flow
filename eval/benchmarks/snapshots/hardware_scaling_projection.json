@@ -1,0 +1,71 @@
+{
+  "evidence_mode": "model_projection",
+  "inferential": false,
+  "host_inventory": {
+    "os": "Darwin",
+    "cores": 10,
+    "numa_nodes": 1,
+    "total_memory_gb": 24.0
+  },
+  "target_topology": {
+    "description": "Dual-socket AMD EPYC 9654 model (128 physical Zen4 cores, 256 threads, 768 MB L3 cache, 12-channel DDR5-4800, four PCIe 5.0 NVMe scratch devices)",
+    "provenance": "fixed model assumption, not inventory"
+  },
+  "results": [
+    {
+      "config_name": "Monolithic NFS + OS Scheduler",
+      "description": "Default Linux CFS scheduler without NUMA affinity; all intermediate I/O directed to shared NFS volume",
+      "cohort_size": 10000,
+      "wall_time_hours": 1445.31,
+      "samples_per_hour": 6.92,
+      "l3_cache_miss_rate_pct": 18.4,
+      "remote_numa_access_pct": 48.2,
+      "interconnect_bandwidth_gbps": 112.5,
+      "io_wait_time_pct": 34.8,
+      "peak_memory_gb": 384.0,
+      "energy_kwh": 939.5,
+      "n_runs": 1,
+      "wall_time_ci_hours": null,
+      "throughput_ci_samples_per_hour": null,
+      "run_ids": null,
+      "seeds": null
+    },
+    {
+      "config_name": "oxo-flow NUMA-Pinned + Monolithic NFS",
+      "description": "Engine dynamically discovers NUMA sockets; memory-bound alignment tasks bound to local socket DDR channels",
+      "cohort_size": 10000,
+      "wall_time_hours": 1098.44,
+      "samples_per_hour": 9.1,
+      "l3_cache_miss_rate_pct": 6.1,
+      "remote_numa_access_pct": 4.3,
+      "interconnect_bandwidth_gbps": 28.7,
+      "io_wait_time_pct": 31.2,
+      "peak_memory_gb": 340.0,
+      "energy_kwh": 637.1,
+      "n_runs": 1,
+      "wall_time_ci_hours": null,
+      "throughput_ci_samples_per_hour": null,
+      "run_ids": null,
+      "seeds": null
+    },
+    {
+      "config_name": "oxo-flow NUMA-Pinned + 4-Tier NVMe/RAM Scratch",
+      "description": "NUMA core pinning combined with Tier 0 tmpfs FIFO piping and local high-speed NVMe scratch tiering",
+      "cohort_size": 10000,
+      "wall_time_hours": 679.3,
+      "samples_per_hour": 14.72,
+      "l3_cache_miss_rate_pct": 5.4,
+      "remote_numa_access_pct": 3.8,
+      "interconnect_bandwidth_gbps": 22.4,
+      "io_wait_time_pct": 7.6,
+      "peak_memory_gb": 285.0,
+      "energy_kwh": 353.2,
+      "n_runs": 1,
+      "wall_time_ci_hours": null,
+      "throughput_ci_samples_per_hour": null,
+      "run_ids": null,
+      "seeds": null
+    }
+  ],
+  "interpretation_warning": "Deterministic model projection; not empirical evidence."
+}

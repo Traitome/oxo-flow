@@ -11,7 +11,10 @@ Honesty note: the committed status reports are hand-authored documents that
 embed measured rows; the generators in ``eval/benchmarks`` and
 ``eval/frontier`` emit the raw measurement *tables*. Neither regenerates the
 committed reports byte-for-byte, and this tool does not claim that. It records
-the true provenance of the measured numbers that appear in the reports.
+the true provenance of the measured numbers that appear in the reports, and —
+since the #1305 closure amendment — the generator-run provenance of the three
+non-measured reports too (their generator outputs are snapshot-committed under
+``eval/benchmarks/snapshots/`` and drift-gated by ``make reports-regen``).
 
 Usage:
   python3 eval/benchmarks/provenance_manifest.py --emit eval/benchmarks/provenance_manifest.json
@@ -428,6 +431,62 @@ def default_report_paths() -> list:
     return discover_report_paths()
 
 
+def _generator_relationship_entry(
+    generator_path: str, generator_sha256: str,
+    generator_command: str, seeds: dict, snapshot_path: str,
+) -> dict:
+    """Provenance for a NON-MEASURED report's generator relationship (#1305).
+
+    These reports state an evidence status (simulation only / MODEL PROJECTION
+    / tooling validation only) and carry no measured numbers, so there is no
+    measurement to attribute. What CAN be pinned — and what the #1305 closure
+    amendment pins — is the generator run behind each report's committed
+    snapshot: the exact command, the commit whose tree it ran on, the host it
+    ran on, the tool versions, the generator script's content hash, and the
+    generator's seeds. ``make reports-regen`` byte-gates each snapshot against
+    the generator's current output (host-dependent fields excluded by name,
+    never silently). The report body itself stays hand-authored.
+    """
+    return {
+        "source_commit": "cc211ae883a11e0c4c7ea31b939e6aca62248b26",
+        "generator_command": generator_command,
+        "host": {
+            "os": "macOS 27.0.1 / Darwin 27.0.0 arm64",
+            "cpu": "Mac17,2",
+            "logical_cores": 10,
+            "memory_bytes": 25769803776,
+        },
+        "tool_versions": {
+            "python3": "3.13.9",
+        },
+        "seeds": seeds,
+        "inputs": [
+            {
+                "path": generator_path,
+                "sha256": generator_sha256,
+            },
+            {
+                "path": snapshot_path,
+                "sha256": _sha256_of(os.path.join(REPO_ROOT, snapshot_path)),
+            },
+        ],
+        "note": (
+            "Hand-authored status document with no measured numbers; this "
+            "entry pins the generator RUN behind the committed snapshot (%s), "
+            "not a measurement. The snapshot is regenerated and byte-diffed by "
+            "`make reports-regen` (host-dependent fields excluded by name in "
+            "eval/benchmarks/reports_regen.py)."
+        ) % snapshot_path,
+    }
+
+
+def _sha256_of(path: str) -> str:
+    import hashlib
+
+    with open(path, "rb") as fh:
+        return hashlib.sha256(fh.read()).hexdigest()
+
+
 def _implementation_plan_entry() -> dict:
     """Provenance for the measured AI-repair row in the implementation plan.
 
@@ -495,6 +554,14 @@ def build_manifest() -> dict:
                 "sha256": "81bf9bab8fb253b35f1f04575650c7ea573db878a9fd04957378c7788748809f",
             }
         ],
+        "seeds": {
+            "cohort_generation": 42,
+            "note": (
+                "cohort_driver.generate_cohort default seed (unchanged across "
+                "the recorded commit); the wall-time values are unseeded host "
+                "timings"
+            ),
+        },
         "note": (
             "Pins the section 2 reproduction block. The section 1 row (118.69 ms) "
             "is UNPINNED and documented as such; it is not attributable to this commit."
@@ -502,8 +569,38 @@ def build_manifest() -> dict:
     }
     artifacts = {
         "docs/superpowers/plans/cohort-scaling-report.md": cohort_entry,
+        "docs/superpowers/plans/hardware-scaling-report.md": (
+            _generator_relationship_entry(
+                "eval/benchmarks/hardware_scaling.py",
+                "e3e4bfc9e3b5d6cb5aa75ff7fa1e79aa899b47b27567aef60c9629f4b71d4758",
+                "python3 eval/benchmarks/hardware_scaling.py --allow-simulation "
+                "--out-json eval/benchmarks/snapshots/hardware_scaling_projection.json",
+                {"note": "none — deterministic fixed-factor model, no RNG"},
+                "eval/benchmarks/snapshots/hardware_scaling_projection.json",
+            )
+        ),
         "docs/superpowers/plans/industrial-scientific-implementation-plan.md": (
             _implementation_plan_entry()
+        ),
+        "docs/superpowers/plans/statistical-benchmark-report.md": (
+            _generator_relationship_entry(
+                "eval/frontier/statistical_report.py",
+                "f1e90246b20e893c25963e83b03029ea380a6f960871addface65b78c9529c44",
+                "python3 eval/frontier/statistical_report.py --synthetic-fixture "
+                "--out-md eval/benchmarks/snapshots/statistical_synthetic_fixture.md",
+                {"synthetic_dataset_rng": 12345, "bootstrap_rng": 42},
+                "eval/benchmarks/snapshots/statistical_synthetic_fixture.md",
+            )
+        ),
+        "docs/superpowers/plans/sus-survey-report.md": (
+            _generator_relationship_entry(
+                "eval/benchmarks/sus_survey_analysis.py",
+                "b74453543b0d6351725d051c85b3baa975951df52035bfb06e06a425cdc22291",
+                "python3 eval/benchmarks/sus_survey_analysis.py --out-md "
+                "eval/benchmarks/snapshots/sus_survey_harness_check.md",
+                {"synthetic_fixture_rng": 999},
+                "eval/benchmarks/snapshots/sus_survey_harness_check.md",
+            )
         ),
     }
     return {

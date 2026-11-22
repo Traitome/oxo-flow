@@ -1,0 +1,13 @@
+{
+  "benchmark": "cohort_expansion_latency",
+  "results": [
+    {
+      "num_samples": 10,
+      "dag_nodes": 30,
+      "expansion_latency_ms": 2462.5,
+      "parse_success": true,
+      "measurement_valid": true,
+      "throughput_nodes_per_sec": 12.2
+    }
+  ]
+}

@@ -15,11 +15,42 @@
         }
       ],
       "note": "Pins the section 2 reproduction block. The section 1 row (118.69 ms) is UNPINNED and documented as such; it is not attributable to this commit.",
+      "seeds": {
+        "cohort_generation": 42,
+        "note": "cohort_driver.generate_cohort default seed (unchanged across the recorded commit); the wall-time values are unseeded host timings"
+      },
       "source_commit": "e855fa6a71631237d5973041caf95664af23590d",
       "tool_versions": {
         "cargo": "1.98.0",
         "python3": "3.12.4",
         "rustc": "1.98.0 (88d9e12ae 2026-08-18)"
+      }
+    },
+    "docs/superpowers/plans/hardware-scaling-report.md": {
+      "generator_command": "python3 eval/benchmarks/hardware_scaling.py --allow-simulation --out-json eval/benchmarks/snapshots/hardware_scaling_projection.json",
+      "host": {
+        "cpu": "Mac17,2",
+        "logical_cores": 10,
+        "memory_bytes": 25769803776,
+        "os": "macOS 27.0.1 / Darwin 27.0.0 arm64"
+      },
+      "inputs": [
+        {
+          "path": "eval/benchmarks/hardware_scaling.py",
+          "sha256": "e3e4bfc9e3b5d6cb5aa75ff7fa1e79aa899b47b27567aef60c9629f4b71d4758"
+        },
+        {
+          "path": "eval/benchmarks/snapshots/hardware_scaling_projection.json",
+          "sha256": "fa036645bdfa3c29a53e16a785dbc3be9cab349ba5c4b95914f01347bb41c5de"
+        }
+      ],
+      "note": "Hand-authored status document with no measured numbers; this entry pins the generator RUN behind the committed snapshot (eval/benchmarks/snapshots/hardware_scaling_projection.json), not a measurement. The snapshot is regenerated and byte-diffed by `make reports-regen` (host-dependent fields excluded by name in eval/benchmarks/reports_regen.py).",
+      "seeds": {
+        "note": "none \u2014 deterministic fixed-factor model, no RNG"
+      },
+      "source_commit": "cc211ae883a11e0c4c7ea31b939e6aca62248b26",
+      "tool_versions": {
+        "python3": "3.13.9"
       }
     },
     "docs/superpowers/plans/industrial-scientific-implementation-plan.md": {
@@ -40,6 +71,61 @@
       "tool_versions": {
         "oxo-flow": "0.32.0 (v0.32.0 + verified-repair loop, #1185/#1186/#1187)",
         "python3": "3.12.4"
+      }
+    },
+    "docs/superpowers/plans/statistical-benchmark-report.md": {
+      "generator_command": "python3 eval/frontier/statistical_report.py --synthetic-fixture --out-md eval/benchmarks/snapshots/statistical_synthetic_fixture.md",
+      "host": {
+        "cpu": "Mac17,2",
+        "logical_cores": 10,
+        "memory_bytes": 25769803776,
+        "os": "macOS 27.0.1 / Darwin 27.0.0 arm64"
+      },
+      "inputs": [
+        {
+          "path": "eval/frontier/statistical_report.py",
+          "sha256": "f1e90246b20e893c25963e83b03029ea380a6f960871addface65b78c9529c44"
+        },
+        {
+          "path": "eval/benchmarks/snapshots/statistical_synthetic_fixture.md",
+          "sha256": "0736e979ab61588f03d034e2a15cc97beff06d465d059dbf068c25eb62a89510"
+        }
+      ],
+      "note": "Hand-authored status document with no measured numbers; this entry pins the generator RUN behind the committed snapshot (eval/benchmarks/snapshots/statistical_synthetic_fixture.md), not a measurement. The snapshot is regenerated and byte-diffed by `make reports-regen` (host-dependent fields excluded by name in eval/benchmarks/reports_regen.py).",
+      "seeds": {
+        "bootstrap_rng": 42,
+        "synthetic_dataset_rng": 12345
+      },
+      "source_commit": "cc211ae883a11e0c4c7ea31b939e6aca62248b26",
+      "tool_versions": {
+        "python3": "3.13.9"
+      }
+    },
+    "docs/superpowers/plans/sus-survey-report.md": {
+      "generator_command": "python3 eval/benchmarks/sus_survey_analysis.py --out-md eval/benchmarks/snapshots/sus_survey_harness_check.md",
+      "host": {
+        "cpu": "Mac17,2",
+        "logical_cores": 10,
+        "memory_bytes": 25769803776,
+        "os": "macOS 27.0.1 / Darwin 27.0.0 arm64"
+      },
+      "inputs": [
+        {
+          "path": "eval/benchmarks/sus_survey_analysis.py",
+          "sha256": "b74453543b0d6351725d051c85b3baa975951df52035bfb06e06a425cdc22291"
+        },
+        {
+          "path": "eval/benchmarks/snapshots/sus_survey_harness_check.md",
+          "sha256": "6ff1c8a7b3fb0f4936312c58cfe6a33da9cac73c49a85124a0c28f69a0061598"
+        }
+      ],
+      "note": "Hand-authored status document with no measured numbers; this entry pins the generator RUN behind the committed snapshot (eval/benchmarks/snapshots/sus_survey_harness_check.md), not a measurement. The snapshot is regenerated and byte-diffed by `make reports-regen` (host-dependent fields excluded by name in eval/benchmarks/reports_regen.py).",
+      "seeds": {
+        "synthetic_fixture_rng": 999
+      },
+      "source_commit": "cc211ae883a11e0c4c7ea31b939e6aca62248b26",
+      "tool_versions": {
+        "python3": "3.13.9"
       }
     }
   },
