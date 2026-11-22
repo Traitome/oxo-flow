@@ -528,8 +528,9 @@ fn build_router_with_limiter(
     /// whole `/api/runs*` domain at the router layer gives every run endpoint
     /// one explicit, actionable answer instead of silent empty reads or
     /// spawn-task degradations discovered mid-flight. The check itself is
-    /// backend-agnostic — any initialized backend passes; only execution is
-    /// SQLite-only (live-verified against postgres:16, 2026-11-05).
+    /// backend-agnostic — any initialized backend passes (embedded SQLite or
+    /// PostgreSQL); the 503 fires only when NO backend is initialized
+    /// (live-verified against postgres:16, 2026-11-05).
     async fn require_storage_backend_for_runs(
         req: axum::extract::Request,
         next: axum::middleware::Next,
@@ -1392,7 +1393,7 @@ fn runs_gate_verdict(backend_ready: bool) -> Result<(), (StatusCode, axum::Json<
             detail: Some(
                 "Run lifecycle bookkeeping requires an initialized storage backend \
                  (embedded SQLite, or PostgreSQL with the `postgres` feature); \
-                 run *execution* itself remains SQLite-only."
+                 any initialized backend passes."
                     .into(),
             ),
             suggestion: Some(

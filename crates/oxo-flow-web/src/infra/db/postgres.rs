@@ -430,9 +430,10 @@ impl StorageBackend for PostgresBackend {
         .map_err(|e| format!("PG init schema: {e}"))?;
 
         // Migration for pre-existing postgres databases: the runs table
-        // gained `config_overrides` after #930. Run execution remains
-        // SQLite-only (#207), but keeping the storage contract healthy lets
-        // metadata tools and pre-execution checks work on legacy tables.
+        // gained `config_overrides` after #930. Run lifecycle bookkeeping is
+        // backend-agnostic since #207, but keeping the storage contract
+        // healthy lets metadata tools and pre-execution checks work on
+        // legacy tables.
         sqlx::query("ALTER TABLE runs ADD COLUMN IF NOT EXISTS config_overrides TEXT")
             .execute(&mut *tx)
             .await
