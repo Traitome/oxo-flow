@@ -76,6 +76,49 @@ pub(crate) enum CheckpointLoadMode {
     ReadOnlyPreview,
 }
 
+/// The fail-safe format gate (issue #1309), shared by every command that
+/// loads a checkpoint: a checkpoint written by a NEWER oxo-flow build may
+/// have changed the meaning of the fields this engine still parses, so its
+/// completed-rule set cannot be trusted to match this engine's plan.
+///
+/// Under [`CheckpointLoadMode::Execute`] this returns `Err` — the caller
+/// refuses to start rather than silently skipping rules recorded by a format
+/// it cannot verify. Under [`CheckpointLoadMode::ReadOnlyPreview`] it prints
+/// the degrade warning and hands back a fresh default state, so the preview
+/// plans as if every rule had never completed and stays usable.
+pub(crate) fn gate_checkpoint_format(
+    ck: CheckpointState,
+    checkpoint_path: &Path,
+    mode: CheckpointLoadMode,
+) -> anyhow::Result<CheckpointState> {
+    if ck.compat() != CheckpointCompat::Newer {
+        return Ok(ck);
+    }
+    match mode {
+        CheckpointLoadMode::Execute => Err(anyhow::anyhow!(
+            "checkpoint at {} was written by a NEWER oxo-flow build \
+             (format v{} > this engine v{}); refusing to start because \
+             its completed-rule set cannot be trusted to match this \
+             engine's plan. Re-run from scratch, or use a matching build.",
+            checkpoint_path.display(),
+            ck.checkpoint_format_version,
+            CHECKPOINT_FORMAT_VERSION,
+        )),
+        CheckpointLoadMode::ReadOnlyPreview => {
+            eprintln!(
+                "{} checkpoint at {} was written by a NEWER oxo-flow build \
+                 (format v{} > v{}) — planning as if every rule never \
+                 completed; its recorded state cannot be trusted",
+                "⚠".yellow(),
+                checkpoint_path.display(),
+                ck.checkpoint_format_version,
+                CHECKPOINT_FORMAT_VERSION,
+            );
+            Ok(CheckpointState::default())
+        }
+    }
+}
+
 /// The checkpoint-load phase `run` and `dry-run` share: load from `path`,
 /// adopt for `workflow` (audit B8), and clear stale `running` entries
 /// (issue #685 — the previous run died between spawn and any terminal
@@ -92,42 +135,7 @@ pub(crate) fn load_checkpoint_for_command(
 ) -> anyhow::Result<(CheckpointState, Vec<String>)> {
     let mut state = if checkpoint_path.exists() {
         match CheckpointState::load_from_file(checkpoint_path) {
-            Ok(ck) => {
-                // Fail-safe format gate (issue #1309): a checkpoint written by
-                // a NEWER build may have changed the meaning of the fields
-                // this engine still parses, so its completion set cannot be
-                // trusted. Refuse (Execute) / degrade (preview) rather than
-                // silently skipping rules that may not match this engine's plan.
-                if let CheckpointCompat::Newer = ck.compat() {
-                    match mode {
-                        CheckpointLoadMode::Execute => {
-                            return Err(anyhow::anyhow!(
-                                "checkpoint at {} was written by a NEWER oxo-flow build \
-                                 (format v{} > this engine v{}); refusing to start because \
-                                 its completed-rule set cannot be trusted to match this \
-                                 engine's plan. Re-run from scratch, or use a matching build.",
-                                checkpoint_path.display(),
-                                ck.checkpoint_format_version,
-                                CHECKPOINT_FORMAT_VERSION,
-                            ));
-                        }
-                        CheckpointLoadMode::ReadOnlyPreview => {
-                            eprintln!(
-                                "{} checkpoint at {} was written by a NEWER oxo-flow build \
-                                 (format v{} > v{}) — planning as if every rule never \
-                                 completed; its recorded state cannot be trusted",
-                                "⚠".yellow(),
-                                checkpoint_path.display(),
-                                ck.checkpoint_format_version,
-                                CHECKPOINT_FORMAT_VERSION,
-                            );
-                            CheckpointState::default()
-                        }
-                    }
-                } else {
-                    ck
-                }
-            }
+            Ok(ck) => gate_checkpoint_format(ck, checkpoint_path, mode)?,
             Err(e) => match mode {
                 CheckpointLoadMode::Execute => {
                     return Err(anyhow::anyhow!(
