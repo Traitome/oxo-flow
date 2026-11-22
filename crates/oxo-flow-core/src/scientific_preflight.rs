@@ -2775,9 +2775,12 @@ name = \"t\"\nversion = \"1.0\"\n\n[[rules]]\nname = \"r1\"\nwhen = 'file_exists
             "JSON ScientificWarning must expose coercion_rule: {json}"
         );
 
-        // A rule-less finding omits the key (no snapshot churn).
+        // A rule-less finding omits the key (no snapshot churn). The code
+        // value is irrelevant to this assertion, so use a neutral non-SCI
+        // literal: the drift guard tallies constant-backed emission sites,
+        // and a test fixture must not inflate that tally.
         let ruleless = ScientificWarning {
-            code: "SCI-AGG-RACE".into(),
+            code: "X-TEST".into(),
             rule: "r".into(),
             message: "m".into(),
             suggestion: "s".into(),
