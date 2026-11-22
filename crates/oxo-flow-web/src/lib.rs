@@ -23,6 +23,7 @@ pub mod infra;
 pub mod openapi;
 pub mod process_control;
 pub mod rate_limit;
+pub mod sandbox;
 pub mod server;
 pub mod sse;
 pub mod sys;

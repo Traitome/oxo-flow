@@ -267,6 +267,37 @@ workflow's declared memory with `RLIMIT_DATA` on the spawned CLI process
 tree; other platforms and remote (cluster) runs remain advisory — see
 [Quota → Declared-resource enforcement](web-api.md#declared-resource-enforcement).
 
+### Tenant execution boundary (RB-01)
+
+Every locally executed run spawns through one choke point
+(`spawn_background_run_with_args`), which layers four independent OS-level
+controls on the CLI process tree (and therefore every rule shell it forks):
+
+1. **Environment allowlist (always on, all platforms, RB-01a)** — the child
+   is rebuilt from the engine's rule-shell policy; server secrets never
+   ride along.
+2. **Resource ceilings (Linux, opt-in)** — `RLIMIT_DATA` from the declared
+   memory, plus operator-wide `RLIMIT_CPU`/`RLIMIT_NPROC` knobs.
+3. **Kernel filesystem/network sandbox (Linux 5.13+, opt-in)** —
+   `OXO_FLOW_WEB_SANDBOX=landlock` installs a Landlock ruleset in a
+   `pre_exec` hook: the spawned tree can read+execute system dirs and the
+   engine binary and write only the run workdir, the per-run scratch dir,
+   and the operator's engine dirs; `/proc`, `/sys`, `/etc`, the server's
+   `$HOME`, the workspace root, and other tenants' workdirs are denied at
+   the kernel level; TCP bind/connect is denied on kernel 6.7+ (ABI v4),
+   abstract-UNIX-socket and signal scoping on 6.10+/6.12+ (ABI v5/v6).
+   Fail-closed: an unhonorable sandbox request refuses the spawn.
+4. **Process-group bookkeeping (always on)** — the run owns a process
+   group, so cancel/pause/resume signal the whole tree.
+
+The implementation lives in `crates/oxo-flow-web/src/sandbox.rs`; the
+enforced-vs-residual matrix, the knob reference, and the two-tenant
+adversarial evidence are in
+[Create Run → Tenant isolation](web-api.md#tenant-isolation-and-the-run-sandbox).
+Per-run OS identities and per-tenant containers remain deployment modes,
+not enforced features — remote (cluster) runs execute on the cluster host
+under the cluster's own controls.
+
 ---
 
 ## API Namespace
