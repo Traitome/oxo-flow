@@ -28,12 +28,13 @@ oxo-flow graph [OPTIONS] <WORKFLOW>
 | `--output <FILE>` | `-o` | Save output to a file (useful for dot/svg generation) |
 | `--expanded` | | Show the DAG after wildcard/sample/scatter expansion (the actual runtime DAG) |
 | `--granularity <LEVEL>` | | `metro` station zoom (metro only): `rule` (one station per rule, default), `process` (chain-connected same-tool rules collapse into tool-named stations — one stop per analysis step), `module` (one station per module section — the publication/overview tier). Passing it with any other format is an error. See [Graph Subcommand Design](../reference/graph-subcommand.md) |
+| `--json` | | Emit the machine-readable DAG document (nodes, edges, parallel groups, critical path, metrics) to stdout — the same structure the web API returns. Cannot be combined with `-f`/`--format` or `--granularity`. See [JSON output](#json-output) |
 | `--verbose` | `-v` | Enable debug-level logging |
 | `--quiet` | | Accepted; has no effect on graph output (the DAG is printed regardless) |
 | `--no-color` | | Disable colored output |
 
 
-> The global `--json` flag is **not supported** by this command — passing it fails fast instead of being silently ignored. Machine-readable output is available from: `run`, `dry-run`, `validate`, `lint`, `test`, `status`, `wait`, `batch`, `info`, `knowledge`, `schema`, `verify-data`, `license`, `ai`, `provenance verify`, `runs gc`, `import`, and `cluster status`/`cancel`/`logs` (see [`init`](init.md#options) for the canonical note).
+> JSON output for `graph` is the global `--json` flag (see [JSON output](#json-output)); it fails fast if combined with a diagram format. Machine-readable output is also available from: `run`, `dry-run`, `validate`, `lint`, `test`, `status`, `wait`, `batch`, `info`, `knowledge`, `schema`, `verify-data`, `license`, `ai`, `provenance verify`, `runs gc`, `import`, and `cluster status`/`cancel`/`logs` (see [`init`](init.md#options) for the canonical note).
 
 ---
 
@@ -284,6 +285,53 @@ section graph, ties by first appearance — so lines flow through them
 without loops (file order alone can violate dataflow in ported workflows);
 cross-section edges are placed outside the sections as nf-metro requires.
 Station labels drop the `module::` prefix.
+
+---
+
+## JSON output
+
+`graph --json` emits a machine-readable DAG document instead of a diagram — the same structure the web API's DAG endpoint returns, built from the same core primitives (`WorkflowDag::metrics`, `parallel_groups`, `critical_path`). Scripts and CI can diff topology and metrics without running the workflow or calling the API:
+
+```bash
+oxo-flow graph pipeline.oxoflow --json
+# Diff-friendly, deterministic (nodes/edges sorted), pipe straight into jq:
+oxo-flow graph pipeline.oxoflow --json | jq '.metrics.critical_path_length'
+oxo-flow graph pipeline.oxoflow --json -o dag.json
+```
+
+The document has five top-level keys:
+
+| Key | Contents |
+|---|---|
+| `nodes` | One entry per rule: `{id, label, color, environment, rule}` (`rule` is the full serialized rule; nodes sorted by `id`) |
+| `edges` | One entry per dependency: `{from, to, kind}` where `kind` is `declared` (explicit `depends_on`) or `file` (inferred input/output match); edges sorted by `from`, then `to`, then `kind` |
+| `parallel_groups` | Rules grouped by topological depth — each inner list is the rules that can run at that level |
+| `critical_path` | The longest dependency chain, as rule names in order |
+| `metrics` | `{node_count, edge_count, max_depth, max_width, critical_path_length, parallel_group_count}` |
+
+```json
+{
+  "nodes": [
+    { "id": "generate_data", "label": "generate_data", "color": "#6B7280", "environment": "system", "rule": { "…": "…" } },
+    { "id": "transform", "label": "transform", "color": "#6B7280", "environment": "system", "rule": { "…": "…" } }
+  ],
+  "edges": [
+    { "from": "generate_data", "to": "transform", "kind": "file" }
+  ],
+  "parallel_groups": [["generate_data"], ["transform"]],
+  "critical_path": ["generate_data", "transform"],
+  "metrics": {
+    "node_count": 2,
+    "edge_count": 1,
+    "max_depth": 2,
+    "max_width": 1,
+    "critical_path_length": 2,
+    "parallel_group_count": 2
+  }
+}
+```
+
+`--json` emits a document, not a diagram: it is rejected when combined with `-f`/`--format` or `--granularity` (which would otherwise be silently ignored). The document goes to stdout; human-readable notices (the save confirmation) stay on stderr, and `-o FILE` writes the JSON to a file with stdout left clean. Without `--json` the diagram output is unchanged.
 
 ---
 
