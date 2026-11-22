@@ -33,12 +33,14 @@ fn parse_json(stdout: &str) -> Value {
         .unwrap_or_else(|e| panic!("stdout must be one JSON document ({e}): {stdout}"))
 }
 
+/// A workflow `env check` accepts on ANY host: neither rule declares a real
+/// backend, so both resolve to `system`, whose `validate_spec` never probes an
+/// external binary. Declaring `conda`/`venv` here would make the "valid"
+/// fixture host-dependent — `validate_spec` is availability-gated, so the
+/// clean case failed on any runner without that backend in PATH (CI incident).
 const WORKFLOW: &str = r#"
 [workflow]
 name = "env-json"
-
-[defaults.environment]
-conda = "envs/default.yaml"
 
 [[rules]]
 name = "step_a"
@@ -47,8 +49,6 @@ shell = "echo hi"
 [[rules]]
 name = "step_b"
 shell = "echo hi"
-[rules.environment]
-venv = ".venv"
 "#;
 
 /// A spec the resolver rejects (modules combined with a real backend), so

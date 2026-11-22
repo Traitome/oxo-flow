@@ -11264,9 +11264,7 @@ fn no_color_suppresses_tracing_ansi_escapes() {
 fn json_flag_fails_fast_on_unsupported_commands() {
     // The global --json was silently ignored by most subcommands: they
     // exited 0 with human text (or nothing) on stdout.
-    for args in [
-        vec!["touch", "wf.oxoflow", "--json"],
-    ] {
+    for args in [vec!["touch", "wf.oxoflow", "--json"]] {
         let assert = oxo_flow_cmd().args(&args).assert().failure();
         let stderr = String::from_utf8_lossy(&assert.get_output().stderr).to_string();
         assert!(
