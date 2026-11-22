@@ -28,7 +28,7 @@ oxo-flow graph [OPTIONS] <WORKFLOW>
 | `--output <FILE>` | `-o` | Save output to a file (useful for dot/svg generation) |
 | `--expanded` | | Show the DAG after wildcard/sample/scatter expansion (the actual runtime DAG) |
 | `--granularity <LEVEL>` | | `metro` station zoom (metro only): `rule` (one station per rule, default), `process` (chain-connected same-tool rules collapse into tool-named stations — one stop per analysis step), `module` (one station per module section — the publication/overview tier). Passing it with any other format is an error. See [Graph Subcommand Design](../reference/graph-subcommand.md) |
-| `--json` | | Emit the machine-readable DAG document (nodes, edges, parallel groups, critical path, metrics) to stdout — the same structure the web API returns. Cannot be combined with `-f`/`--format` or `--granularity`. See [JSON output](#json-output) |
+| `--json` | | Emit the machine-readable DAG document (nodes, edges, parallel groups, critical path, metrics) to stdout — the same structure the web API returns. Rejected with a non-default diagram format (`-f dot`/`tree`/`mermaid`/`metro`/`dot-clustered`) or with `--granularity`; the default `ascii` format is accepted. See [JSON output](#json-output) |
 | `--verbose` | `-v` | Enable debug-level logging |
 | `--quiet` | | Accepted; has no effect on graph output (the DAG is printed regardless) |
 | `--no-color` | | Disable colored output |
@@ -331,7 +331,7 @@ The document has five top-level keys:
 }
 ```
 
-`--json` emits a document, not a diagram: it is rejected when combined with `-f`/`--format` or `--granularity` (which would otherwise be silently ignored). The document goes to stdout; human-readable notices (the save confirmation) stay on stderr, and `-o FILE` writes the JSON to a file with stdout left clean. Without `--json` the diagram output is unchanged.
+`--json` emits a document, not a diagram: it is rejected when a **non-default** diagram format is requested (`-f dot`/`tree`/`mermaid`/`metro`/`dot-clustered`) or when `--granularity` is passed (metro-only), since either would otherwise be silently ignored. The default `ascii` format is accepted alongside `--json` — the format flag is a no-op for JSON output. The document goes to stdout; human-readable notices (the save confirmation) stay on stderr, and `-o FILE` writes the JSON to a file with stdout left clean. Without `--json` the diagram output is unchanged.
 
 ---
 
