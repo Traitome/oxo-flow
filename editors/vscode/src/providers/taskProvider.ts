@@ -1,5 +1,13 @@
 import * as vscode from "vscode";
-import { dryRunArgs, graphArgs, resumeArgs, runArgs, templateArgs, type GraphFormat } from "../core/cliArgs";
+import {
+  applyRepairArgs,
+  dryRunArgs,
+  graphArgs,
+  resumeArgs,
+  runArgs,
+  templateArgs,
+  type GraphFormat,
+} from "../core/cliArgs";
 
 export const TASK_TYPE = "oxo-flow";
 
@@ -11,10 +19,20 @@ export interface OxoflowTaskDefinition extends vscode.TaskDefinition {
   keepGoing?: boolean;
   /** `graph` tasks only: output format (`-f`, ascii is the CLI default). */
   format?: GraphFormat;
+  /**
+   * `apply-repair` tasks only: the reviewed patch document (whole `.oxoflow`
+   * workflow) passed to `--apply-patch` (issue #1302).
+   */
+  patch?: string;
+  /**
+   * `apply-repair` tasks only: the failed run's workdir forwarded as
+   * `--workdir` when the workflow argument lives outside it.
+   */
+  workdir?: string;
   extraArgs?: string[];
 }
 
-export type TaskKind = "run" | "dry-run" | "graph" | "resume" | "generate";
+export type TaskKind = "run" | "dry-run" | "graph" | "resume" | "generate" | "apply-repair";
 
 /**
  * Task integration: `oxo-flow` tasks show up in the task list and run in the
@@ -119,7 +137,13 @@ export function createTask(
             // as the description — without this branch it fell through to
             // `graph` and silently produced a DAG instead.
             ? templateArgs(def.extraArgs?.[0] ?? "", def.workflow)
-            : graphArgs(def.workflow, def.format));
+            : kind === "apply-repair"
+              // Issue #1302: the reviewed patch rides `--apply-patch`; the
+              // CLI's apply path validates it before any write. A definition
+              // without `patch` reaches the CLI's honest "cannot read"
+              // narration rather than a silent no-op.
+              ? applyRepairArgs(def.workflow, def.patch ?? "", def.workdir)
+              : graphArgs(def.workflow, def.format));
   // ShellQuotedString is a plain object interface, not a constructor: pass
   // {value, quoting} literals so no shell metacharacter in paths/args breaks.
   const strong = (value: string) => ({ value, quoting: vscode.ShellQuoting.Strong });

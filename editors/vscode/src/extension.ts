@@ -186,6 +186,7 @@ export function activate(context: vscode.ExtensionContext): void {
   register("oxo-flow.lint", () => runQualityCommand(output, statusBar, "lint"));
   register("oxo-flow.format", () => formatDocument());
   register("oxo-flow.resume", () => resumePipeline(statusBar));
+  register("oxo-flow.applyRepair", () => applyRepair(statusBar));
   register("oxo-flow.generate", () => generateWithAI(output, statusBar, context));
   register("oxo-flow.aiStatus", () => showAiStatus(output, statusBar));
   register("oxo-flow.exportSchema", () => exportSchema(statusBar));
@@ -457,6 +458,72 @@ async function resumePipeline(statusBar: StatusBar): Promise<void> {
         kind: "resume",
       },
       "resume"
+    )
+  );
+}
+
+/**
+ * Apply a REVIEWED repair patch through the CLI's verified-repair path
+ * (issue #1302): pick a failed run's checkpoint, pick the reviewed patch
+ * document, and run `oxo-flow run <workflow> --apply-patch <patch>` as a
+ * task. The CLI — the same engine every other surface shells — validates
+ * the patch against the workflow it replaces, applies it only when a rule
+ * fails during the re-attempt, and verifies it with one bounded rerun; the
+ * `REPAIR_APPLIED` / `REPAIR_RERUN_*` narration and the checkpoint
+ * `repair_record` are the shared cross-surface contract (the parity
+ * harness `tests/remediation_continuity.rs` pins it).
+ */
+async function applyRepair(statusBar: StatusBar): Promise<void> {
+  const checkpoints = await vscode.workspace.findFiles("**/.oxo-flow/checkpoint.json", "**/node_modules/**", 20);
+  if (checkpoints.length === 0) {
+    void vscode.window.showInformationMessage(
+      "No .oxo-flow/checkpoint.json found in this workspace — a repair applies to a failed run's checkpoint."
+    );
+    return;
+  }
+  const pick = await vscode.window.showQuickPick(
+    checkpoints.map((c) => ({ label: vscode.workspace.asRelativePath(c), file: c })),
+    { placeHolder: "Select the failed run's checkpoint to repair" }
+  );
+  if (!pick) return;
+  const folder = folderFor(pick.file);
+  if (!folder) return;
+
+  // The checkpoint's parent directory IS the failed run's workdir. A
+  // web-staged (or CLI snapshot) run keeps `workflow.oxoflow` there; a
+  // project-local run keeps its workflow beside the checkpoint — fall back
+  // to the pipeline picker for anything else.
+  const workdir = vscode.Uri.joinPath(pick.file, "..", "..");
+  const staged = vscode.Uri.joinPath(workdir, "workflow.oxoflow");
+  let workflow: vscode.Uri | undefined;
+  try {
+    await vscode.workspace.fs.stat(staged);
+    workflow = staged;
+  } catch {
+    workflow = (await pipelineTarget())?.file;
+  }
+  if (!workflow) return;
+
+  const patch = await vscode.window.showOpenDialog({
+    canSelectMany: false,
+    openLabel: "Apply Reviewed Patch",
+    filters: { "oxo-flow pipeline": ["oxoflow"] },
+    title: "Select the reviewed repair patch (a whole .oxoflow workflow)",
+  });
+  if (!patch || patch.length === 0) return;
+
+  await vscode.tasks.executeTask(
+    createTask(
+      statusBar.executable(),
+      folder,
+      {
+        type: TASK_TYPE,
+        workflow: relativeWorkflow(folder, workflow),
+        kind: "apply-repair",
+        patch: relativeWorkflow(folder, patch[0]),
+        workdir: relativeWorkflow(folder, workdir),
+      },
+      "apply-repair"
     )
   );
 }
@@ -801,6 +868,7 @@ const COMMAND_PICKS: { label: string; command: string }[] = [
   { label: "$(alignment-align) Format Document", command: "oxo-flow.format" },
   { label: "$(graph) Show DAG Graph", command: "oxo-flow.graph" },
   { label: "$(debug-restart) Resume from Checkpoint", command: "oxo-flow.resume" },
+  { label: "$(wrench) Apply Reviewed Repair…", command: "oxo-flow.applyRepair" },
   { label: "$(info) Show Run Status", command: "oxo-flow.status" },
   { label: "$(trash) Clean Outputs…", command: "oxo-flow.clean" },
   { label: "$(sparkle) Generate Pipeline with AI…", command: "oxo-flow.generate" },

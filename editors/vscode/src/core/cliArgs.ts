@@ -64,6 +64,22 @@ export function resumeArgs(checkpoint: string, extraArgs?: string[]): string[] {
   return ["resume", checkpoint, ...(extraArgs ?? [])];
 }
 
+/**
+ * Apply a REVIEWED repair patch through the CLI's verified-repair path
+ * (issue #1302). The patch is a WHOLE `.oxoflow` workflow document in the
+ * exact shape the CLI's `apply_fix` writes; the CLI validates it against the
+ * workflow it replaces, applies it only when a rule fails during the
+ * re-attempt, and verifies it with one bounded rerun (the
+ * `REPAIR_APPLIED` / `REPAIR_RERUN_*` checkpoint contract). `--workdir` pins
+ * the failed run's workdir when the workflow argument itself lives outside
+ * it (e.g. the web-staged snapshot).
+ */
+export function applyRepairArgs(workflow: string, patchPath: string, workdir?: string): string[] {
+  const args = ["run", workflow, "--apply-patch", patchPath];
+  if (workdir) args.push("--workdir", workdir);
+  return args;
+}
+
 /** `oxo-flow clean <workflow> [-n|--force] [--orphans] [-d workdir]` */
 export function cleanArgs(
   file: string,
