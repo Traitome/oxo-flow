@@ -29,7 +29,7 @@ const DEEPSEEK_BODY: &str = r#"{"choices":[{"message":{"role":"assistant","conte
 const GENERATED_WORKFLOW_BODY: &str = r#"{"message":{"role":"assistant","content":"```toml\n[workflow]\nname = \"race\"\nversion = \"1.0.0\"\n\n[[rules]]\nname = \"step1\"\noutput = [\"out1.txt\"]\nshell = \"echo done > out1.txt\"\n```"},"done":true}"#;
 
 /// How long a stub keeps listening for a request before exiting on its own.
-const STUB_LIFETIME: Duration = Duration::from_secs(15);
+const STUB_LIFETIME: Duration = Duration::from_secs(120);
 
 /// A bounded loopback HTTP stub: answers every request with a fixed JSON
 /// body, records the raw request text, and stops after [`STUB_LIFETIME`]
