@@ -13,14 +13,14 @@ static DB_POOL: OnceLock<SqlitePool> = OnceLock::new();
 /// Initialize the global pool and run schema migrations.
 ///
 /// Can safely be called multiple times — subsequent calls are no-ops.
-pub async fn init_pool(database_url: &str) {
+pub async fn init_pool(database_url: &str) -> Result<(), String> {
     // Serialize concurrent callers — the runs-table migration drops and
     // renames tables, which must not interleave with another init.
     static INIT_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
     let _guard = INIT_LOCK.lock().await;
 
     if DB_POOL.get().is_some() {
-        return;
+        return Ok(());
     }
     // Transient filesystem errors (SQLITE_IOERR) happen on busy ephemeral
     // disks (CI runners under parallel test load); retry a few times before
@@ -32,7 +32,7 @@ pub async fn init_pool(database_url: &str) {
                 Ok(()) => {
                     let _ = DB_POOL.set(backend.pool.clone());
                     super::set_global_backend(std::sync::Arc::new(backend));
-                    return;
+                    return Ok(());
                 }
                 Err(e) => last_err = e,
             },
@@ -40,7 +40,9 @@ pub async fn init_pool(database_url: &str) {
         }
         tokio::time::sleep(std::time::Duration::from_millis(100 * attempt as u64)).await;
     }
-    panic!("Failed to initialize database after 3 attempts: {last_err}");
+    Err(format!(
+        "Failed to initialize database after 3 attempts: {last_err}"
+    ))
 }
 
 /// Obtain a reference to the global pool.
@@ -3570,7 +3572,7 @@ mod tests {
     async fn test_global_pool() {
         // Reset: use a fresh in-memory URL
         let url = "sqlite::memory:";
-        init_pool(url).await;
+        init_pool(url).await.expect("in-memory pool init");
         let p = pool();
         let row: (i64,) = sqlx::query_as("SELECT 1").fetch_one(p).await.unwrap();
         assert_eq!(row.0, 1);

@@ -321,3 +321,101 @@ async fn web_admission_and_cli_preflight_agree_on_the_resolved_dag() {
         "the override removed the align->call edge, so both rules are independent: {groups:?}"
     );
 }
+
+#[tokio::test]
+async fn included_workflow_override_is_identical_in_plan_snapshot_and_argv() {
+    ensure_db().await;
+    let app = server::build_router("personal");
+
+    let host = r#"
+[workflow]
+name = "rb04-included-snapshot"
+
+[[include]]
+path = "modules/routed.oxoflow"
+"#;
+    let included = r#"
+[workflow]
+name = "rb04-included-snapshot-module"
+
+[config]
+input = { default = "aligned" }
+
+[[rules]]
+name = "align"
+output = ["aligned.sam"]
+shell = "touch aligned.sam"
+
+[[rules]]
+name = "call"
+input = ["{config.input}.sam"]
+output = ["calls.vcf"]
+shell = "touch calls.vcf"
+"#;
+
+    let (status, body) = post(
+        &app,
+        "/api/runs",
+        json!({
+            "toml_content": host,
+            "dry_run": true,
+            "include_files": {"modules/routed.oxoflow": included},
+            "config_overrides": ["input=other"]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    assert_eq!(
+        body["execution_plan"]["total_rules"].as_u64(),
+        Some(2),
+        "the include-resolved plan must contain both rules: {body}"
+    );
+
+    let run_id = body["run_id"].as_str().expect("run id");
+    let pool = oxo_flow_web::infra::db::sqlite::try_pool().expect("SQLite pool");
+    let (pipeline_snapshot, workdir, config_overrides): (String, Option<String>, Option<String>) =
+        sqlx::query_as(
+            "SELECT pipeline_snapshot, workdir, config_overrides FROM runs WHERE id = ?",
+        )
+        .bind(run_id)
+        .fetch_one(pool)
+        .await
+        .expect("persisted run row");
+
+    assert_eq!(
+        config_overrides.as_deref(),
+        Some(r#"["input=other"]"#),
+        "the same override must forward to the spawned argv"
+    );
+
+    // RB-02: the row keeps the EXACT submitted host document (run identity,
+    // retry + override replay). The effective workflow is materialized beside
+    // the staged sources and is the value every derivation must have used.
+    assert!(
+        pipeline_snapshot.contains(r#"input = { default = "aligned" }"#)
+            || pipeline_snapshot.contains("path = \"modules/routed.oxoflow\""),
+        "the row snapshot must stay the submitted host document: {pipeline_snapshot}"
+    );
+
+    let workdir = workdir.expect("run workdir");
+    let snapshot_path = std::path::Path::new(&workdir)
+        .join(".oxo-flow")
+        .join("resolved-workflow.oxoflow");
+    let resolved_snapshot =
+        std::fs::read_to_string(&snapshot_path).expect("resolved snapshot beside staged sources");
+    let parsed =
+        oxo_flow_core::config::WorkflowConfig::parse(&resolved_snapshot).expect("effective TOML");
+    assert_eq!(
+        parsed
+            .config_placeholder_values()
+            .get("config.input")
+            .map(String::as_str),
+        Some("other"),
+        "the materialized effective snapshot must contain the override: {resolved_snapshot}"
+    );
+    assert!(
+        resolved_snapshot.contains("{config.input}.sam"),
+        "the snapshot keeps the engine template as workflow semantics"
+    );
+}
