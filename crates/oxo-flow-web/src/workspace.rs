@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use std::fs;
+use std::io;
 use std::path::{Component, Path, PathBuf};
 
 /// Base workspace directory for the Web UI (uploaded inputs, run sandboxes).
@@ -191,24 +192,64 @@ pub fn inputs_directory(username: &str) -> Result<PathBuf> {
 /// re-staging. Returns the number of files copied.
 pub fn stage_user_inputs(username: &str, run_dir: &Path) -> Result<usize> {
     let root = inputs_directory(username)?;
-    if !root.is_dir() {
-        return Ok(0);
+
+    match fs::symlink_metadata(&root) {
+        Ok(meta) if meta.file_type().is_symlink() => {
+            anyhow::bail!("uploaded-inputs root {:?} is a symlink", root);
+        }
+        Ok(meta) if meta.is_dir() => {}
+        Ok(_) => return Ok(0),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(e) => {
+            return Err(e).with_context(|| format!("failed to inspect inputs root {:?}", root));
+        }
     }
+
+    let root = fs::canonicalize(&root)
+        .with_context(|| format!("failed to canonicalize inputs root {:?}", root))?;
+    reject_symlink_components(&root)?;
+
+    let run_root = fs::canonicalize(run_dir)
+        .with_context(|| format!("failed to canonicalize run directory {:?}", run_dir))?;
+    if !run_root.is_dir() {
+        anyhow::bail!("run staging destination {:?} is not a directory", run_root);
+    }
+    reject_symlink_components(&run_root)?;
+
     let mut copied = 0usize;
     let mut stack = vec![root.clone()];
     while let Some(dir) = stack.pop() {
+        reject_symlink_components(&dir)?;
         let entries = fs::read_dir(&dir)
             .with_context(|| format!("failed to read inputs directory {:?}", dir))?;
-        for entry in entries.flatten() {
+        for entry in entries {
+            let entry = entry.with_context(|| {
+                format!("failed to read an entry in inputs directory {:?}", dir)
+            })?;
             let path = entry.path();
-            let Ok(meta) = entry.metadata() else { continue };
+            reject_symlink_components(&path)?;
+
+            let meta = fs::symlink_metadata(&path)
+                .with_context(|| format!("failed to inspect uploaded input {:?}", path))?;
+            if meta.file_type().is_symlink() {
+                anyhow::bail!("uploaded input {:?} is a symlink", path);
+            }
             if meta.is_dir() {
                 stack.push(path);
                 continue;
             }
             if !meta.is_file() {
-                continue; // never follow symlinks out of the inputs tree
+                continue;
             }
+
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                if meta.permissions().mode() & 0o444 == 0 {
+                    anyhow::bail!("uploaded input {:?} is unreadable (mode 000)", path);
+                }
+            }
+
             // A staged-upload temp a killed process left behind is engine
             // scratch, not an input; mirroring it would hand every run a
             // phantom file (issue #1161).
@@ -219,23 +260,154 @@ pub fn stage_user_inputs(username: &str, run_dir: &Path) -> Result<usize> {
             {
                 continue;
             }
-            let Ok(rel) = path.strip_prefix(&root) else {
-                continue;
-            };
-            let dest = run_dir.join(rel);
-            if dest_is_current(&dest, &meta) {
+
+            let rel = path.strip_prefix(&root).with_context(|| {
+                format!(
+                    "uploaded input {:?} escaped canonical inputs root {:?}",
+                    path, root
+                )
+            })?;
+            let dest = run_root.join(rel);
+            if dest_is_current(&dest, &meta)? {
                 continue;
             }
+
             if let Some(parent) = dest.parent() {
+                reject_symlink_components(parent)?;
                 fs::create_dir_all(parent)
                     .with_context(|| format!("failed to create {:?}", parent))?;
+                reject_symlink_components(parent)?;
+                let canonical_parent = fs::canonicalize(parent)
+                    .with_context(|| format!("failed to canonicalize destination {:?}", parent))?;
+                if !canonical_parent.starts_with(&run_root) {
+                    anyhow::bail!(
+                        "destination {:?} escaped canonical run root {:?}",
+                        canonical_parent,
+                        run_root
+                    );
+                }
             }
-            fs::copy(&path, &dest)
-                .with_context(|| format!("failed to stage {:?} → {:?}", path, dest))?;
+
+            reject_symlink_components(&dest)?;
+            if fs::symlink_metadata(&dest)
+                .ok()
+                .is_some_and(|m| m.file_type().is_symlink())
+            {
+                anyhow::bail!("destination {:?} is a symlink", dest);
+            }
+
+            // Open the source without following symlinks, then re-check the
+            // path and inode immediately around the copy. This closes the
+            // common symlink swap while keeping ordinary regular files intact.
+            let mut source = open_regular_nofollow(&path)?;
+            recheck_regular_source(&path, &root, &mut source)?;
+
+            let Some(parent) = dest.parent() else {
+                anyhow::bail!("destination {:?} has no parent", dest);
+            };
+            let mut temp = tempfile::NamedTempFile::new_in(parent)
+                .with_context(|| format!("failed to create staged temp in {:?}", parent))?;
+            io::copy(&mut source, temp.as_file_mut())
+                .with_context(|| format!("failed to read uploaded input {:?}", path))?;
+
+            // Re-check source and destination immediately before the atomic
+            // rename. Persist replaces a symlink at the destination name itself
+            // rather than following it.
+            recheck_regular_source(&path, &root, &mut source)?;
+            reject_symlink_components(&dest)?;
+            temp.persist(&dest).map_err(|e| {
+                anyhow::Error::new(e.error).context(format!(
+                    "failed to atomically stage {:?} → {:?}",
+                    path, dest
+                ))
+            })?;
+
+            reject_symlink_components(&dest)?;
+            let dest_meta = fs::symlink_metadata(&dest)
+                .with_context(|| format!("failed to inspect staged destination {:?}", dest))?;
+            if dest_meta.file_type().is_symlink() || !dest_meta.is_file() {
+                anyhow::bail!("staged destination {:?} is not a regular file", dest);
+            }
             copied += 1;
         }
     }
     Ok(copied)
+}
+
+fn reject_symlink_components(path: &Path) -> Result<()> {
+    let mut current = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::RootDir => current.push(component.as_os_str()),
+            Component::Prefix(prefix) => current.push(prefix.as_os_str()),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                anyhow::bail!("path {:?} contains a parent traversal", path);
+            }
+            Component::Normal(part) => {
+                current.push(part);
+                match fs::symlink_metadata(&current) {
+                    Ok(meta) if meta.file_type().is_symlink() => {
+                        anyhow::bail!("path {:?} contains symlink {:?}", path, current);
+                    }
+                    Ok(_) => {}
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(e) => {
+                        return Err(e).with_context(|| {
+                            format!("failed to inspect path component {:?}", current)
+                        });
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn open_regular_nofollow(path: &Path) -> Result<fs::File> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut options = fs::OpenOptions::new();
+        options.read(true).custom_flags(nix::libc::O_NOFOLLOW);
+        options
+            .open(path)
+            .with_context(|| format!("failed to open uploaded input {:?}", path))
+    }
+    #[cfg(not(unix))]
+    {
+        fs::File::open(path).with_context(|| format!("failed to open uploaded input {:?}", path))
+    }
+}
+
+fn recheck_regular_source(path: &Path, root: &Path, source: &mut fs::File) -> Result<()> {
+    reject_symlink_components(path)?;
+    let lmeta = fs::symlink_metadata(path)
+        .with_context(|| format!("uploaded input disappeared before copy: {:?}", path))?;
+    if lmeta.file_type().is_symlink() || !lmeta.is_file() {
+        anyhow::bail!("uploaded input {:?} changed into a non-regular file", path);
+    }
+    let canonical = fs::canonicalize(path)
+        .with_context(|| format!("failed to canonicalize uploaded input {:?}", path))?;
+    if !canonical.starts_with(root) {
+        anyhow::bail!(
+            "uploaded input {:?} escaped canonical inputs root {:?}",
+            canonical,
+            root
+        );
+    }
+
+    let opened = source
+        .metadata()
+        .with_context(|| format!("failed to inspect opened uploaded input {:?}", path))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if opened.dev() != lmeta.dev() || opened.ino() != lmeta.ino() {
+            anyhow::bail!("uploaded input {:?} changed during staging", path);
+        }
+    }
+    Ok(())
 }
 
 /// True when `dest` already carries content at least as new as the staged
@@ -245,17 +417,25 @@ pub fn stage_user_inputs(username: &str, run_dir: &Path) -> Result<usize> {
 /// #297 item 1) while newer local outputs are left alone. Size is
 /// deliberately NOT part of the check — freshness is an mtime property,
 /// and a same-size stale copy must still be refreshed.
-fn dest_is_current(dest: &Path, src_meta: &fs::Metadata) -> bool {
-    let Ok(dest_meta) = fs::metadata(dest) else {
-        return false; // missing (or unreadable) → stage it
+fn dest_is_current(dest: &Path, src_meta: &fs::Metadata) -> Result<bool> {
+    reject_symlink_components(dest)?;
+    let dest_meta = match fs::symlink_metadata(dest) {
+        Ok(meta) => meta,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => {
+            return Err(e).with_context(|| format!("failed to inspect destination {:?}", dest));
+        }
     };
+    if dest_meta.file_type().is_symlink() {
+        anyhow::bail!("destination {:?} is a symlink", dest);
+    }
     if !dest_meta.is_file() {
-        return false; // a directory/symlink in the way → replace with the file
+        return Ok(false); // directory/special in the way → staging reports copy failure
     }
     match (src_meta.modified().ok(), dest_meta.modified().ok()) {
-        (Some(src_m), Some(dest_m)) => src_m <= dest_m,
+        (Some(src_m), Some(dest_m)) => Ok(src_m <= dest_m),
         // Filesystems without mtime: cannot compare — refresh.
-        _ => false,
+        _ => Ok(false),
     }
 }
 
@@ -393,6 +573,45 @@ mod tests {
         assert!(run_dir.join("data/raw.txt").is_file());
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn stage_user_inputs_rejects_source_and_destination_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let _cwd = CWD_LOCK.lock().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let prev = std::env::current_dir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+
+        std::fs::create_dir_all("workspace/users/alice/inputs").unwrap();
+        std::fs::create_dir_all("workspace/users/alice/runs/r1").unwrap();
+        std::fs::write("external-secret.txt", "do not stage\n").unwrap();
+        symlink(
+            tmp.path().join("external-secret.txt"),
+            "workspace/users/alice/inputs/leak.txt",
+        )
+        .unwrap();
+
+        let run_dir = tmp.path().join("workspace/users/alice/runs/r1");
+        let source_err = stage_user_inputs("alice", &run_dir).unwrap_err();
+        assert!(
+            source_err.to_string().contains("symlink"),
+            "source symlink must be rejected: {source_err:#}"
+        );
+
+        std::fs::remove_file("workspace/users/alice/inputs/leak.txt").unwrap();
+        std::fs::write("workspace/users/alice/inputs/safe.txt", "safe\n").unwrap();
+        symlink("../../../../external-secret.txt", run_dir.join("safe.txt")).unwrap();
+
+        let dest_err = stage_user_inputs("alice", &run_dir).unwrap_err();
+        assert!(
+            dest_err.to_string().contains("symlink"),
+            "destination symlink must be rejected: {dest_err:#}"
+        );
+
+        std::env::set_current_dir(prev).unwrap();
+    }
+
     #[test]
     fn stage_user_inputs_skips_staged_upload_temps() {
         // Issue #1161: a process killed between creating its staging temp and
@@ -523,5 +742,128 @@ mod tests {
         let run_dir = tmp.path().join("runs/r3");
         std::fs::create_dir_all(&run_dir).unwrap();
         assert!(stage_user_inputs("../alice", &run_dir).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stage_user_inputs_rejects_source_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let _cwd = CWD_LOCK.lock().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let prev = std::env::current_dir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+
+        std::fs::create_dir_all("workspace/users/alice/inputs").unwrap();
+        std::fs::write("outside.txt", "outside secret").unwrap();
+        symlink(
+            tmp.path().join("outside.txt"),
+            "workspace/users/alice/inputs/leak.txt",
+        )
+        .unwrap();
+        let run_dir = tmp.path().join("workspace/users/alice/runs/r1");
+        std::fs::create_dir_all(&run_dir).unwrap();
+
+        let result = stage_user_inputs("alice", &run_dir);
+        std::env::set_current_dir(prev).unwrap();
+
+        assert!(result.is_err(), "source symlinks must fail staging");
+        assert!(
+            !run_dir.join("leak.txt").exists(),
+            "symlinked upload must not be copied"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stage_user_inputs_rejects_symlinked_source_parent() {
+        use std::os::unix::fs::symlink;
+
+        let _cwd = CWD_LOCK.lock().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let prev = std::env::current_dir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+
+        let outside = tmp.path().join("outside");
+        std::fs::create_dir_all("workspace/users/alice/inputs").unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("data.txt"), "outside").unwrap();
+        symlink(&outside, "workspace/users/alice/inputs/external").unwrap();
+        let run_dir = tmp.path().join("workspace/users/alice/runs/r1");
+        std::fs::create_dir_all(&run_dir).unwrap();
+
+        let result = stage_user_inputs("alice", &run_dir);
+        std::env::set_current_dir(prev).unwrap();
+
+        assert!(
+            result.is_err(),
+            "symlinked source parents must fail staging"
+        );
+        assert!(
+            !run_dir.join("external/data.txt").exists(),
+            "files below a symlinked source parent must not be copied"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stage_user_inputs_rejects_symlinked_destination_parent() {
+        use std::os::unix::fs::symlink;
+
+        let _cwd = CWD_LOCK.lock().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let prev = std::env::current_dir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+
+        std::fs::create_dir_all("workspace/users/alice/inputs").unwrap();
+        std::fs::write("workspace/users/alice/inputs/data.txt", "upload").unwrap();
+        let run_dir = tmp.path().join("workspace/users/alice/runs/r1");
+        let outside = tmp.path().join("outside");
+        std::fs::create_dir_all(&run_dir).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        symlink(&outside, run_dir.join("redirect")).unwrap();
+
+        // Make the upload resolve below the symlinked destination parent.
+        std::fs::create_dir_all("workspace/users/alice/inputs/redirect").unwrap();
+        std::fs::write("workspace/users/alice/inputs/redirect/data.txt", "upload").unwrap();
+
+        let result = stage_user_inputs("alice", &run_dir);
+        std::env::set_current_dir(prev).unwrap();
+
+        assert!(
+            result.is_err(),
+            "symlinked destination parents must fail staging"
+        );
+        assert!(
+            !outside.join("redirect/data.txt").exists() && !outside.join("data.txt").exists(),
+            "a destination symlink must not redirect staged data"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stage_user_inputs_rejects_unreadable_regular_file() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _cwd = CWD_LOCK.lock().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let prev = std::env::current_dir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+
+        std::fs::create_dir_all("workspace/users/alice/inputs").unwrap();
+        let source = std::path::Path::new("workspace/users/alice/inputs/private.txt");
+        std::fs::write(source, "private").unwrap();
+        std::fs::set_permissions(source, std::fs::Permissions::from_mode(0o0)).unwrap();
+        let run_dir = tmp.path().join("workspace/users/alice/runs/r1");
+        std::fs::create_dir_all(&run_dir).unwrap();
+
+        let result = stage_user_inputs("alice", &run_dir);
+        std::fs::set_permissions(source, std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::env::set_current_dir(prev).unwrap();
+
+        assert!(
+            result.is_err(),
+            "mode-000 uploaded input must be reported as unreadable"
+        );
     }
 }

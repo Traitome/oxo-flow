@@ -545,17 +545,26 @@ fn fire_shutdown() {
 /// Wait for a shutdown signal (Ctrl+C or SIGTERM on Unix).
 pub async fn shutdown_signal() {
     let ctrl_c = async {
-        tokio::signal::ctrl_c()
-            .await
-            .expect("failed to listen for Ctrl+C");
+        match tokio::signal::ctrl_c().await {
+            Ok(()) => {}
+            Err(e) => {
+                tracing::error!("Failed to listen for Ctrl+C shutdown signal: {e}");
+                std::future::pending::<()>().await;
+            }
+        }
     };
 
     #[cfg(unix)]
     let terminate = async {
-        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-            .expect("failed to install signal handler")
-            .recv()
-            .await;
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut signal) => {
+                let _ = signal.recv().await;
+            }
+            Err(e) => {
+                tracing::error!("Failed to install SIGTERM shutdown handler: {e}");
+                std::future::pending::<()>().await;
+            }
+        }
     };
 
     #[cfg(not(unix))]
@@ -626,6 +635,13 @@ mod effective_bind_host_tests {
         assert!(background_tasks_started());
         start_background_tasks();
         assert!(background_tasks_started());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_terminate_shutdown_kind_is_sigterm() {
+        let kind = tokio::signal::unix::SignalKind::terminate();
+        assert_eq!(kind.as_raw_value(), nix::libc::SIGTERM);
     }
 
     #[test]

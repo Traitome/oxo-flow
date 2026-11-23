@@ -7,9 +7,9 @@
 //! until `tests/audit_integration.rs` pinned them together; the delegation
 //! makes that pin true by construction.
 //!
-//! Failure-mode note: schema/pool initialization aborts via the canonical
-//! `init_pool` retry-then-panic contract instead of returning `Err` — the
-//! server boot terminates either way.
+//! Failure-mode note: schema/pool initialization returns the canonical
+//! `init_pool` retry failure instead of terminating through a panic — server
+//! boot propagates the error to its entry point.
 //!
 //! Pool access goes through `crate::infra::db::sqlite::{pool, try_pool}`
 //! directly — the re-export shims that used to live here were deleted as
@@ -26,7 +26,9 @@ use uuid::Uuid;
 /// call only re-runs the name-guarded template seed. PostgreSQL boots
 /// never run this seed (SQLite-only path in `init_database`).
 pub async fn init_db(database_url: &str) -> Result<()> {
-    crate::infra::db::sqlite::init_pool(database_url).await;
+    crate::infra::db::sqlite::init_pool(database_url)
+        .await
+        .map_err(anyhow::Error::msg)?;
     seed_system_templates(crate::infra::db::sqlite::pool()).await
 }
 

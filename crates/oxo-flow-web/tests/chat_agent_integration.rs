@@ -53,7 +53,6 @@ async fn chat_agent_loop_emits_typed_events_and_registers_run_tools() {
     let _ = std::fs::remove_file(format!("{path}-shm"));
     let url = format!("sqlite:{path}?mode=rwc");
     oxo_flow_web::db::init_db(&url).await.ok();
-    oxo_flow_web::infra::db::sqlite::init_pool(&url).await;
 
     let workdir = format!("{dir}/report-qa-workdir");
     let _ = std::fs::remove_dir_all(&workdir);

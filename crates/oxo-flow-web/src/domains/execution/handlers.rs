@@ -843,10 +843,8 @@ pub async fn create_run(
     // retry/resume keyed the user id, so the per-minute limits stacked.
     // The quota admission (durable, mutating) runs later — see
     // `admit_spawn_budget` right before the run-row claim.
-    // Provisional host-string parse; re-derived from the resolved config
-    // below (staged includes can declare their own resources) — the reserve
-    // must charge the RESOLVED rule set, not the host text (review fix F1).
-    let mut quota_usage = quota_usage_for(toml);
+    // Quota is derived later from the single canonical effective config,
+    // after includes and overrides have been resolved.
     check_run_rate_limit(limiter.as_ref().map(|Extension(l)| &**l), &user.id)?;
     let max_jobs = req.max_jobs.unwrap_or(4);
     let config = RunConfig {
@@ -973,107 +971,64 @@ pub async fn create_run(
     })?;
     let workflow_path = stage_run_sources(staging.path(), toml, &include_paths).await?;
 
-    // One canonical load path for the plan: when secondary sources are
-    // staged, resolve them (`from_file`) before building the response. The
-    // resolved config is reused for admission below — never re-parsed. The
-    // load runs on the blocking pool: a repo-pinned [[include]] clones from
-    // the module cache inside `from_file`, and a git fetch must not pin a
-    // tokio worker for its duration.
-    let resolved_config = if include_paths.is_empty() {
-        None
-    } else {
-        let path = workflow_path.clone();
-        let resolved = tokio::task::spawn_blocking(move || {
-            oxo_flow_core::config::WorkflowConfig::from_file(&path)
-        })
-        .await
-        .map_err(|e| {
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "RUN_ERROR",
-                format!("workflow load task failed: {e}"),
-            )
-        })?
-        .map_err(|e| {
-            err(
-                StatusCode::BAD_REQUEST,
-                "RUN_ERROR",
-                format!("resolved workflow parse failed: {e}"),
-            )
-        })?;
-        Some(resolved)
-    };
-    // RB-04 (#1277): resolve `config_overrides` HERE, BEFORE the plan (and,
-    // below, the admission graph) is derived — the CLI applies overrides in
-    // its preflight before `validate_workflow_types` and the DAG build, so
-    // web admission must see the identical resolved workflow. `resolved_config`
-    // is cloned so the un-overridden copy is never mutated; the override map
-    // always targets its `[config]` keys.
-    let resp = match &resolved_config {
-        // Keep the stable TYPE_CONTRACT_VIOLATION code for biological
-        // contract violations on the resolved path; everything else is
-        // RUN_ERROR (issue #1152 review, LOW).
-        Some(resolved) => {
-            let mut resolved = resolved.clone();
-            apply_web_config_overrides(&mut resolved, &validated_overrides)?;
-            service::create_run_from_config(&resolved, &config).map_err(|e| match e {
-                service::CreateRunError::TypeContract(message) => {
-                    err(StatusCode::BAD_REQUEST, "TYPE_CONTRACT_VIOLATION", message)
-                }
-                service::CreateRunError::Other(message) => {
-                    err(StatusCode::BAD_REQUEST, "RUN_ERROR", message)
-                }
-            })?
-        }
-        None => {
-            // Single-file path: keep the legacy string entry point's error
-            // contract — every parse/DAG/type failure collapses to RUN_ERROR
-            // (the resolved-includes path above is the one that distinguishes
-            // TYPE_CONTRACT_VIOLATION; issue #1152 review, LOW). Overrides are
-            // still applied to the parsed workflow BEFORE the plan + checker,
-            // so the un-staged path resolves identically to the CLI too.
-            let mut wf = oxo_flow_core::config::WorkflowConfig::parse(toml)
-                .map_err(|e| err(StatusCode::BAD_REQUEST, "RUN_ERROR", format!("Parse: {e}")))?;
-            apply_web_config_overrides(&mut wf, &validated_overrides)?;
-            service::create_run_from_config(&wf, &config).map_err(|e| {
-                let message = match e {
-                    service::CreateRunError::TypeContract(message)
-                    | service::CreateRunError::Other(message) => message,
-                };
-                err(StatusCode::BAD_REQUEST, "RUN_ERROR", message)
-            })?
-        }
-    };
+    // One canonical effective config for every create-run derivation. Always
+    // resolve from the staged file: even a workflow with no uploaded
+    // include_files can have a local/repo [[include]] providing a rule named
+    // by `extends`. Parsing the host TOML first would reject that valid graph
+    // before `from_file` can merge its source. Apply overrides once afterward;
+    // plan, quota, admission/DAG, snapshot, and spawned argv share this value.
+    let needs_staged_includes = !include_paths.is_empty();
+    let path = workflow_path.clone();
+    let mut effective_config = tokio::task::spawn_blocking(move || {
+        oxo_flow_core::config::WorkflowConfig::from_file(&path)
+    })
+    .await
+    .map_err(|e| {
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "RUN_ERROR",
+            format!("workflow load task failed: {e}"),
+        )
+    })?
+    .map_err(|e| {
+        err(
+            StatusCode::BAD_REQUEST,
+            "RUN_ERROR",
+            format!("resolved workflow parse failed: {e}"),
+        )
+    })?;
+    apply_web_config_overrides(&mut effective_config, &validated_overrides)?;
 
-    // Serialize the effective workflow (includes merged, extends resolved) so
-    // the run workdir carries a self-contained snapshot for retry, resume,
-    // DAG/status, and protected-drift. Best-effort: the staged sources still
-    // resolve through `from_file` if serialization fails.
-    let resolved_snapshot =
-        resolved_config
-            .as_ref()
-            .and_then(|wf| match service::resolved_snapshot_toml(wf) {
-                Ok(text) => Some(text),
-                Err(e) => {
-                    tracing::warn!("could not serialize the resolved workflow snapshot: {e}");
-                    None
-                }
-            });
+    let resp = service::create_run_from_config(&effective_config, &config).map_err(|e| {
+        match (needs_staged_includes, e) {
+            (true, service::CreateRunError::TypeContract(message)) => {
+                err(StatusCode::BAD_REQUEST, "TYPE_CONTRACT_VIOLATION", message)
+            }
+            (_, service::CreateRunError::TypeContract(message))
+            | (_, service::CreateRunError::Other(message)) => {
+                err(StatusCode::BAD_REQUEST, "RUN_ERROR", message)
+            }
+        }
+    })?;
+
+    // Serialize the override-applied effective workflow (includes merged,
+    // extends resolved) for retry, resume, DAG/status, and protected-drift.
+    // Keep staged sources as the materialization fallback, not as a second
+    // config derivation path.
+    let resolved_snapshot = match service::resolved_snapshot_toml(&effective_config) {
+        Ok(text) => Some(text),
+        Err(e) => {
+            tracing::warn!("could not serialize the resolved workflow snapshot: {e}");
+            None
+        }
+    };
 
     // Persist run to database. Ad-hoc runs (no pipeline_id) keep a NULL
     // pipeline_id (the column is an FK only when a pipeline exists).
     if let Some(backend) = crate::infra::db::global_backend() {
-        // The resolved config carries the include-merged name; fall back to
-        // the single-file parse for workflows without staged sources.
-        let workflow_name = resolved_config
-            .as_ref()
-            .map(|c| c.workflow.name.clone())
-            .or_else(|| {
-                oxo_flow_core::config::WorkflowConfig::parse(toml)
-                    .map(|c| c.workflow.name)
-                    .ok()
-            })
-            .unwrap_or_else(|| "unnamed".to_string());
+        // The canonical effective config carries the include-merged name and
+        // already-applied override values.
+        let workflow_name = effective_config.workflow.name.clone();
 
         // Read permission was checked before any IO above (pre-IO hoist) —
         // re-checking here would retype the same gate with no new information
@@ -1084,100 +1039,12 @@ pub async fn create_run(
         // the CLI, which warns on unknown keys and hard-fails on invalid
         // values for declared keys.
 
-        // Issue #1018: resolved-workflow BioType admission. When secondary
-        // sources were staged, `resolved_config` above already came through
-        // the canonical `from_file` load path — reuse it. Otherwise resolve
-        // only when the host declares type contracts or [[include]]: a host
-        // include pointing at a missing file must surface as a 400, not
-        // silently queue a run whose spawned CLI will fail identically.
-        //
-        // The old scan_admission_sources text-scan that rejected any typed
-        // workflow with includes as TYPED_ADMISSION_UNSUPPORTED is gone —
-        // this is the real resolved admission path. The staged sources from
-        // the single per-request staging above (claim-then-stage: they are
-        // copied into the workdir only after the admission claim wins) are
-        // what this load resolves.
-        let mut admission_config = match resolved_config {
-            Some(resolved) => Some(resolved),
-            None => {
-                let host_config =
-                    oxo_flow_core::config::WorkflowConfig::parse(toml).map_err(|e| {
-                        err(StatusCode::BAD_REQUEST, "RUN_ERROR", format!("Parse: {e}"))
-                    })?;
-                let host_has_types = host_config.rules.iter().any(|r| r.types.is_some())
-                    || !host_config.types.is_empty();
-                if host_has_types || !host_config.includes.is_empty() {
-                    // A repo-pinned [[include]] clones from the module cache
-                    // inside `from_file` — keep the git fetch off the async
-                    // worker (same reason the file writes use spawn_blocking).
-                    let path = workflow_path.clone();
-                    let resolved = tokio::task::spawn_blocking(move || {
-                        oxo_flow_core::config::WorkflowConfig::from_file(&path)
-                    })
-                    .await
-                    .map_err(|e| {
-                        err(
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            "RUN_ERROR",
-                            format!("workflow load task failed: {e}"),
-                        )
-                    })?
-                    .map_err(|e| {
-                        err(
-                            StatusCode::BAD_REQUEST,
-                            "RUN_ERROR",
-                            format!("resolved workflow parse failed: {e}"),
-                        )
-                    })?;
-                    Some(resolved)
-                } else {
-                    None
-                }
-            }
-        };
-        // RB-04 (#1277): the admission graph must be the OVERRIDE-APPLIED
-        // one — the CLI's preflight applies `config_overrides` BEFORE the
-        // DAG build + `validate_workflow_types`, so a typed workflow whose
-        // routing depends on an overridden `{config.*}` value is checked on
-        // the same resolved graph here as it is by the CLI.
-        if let Some(resolved) = admission_config.as_mut() {
-            apply_web_config_overrides(resolved, &validated_overrides)?;
-        }
-        // Expand before deriving (AGENTS invariant): included modules may
-        // declare their own resources, so the quota charge and the enforced
-        // memory ceiling must cover the RESOLVED rule set, not just the host
-        // TOML. The reservation below is charged from this resolved quota —
-        // a staged-include run whose host text does not parse on its own
-        // (`extends` an included base rule) would otherwise be admitted at
-        // the `(1, 0)` host-string fallback (review fix F1, #1152).
-        // Resolve FIRST, then reserve below.
-        if let Some(resolved) = admission_config.as_ref() {
-            quota_usage = quota_usage_for_config(resolved);
-        }
-        // E005 undefined-config gate (issue #1289, audit RB-04 residual): the
-        // CLI hard-fails `run`/`dry-run` BEFORE the DAG builds when a rule
-        // references an undefined `{config.<key>}`. The web must run the SAME
-        // canonical gate on the RESOLVED config (includes merged) AFTER
-        // `config_overrides` are applied, so it can never persist a run row the
-        // spawned CLI would refuse. Fail closed with the layer's 400 RUN_ERROR
-        // shape and create no row (RB-03) — placed before the workdir claim
-        // below like every other 400-producing gate.
-        let mut gate_config = match admission_config.as_ref() {
-            Some(resolved) => resolved.clone(),
-            None => oxo_flow_core::config::WorkflowConfig::parse(toml)
-                .map_err(|e| err(StatusCode::BAD_REQUEST, "RUN_ERROR", format!("Parse: {e}")))?,
-        };
-        if !validated_overrides.is_empty() {
-            let overrides: std::collections::HashMap<String, String> = validated_overrides
-                .iter()
-                .filter_map(|kv| {
-                    kv.split_once('=')
-                        .map(|(k, v)| (k.trim_start_matches('-').to_string(), v.to_string()))
-                })
-                .collect();
-            gate_config.apply_config_overrides(&overrides);
-        }
-        let e005 = oxo_flow_core::format::undefined_config_findings(&gate_config);
+        // The effective config is already resolved and override-applied once;
+        // derive quota and all admission checks from it without re-parsing or
+        // re-applying overrides.
+        let quota_usage = quota_usage_for_config(&effective_config);
+
+        let e005 = oxo_flow_core::format::undefined_config_findings(&effective_config);
         if !e005.is_empty() {
             return Err(err(
                 StatusCode::BAD_REQUEST,
@@ -1188,30 +1055,33 @@ pub async fn create_run(
                 ),
             ));
         }
-        if let Some(resolved_config) = admission_config {
-            let resolved_dag = oxo_flow_core::dag::WorkflowDag::from_rules_with_config(
-                &resolved_config.rules,
-                &resolved_config.config_placeholder_values(),
+
+        let resolved_dag = oxo_flow_core::dag::WorkflowDag::from_rules_with_config(
+            &effective_config.rules,
+            &effective_config.config_placeholder_values(),
+        )
+        .map_err(|e| {
+            err(
+                StatusCode::BAD_REQUEST,
+                "RUN_ERROR",
+                format!("resolved workflow DAG failed: {e}"),
             )
-            .map_err(|e| {
-                err(
-                    StatusCode::BAD_REQUEST,
-                    "RUN_ERROR",
-                    format!("resolved workflow DAG failed: {e}"),
-                )
-            })?;
-            if let Err(type_errors) =
-                oxo_flow_core::types::validate_workflow_types(&resolved_config, &resolved_dag)
-            {
-                // Shared core formatter (issue #1352 F1): the marker phrase is
-                // ONE constant owned by the gate, never retyped — the CLI
-                // repair loop greps the exact phrase.
-                return Err(err(
-                    StatusCode::BAD_REQUEST,
-                    "TYPE_CONTRACT_VIOLATION",
-                    oxo_flow_core::types::type_admission_error_message(&type_errors),
-                ));
-            }
+        })?;
+        if let Err(type_errors) =
+            oxo_flow_core::types::validate_workflow_types(&effective_config, &resolved_dag)
+        {
+            // Shared core formatter (issue #1352 F1): the marker phrase is
+            // ONE constant owned by the gate, never retyped — the CLI repair
+            // loop greps the exact phrase.
+            return Err(err(
+                StatusCode::BAD_REQUEST,
+                if needs_staged_includes {
+                    "TYPE_CONTRACT_VIOLATION"
+                } else {
+                    "RUN_ERROR"
+                },
+                oxo_flow_core::types::type_admission_error_message(&type_errors),
+            ));
         }
 
         // Allocate the run's workdir only AFTER every 400-producing gate
@@ -1234,6 +1104,12 @@ pub async fn create_run(
             id: resp.run_id.clone(),
             user_id: user.id.clone(),
             pipeline_id: pipeline_id.clone(),
+            // RB-02: the row keeps the EXACT submitted host document so run
+            // identity, retry replay and config-override replay stay
+            // byte-stable. The override-applied effective workflow is
+            // materialized beside the staged sources instead
+            // (`.oxo-flow/resolved-workflow.oxoflow`, via `resolved_snapshot`
+            // below) and is what DAG/status/protected-drift load.
             pipeline_snapshot: toml.to_string(),
             status: "queued".to_string(),
             phase: "parsing".to_string(),

@@ -146,16 +146,39 @@ fn run() -> Result<()> {
         #[cfg(unix)]
         let interrupted = async {
             use tokio::signal::unix::{SignalKind as TkSignalKind, signal};
-            let mut term =
-                signal(TkSignalKind::terminate()).expect("failed to install SIGTERM handler");
-            tokio::select! {
-                _ = tokio::signal::ctrl_c() => {}
-                _ = term.recv() => {}
+            match signal(TkSignalKind::terminate()) {
+                Ok(mut term) => {
+                    tokio::select! {
+                        result = tokio::signal::ctrl_c() => {
+                            if let Err(e) = result {
+                                eprintln!("Failed to listen for Ctrl+C shutdown signal: {e}");
+                                std::future::pending::<()>().await;
+                            }
+                        }
+                        _ = term.recv() => {}
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Failed to install SIGTERM shutdown handler: {e}");
+                    match tokio::signal::ctrl_c().await {
+                        Ok(()) => {}
+                        Err(e) => {
+                            eprintln!("Failed to listen for Ctrl+C shutdown signal: {e}");
+                            std::future::pending::<()>().await;
+                        }
+                    }
+                }
             }
         };
         #[cfg(not(unix))]
         let interrupted = async {
-            let _ = tokio::signal::ctrl_c().await;
+            match tokio::signal::ctrl_c().await {
+                Ok(()) => {}
+                Err(e) => {
+                    tracing::error!("Failed to listen for Ctrl+C shutdown signal: {e}");
+                    std::future::pending::<()>().await;
+                }
+            }
         };
 
         tokio::select! {

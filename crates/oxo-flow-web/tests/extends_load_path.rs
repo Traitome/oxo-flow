@@ -554,8 +554,9 @@ async fn web_protected_drift_uses_protected_trees_of_include_run() {
 
 /// Fail closed, never fail open: a run whose workflow sources are all gone
 /// must answer an error for protected-drift rather than report a clean
-/// `drifted_files: []`. (The host snapshot alone cannot be parsed for this
-/// run class, so removing the workdir sources leaves nothing loadable.)
+/// `drifted_files: []`. The run row now stores the override-applied effective
+/// snapshot, so the unreadable state is produced by removing the materialized
+/// sources AND making the stored snapshot unparseable.
 #[tokio::test]
 async fn web_protected_drift_fails_closed_when_workflow_unreadable() {
     ensure_run_db().await;
@@ -563,11 +564,16 @@ async fn web_protected_drift_fails_closed_when_workflow_unreadable() {
     let run = wait_terminal(&run_id).await;
     let workdir = std::path::PathBuf::from(run["workdir"].as_str().expect("workdir"));
 
-    // Remove both loadable sources: the materialized host document and the
-    // persisted resolved snapshot. The host snapshot in the DB alone does
-    // not parse (it extends an included rule).
+    // Remove both materialized sources and corrupt the row snapshot so no
+    // loadable workflow remains anywhere.
     std::fs::remove_file(workdir.join("workflow.oxoflow")).unwrap();
     std::fs::remove_file(workdir.join(".oxo-flow/resolved-workflow.oxoflow")).unwrap();
+    let pool = oxo_flow_web::infra::db::sqlite::pool();
+    sqlx::query("UPDATE runs SET pipeline_snapshot = 'not valid toml [[' WHERE id = ?")
+        .bind(&run_id)
+        .execute(pool)
+        .await
+        .expect("corrupt stored snapshot");
 
     let (status, body) = get_json(&format!("/api/runs/{run_id}/protected-drift")).await;
     assert_eq!(
