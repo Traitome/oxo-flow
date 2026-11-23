@@ -11,6 +11,7 @@ mod run_status;
 
 use crate::commands::agent_docs::agent_docs_command;
 use crate::commands::ai_status::{ai_setup_command, ai_status_command, ai_test_command};
+use crate::commands::attestation::{attest_command, attest_verify_command};
 use crate::commands::batch::batch_command;
 use crate::commands::clean::clean_command;
 use crate::commands::cluster::cluster_command;
@@ -74,7 +75,8 @@ pub struct Cli {
     /// Output machine-readable JSON to stdout (human-readable logs stay on stderr).
     /// Implemented by run, dry-run, validate, lint, test, status, wait, batch,
     /// resume, info, knowledge, diagnostics, schema, verify-data, license,
-    /// provenance verify, provenance diff, ai, graph, runs gc, diff (the
+    /// provenance verify, provenance diff, provenance attest, provenance
+    /// attest-verify, ai, graph, runs gc, diff (the
     /// workflow text diff), import, env list/check,
     /// and the cluster status/cancel/logs monitors;
     /// every other command rejects the flag instead of silently ignoring it.
@@ -1359,6 +1361,48 @@ pub enum ProvenanceAction {
         #[arg(value_name = "RIGHT_CHECKPOINT", help = "Path to the right checkpoint")]
         right: PathBuf,
     },
+    /// Emit a portable, optionally signed run attestation from a checkpoint.
+    ///
+    /// Binds the recorded workflow identity, include resolutions, resolved
+    /// config, input/output checksums, environment identity and outcome into
+    /// one canonical JSON document (`oxo-flow.attestation/v1`). Signing uses
+    /// Ed25519 over the document without its `signature` field.
+    Attest {
+        #[arg(
+            value_name = "CHECKPOINT",
+            help = "Path to checkpoint.json (or a run workdir containing one)"
+        )]
+        checkpoint: PathBuf,
+        #[arg(
+            long,
+            value_name = "KEY",
+            help = "Ed25519 signing key (64 hex characters or 32 raw bytes); required with --sign"
+        )]
+        key: Option<PathBuf>,
+        #[arg(long, help = "Sign the attestation (requires --key)")]
+        sign: bool,
+        #[arg(
+            short = 'o',
+            long,
+            value_name = "FILE",
+            help = "Write the document here"
+        )]
+        output: Option<PathBuf>,
+    },
+    /// Verify an attestation document's format and (when signed) signature.
+    ///
+    /// Exit codes: 0 valid or unsigned, 2 invalid signature, 3 key mismatch,
+    /// 4 malformed/unreadable document.
+    AttestVerify {
+        #[arg(value_name = "FILE", help = "Attestation JSON file")]
+        file: PathBuf,
+        #[arg(
+            long,
+            value_name = "KEY",
+            help = "Ed25519 seed file the caller trusts; a different signer is a mismatch"
+        )]
+        key: Option<PathBuf>,
+    },
 }
 
 /// Emit the single `--json` document for `test`.
@@ -1432,7 +1476,10 @@ fn json_supported(command: &Commands) -> bool {
         Commands::Diff { .. } => true,
         Commands::Provenance { action } => matches!(
             action,
-            ProvenanceAction::Verify { .. } | ProvenanceAction::Diff { .. }
+            ProvenanceAction::Verify { .. }
+                | ProvenanceAction::Diff { .. }
+                | ProvenanceAction::Attest { .. }
+                | ProvenanceAction::AttestVerify { .. }
         ),
         Commands::VerifyData { .. } => true,
         Commands::Runs { .. } => true,
@@ -1602,6 +1649,7 @@ async fn main() -> Result<()> {
              document is implemented (run, dry-run, validate, lint, test, \
              status, wait, batch, resume, info, knowledge, diagnostics, \
              schema, license, ai, provenance verify, provenance diff, \
+             provenance attest, provenance attest-verify, \
              verify-data, graph, runs gc, import, diff (the workflow text \
              diff), env list/check, cluster status/cancel/logs)."
         );
@@ -2282,6 +2330,18 @@ async fn main() -> Result<()> {
             }
             ProvenanceAction::Diff { left, right } => {
                 provenance_diff_command(left, right, cli.json)?
+            }
+            ProvenanceAction::Attest {
+                checkpoint,
+                key,
+                sign,
+                output,
+            } => attest_command(checkpoint, key, sign, output, cli.json)?,
+            ProvenanceAction::AttestVerify { file, key } => {
+                let code = attest_verify_command(file, key, cli.json)?;
+                if code != 0 {
+                    std::process::exit(code);
+                }
             }
         },
         Commands::VerifyData { tree, from } => verify_data_command(tree, from, cli.json)?,
