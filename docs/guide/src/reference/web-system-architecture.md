@@ -153,6 +153,10 @@ Share URL truth:
   literals on the override path are bracketed. Import accepts both
   schemes, so older `oxo+https://` links keep working.
 
+### Operator variables and internal/test variables
+
+The environment variables documented below and in the deployment guides are operator-facing configuration knobs. Some variables exist only for test harnesses or internal process coordination (for example `OXO_FLOW_BACKGROUND_PID_FILE`, `OXO_FLOW_TRACK_PGID`, `OXO_FLOW_STDERR_ALREADY_REDIRECTED`, and names prefixed `OXO_FLOW_TEST_*`). Internal/test names are implementation details, are not a supported public configuration contract, and may change without operator-facing release guarantees. Operators should use the documented variables only; test harnesses own and pin their internal names.
+
 Server process environment:
 
 - `OXO_FLOW_BIN` — explicit path to the `oxo-flow` CLI binary the server

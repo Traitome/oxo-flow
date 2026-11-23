@@ -5,8 +5,41 @@
 //! its inputs, outputs, shell command, resource requirements, and execution
 //! environment.
 
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use serde::{Deserialize, Serialize, Serializer};
+use std::collections::{BTreeMap, HashMap};
+
+fn serialize_sorted_toml_map<S>(
+    map: &HashMap<String, toml::Value>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    map.iter().collect::<BTreeMap<_, _>>().serialize(serializer)
+}
+
+fn serialize_sorted_string_map<S>(
+    map: &HashMap<String, String>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    map.iter().collect::<BTreeMap<_, _>>().serialize(serializer)
+}
+
+fn serialize_sorted_file_patterns<S>(
+    patterns: &FilePatterns,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    match patterns {
+        FilePatterns::Map(map) => map.iter().collect::<BTreeMap<_, _>>().serialize(serializer),
+        _ => patterns.serialize(serializer),
+    }
+}
 
 /// Auto-scaling resource value.
 ///
@@ -1154,15 +1187,6 @@ impl std::hash::Hash for FilePatterns {
     }
 }
 
-impl std::ops::Index<usize> for FilePatterns {
-    type Output = String;
-
-    fn index(&self, index: usize) -> &Self::Output {
-        self.get_index(index)
-            .expect("index out of bounds for FilePatterns")
-    }
-}
-
 /// A single rule (step) in a workflow.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Rule {
@@ -1173,6 +1197,7 @@ pub struct Rule {
     /// Supports either a list `["a.txt"]` or a map `{ reads = "a.txt" }`.
     #[serde(default)]
     #[serde(skip_serializing_if = "FilePatterns::is_empty")]
+    #[serde(serialize_with = "serialize_sorted_file_patterns")]
     pub input: FilePatterns,
 
     /// Expanded input file patterns via Cartesian product.
@@ -1206,6 +1231,7 @@ pub struct Rule {
     /// Supports either a list `["a.txt"]` or a map `{ bam = "a.bam" }`.
     #[serde(default)]
     #[serde(skip_serializing_if = "FilePatterns::is_empty")]
+    #[serde(serialize_with = "serialize_sorted_file_patterns")]
     pub output: FilePatterns,
 
     /// Runtime-discovered output declaration (issue #227 item 5): the
@@ -1282,6 +1308,7 @@ pub struct Rule {
     /// Rule parameters (arbitrary key-value pairs).
     #[serde(default)]
     #[serde(skip_serializing_if = "HashMap::is_empty")]
+    #[serde(serialize_with = "serialize_sorted_toml_map")]
     pub params: HashMap<String, toml::Value>,
 
     /// Priority (higher = run first). Default is 0.
@@ -1473,6 +1500,7 @@ pub struct Rule {
     /// Environment variables to inject before running this rule.
     #[serde(default)]
     #[serde(skip_serializing_if = "HashMap::is_empty")]
+    #[serde(serialize_with = "serialize_sorted_string_map")]
     pub envvars: HashMap<String, String>,
 
     /// Whether this rule is a checkpoint that allows dynamic DAG modification.
@@ -1588,6 +1616,7 @@ pub struct Rule {
     /// for use by downstream tools, reports, or pipeline-specific logic.
     #[serde(default)]
     #[serde(skip_serializing_if = "HashMap::is_empty")]
+    #[serde(serialize_with = "serialize_sorted_toml_map")]
     pub rule_metadata: HashMap<String, toml::Value>,
 
     /// Content-based cache key (issue #194 §2.3).
@@ -3427,6 +3456,61 @@ mod tests {
         // Empty segments dropped
         let spec: EnvironmentSpec = toml::from_str(r#"modules = "gcc/11.2,""#).unwrap();
         assert_eq!(spec.modules, vec!["gcc/11.2"]);
+    }
+
+    #[test]
+    fn rule_hashmaps_serialize_independently_of_insertion_order() {
+        let mut params_a = HashMap::new();
+        params_a.insert("z".to_string(), toml::Value::Integer(2));
+        params_a.insert("a".to_string(), toml::Value::Integer(1));
+        let mut params_b = HashMap::new();
+        params_b.insert("a".to_string(), toml::Value::Integer(1));
+        params_b.insert("z".to_string(), toml::Value::Integer(2));
+
+        let mut env_a = HashMap::new();
+        env_a.insert("Z_VAR".to_string(), "z".to_string());
+        env_a.insert("A_VAR".to_string(), "a".to_string());
+        let mut env_b = HashMap::new();
+        env_b.insert("A_VAR".to_string(), "a".to_string());
+        env_b.insert("Z_VAR".to_string(), "z".to_string());
+
+        let mut metadata_a = HashMap::new();
+        metadata_a.insert("z".to_string(), toml::Value::Boolean(false));
+        metadata_a.insert("a".to_string(), toml::Value::Boolean(true));
+        let mut metadata_b = HashMap::new();
+        metadata_b.insert("a".to_string(), toml::Value::Boolean(true));
+        metadata_b.insert("z".to_string(), toml::Value::Boolean(false));
+
+        let rule_a = Rule {
+            name: "a".to_string(),
+            params: params_a,
+            envvars: env_a,
+            rule_metadata: metadata_a,
+            ..Default::default()
+        };
+        let rule_b = Rule {
+            name: "a".to_string(),
+            params: params_b,
+            envvars: env_b,
+            rule_metadata: metadata_b,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            toml::to_string(&rule_a).unwrap(),
+            toml::to_string(&rule_b).unwrap()
+        );
+        assert_eq!(
+            serde_json::to_string(&rule_a).unwrap(),
+            serde_json::to_string(&rule_b).unwrap()
+        );
+
+        let patterns = FilePatterns::Map(HashMap::from([
+            ("b".to_string(), "two".to_string()),
+            ("a".to_string(), "one".to_string()),
+        ]));
+        assert_eq!(patterns.get_index(0), Some(&"one".to_string()));
+        assert_eq!(patterns.get_index(2), None);
     }
 
     #[test]

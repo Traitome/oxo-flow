@@ -486,7 +486,7 @@ pub async fn lint_command(workflow: PathBuf, strict: bool, json: bool, ai: bool)
             "info_count": info_count,
             "passed": error_count == 0 && (!strict || warning_count == 0),
         });
-        println!("{}", serde_json::to_string_pretty(&output).unwrap());
+        println!("{}", serde_json::to_string_pretty(&output)?);
         if error_count > 0 || (strict && warning_count > 0) {
             // Return Err instead of process::exit so `test --json` can
             // compose this step into its aggregate document (audit #666).

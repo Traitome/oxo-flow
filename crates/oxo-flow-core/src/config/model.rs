@@ -12,8 +12,41 @@ use crate::error::{OxoFlowError, Result};
 use crate::rule::{EnvironmentSpec, FilePatterns, Rule};
 use crate::scheduler::DispatchOrder;
 use regex::Regex;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+
+fn serialize_sorted_map<S, V>(
+    map: &HashMap<String, V>,
+    serializer: S,
+) -> std::result::Result<S::Ok, S::Error>
+where
+    S: Serializer,
+    V: Serialize,
+{
+    map.iter().collect::<BTreeMap<_, _>>().serialize(serializer)
+}
+
+fn serialize_sorted_nested_string_map<S>(
+    map: &HashMap<String, HashMap<String, String>>,
+    serializer: S,
+) -> std::result::Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    let sorted: BTreeMap<&str, BTreeMap<&str, &str>> = map
+        .iter()
+        .map(|(outer, inner)| {
+            (
+                outer.as_str(),
+                inner
+                    .iter()
+                    .map(|(key, value)| (key.as_str(), value.as_str()))
+                    .collect(),
+            )
+        })
+        .collect();
+    sorted.serialize(serializer)
+}
 use std::path::Path;
 use std::sync::LazyLock;
 
@@ -1945,6 +1978,7 @@ pub struct WorkflowConfig {
     /// Referenced in shells / inputs / outputs / `when` as `{config.key}`.
     #[serde(default)]
     #[serde(skip_serializing_if = "HashMap::is_empty")]
+    #[serde(serialize_with = "serialize_sorted_map")]
     pub config: HashMap<String, toml::Value>,
 
     /// Metadata for declarative `[config]` entries — parsed from inline-table values.
@@ -2055,6 +2089,7 @@ pub struct WorkflowConfig {
     /// Shared resource groups for limiting concurrent access to APIs or databases.
     #[serde(default, rename = "resource_groups")]
     #[serde(skip_serializing_if = "HashMap::is_empty")]
+    #[serde(serialize_with = "serialize_sorted_map")]
     pub resource_groups: HashMap<String, ResourceGroupConfig>,
 
     /// Reference database versions used by this workflow.
@@ -2068,12 +2103,14 @@ pub struct WorkflowConfig {
     /// specifying `environment` directly.
     #[serde(default, rename = "env_groups")]
     #[serde(skip_serializing_if = "HashMap::is_empty")]
+    #[serde(serialize_with = "serialize_sorted_map")]
     pub env_groups: HashMap<String, EnvironmentSpec>,
 
     /// Global wildcard constraints (regular expressions).
     /// Each key is a wildcard name, value is the regex pattern it must match.
     #[serde(default)]
     #[serde(skip_serializing_if = "HashMap::is_empty")]
+    #[serde(serialize_with = "serialize_sorted_map")]
     pub wildcard_constraints: HashMap<String, String>,
 
     /// Experiment-control sample pairs for comparative analysis workflows.
@@ -2107,6 +2144,7 @@ pub struct WorkflowConfig {
     /// same sample id.
     #[serde(default)]
     #[serde(skip_serializing_if = "HashMap::is_empty")]
+    #[serde(serialize_with = "serialize_sorted_nested_string_map")]
     pub metadata: HashMap<String, HashMap<String, String>>,
 
     /// Named value lists for arbitrary parameter wildcards (`[[values]]`).

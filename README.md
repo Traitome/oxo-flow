@@ -481,7 +481,7 @@ cargo build --workspace
 # Run all tests (unit + integration)
 cargo test --workspace
 
-# Run the full CI suite (fmt + clippy + build + test + schema-drift + skill-drift + version-check + audit + deny + aws-legacy-tripwire + issue-id-tripwire + npmmirror-tripwire + secrets + docs + frontend-lint + eval-tests + eval-lint + extension-test)
+# Run the full CI suite (fmt + clippy + build + test + schema-drift + skill-drift + version-check + audit + deny + aws-legacy-tripwire + issue-id-tripwire + npmmirror-tripwire + truthset-stamp + secrets + docs + frontend-lint + eval-tests + eval-lint + provenance-check + reports-regen + extension-test)
 make ci
 
 # Individual CI steps
