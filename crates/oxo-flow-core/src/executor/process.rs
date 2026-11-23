@@ -4172,6 +4172,7 @@ pub(super) fn spawn_rule_shell(
 ) -> std::io::Result<tokio::process::Child> {
     fn shell_command(
         shell: &str,
+        shell_args: &[&str],
         cmd: &str,
         workdir: &std::path::Path,
         envs: &HashMap<String, String>,
@@ -4184,6 +4185,7 @@ pub(super) fn spawn_rule_shell(
         // active_pids for the explicit tree kill; this is the
         // task-lifetime backstop that also covers pre_exec and hooks.
         c.kill_on_drop(true);
+        c.args(shell_args);
         c.arg("-c").arg(cmd).current_dir(workdir);
         // Issue #1108 (RB-15): rule shells get a cleared environment plus
         // the shared allowlist — never the engine's ambient environment.
@@ -4199,11 +4201,23 @@ pub(super) fn spawn_rule_shell(
         c.stdout(Stdio::piped()).stderr(Stdio::piped());
         c
     }
-    match shell_command("bash", cmd, workdir, envs, container_daemon).spawn() {
+    // Rule shells are batch shells: pass `--noprofile --norc` for bash so a
+    // denied `$HOME`/`/etc` (the web sandbox, RB-01) cannot break startup by
+    // sourcing rc files. The sh fallback takes no such flags.
+    match shell_command(
+        "bash",
+        &["--noprofile", "--norc"],
+        cmd,
+        workdir,
+        envs,
+        container_daemon,
+    )
+    .spawn()
+    {
         Ok(child) => Ok(child),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             warn_shell_fallback_once();
-            shell_command("sh", cmd, workdir, envs, container_daemon).spawn()
+            shell_command("sh", &[], cmd, workdir, envs, container_daemon).spawn()
         }
         Err(e) => Err(e),
     }

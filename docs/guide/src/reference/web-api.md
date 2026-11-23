@@ -1878,7 +1878,12 @@ grant set is:
   cannot be re-read through `/proc/<pid>/environ` — the env allowlist alone
   would not survive that bypass), `/sys`, `/etc`, the server's `$HOME`, the
   workspace root, and other tenants' workdirs. `truncate(2)` and device
-  ioctls are handled too, so neither is a bypass.
+  ioctls are handled too, so neither is a bypass. The only device files
+  granted are the minimal set every process needs — `/dev/null`, `/dev/zero`,
+  `/dev/urandom`, `/dev/random` (read+write, as individual files); the rest of
+  `/dev` stays denied. Sandboxed starts also pre-create the run scratch dir
+  and run rule shells without rc/profile files (`--noprofile --norc`), so a
+  denied `$HOME`/`/etc` cannot break ordinary shell startup.
 - **network (kernel 6.7+, Landlock ABI v4)**: TCP `bind`/`connect` are
   denied outright (`OXO_FLOW_WEB_SANDBOX_NET=require` fails the spawn on
   kernels too old to deny TCP; `deny` — the default — warns and proceeds
