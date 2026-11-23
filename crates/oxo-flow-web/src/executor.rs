@@ -961,6 +961,16 @@ pub fn spawn_background_run_with_args(
                     "Failed to spawn child process for run {run_id} \
                      after {spawn_attempts} retries: {e}"
                 );
+                // A pre_exec sandbox failure occurs before the child can
+                // write to stdout/stderr. Persist the spawn error in the run
+                // log so operators can diagnose fail-closed startup failures.
+                if let Ok(mut log) = std::fs::OpenOptions::new()
+                    .append(true)
+                    .open(&log_file_path)
+                {
+                    use std::io::Write as _;
+                    let _ = writeln!(log, "run failed before child execution: {e}");
+                }
                 // A cancel that landed during the retry window is the
                 // terminal truth — never overwrite 'cancelled' with a
                 // fabricated 'failed' (issue #136 tier-2).

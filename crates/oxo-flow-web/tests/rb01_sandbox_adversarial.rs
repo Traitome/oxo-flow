@@ -244,10 +244,11 @@ else
   echo "net-tcp: denied" >> "$res"
 fi
 
-if /usr/bin/env >/dev/null 2>&1; then
+if /usr/bin/env >"$dir/system-exec.stdout" 2>"$dir/system-exec.stderr"; then
   echo "system-exec: pass" >> "$res"
 else
   echo "system-exec: FAIL" >> "$res"
+  cat "$dir/system-exec.stderr" >> "$res"
 fi
 exit 0
 "#;
@@ -354,7 +355,13 @@ shell = "cat {B_FILE} > stolen.txt"
     let home_key = home.join(".ssh").join("id_rsa");
     std::fs::write(&home_key, "rb01x-host-credential-sentinel").expect("seed host credential");
 
-    let stub = root.join("oxo-flow-stub");
+    // Keep the engine binary in its own directory: the sandbox grants read on
+    // the binary's parent (adjacent interpreter/assets), so placing it in the
+    // test root would legitimately widen the grant to B's workspace and the
+    // fake server HOME. This mirrors a real install layout.
+    let engine_bin_dir = root.join("engine-bin");
+    std::fs::create_dir_all(&engine_bin_dir).expect("create engine bin dir");
+    let stub = engine_bin_dir.join("oxo-flow-stub");
     write_stub(&stub);
 
     // Tenant B's private data lives in B's workspace inputs dir.
@@ -500,9 +507,23 @@ shell = "cat {B_FILE} > stolen.txt"
     // checkpointing, output writes all inside the granted set) and that a
     // tenant-authored rule READING B's file fails the run.
     let real_cli = workspace_bin("oxo-flow");
-    // SAFETY: no spawn task reads OXO_FLOW_BIN between the sandbox run's
-    // terminal state and this point.
-    unsafe { std::env::set_var("OXO_FLOW_BIN", &real_cli) };
+    // The test binary lives in target/debug (or target/debug/deps); Landlock
+    // grants system trees plus the binary FILE, but exec of a dynamically
+    // linked program also resolves its parent path. In a production install
+    // that directory is a normal system path; in the cargo test sandbox it is
+    // an engine-private tree, so grant it read+execute explicitly. The
+    // tenant/private-data assertions are unaffected.
+    let cli_dir = real_cli
+        .parent()
+        .expect("CLI binary has a parent")
+        .to_path_buf();
+    let read_paths = format!("{}", cli_dir.display());
+    // SAFETY: no spawn task reads OXO_FLOW_SANDBOX_READ_PATHS between the
+    // sandbox run's terminal state and this point.
+    unsafe {
+        std::env::set_var("OXO_FLOW_SANDBOX_READ_PATHS", &read_paths);
+        std::env::set_var("OXO_FLOW_BIN", &real_cli);
+    }
     let workflow = REAL_CLI_WORKFLOW_TEMPLATE.replace("{B_FILE}", &b_file.to_string_lossy());
     let (status, body) = post_run(&app, A_TOKEN, &workflow).await;
     assert_eq!(status, StatusCode::OK, "real-CLI run accepted: {body}");
@@ -516,9 +537,19 @@ shell = "cat {B_FILE} > stolen.txt"
          execution.log:\n{}",
         std::fs::read_to_string(real_dir.join("execution.log")).unwrap_or_default()
     );
+    let real_log = std::fs::read_to_string(real_dir.join("execution.log")).unwrap_or_default();
+    let real_files = std::fs::read_dir(&real_dir)
+        .map(|entries| {
+            entries
+                .filter_map(Result::ok)
+                .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
     assert!(
         real_dir.join("sanity.txt").exists(),
-        "the rule writing the run's OWN workdir must still succeed under the sandbox"
+        "the rule writing the run's OWN workdir must still succeed under the sandbox; \
+         status={real_status}, files={real_files:?}, execution.log:\n{real_log}"
     );
     assert!(
         !real_dir.join("stolen.txt").exists(),

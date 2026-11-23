@@ -213,7 +213,8 @@ fn configure_with(
     // Per-run scratch + self-binary injection, then the granted path set —
     // portable so the grants and the child env stay consistent; the caller
     // discards both when the platform check below fails.
-    if !spawn_envs.contains_key("OXO_FLOW_TMPDIR") {
+    let default_scratch = !spawn_envs.contains_key("OXO_FLOW_TMPDIR");
+    if default_scratch {
         spawn_envs.insert(
             "OXO_FLOW_TMPDIR".to_string(),
             run_dir
@@ -221,6 +222,48 @@ fn configure_with(
                 .join("tmp")
                 .to_string_lossy()
                 .into_owned(),
+        );
+    }
+    #[cfg(target_os = "linux")]
+    {
+        // PATH is inherited from the web server and may begin with private
+        // directories (e.g. ~/.cargo/bin) that Landlock deliberately denies.
+        // Put the granted system trees first so the engine can resolve its
+        // shell and basic tools without broadening the filesystem grant; retain
+        // operator PATH entries afterward for explicitly granted tool trees.
+        let path = spawn_envs.get("PATH").cloned();
+        spawn_envs.insert("PATH".to_string(), sandboxed_path(path.as_deref()));
+
+        let scratch = spawn_envs
+            .get("OXO_FLOW_TMPDIR")
+            .ok_or_else(|| "sandbox scratch directory was not configured".to_string())?;
+        let scratch_path = Path::new(scratch);
+        if !scratch_path.is_absolute() {
+            return Err(format!(
+                "OXO_FLOW_TMPDIR must be absolute when {SANDBOX_MODE_ENV}=landlock; got {scratch_path:?}"
+            ));
+        }
+        // Landlock requires the granted path to exist before the child enters
+        // its pre_exec hook. The engine normally creates TMPDIR later, after
+        // the CLI has started; do it here in the trusted parent first.
+        std::fs::create_dir_all(scratch_path).map_err(|e| {
+            format!("failed to create sandbox scratch directory {scratch_path:?}: {e}")
+        })?;
+        let canonical_scratch = std::fs::canonicalize(scratch_path).map_err(|e| {
+            format!("failed to canonicalize sandbox scratch directory {scratch_path:?}: {e}")
+        })?;
+        if default_scratch {
+            let canonical_run = std::fs::canonicalize(run_dir)
+                .map_err(|e| format!("failed to canonicalize run directory {run_dir:?}: {e}"))?;
+            if !canonical_scratch.starts_with(&canonical_run) {
+                return Err(format!(
+                    "default sandbox scratch directory {canonical_scratch:?} escaped run directory {canonical_run:?}"
+                ));
+            }
+        }
+        spawn_envs.insert(
+            "OXO_FLOW_TMPDIR".to_string(),
+            canonical_scratch.to_string_lossy().into_owned(),
         );
     }
     if !spawn_envs.contains_key("OXO_FLOW_BIN") && oxo_bin.is_absolute() && oxo_bin.is_file() {
@@ -254,6 +297,7 @@ fn configure_with(
 
     #[cfg(target_os = "linux")]
     {
+        let grants = prepare_write_grants(grants)?;
         let abi = linux::probe_abi()?;
         let net_mode = linux::parse_net_mode(net_raw)?;
         let (net_supported, scoped_supported) = linux::probe_features(abi);
@@ -325,6 +369,8 @@ struct Grants {
     read_dirs: Vec<PathBuf>,
     read_files: Vec<PathBuf>,
     write_dirs: Vec<PathBuf>,
+    /// Character devices granted read+write as individual files.
+    dev_files: Vec<PathBuf>,
 }
 
 /// Assemble the granted path set. Every path must be absolute — a relative
@@ -400,6 +446,17 @@ fn build_grants(
     }
     grants.read_files.push(oxo_bin.to_path_buf());
 
+    // Ordinary process operation needs the minimal character devices
+    // (`stdin = /dev/null` for rule shells, entropy/zero for tools). Grant
+    // only these exact device files, never the /dev tree (details in
+    // `MINIMAL_DEV_FILES`).
+    for dev in MINIMAL_DEV_FILES {
+        let path = Path::new(dev);
+        if path.exists() {
+            grants.dev_files.push(path.to_path_buf());
+        }
+    }
+
     Ok(grants)
 }
 
@@ -419,6 +476,56 @@ fn checked_absolute(path: &str, knob: &str) -> Result<PathBuf, String> {
     }
     Ok(path.to_path_buf())
 }
+
+/// Landlock only accepts existing paths when its pre-exec rules are added.
+/// Materialize the approved write roots in the trusted parent and pin each
+/// grant to its canonical path before handing it to the child.
+#[cfg(target_os = "linux")]
+fn sandboxed_path(original: Option<&str>) -> String {
+    let mut entries = Vec::new();
+    for path in [
+        "/usr/local/sbin",
+        "/usr/local/bin",
+        "/usr/sbin",
+        "/usr/bin",
+        "/sbin",
+        "/bin",
+    ] {
+        if Path::new(path).is_dir() {
+            entries.push(path.to_string());
+        }
+    }
+    if let Some(original) = original {
+        for path in original.split(':').filter(|path| !path.is_empty()) {
+            if !entries.iter().any(|entry| entry == path) {
+                entries.push(path.to_string());
+            }
+        }
+    }
+    entries.join(":")
+}
+
+#[cfg(target_os = "linux")]
+fn prepare_write_grants(mut grants: Grants) -> Result<Grants, String> {
+    for path in &mut grants.write_dirs {
+        if !path.is_absolute() {
+            return Err(format!(
+                "sandbox write grant must be absolute; got {path:?}"
+            ));
+        }
+        std::fs::create_dir_all(&*path)
+            .map_err(|e| format!("failed to create sandbox write grant {path:?}: {e}"))?;
+        *path = std::fs::canonicalize(&*path)
+            .map_err(|e| format!("failed to canonicalize sandbox write grant {path:?}: {e}"))?;
+    }
+    Ok(grants)
+}
+
+/// Character devices every spawned process needs for ordinary operation
+/// (`stdin = /dev/null` on rule shells; entropy/zero reads by tools). Each is
+/// granted read+write as a single file — never the whole `/dev` tree, so
+/// other devices (ttys, disks, `/dev/mem`) stay denied.
+const MINIMAL_DEV_FILES: &[&str] = &["/dev/null", "/dev/zero", "/dev/urandom", "/dev/random"];
 
 // ── Kernel interface (Linux only) ─────────────────────────────────────────
 //
@@ -466,6 +573,11 @@ mod linux {
                 .collect::<Result<_, _>>()?,
             write_dirs: grants
                 .write_dirs
+                .iter()
+                .map(|p| cstr(p))
+                .collect::<Result<_, _>>()?,
+            dev_files: grants
+                .dev_files
                 .iter()
                 .map(|p| cstr(p))
                 .collect::<Result<_, _>>()?,
@@ -565,6 +677,7 @@ mod linux {
         pub read_dirs: Vec<CString>,
         pub read_files: Vec<CString>,
         pub write_dirs: Vec<CString>,
+        pub dev_files: Vec<CString>,
     }
 
     pub fn parse_net_mode(raw: Option<&str>) -> Result<NetMode, String> {
@@ -803,6 +916,11 @@ mod linux {
                 let pfd = open_path(path)?;
                 path_fds.push(pfd);
                 add_rule(pfd, GRANT_READ_FILE)?;
+            }
+            for path in &plan.dev_files {
+                let pfd = open_path(path)?;
+                path_fds.push(pfd);
+                add_rule(pfd, FS_READ_FILE | FS_WRITE_FILE)?;
             }
             restrict(fd)
         })();
@@ -1062,6 +1180,10 @@ mod tests {
         #[cfg(target_os = "linux")]
         {
             let mut envs = HashMap::new();
+            envs.insert(
+                "PATH".to_string(),
+                "/private/tools:/usr/bin:/private/bin".to_string(),
+            );
             let plan = configure_with(
                 Some("landlock"),
                 None,
@@ -1078,8 +1200,8 @@ mod tests {
             assert_eq!(
                 envs.get("OXO_FLOW_TMPDIR"),
                 Some(
-                    &run.join(".oxo-flow")
-                        .join("tmp")
+                    &std::fs::canonicalize(run.join(".oxo-flow").join("tmp"))
+                        .expect("canonical scratch")
                         .to_string_lossy()
                         .into_owned()
                 )
@@ -1087,6 +1209,15 @@ mod tests {
             assert_eq!(
                 envs.get("OXO_FLOW_BIN"),
                 Some(&bin.to_string_lossy().into_owned())
+            );
+            let path = envs.get("PATH").expect("sandbox PATH injection");
+            assert!(
+                path.starts_with("/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"),
+                "private PATH entries must follow the granted system trees: {path}"
+            );
+            assert!(
+                path.ends_with("/private/tools:/private/bin"),
+                "operator PATH entries remain available behind the system prefix: {path}"
             );
         }
     }
