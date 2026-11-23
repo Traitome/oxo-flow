@@ -1373,9 +1373,9 @@ fn emit_test_json(
     status: &str,
     steps: &[serde_json::Value],
     reports: &serde_json::Map<String, serde_json::Value>,
-) {
+) -> anyhow::Result<()> {
     if !json {
-        return;
+        return Ok(());
     }
     let mut output = serde_json::json!({
         "command": "test",
@@ -1386,7 +1386,8 @@ fn emit_test_json(
     if !reports.is_empty() {
         output["reports"] = serde_json::Value::Object(reports.clone());
     }
-    println!("{}", serde_json::to_string_pretty(&output).unwrap());
+    println!("{}", serde_json::to_string_pretty(&output)?);
+    Ok(())
 }
 
 /// One `steps[]` entry for the `test --json` document.
@@ -2321,7 +2322,7 @@ async fn main() -> Result<()> {
                     let result = $call;
                     steps.push(test_step_json($name, result.is_ok()));
                     if let Err(e) = result {
-                        emit_test_json(cli.json, &workflow, "failed", &steps, &reports);
+                        emit_test_json(cli.json, &workflow, "failed", &steps, &reports)?;
                         return Err(e);
                     }
                 }};
@@ -2370,13 +2371,13 @@ async fn main() -> Result<()> {
                         reports.insert("deep-check".to_string(), document);
                         if !report.passed {
                             // Same verdict as `deep-check`: D-errors fail.
-                            emit_test_json(cli.json, &workflow, "failed", &steps, &reports);
+                            emit_test_json(cli.json, &workflow, "failed", &steps, &reports)?;
                             std::process::exit(1);
                         }
                     }
                     Err(e) => {
                         steps.push(test_step_json("deep-check", false));
-                        emit_test_json(cli.json, &workflow, "failed", &steps, &reports);
+                        emit_test_json(cli.json, &workflow, "failed", &steps, &reports)?;
                         return Err(e);
                     }
                 }
@@ -2459,11 +2460,11 @@ async fn main() -> Result<()> {
                         "step": "output",
                         "status": "failed",
                     }));
-                    emit_test_json(cli.json, &workflow, "failed", &steps, &reports);
+                    emit_test_json(cli.json, &workflow, "failed", &steps, &reports)?;
                     std::process::exit(1);
                 }
             }
-            emit_test_json(cli.json, &workflow, "passed", &steps, &reports);
+            emit_test_json(cli.json, &workflow, "passed", &steps, &reports)?;
             eprintln!("\n{} All checks passed.", "✓".green().bold());
         }
         Commands::Publish {

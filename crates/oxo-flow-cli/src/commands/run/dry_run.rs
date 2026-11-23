@@ -920,7 +920,7 @@ async fn dry_run_command_inner(
                 "warnings": dry_protected_warnings,
             },
         });
-        println!("{}", serde_json::to_string_pretty(&output).unwrap());
+        println!("{}", serde_json::to_string_pretty(&output)?);
         *json_written = true;
     }
 

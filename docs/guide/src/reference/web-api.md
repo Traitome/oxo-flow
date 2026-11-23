@@ -535,8 +535,9 @@ weak `W/"7"` form, a multi-token list, or `*` — is rejected with
 > implementations. A CI smoke test against a live PostgreSQL container
 > verifies the schema bootstrap and the core `StorageBackend` CRUD surface,
 > and the storage contract was live-verified against `postgres:16`
-> (2026-11-05: full contract round-trip passed, web suite 554 passed /
-> 0 failed with the `postgres` feature); concurrency, crash recovery, and
+> (dated 2026-11-05 historical evidence: full contract round-trip passed,
+> the web suite passed 554 tests / 0 failed with the `postgres` feature);
+> these exact totals are not presented as current CI evidence. Concurrency, crash recovery, and
 > multi-instance behavior remain unvalidated. The runs gate is
 > backend-agnostic: if no storage backend is initialized at all, these
 > endpoints return
