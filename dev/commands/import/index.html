@@ -658,6 +658,8 @@
       
         
       
+        
+      
     
     
     
@@ -1142,6 +1144,34 @@
     
   
     16 — 16S Amplicon (QIIME2)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../gallery/typed-variant-calling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    17 — Typed Germline Variant Calling
   
 
     
@@ -1781,6 +1811,10 @@
       
         
       
+        
+      
+        
+      
     
     
     
@@ -2024,6 +2058,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../diagnostics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    diagnostics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../diff/" class="md-nav__link">
         
   
@@ -2144,6 +2206,34 @@
     
   
     export
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../export-dsl/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    export-dsl
   
 
     
@@ -2378,6 +2468,17 @@
     <span class="md-ellipsis">
       
         Examples
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#json-output" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        JSON output
       
     </span>
   </a>
@@ -4157,6 +4258,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#json-output" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        JSON output
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -4501,6 +4613,10 @@ through content inspection.</p>
 <td><code>-o, --output &lt;OUTPUT&gt;</code></td>
 <td>Output <code>.oxoflow</code> file (prints to stdout if omitted). Existing files are never overwritten</td>
 </tr>
+<tr>
+<td><code>--json</code></td>
+<td>Emit one machine-readable JSON document on stdout (see <a href="#json-output">JSON output</a>) instead of raw TOML</td>
+</tr>
 </tbody>
 </table>
 <h2 id="examples">Examples<a class="headerlink" href="#examples" title="Permanent link">#</a></h2>
@@ -4512,6 +4628,63 @@ through content inspection.</p>
 </span></code></pre></div>
 <p>Transpile with an explicit format:</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>oxo-flow<span class="w"> </span>import<span class="w"> </span>custom_pipeline.txt<span class="w"> </span>--from<span class="w"> </span>nextflow<span class="w"> </span>-o<span class="w"> </span>pipeline.oxoflow
+</span></code></pre></div>
+<p>Emit a machine-readable translation verdict instead of raw TOML:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>oxo-flow<span class="w"> </span>import<span class="w"> </span>Snakefile<span class="w"> </span>--json
+</span></code></pre></div>
+<h2 id="json-output">JSON output<a class="headerlink" href="#json-output" title="Permanent link">#</a></h2>
+<p><code>--json</code> emits one JSON document on stdout describing the translation, so CI and
+tooling can assert what was accepted and what was lost without parsing colored
+stderr. The colored human warnings and the raw TOML echo are suppressed — stdout
+stays a single JSON document. The exit code is unchanged (a translation warning
+is a report, not a failure). With <code>-o</code>, the file is still written and the
+document is still emitted.</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>tool</code></td>
+<td>Always <code>"oxo-flow import"</code></td>
+</tr>
+<tr>
+<td><code>source</code></td>
+<td>The source path that was transpiled</td>
+</tr>
+<tr>
+<td><code>format</code></td>
+<td>Detected or requested source format: <code>nextflow</code> or <code>snakemake</code></td>
+</tr>
+<tr>
+<td><code>accepted</code></td>
+<td><code>true</code> when no translation warnings were produced; <code>false</code> when a source construct was not mapped faithfully</td>
+</tr>
+<tr>
+<td><code>warnings</code></td>
+<td>Ordered array of <code>{ "message": "..." }</code> objects, one per translation loss (empty when <code>accepted</code> is <code>true</code>)</td>
+</tr>
+<tr>
+<td><code>toml</code></td>
+<td>The generated oxo-flow TOML workflow</td>
+</tr>
+</tbody>
+</table>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="p">{</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span><span class="nt">"tool"</span><span class="p">:</span><span class="w"> </span><span class="s2">"oxo-flow import"</span><span class="p">,</span>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span><span class="nt">"source"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Snakefile"</span><span class="p">,</span>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">  </span><span class="nt">"format"</span><span class="p">:</span><span class="w"> </span><span class="s2">"snakemake"</span><span class="p">,</span>
+</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">  </span><span class="nt">"accepted"</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="w">  </span><span class="nt">"warnings"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="w">    </span><span class="p">{</span>
+</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="w">      </span><span class="nt">"message"</span><span class="p">:</span><span class="w"> </span><span class="s2">"line 7: `benchmark:` becomes a declared path, but oxo-flow does not auto-populate benchmark files — the rule's command must write it"</span>
+</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-6-10"><a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a><span class="w">  </span><span class="p">],</span>
+</span><span id="__span-6-11"><a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a><span class="w">  </span><span class="nt">"toml"</span><span class="p">:</span><span class="w"> </span><span class="s2">"[workflow]\nname = \"bwa_mem_pipeline\"\n..."</span>
+</span><span id="__span-6-12"><a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a><span class="p">}</span>
 </span></code></pre></div>
 <blockquote>
 <p><strong>Next:</strong> <a href="../../how-to/migrate-from-nextflow-snakemake/">Migrating a whole pipeline from Nextflow or Snakemake</a></p>

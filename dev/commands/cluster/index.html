@@ -658,6 +658,8 @@
       
         
       
+        
+      
     
     
     
@@ -1142,6 +1144,34 @@
     
   
     16 — 16S Amplicon (QIIME2)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../gallery/typed-variant-calling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    17 — Typed Germline Variant Calling
   
 
     
@@ -1708,6 +1738,10 @@
   
     
     
+      
+        
+      
+        
       
         
       
@@ -2419,6 +2453,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../diagnostics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    diagnostics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../diff/" class="md-nav__link">
         
   
@@ -2539,6 +2601,34 @@
     
   
     export
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../export-dsl/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    export-dsl
   
 
     
@@ -5200,6 +5290,15 @@ are <strong>rejected at plan time</strong> on the cluster path (naming every off
 instead of silently running those jobs in the shared workdir, where tools
 writing fixed filenames collide across concurrent instances. See
 <a href="../../reference/workflow-format/#scratch-tier-ladder">Scratch tier ladder</a>.</p>
+<p><strong>Lifecycle hooks are local-executor-only too.</strong> The rule-level hooks
+<code>pre_exec</code> / <code>on_success</code> / <code>on_failure</code> and the workflow-level terminal
+hooks <code>on_complete</code> / <code>on_error</code> are run by the local executor and the CLI
+run loop; the cluster job generators render only the rule command and never
+enter that loop. A workflow that declares any of them is <strong>rejected at plan
+time</strong> on both submission paths (<code>run --profile &lt;name&gt;</code> and <code>cluster
+submit</code>), naming the offending rule and hook field (issue #1340), instead of
+silently dropping the hook on the scheduler. Remove the hooks or run the
+workflow locally (<code>oxo-flow run</code>).</p>
 <h3 id="job-arrays">Job arrays<a class="headerlink" href="#job-arrays" title="Permanent link">#</a></h3>
 <p>Same-template instances that are ready together and agree on every
 scheduler-visible directive (threads, memory, time limit, partition,

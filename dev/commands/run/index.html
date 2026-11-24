@@ -658,6 +658,8 @@
       
         
       
+        
+      
     
     
     
@@ -1142,6 +1144,34 @@
     
   
     16 — 16S Amplicon (QIIME2)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../gallery/typed-variant-calling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    17 — Typed Germline Variant Calling
   
 
     
@@ -1781,6 +1811,10 @@
       
         
       
+        
+      
+        
+      
     
     
     
@@ -2024,6 +2058,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../diagnostics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    diagnostics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../diff/" class="md-nav__link">
         
   
@@ -2144,6 +2206,34 @@
     
   
     export
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../export-dsl/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    export-dsl
   
 
     
@@ -3079,6 +3169,17 @@
     <span class="md-ellipsis">
       
         Include resolutions in the checkpoint
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#environment-lock-identity-in-the-checkpoint" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Environment-lock identity in the checkpoint
       
     </span>
   </a>
@@ -5026,6 +5127,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#environment-lock-identity-in-the-checkpoint" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Environment-lock identity in the checkpoint
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#run-logs" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -5336,6 +5448,12 @@ keys matching nothing declared keep the literal spelling.</p>
 <td>—</td>
 <td><code>1</code></td>
 <td>Maximum AI recovery attempts when a <code>--ai-recover</code> call fails (only a failed call is retried). This bounds <strong>recovery</strong> attempts; the generation-side <code>--ai-max-retries</code> on <a href="../template/"><code>template</code></a> (default 10, bounding orchestrator rounds) is a separate knob</td>
+</tr>
+<tr>
+<td><code>--apply-patch</code></td>
+<td><code>FILE</code></td>
+<td>—</td>
+<td>Apply a <strong>reviewed</strong> repaired workflow from <code>FILE</code> when a required rule fails, instead of letting the AI decide the fix. <code>FILE</code> is a complete <code>.oxoflow</code> document (not a diff); it is written through the same apply/validate/archive path as the AI-decided repair and gets the same one-shot verification rerun and <code>REPAIR_*</code> contract. Mutually exclusive with <code>--ai-recover</code> (fail-closed) and suppressed by <code>--no-ai-recover</code> (see <a href="#reviewed-patch-repair-apply-patch">Reviewed-patch repair</a>)</td>
 </tr>
 <tr>
 <td><code>--samples</code></td>
@@ -6360,9 +6478,33 @@ repository's <strong>HEAD commit SHA</strong> in the checkpoint (<code>workflow_
 run start. Every result set is therefore auditable to the exact workflow
 version that produced it: <code>oxo-flow provenance verify</code> prints the SHA, and
 report snapshots carry it through the checkpoint they embed.</p>
+<p>The engine also records a <strong>content digest of the top-level workflow file as
+read at run start</strong> (<code>workflow_content_hash</code>, a <code>sha256:&lt;hex&gt;</code> of the file)
+and whether the workflow file had <strong>uncommitted changes</strong>
+(<code>workflow_git_dirty</code>). For a <code>[[include]]</code> workflow the digest covers the
+top-level file only — the complete identity is that file plus the
+separately recorded include resolutions (<code>include_resolutions</code>, the
+per-include checkout SHAs). The HEAD
+SHA alone cannot tell two runs of the same uncommitted file apart — when
+the tree is dirty, the content hash is the authoritative record of which
+bytes executed, and it changes with every edit. The run log header
+(<code>.oxo-flow/logs/oxo-flow.log</code>) carries all three values.</p>
+<p>Two runs of the same file invoked with <strong>different <code>--arg KEY=VALUE</code>
+overrides</strong> share that raw digest (it hashes bytes, not the resolved
+workflow), so the checkpoint additionally records an <strong>override-aware
+fingerprint</strong> (<code>workflow_resolved_hash</code>, issue #1350): a <code>sha256:&lt;hex&gt;</code>
+over the raw digest combined with the engine's resolved config snapshot
+(the same order-independent map that drives config-change invalidation —
+post-override, post-profile, post-expansion; engine-injected keys
+excluded; sensitive values stored as digests). Override-driven runs of one
+file never collide on it. It is a run-to-run identity label, not a
+re-derived claim: <code>provenance verify</code> re-checks the raw content digest
+(an edited workflow is a verification failure), while reproducing the
+fingerprint would need the full invocation context. See
+<a href="../../reference/versioning/">Workflow Versioning</a> for the full model.</p>
 <p>The lookup is best-effort — running outside a git repository simply omits
-the field and never fails the run. Commit your workflow before running to
-get fully version-audited results. See
+the SHA and dirty fields and never fails the run. Commit your workflow
+before running to get fully version-audited results. See
 <a href="../../reference/versioning/">Workflow Versioning</a> for the full model.</p>
 <h3 id="include-resolutions-in-the-checkpoint">Include resolutions in the checkpoint<a class="headerlink" href="#include-resolutions-in-the-checkpoint" title="Permanent link">#</a></h3>
 <p>Every <code>[[include]]</code> that pins a git repository (<code>repo</code> + <code>ref</code>) records
@@ -6376,6 +6518,29 @@ and recording it is best-effort (an unreadable checkout logs a warning and
 records nothing, never failing the run). The run report's Provenance
 section lists one row per include. See
 <a href="../../reference/versioning/">Workflow Versioning</a> for the full model.</p>
+<h3 id="environment-lock-identity-in-the-checkpoint">Environment-lock identity in the checkpoint<a class="headerlink" href="#environment-lock-identity-in-the-checkpoint" title="Permanent link">#</a></h3>
+<p>Every run records a per-rule <strong>environment-lock identity</strong> in the checkpoint
+(<code>env_lock_identity</code>, keyed by rule name; issue #1274). It is a self-describing
+<code>"&lt;kind&gt;|&lt;value&gt;"</code> string a caller can compare across hosts:</p>
+<ul>
+<li>container backends (<code>docker</code>/<code>singularity</code>) record the resolved image
+  <strong>digest</strong> (<code>repo@sha256:…</code>), never just the tag;</li>
+<li>env backends (<code>pixi</code>/<code>conda</code>/<code>mamba</code>/<code>venv</code>) record a deterministic,
+  key-ordered SHA-256 <strong>lock hash</strong> over the resolved spec files (including the
+  sibling <code>pixi.lock</code>) — stable across hosts;</li>
+<li>the <code>system</code> backend (or a rule with no lockable environment) records the
+  explicit sentinel <code>system|unavailable</code>.</li>
+</ul>
+<p>When a value cannot be resolved offline (e.g. a container digest the runtime
+cannot report without a pull) it records the explicit sentinel <code>…|unresolved</code>
+rather than a fabricated digest. Use
+<code>oxo_flow_core::env_lock::env_lock_is_resolved(value)</code> — or read the
+<code>env_lock_identity</code> object from <code>provenance verify --json</code> — to tell a resolved
+lock from either sentinel. The field is absent when no rule needs it
+(legacy-skip convention). It exists so a cross-architecture comparison can
+<strong>prove or deny</strong> environment-lock equality instead of assuming it; the
+measurement protocol lives in
+<code>docs/superpowers/audits/cross-arch-provenance-2026-11-19.md</code> (§7a).</p>
 <h3 id="run-logs">Run logs<a class="headerlink" href="#run-logs" title="Permanent link">#</a></h3>
 <p>Every run — and <code>resume</code>, which re-enters the same path — archives its own
 log under the workdir:</p>
@@ -6876,7 +7041,13 @@ re-runs. A missing or unparsable manifest fails the checkpoint rule. See
 the config surface.</p>
 <h2 id="ai-error-recovery-ai-recover">AI error recovery (<code>--ai-recover</code>)<a class="headerlink" href="#ai-error-recovery-ai-recover" title="Permanent link">#</a></h2>
 <p><code>--ai-recover</code> turns a rule failure into a bounded diagnose → apply →
-verify loop. AI can also activate implicitly: a workflow with
+verify loop. The BioType type-admission abort is covered too (issue #1265):
+when the preflight gate rejects a workflow (<code>declared biological type
+contracts are violated …</code>) before any rule runs, the bail is routed through
+the same loop — diagnose, authorized patch, then an <strong>in-process</strong>
+re-admission that only "clears" once the patched workflow passes the type
+gate (no subprocess rerun, since no rule has executed yet). AI can also
+activate implicitly: a workflow with
 <code>[ai] enabled = true</code> runs recovery on failure without the flag. The write
 authorization comes from <code>[ai] auto_fix</code> (see
 <a href="../../reference/workflow-format/#ai-ai-companion-settings">workflow-format</a>);
@@ -6904,7 +7075,13 @@ gate the write, and an unauthorized or refused fix never touches the file.</p>
    could not be resolved).</li>
 <li>The outcome is recorded in the checkpoint's <code>repair_record</code>:
    <code>{applied, session_id, rerun_attempted, rerun_succeeded, detail,
-   timestamp}</code>. Legacy checkpoints without the field load unchanged, and
+   timestamp}</code>. The write is a load-preserve <strong>append</strong> onto the checkpoint
+   file: a checkpoint already present at the run's checkpoint path (a reused
+   workdir's previous-run ledger, including a type-admission abort that ran
+   no rule) keeps every prior field — only the record is added — and an
+   existing-but-unreadable checkpoint is never overwritten by the record
+   write (the evidence survives for the next run's refuse-to-start gate).
+   Legacy checkpoints without the field load unchanged, and
    the report's <code>ai-repair</code> section surfaces the record (see
    <a href="../report/"><code>report</code></a>).</li>
 </ol>
@@ -6920,6 +7097,43 @@ never diagnoses, never rewrites the workflow, and never starts another
 rerun — it only verifies the fix that was already authorized. <code>--no-ai-recover</code>
 also disables recovery for a normal invocation (including the <code>[ai] enabled</code>
 auto-detect).</p>
+<h2 id="reviewed-patch-repair-apply-patch">Reviewed-patch repair (<code>--apply-patch</code>)<a class="headerlink" href="#reviewed-patch-repair-apply-patch" title="Permanent link">#</a></h2>
+<p><code>--apply-patch &lt;FILE&gt;</code> is the <strong>surface-agnostic</strong> half of the repair loop
+(issue #1302). Where <code>--ai-recover</code> lets the model diagnose and propose a fix,
+<code>--apply-patch</code> supplies the fix directly: <code>FILE</code> is a complete, already-repaired
+<code>.oxoflow</code> document (typically reviewed by a human or produced by another tool
+such as the web UI or an editor), and the CLI applies it verbatim. There is no
+diff/patch grammar — the file IS the repaired workflow, which is what the
+shared apply path validates and writes.</p>
+<p>When a required rule fails and <code>--apply-patch</code> is set, the engine:</p>
+<ol>
+<li>Reads <code>FILE</code> and parses it as a complete workflow. A missing or unparseable
+   file is reported and the patch is <strong>not</strong> applied (the run keeps its normal
+   failure path).</li>
+<li>Applies it through the <strong>same</strong> internal path the AI-decided repair uses
+   (<code>apply_fix</code>): the current workflow is validated for shape, the pre-edit
+   original is archived, a <code>.bak</code> sibling is written, and the new document is
+   written atomically. Because it is the same path, <code>FILE</code> must keep every rule
+   name, include, <code>[config]</code> key, and top-level table the original had — a patch
+   that would delete structure is refused.</li>
+<li>Narrates <code>REPAIR_APPLIED session_id=reviewed-patch</code> (the reviewed path uses
+   the fixed session label <code>reviewed-patch</code>).</li>
+<li>Runs the <strong>same</strong> one-shot verification rerun described above, narrating
+   <code>REPAIR_RERUN_SUCCEEDED</code> / <code>REPAIR_RERUN_FAILED</code> / <code>REPAIR_RERUN_SKIPPED</code>, and
+   records the identical <code>repair_record</code> in the checkpoint.</li>
+</ol>
+<p>The verified-repair contract is therefore the same whether the fix came from the
+model or from a reviewed file: one apply, one bounded rerun, one <code>repair_record</code>.
+Automation can produce a fix anywhere, hand it to <code>run --apply-patch</code>, and read
+back the same outcome it would get from AI recovery.</p>
+<h3 id="interaction-with-ai-recover">Interaction with <code>--ai-recover</code><a class="headerlink" href="#interaction-with-ai-recover" title="Permanent link">#</a></h3>
+<p>The two flags are mutually exclusive and <strong>fail closed</strong>: passing both is a
+contradiction (a reviewed file pins the fix, <code>--ai-recover</code> lets the model pick
+one) and <code>run</code> exits with a clear error before starting, rather than guessing
+which wins. <code>--apply-patch</code> is also suppressed by <code>--no-ai-recover</code>, which the
+verification rerun child receives — so a rerun never applies a patch and never
+starts another repair cycle. <code>resume</code> does not accept <code>--apply-patch</code>:
+reviewed-patch repair is a <code>run</code>-time decision.</p>
 <h2 id="exit-codes">Exit codes<a class="headerlink" href="#exit-codes" title="Permanent link">#</a></h2>
 <table>
 <thead>

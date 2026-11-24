@@ -658,6 +658,8 @@
       
         
       
+        
+      
     
     
     
@@ -1142,6 +1144,34 @@
     
   
     16 — 16S Amplicon (QIIME2)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../gallery/typed-variant-calling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    17 — Typed Germline Variant Calling
   
 
     
@@ -1779,6 +1809,10 @@
       
         
       
+        
+      
+        
+      
     
     
     
@@ -2022,6 +2056,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../../commands/diagnostics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    diagnostics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../commands/diff/" class="md-nav__link">
         
   
@@ -2142,6 +2204,34 @@
     
   
     export
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands/export-dsl/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    export-dsl
   
 
     
@@ -3500,6 +3590,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#operator-variables-and-internaltest-variables" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Operator variables and internal/test variables
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#run-workdir-lifecycle" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3543,6 +3644,17 @@
     <span class="md-ellipsis">
       
         Durable runtime state
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tenant-execution-boundary-rb-01" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tenant execution boundary (RB-01)
       
     </span>
   </a>
@@ -4326,6 +4438,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#operator-variables-and-internaltest-variables" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Operator variables and internal/test variables
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#run-workdir-lifecycle" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4369,6 +4492,17 @@
     <span class="md-ellipsis">
       
         Durable runtime state
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tenant-execution-boundary-rb-01" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tenant execution boundary (RB-01)
       
     </span>
   </a>
@@ -4651,6 +4785,8 @@
   literals on the override path are bracketed. Import accepts both
   schemes, so older <code>oxo+https://</code> links keep working.</li>
 </ul>
+<h3 id="operator-variables-and-internaltest-variables">Operator variables and internal/test variables<a class="headerlink" href="#operator-variables-and-internaltest-variables" title="Permanent link">#</a></h3>
+<p>The environment variables documented below and in the deployment guides are operator-facing configuration knobs. Some variables exist only for test harnesses or internal process coordination (for example <code>OXO_FLOW_BACKGROUND_PID_FILE</code>, <code>OXO_FLOW_TRACK_PGID</code>, <code>OXO_FLOW_STDERR_ALREADY_REDIRECTED</code>, and names prefixed <code>OXO_FLOW_TEST_*</code>). Internal/test names are implementation details, are not a supported public configuration contract, and may change without operator-facing release guarantees. Operators should use the documented variables only; test harnesses own and pin their internal names.</p>
 <p>Server process environment:</p>
 <ul>
 <li><code>OXO_FLOW_BIN</code> — explicit path to the <code>oxo-flow</code> CLI binary the server
@@ -4688,6 +4824,7 @@ and only <code>ON CONFLICT</code> decides the loser (zero rows affected → the 
 not per user, so a <code>workspace</code>-shared pipeline admits one live run across all
 its readers. <code>retry</code> and <code>resume-checkpoint</code> are the only paths that
 deliberately continue a predecessor's workdir.</p>
+<p>Backend-equivalent admission is now asserted, not assumed (<code>tests/admission_backend_parity.rs</code>, issue #1312): one shared scenario driver runs the SAME claims through the SAME <code>claim_run_row</code> helper against BOTH backends and compares each backend's verdict vector to one canonical contract (workdir-serialized claim; pipeline-serialized claim; concurrent double-claim admits exactly one; a terminal predecessor releases the guard; a zero-affected-rows rejection is <code>Ok(false)</code> — the exact input the retry/resume arms map to <code>409 RUN_NOT_TERMINAL</code> — never a storage error). The SQLite arm runs unconditionally; the PostgreSQL arm gates on <code>OXO_PG_TEST_URL</code> and skips when unset. This proves backend-equal admission VERDICTS for these scenarios in a single process on a single host. It does NOT prove multi-instance deployment, pool exhaustion, network partitions, or crash recovery — those remain unverified (see <code>docs/superpowers/audits/postgres-ledger-2026-11-19.md</code>).</p>
 <p>Nothing reclaims those trees automatically: a long-lived server accumulates one
 <code>users/&lt;u&gt;/runs/&lt;run_id&gt;/</code> directory per run forever. The manual sweeper is
 <a href="../../commands/runs/"><code>oxo-flow runs gc</code></a>, which deletes only terminal-run
@@ -4845,6 +4982,35 @@ issue #1133). Locally executed runs on Linux additionally enforce the
 workflow's declared memory with <code>RLIMIT_DATA</code> on the spawned CLI process
 tree; other platforms and remote (cluster) runs remain advisory — see
 <a href="../web-api/#declared-resource-enforcement">Quota → Declared-resource enforcement</a>.</p>
+<h3 id="tenant-execution-boundary-rb-01">Tenant execution boundary (RB-01)<a class="headerlink" href="#tenant-execution-boundary-rb-01" title="Permanent link">#</a></h3>
+<p>Every locally executed run spawns through one choke point
+(<code>spawn_background_run_with_args</code>), which layers four independent OS-level
+controls on the CLI process tree (and therefore every rule shell it forks):</p>
+<ol>
+<li><strong>Environment allowlist (always on, all platforms, RB-01a)</strong> — the child
+   is rebuilt from the engine's rule-shell policy; server secrets never
+   ride along.</li>
+<li><strong>Resource ceilings (Linux, opt-in)</strong> — <code>RLIMIT_DATA</code> from the declared
+   memory, plus operator-wide <code>RLIMIT_CPU</code>/<code>RLIMIT_NPROC</code> knobs.</li>
+<li><strong>Kernel filesystem/network sandbox (Linux 5.13+, opt-in)</strong> —
+   <code>OXO_FLOW_WEB_SANDBOX=landlock</code> installs a Landlock ruleset in a
+   <code>pre_exec</code> hook: the spawned tree can read+execute system dirs and the
+   engine binary and write only the run workdir, the per-run scratch dir,
+   and the operator's engine dirs; <code>/proc</code>, <code>/sys</code>, <code>/etc</code>, the server's
+   <code>$HOME</code>, the workspace root, and other tenants' workdirs are denied at
+   the kernel level; TCP bind/connect is denied on kernel 6.7+ (ABI v4),
+   abstract-UNIX-socket and signal scoping on 6.10+/6.12+ (ABI v5/v6).
+   Fail-closed: an unhonorable sandbox request refuses the spawn.</li>
+<li><strong>Process-group bookkeeping (always on)</strong> — the run owns a process
+   group, so cancel/pause/resume signal the whole tree.</li>
+</ol>
+<p>The implementation lives in <code>crates/oxo-flow-web/src/sandbox.rs</code>; the
+enforced-vs-residual matrix, the knob reference, and the two-tenant
+adversarial evidence are in
+<a href="../web-api/#tenant-isolation-and-the-run-sandbox">Create Run → Tenant isolation</a>.
+Per-run OS identities and per-tenant containers remain deployment modes,
+not enforced features — remote (cluster) runs execute on the cluster host
+under the cluster's own controls.</p>
 <hr />
 <h2 id="api-namespace">API Namespace<a class="headerlink" href="#api-namespace" title="Permanent link">#</a></h2>
 <p><div class="language-text highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>/api
@@ -5019,7 +5185,7 @@ only present when a handler supplies them (e.g. <code>429</code> bodies carry
 <tr>
 <td><code>AUDIT_WRITE_FAILED</code></td>
 <td>500</td>
-<td>A REQUIRED audit row for a security-relevant action could not be persisted; the request fails closed (WEB-15 / issue #1140)</td>
+<td>A REQUIRED audit row for a security-relevant action could not be persisted; the request fails closed. Audit rows are written ahead of the mutation (a durable <code>pending</code> intent before the handler, finalized after) so a crash cannot leave a committed change with no audit row (WEB-15 / issue #1140, write-ahead ordering issue #1311)</td>
 </tr>
 <tr>
 <td><code>DB_ERROR</code></td>

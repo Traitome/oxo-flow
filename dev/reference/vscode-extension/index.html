@@ -658,6 +658,8 @@
       
         
       
+        
+      
     
     
     
@@ -1142,6 +1144,34 @@
     
   
     16 — 16S Amplicon (QIIME2)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../gallery/typed-variant-calling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    17 — Typed Germline Variant Calling
   
 
     
@@ -1779,6 +1809,10 @@
       
         
       
+        
+      
+        
+      
     
     
     
@@ -2022,6 +2056,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../../commands/diagnostics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    diagnostics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../commands/diff/" class="md-nav__link">
         
   
@@ -2142,6 +2204,34 @@
     
   
     export
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands/export-dsl/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    export-dsl
   
 
     
@@ -3153,6 +3243,23 @@
       
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="CLI lifecycle commands">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#apply-reviewed-repair-remediation-continuity" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Apply Reviewed Repair (remediation continuity)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -4176,6 +4283,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="CLI lifecycle commands">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#apply-reviewed-repair-remediation-continuity" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Apply Reviewed Repair (remediation continuity)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -4430,6 +4554,10 @@ title bar.</p>
 <td><code>oxo-flow resume &lt;checkpoint&gt;</code> (quick pick over <code>**/.oxo-flow/checkpoint.json</code>)</td>
 </tr>
 <tr>
+<td>Apply Reviewed Repair…</td>
+<td><code>oxo-flow run &lt;workflow&gt; --apply-patch &lt;patch&gt; --workdir &lt;workdir&gt;</code> — pick a failed run's checkpoint, then the reviewed patch file (see below)</td>
+</tr>
+<tr>
 <td>Show Run Status</td>
 <td><code>oxo-flow status &lt;checkpoint&gt; --timing</code> (quick pick over checkpoint files)</td>
 </tr>
@@ -4484,10 +4612,36 @@ a dedicated terminal panel, re-run support, and <code>tasks.json</code> customiz
 </span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="p">}</span>
 </span></code></pre></div>
 <p><code>kind</code> selects the lifecycle: <code>run</code> (default), <code>dry-run</code>, <code>graph</code>,
-<code>resume</code>, or <code>generate</code>. For <code>resume</code>, <code>workflow</code> holds the checkpoint path
+<code>resume</code>, <code>generate</code>, or <code>apply-repair</code>. For <code>resume</code>, <code>workflow</code> holds the checkpoint path
 (e.g. <code>.oxo-flow/checkpoint.json</code>); for <code>generate</code>, the task runs
 <code>oxo-flow template "&lt;description&gt;" --ai -o &lt;file&gt;</code> with <code>extraArgs[0]</code> as
-the description.</p>
+the description; for <code>apply-repair</code>, the task runs
+<code>oxo-flow run &lt;workflow&gt; --apply-patch &lt;patch&gt; --workdir &lt;workdir&gt;</code> with the
+<code>patch</code> and <code>workdir</code> definition fields.</p>
+<h3 id="apply-reviewed-repair-remediation-continuity">Apply Reviewed Repair (remediation continuity)<a class="headerlink" href="#apply-reviewed-repair-remediation-continuity" title="Permanent link">#</a></h3>
+<p><strong>Apply Reviewed Repair…</strong> closes the third surface of the self-healing loop
+(issue #1302): a repair patch a human reviewed — or another surface produced —
+is applied through the SAME CLI verified-repair path everywhere, so the
+reviewed patch is the thing that actually runs, with the same
+<code>REPAIR_APPLIED</code> / <code>REPAIR_RERUN_*</code> narration and the same checkpoint
+<code>repair_record</code> on every surface. The command:</p>
+<ol>
+<li>Quick-picks a failed run's checkpoint (<code>**/.oxo-flow/checkpoint.json</code>).</li>
+<li>Resolves the workflow: the workdir's staged <code>workflow.oxoflow</code>
+   (web-created runs) when present, else the pipeline picker.</li>
+<li>Asks for the reviewed patch document — a whole <code>.oxoflow</code> workflow in the
+   exact shape the CLI's <code>apply_fix</code> writes (no diff grammar).</li>
+<li>Executes <code>oxo-flow run &lt;workflow&gt; --apply-patch &lt;patch&gt; --workdir
+   &lt;workdir&gt;</code> as a task.</li>
+</ol>
+<p>The extension shells the CLI binary, so the extension's apply path IS the
+CLI path by construction; the cross-surface parity harness
+(<code>tests/remediation_continuity.rs</code> in the repository) proves the applied
+workflow and the <code>REPAIR_*</code> checkpoint outcome converge across the CLI, the
+web route (<code>POST /api/runs/{id}/apply-repair</code>), and this extension argv.
+The patch applies only when a rule fails during the re-attempt, and the CLI
+validates it against the workflow it replaces before any write — a patch
+that would drop rules or sections is refused, never blind-written.</p>
 <h2 id="settings">Settings<a class="headerlink" href="#settings" title="Permanent link">#</a></h2>
 <table>
 <thead>

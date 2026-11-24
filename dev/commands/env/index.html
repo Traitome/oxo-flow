@@ -658,6 +658,8 @@
       
         
       
+        
+      
     
     
     
@@ -1142,6 +1144,34 @@
     
   
     16 — 16S Amplicon (QIIME2)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../gallery/typed-variant-calling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    17 — Typed Germline Variant Calling
   
 
     
@@ -1781,6 +1811,10 @@
       
         
       
+        
+      
+        
+      
     
     
     
@@ -2004,6 +2038,34 @@
     
   
     debug
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../diagnostics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    diagnostics
   
 
     
@@ -2296,6 +2358,34 @@
     
   
     export
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../export-dsl/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    export-dsl
   
 
     
@@ -4192,7 +4282,7 @@
 <h2 id="subcommands">Subcommands<a class="headerlink" href="#subcommands" title="Permanent link">#</a></h2>
 <h3 id="env-list"><code>env list</code><a class="headerlink" href="#env-list" title="Permanent link">#</a></h3>
 <p>List available environment backends, or list environments defined in a workflow.</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>oxo-flow<span class="w"> </span>env<span class="w"> </span>list<span class="w"> </span><span class="o">[</span>WORKFLOW<span class="o">]</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>oxo-flow<span class="w"> </span>env<span class="w"> </span>list<span class="w"> </span><span class="o">[</span>WORKFLOW<span class="o">]</span><span class="w"> </span><span class="o">[</span>--json<span class="o">]</span>
 </span></code></pre></div>
 <p>When called without arguments, lists all backends detected on the system.
 When given a workflow file, lists the environment each rule will actually run
@@ -4214,9 +4304,38 @@ that resolves to no environment is reported as <code>system</code>.</p>
 </span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>  ✓ venv
 </span></code></pre></div>
 <p>The two banner lines print only at an interactive terminal. All of this output goes to <strong>stderr</strong> — capture it with <code>2&gt;</code> or <code>2&gt;&amp;1</code>; stdout stays empty.</p>
+<p><strong><code>--json</code> output</strong> (issue #1336): pass <code>--json</code> to emit one machine-readable
+document to stdout instead. Without a workflow the <code>backends</code> array is filled
+and <code>rules</code> is empty; with a workflow the reverse holds. <code>resolved_binary</code> is
+present only where the resolver names the binary it would invoke (the
+conda family).</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>oxo-flow<span class="w"> </span>env<span class="w"> </span>list<span class="w"> </span>--json
+</span></code></pre></div>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="p">{</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span><span class="nt">"command"</span><span class="p">:</span><span class="w"> </span><span class="s2">"env list"</span><span class="p">,</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span><span class="nt">"backends"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">    </span><span class="p">{</span><span class="w"> </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"system"</span><span class="p">,</span><span class="w"> </span><span class="nt">"available"</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="w"> </span><span class="p">},</span>
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">    </span><span class="p">{</span><span class="w"> </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"conda"</span><span class="p">,</span><span class="w"> </span><span class="nt">"available"</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="nt">"resolved_binary"</span><span class="p">:</span><span class="w"> </span><span class="s2">"conda"</span><span class="w"> </span><span class="p">},</span>
+</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">    </span><span class="p">{</span><span class="w"> </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"venv"</span><span class="p">,</span><span class="w"> </span><span class="nt">"available"</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="w"> </span><span class="p">}</span>
+</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="w">  </span><span class="p">],</span>
+</span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="w">  </span><span class="nt">"rules"</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span>
+</span><span id="__span-4-9"><a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="p">}</span>
+</span></code></pre></div>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>oxo-flow<span class="w"> </span>env<span class="w"> </span>list<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>--json
+</span></code></pre></div>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="p">{</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span><span class="nt">"command"</span><span class="p">:</span><span class="w"> </span><span class="s2">"env list"</span><span class="p">,</span>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span><span class="nt">"workflow"</span><span class="p">:</span><span class="w"> </span><span class="s2">"pipeline.oxoflow"</span><span class="p">,</span>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">  </span><span class="nt">"backends"</span><span class="p">:</span><span class="w"> </span><span class="p">[],</span>
+</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">  </span><span class="nt">"rules"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="w">    </span><span class="p">{</span><span class="w"> </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"align"</span><span class="p">,</span><span class="w"> </span><span class="nt">"backend"</span><span class="p">:</span><span class="w"> </span><span class="s2">"conda"</span><span class="w"> </span><span class="p">},</span>
+</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="w">    </span><span class="p">{</span><span class="w"> </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"call_variants"</span><span class="p">,</span><span class="w"> </span><span class="nt">"backend"</span><span class="p">:</span><span class="w"> </span><span class="s2">"docker"</span><span class="w"> </span><span class="p">}</span>
+</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="w">  </span><span class="p">]</span>
+</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a><span class="p">}</span>
+</span></code></pre></div>
 <h3 id="env-check"><code>env check</code><a class="headerlink" href="#env-check" title="Permanent link">#</a></h3>
 <p>Check that all environments declared in a workflow file are valid and their backends are available. Each rule's environment is resolved with the same precedence the run uses (<code>env_group</code> → rule <code>environment</code> → <code>[defaults] environment</code>), so a rule that inherits the defaults is validated against the backend that will actually execute.</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>oxo-flow<span class="w"> </span>env<span class="w"> </span>check<span class="w"> </span><span class="o">[</span>WORKFLOW<span class="o">]</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>oxo-flow<span class="w"> </span>env<span class="w"> </span>check<span class="w"> </span><span class="o">[</span>WORKFLOW<span class="o">]</span><span class="w"> </span><span class="o">[</span>--json<span class="o">]</span>
 </span></code></pre></div>
 <table>
 <thead>
@@ -4233,22 +4352,49 @@ that resolves to no environment is reported as <code>system</code>.</p>
 </tbody>
 </table>
 <p><strong>Output (all valid):</strong></p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>  ✓ align (conda)
-</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>  ✓ call_variants (docker)
-</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>  ✓ annotate (singularity)
+<div class="language-text highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>  ✓ align (conda)
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>  ✓ call_variants (docker)
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>  ✓ annotate (singularity)
 </span></code></pre></div>
 <p>Without a workflow, each available backend also names the binary that a run
 would resolve — the engine prefers <code>mamba</code> → <code>micromamba</code> → <code>conda</code>, so on a
 machine with several conda-family installs the resolved binary is what
 actually gets invoked:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>Environment backend availability:
-</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>  ✓ mamba (resolved: micromamba)
-</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>  ✓ conda
-</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>  ✗ docker (not found)
+<div class="language-text highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>Environment backend availability:
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>  ✓ mamba (resolved: micromamba)
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>  ✓ conda
+</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>  ✗ docker (not found)
+</span></code></pre></div>
+<p><strong><code>--json</code> output</strong> (issue #1336): with <code>--json</code>, <code>env check</code> emits one
+document with a per-rule verdict (<code>rules[].ok</code>, and <code>rules[].error</code> when a
+rule fails) plus a top-level <code>all_ok</code> summary. The exit code is preserved: a
+failing check still exits <code>1</code>, so <code>all_ok</code> and the process status agree.</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>oxo-flow<span class="w"> </span>env<span class="w"> </span>check<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>--json
+</span></code></pre></div>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="p">{</span>
+</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="w">  </span><span class="nt">"command"</span><span class="p">:</span><span class="w"> </span><span class="s2">"env check"</span><span class="p">,</span>
+</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="w">  </span><span class="nt">"workflow"</span><span class="p">:</span><span class="w"> </span><span class="s2">"pipeline.oxoflow"</span><span class="p">,</span>
+</span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="w">  </span><span class="nt">"all_ok"</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+</span><span id="__span-11-5"><a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a><span class="w">  </span><span class="nt">"backends"</span><span class="p">:</span><span class="w"> </span><span class="p">[],</span>
+</span><span id="__span-11-6"><a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a><span class="w">  </span><span class="nt">"rules"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-11-7"><a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a><span class="w">    </span><span class="p">{</span><span class="w"> </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"align"</span><span class="p">,</span><span class="w"> </span><span class="nt">"backend"</span><span class="p">:</span><span class="w"> </span><span class="s2">"conda"</span><span class="p">,</span><span class="w"> </span><span class="nt">"ok"</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="w"> </span><span class="p">},</span>
+</span><span id="__span-11-8"><a id="__codelineno-11-8" name="__codelineno-11-8" href="#__codelineno-11-8"></a><span class="w">    </span><span class="p">{</span>
+</span><span id="__span-11-9"><a id="__codelineno-11-9" name="__codelineno-11-9" href="#__codelineno-11-9"></a><span class="w">      </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"call_variants"</span><span class="p">,</span>
+</span><span id="__span-11-10"><a id="__codelineno-11-10" name="__codelineno-11-10" href="#__codelineno-11-10"></a><span class="w">      </span><span class="nt">"backend"</span><span class="p">:</span><span class="w"> </span><span class="s2">"docker"</span><span class="p">,</span>
+</span><span id="__span-11-11"><a id="__codelineno-11-11" name="__codelineno-11-11" href="#__codelineno-11-11"></a><span class="w">      </span><span class="nt">"ok"</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+</span><span id="__span-11-12"><a id="__codelineno-11-12" name="__codelineno-11-12" href="#__codelineno-11-12"></a><span class="w">      </span><span class="nt">"error"</span><span class="p">:</span><span class="w"> </span><span class="s2">"environment error (docker): docker is not installed or not in PATH"</span>
+</span><span id="__span-11-13"><a id="__codelineno-11-13" name="__codelineno-11-13" href="#__codelineno-11-13"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-11-14"><a id="__codelineno-11-14" name="__codelineno-11-14" href="#__codelineno-11-14"></a><span class="w">  </span><span class="p">]</span>
+</span><span id="__span-11-15"><a id="__codelineno-11-15" name="__codelineno-11-15" href="#__codelineno-11-15"></a><span class="p">}</span>
+</span></code></pre></div>
+<p>Without a workflow, <code>--json</code> reports backend availability instead
+(<code>backends[]</code> filled, <code>rules</code> empty) and <code>all_ok</code> stays <code>true</code> — availability
+is informational, matching the text path's exit <code>0</code>.</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>oxo-flow<span class="w"> </span>env<span class="w"> </span>check<span class="w"> </span>--json
 </span></code></pre></div>
 <h3 id="env-create"><code>env create</code><a class="headerlink" href="#env-create" title="Permanent link">#</a></h3>
 <p>Create a new environment from a specification file.</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>oxo-flow<span class="w"> </span>env<span class="w"> </span>create<span class="w"> </span><span class="o">[</span>OPTIONS<span class="o">]</span><span class="w"> </span>&lt;SPEC&gt;
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>oxo-flow<span class="w"> </span>env<span class="w"> </span>create<span class="w"> </span><span class="o">[</span>OPTIONS<span class="o">]</span><span class="w"> </span>&lt;SPEC&gt;
 </span></code></pre></div>
 <table>
 <thead>
@@ -4291,8 +4437,8 @@ actually gets invoked:</p>
 </tbody>
 </table>
 <p><strong>Output (missing backend):</strong></p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>  ✓ align (conda)
-</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>  ✗ call_variants — environment error (docker): docker is not installed or not in PATH
+<div class="language-text highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>  ✓ align (conda)
+</span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>  ✗ call_variants — environment error (docker): docker is not installed or not in PATH
 </span></code></pre></div>
 <h3 id="env-gc"><code>env gc</code><a class="headerlink" href="#env-gc" title="Permanent link">#</a></h3>
 <p>Inspect and clean up the <strong>opt-in</strong> shared environment store.</p>
@@ -4310,7 +4456,7 @@ environment instead of re-downloading and re-building it per tree. A broken
 link (e.g. the store dir was deleted) is detected automatically on the next
 run: the cached entry is invalidated, the dangling in-tree symlink is
 detached, and the environment is rebuilt, no manual intervention needed.</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>oxo-flow<span class="w"> </span>env<span class="w"> </span>gc<span class="w"> </span><span class="o">[</span>--min-age-days<span class="w"> </span>N<span class="o">]</span><span class="w"> </span><span class="o">[</span>--dry-run<span class="o">]</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>oxo-flow<span class="w"> </span>env<span class="w"> </span>gc<span class="w"> </span><span class="o">[</span>--min-age-days<span class="w"> </span>N<span class="o">]</span><span class="w"> </span><span class="o">[</span>--dry-run<span class="o">]</span>
 </span></code></pre></div>
 <table>
 <thead>
@@ -4349,16 +4495,16 @@ and exits — there is nothing to collect.</p>
 <li>Young dirs are kept even when torn/incomplete: a fresh torn dir may be a concurrent run mid-setup, so the age gate protects those too</li>
 <li>Deleting a still-needed env is recoverable: the next run detects the broken link and rebuilds</li>
 </ul>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="c1"># Preview</span>
-</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="nv">OXO_FLOW_ENV_STORE</span><span class="o">=</span>~/.cache/oxo-flow/envs<span class="w"> </span>oxo-flow<span class="w"> </span>env<span class="w"> </span>gc<span class="w"> </span>--dry-run
-</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>
-</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>Shared<span class="w"> </span>environment<span class="w"> </span>store:<span class="w"> </span>/home/user/.cache/oxo-flow/envs<span class="w"> </span><span class="o">(</span><span class="m">3</span><span class="w"> </span>env<span class="w"> </span><span class="nb">dirs</span><span class="o">)</span>
-</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="w">  </span>pixi-3f2a91b0c4d5e6f7<span class="w"> </span><span class="o">[</span>pixi<span class="o">]</span><span class="w"> </span>referenced<span class="w"> </span>by<span class="w"> </span>a<span class="w"> </span>checkpoint<span class="w"> </span>—<span class="w"> </span>kept
-</span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="w">      </span><span class="m">1</span>.2<span class="w"> </span>GiB<span class="w"> </span>/home/user/.cache/oxo-flow/envs/pixi-3f2a91b0c4d5e6f7
-</span><span id="__span-9-7"><a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a><span class="w">  </span>venv-8b7c6d5e4f3a2b1c<span class="w"> </span><span class="o">[</span>venv<span class="o">]</span><span class="w"> </span>unreferenced<span class="w"> </span>and<span class="w"> </span>old<span class="w"> </span>enough<span class="w"> </span>—<span class="w"> </span>eligible
-</span><span id="__span-9-8"><a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a><span class="w">      </span><span class="m">310</span>.4<span class="w"> </span>MiB<span class="w"> </span>/home/user/.cache/oxo-flow/envs/venv-8b7c6d5e4f3a2b1c
-</span><span id="__span-9-9"><a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a>
-</span><span id="__span-9-10"><a id="__codelineno-9-10" name="__codelineno-9-10" href="#__codelineno-9-10"></a>Summary:<span class="w"> </span><span class="m">1</span><span class="w"> </span>store<span class="w"> </span>dir<span class="o">(</span>s<span class="o">)</span><span class="w"> </span>would<span class="w"> </span>be<span class="w"> </span>deleted,<span class="w"> </span>freeing<span class="w"> </span>~310.4<span class="w"> </span>MiB<span class="w"> </span><span class="o">(</span>dry<span class="w"> </span>run<span class="w"> </span>—<span class="w"> </span>nothing<span class="w"> </span>touched<span class="o">)</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="c1"># Preview</span>
+</span><span id="__span-16-2"><a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a><span class="nv">OXO_FLOW_ENV_STORE</span><span class="o">=</span>~/.cache/oxo-flow/envs<span class="w"> </span>oxo-flow<span class="w"> </span>env<span class="w"> </span>gc<span class="w"> </span>--dry-run
+</span><span id="__span-16-3"><a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a>
+</span><span id="__span-16-4"><a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a>Shared<span class="w"> </span>environment<span class="w"> </span>store:<span class="w"> </span>/home/user/.cache/oxo-flow/envs<span class="w"> </span><span class="o">(</span><span class="m">3</span><span class="w"> </span>env<span class="w"> </span><span class="nb">dirs</span><span class="o">)</span>
+</span><span id="__span-16-5"><a id="__codelineno-16-5" name="__codelineno-16-5" href="#__codelineno-16-5"></a><span class="w">  </span>pixi-3f2a91b0c4d5e6f7<span class="w"> </span><span class="o">[</span>pixi<span class="o">]</span><span class="w"> </span>referenced<span class="w"> </span>by<span class="w"> </span>a<span class="w"> </span>checkpoint<span class="w"> </span>—<span class="w"> </span>kept
+</span><span id="__span-16-6"><a id="__codelineno-16-6" name="__codelineno-16-6" href="#__codelineno-16-6"></a><span class="w">      </span><span class="m">1</span>.2<span class="w"> </span>GiB<span class="w"> </span>/home/user/.cache/oxo-flow/envs/pixi-3f2a91b0c4d5e6f7
+</span><span id="__span-16-7"><a id="__codelineno-16-7" name="__codelineno-16-7" href="#__codelineno-16-7"></a><span class="w">  </span>venv-8b7c6d5e4f3a2b1c<span class="w"> </span><span class="o">[</span>venv<span class="o">]</span><span class="w"> </span>unreferenced<span class="w"> </span>and<span class="w"> </span>old<span class="w"> </span>enough<span class="w"> </span>—<span class="w"> </span>eligible
+</span><span id="__span-16-8"><a id="__codelineno-16-8" name="__codelineno-16-8" href="#__codelineno-16-8"></a><span class="w">      </span><span class="m">310</span>.4<span class="w"> </span>MiB<span class="w"> </span>/home/user/.cache/oxo-flow/envs/venv-8b7c6d5e4f3a2b1c
+</span><span id="__span-16-9"><a id="__codelineno-16-9" name="__codelineno-16-9" href="#__codelineno-16-9"></a>
+</span><span id="__span-16-10"><a id="__codelineno-16-10" name="__codelineno-16-10" href="#__codelineno-16-10"></a>Summary:<span class="w"> </span><span class="m">1</span><span class="w"> </span>store<span class="w"> </span>dir<span class="o">(</span>s<span class="o">)</span><span class="w"> </span>would<span class="w"> </span>be<span class="w"> </span>deleted,<span class="w"> </span>freeing<span class="w"> </span>~310.4<span class="w"> </span>MiB<span class="w"> </span><span class="o">(</span>dry<span class="w"> </span>run<span class="w"> </span>—<span class="w"> </span>nothing<span class="w"> </span>touched<span class="o">)</span>
 </span></code></pre></div>
 <p><strong>Notes:</strong></p>
 <ul>
@@ -4382,19 +4528,28 @@ and exits — there is nothing to collect.</p>
 <td><code>-v</code></td>
 <td>Enable debug-level logging</td>
 </tr>
+<tr>
+<td><code>--json</code></td>
+<td>—</td>
+<td>Emit a machine-readable JSON document instead of text. Supported by <code>env list</code> and <code>env check</code> (issue #1336); <code>env create</code> and <code>env gc</code> reject it</td>
+</tr>
 </tbody>
 </table>
 <hr />
 <h2 id="examples">Examples<a class="headerlink" href="#examples" title="Permanent link">#</a></h2>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="c1"># List available backends</span>
-</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>oxo-flow<span class="w"> </span>env<span class="w"> </span>list
-</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>
-</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="c1"># Check a specific workflow</span>
-</span><span id="__span-10-5"><a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a>oxo-flow<span class="w"> </span>env<span class="w"> </span>check<span class="w"> </span>pipeline.oxoflow
-</span><span id="__span-10-6"><a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a>
-</span><span id="__span-10-7"><a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a><span class="c1"># Opt into the shared env store for this shell session, then preview GC</span>
-</span><span id="__span-10-8"><a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a><span class="nb">export</span><span class="w"> </span><span class="nv">OXO_FLOW_ENV_STORE</span><span class="o">=</span>~/.cache/oxo-flow/envs
-</span><span id="__span-10-9"><a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a>oxo-flow<span class="w"> </span>env<span class="w"> </span>gc<span class="w"> </span>--dry-run
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="c1"># List available backends</span>
+</span><span id="__span-17-2"><a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a>oxo-flow<span class="w"> </span>env<span class="w"> </span>list
+</span><span id="__span-17-3"><a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a>
+</span><span id="__span-17-4"><a id="__codelineno-17-4" name="__codelineno-17-4" href="#__codelineno-17-4"></a><span class="c1"># Check a specific workflow</span>
+</span><span id="__span-17-5"><a id="__codelineno-17-5" name="__codelineno-17-5" href="#__codelineno-17-5"></a>oxo-flow<span class="w"> </span>env<span class="w"> </span>check<span class="w"> </span>pipeline.oxoflow
+</span><span id="__span-17-6"><a id="__codelineno-17-6" name="__codelineno-17-6" href="#__codelineno-17-6"></a>
+</span><span id="__span-17-7"><a id="__codelineno-17-7" name="__codelineno-17-7" href="#__codelineno-17-7"></a><span class="c1"># Machine-readable</span>
+</span><span id="__span-17-8"><a id="__codelineno-17-8" name="__codelineno-17-8" href="#__codelineno-17-8"></a>oxo-flow<span class="w"> </span>env<span class="w"> </span>list<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>--json
+</span><span id="__span-17-9"><a id="__codelineno-17-9" name="__codelineno-17-9" href="#__codelineno-17-9"></a>oxo-flow<span class="w"> </span>env<span class="w"> </span>check<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>--json
+</span><span id="__span-17-10"><a id="__codelineno-17-10" name="__codelineno-17-10" href="#__codelineno-17-10"></a>
+</span><span id="__span-17-11"><a id="__codelineno-17-11" name="__codelineno-17-11" href="#__codelineno-17-11"></a><span class="c1"># Opt into the shared env store for this shell session, then preview GC</span>
+</span><span id="__span-17-12"><a id="__codelineno-17-12" name="__codelineno-17-12" href="#__codelineno-17-12"></a><span class="nb">export</span><span class="w"> </span><span class="nv">OXO_FLOW_ENV_STORE</span><span class="o">=</span>~/.cache/oxo-flow/envs
+</span><span id="__span-17-13"><a id="__codelineno-17-13" name="__codelineno-17-13" href="#__codelineno-17-13"></a>oxo-flow<span class="w"> </span>env<span class="w"> </span>gc<span class="w"> </span>--dry-run
 </span></code></pre></div>
 <hr />
 <h2 id="notes">Notes<a class="headerlink" href="#notes" title="Permanent link">#</a></h2>

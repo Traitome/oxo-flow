@@ -658,6 +658,8 @@
       
         
       
+        
+      
     
     
     
@@ -1142,6 +1144,34 @@
     
   
     16 — 16S Amplicon (QIIME2)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../gallery/typed-variant-calling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    17 — Typed Germline Variant Calling
   
 
     
@@ -1781,6 +1811,10 @@
       
         
       
+        
+      
+        
+      
     
     
     
@@ -2024,6 +2058,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../diagnostics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    diagnostics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../diff/" class="md-nav__link">
         
   
@@ -2144,6 +2206,34 @@
     
   
     export
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../export-dsl/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    export-dsl
   
 
     
@@ -2447,6 +2537,17 @@
         
       </ul>
     </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#json-output" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        JSON output
+      
+    </span>
+  </a>
   
 </li>
       
@@ -4374,6 +4475,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#json-output" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        JSON output
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#notes" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4480,6 +4592,11 @@
 <td><code>metro</code> station zoom (metro only): <code>rule</code> (one station per rule, default), <code>process</code> (chain-connected same-tool rules collapse into tool-named stations — one stop per analysis step), <code>module</code> (one station per module section — the publication/overview tier). Passing it with any other format is an error. See <a href="../../reference/graph-subcommand/">Graph Subcommand Design</a></td>
 </tr>
 <tr>
+<td><code>--json</code></td>
+<td></td>
+<td>Emit the machine-readable DAG document (nodes, edges, parallel groups, critical path, metrics) to stdout — the same structure the web API returns. Rejected with a non-default diagram format (<code>-f dot</code>/<code>tree</code>/<code>mermaid</code>/<code>metro</code>/<code>dot-clustered</code>) or with <code>--granularity</code>; the default <code>ascii</code> format is accepted. See <a href="#json-output">JSON output</a></td>
+</tr>
+<tr>
 <td><code>--verbose</code></td>
 <td><code>-v</code></td>
 <td>Enable debug-level logging</td>
@@ -4497,7 +4614,7 @@
 </tbody>
 </table>
 <blockquote>
-<p>The global <code>--json</code> flag is <strong>not supported</strong> by this command — passing it fails fast instead of being silently ignored. Machine-readable output is available from: <code>run</code>, <code>dry-run</code>, <code>validate</code>, <code>lint</code>, <code>test</code>, <code>status</code>, <code>wait</code>, <code>batch</code>, <code>info</code>, <code>knowledge</code>, <code>schema</code>, <code>verify-data</code>, <code>license</code>, <code>ai</code>, <code>provenance verify</code>, <code>runs gc</code>, and <code>cluster status</code>/<code>cancel</code>/<code>logs</code> (see <a href="../init/#options"><code>init</code></a> for the canonical note).</p>
+<p>JSON output for <code>graph</code> is the global <code>--json</code> flag (see <a href="#json-output">JSON output</a>); it fails fast if combined with a diagram format. Machine-readable output is also available from: <code>run</code>, <code>dry-run</code>, <code>validate</code>, <code>lint</code>, <code>test</code>, <code>status</code>, <code>wait</code>, <code>batch</code>, <code>resume</code>, <code>info</code>, <code>knowledge</code>, <code>diagnostics</code>, <code>schema</code>, <code>verify-data</code>, <code>license</code>, <code>ai</code>, <code>provenance verify</code>, <code>provenance diff</code>, <code>provenance attest</code>, <code>provenance attest-verify</code>, <code>diff</code>, <code>runs gc</code>, <code>import</code>, <code>env list</code>/<code>check</code>, and <code>cluster status</code>/<code>cancel</code>/<code>logs</code> (see <a href="../init/#options"><code>init</code></a> for the canonical note).</p>
 </blockquote>
 <hr />
 <h2 id="examples">Examples<a class="headerlink" href="#examples" title="Permanent link">#</a></h2>
@@ -4687,6 +4804,66 @@ section graph, ties by first appearance — so lines flow through them
 without loops (file order alone can violate dataflow in ported workflows);
 cross-section edges are placed outside the sections as nf-metro requires.
 Station labels drop the <code>module::</code> prefix.</p>
+<hr />
+<h2 id="json-output">JSON output<a class="headerlink" href="#json-output" title="Permanent link">#</a></h2>
+<p><code>graph --json</code> emits a machine-readable DAG document instead of a diagram — the same structure the web API's DAG endpoint returns, built from the same core primitives (<code>WorkflowDag::metrics</code>, <code>parallel_groups</code>, <code>critical_path</code>). Scripts and CI can diff topology and metrics without running the workflow or calling the API:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>oxo-flow<span class="w"> </span>graph<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>--json
+</span><span id="__span-16-2"><a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a><span class="c1"># Diff-friendly, deterministic (nodes/edges sorted), pipe straight into jq:</span>
+</span><span id="__span-16-3"><a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a>oxo-flow<span class="w"> </span>graph<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>--json<span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span><span class="s1">'.metrics.critical_path_length'</span>
+</span><span id="__span-16-4"><a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a>oxo-flow<span class="w"> </span>graph<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>--json<span class="w"> </span>-o<span class="w"> </span>dag.json
+</span></code></pre></div>
+<p>The document has five top-level keys:</p>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Contents</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>nodes</code></td>
+<td>One entry per rule: <code>{id, label, color, environment, rule}</code> (<code>rule</code> is the full serialized rule; nodes sorted by <code>id</code>)</td>
+</tr>
+<tr>
+<td><code>edges</code></td>
+<td>One entry per dependency: <code>{from, to, kind}</code> where <code>kind</code> is <code>declared</code> (explicit <code>depends_on</code>) or <code>file</code> (inferred input/output match); edges sorted by <code>from</code>, then <code>to</code>, then <code>kind</code></td>
+</tr>
+<tr>
+<td><code>parallel_groups</code></td>
+<td>Rules grouped by topological depth — each inner list is the rules that can run at that level</td>
+</tr>
+<tr>
+<td><code>critical_path</code></td>
+<td>The longest dependency chain, as rule names in order</td>
+</tr>
+<tr>
+<td><code>metrics</code></td>
+<td><code>{node_count, edge_count, max_depth, max_width, critical_path_length, parallel_group_count}</code></td>
+</tr>
+</tbody>
+</table>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="p">{</span>
+</span><span id="__span-17-2"><a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a><span class="w">  </span><span class="nt">"nodes"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-17-3"><a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a><span class="w">    </span><span class="p">{</span><span class="w"> </span><span class="nt">"id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"generate_data"</span><span class="p">,</span><span class="w"> </span><span class="nt">"label"</span><span class="p">:</span><span class="w"> </span><span class="s2">"generate_data"</span><span class="p">,</span><span class="w"> </span><span class="nt">"color"</span><span class="p">:</span><span class="w"> </span><span class="s2">"#6B7280"</span><span class="p">,</span><span class="w"> </span><span class="nt">"environment"</span><span class="p">:</span><span class="w"> </span><span class="s2">"system"</span><span class="p">,</span><span class="w"> </span><span class="nt">"rule"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">"…"</span><span class="p">:</span><span class="w"> </span><span class="s2">"…"</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="p">},</span>
+</span><span id="__span-17-4"><a id="__codelineno-17-4" name="__codelineno-17-4" href="#__codelineno-17-4"></a><span class="w">    </span><span class="p">{</span><span class="w"> </span><span class="nt">"id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"transform"</span><span class="p">,</span><span class="w"> </span><span class="nt">"label"</span><span class="p">:</span><span class="w"> </span><span class="s2">"transform"</span><span class="p">,</span><span class="w"> </span><span class="nt">"color"</span><span class="p">:</span><span class="w"> </span><span class="s2">"#6B7280"</span><span class="p">,</span><span class="w"> </span><span class="nt">"environment"</span><span class="p">:</span><span class="w"> </span><span class="s2">"system"</span><span class="p">,</span><span class="w"> </span><span class="nt">"rule"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">"…"</span><span class="p">:</span><span class="w"> </span><span class="s2">"…"</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="p">}</span>
+</span><span id="__span-17-5"><a id="__codelineno-17-5" name="__codelineno-17-5" href="#__codelineno-17-5"></a><span class="w">  </span><span class="p">],</span>
+</span><span id="__span-17-6"><a id="__codelineno-17-6" name="__codelineno-17-6" href="#__codelineno-17-6"></a><span class="w">  </span><span class="nt">"edges"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-17-7"><a id="__codelineno-17-7" name="__codelineno-17-7" href="#__codelineno-17-7"></a><span class="w">    </span><span class="p">{</span><span class="w"> </span><span class="nt">"from"</span><span class="p">:</span><span class="w"> </span><span class="s2">"generate_data"</span><span class="p">,</span><span class="w"> </span><span class="nt">"to"</span><span class="p">:</span><span class="w"> </span><span class="s2">"transform"</span><span class="p">,</span><span class="w"> </span><span class="nt">"kind"</span><span class="p">:</span><span class="w"> </span><span class="s2">"file"</span><span class="w"> </span><span class="p">}</span>
+</span><span id="__span-17-8"><a id="__codelineno-17-8" name="__codelineno-17-8" href="#__codelineno-17-8"></a><span class="w">  </span><span class="p">],</span>
+</span><span id="__span-17-9"><a id="__codelineno-17-9" name="__codelineno-17-9" href="#__codelineno-17-9"></a><span class="w">  </span><span class="nt">"parallel_groups"</span><span class="p">:</span><span class="w"> </span><span class="p">[[</span><span class="s2">"generate_data"</span><span class="p">],</span><span class="w"> </span><span class="p">[</span><span class="s2">"transform"</span><span class="p">]],</span>
+</span><span id="__span-17-10"><a id="__codelineno-17-10" name="__codelineno-17-10" href="#__codelineno-17-10"></a><span class="w">  </span><span class="nt">"critical_path"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"generate_data"</span><span class="p">,</span><span class="w"> </span><span class="s2">"transform"</span><span class="p">],</span>
+</span><span id="__span-17-11"><a id="__codelineno-17-11" name="__codelineno-17-11" href="#__codelineno-17-11"></a><span class="w">  </span><span class="nt">"metrics"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-17-12"><a id="__codelineno-17-12" name="__codelineno-17-12" href="#__codelineno-17-12"></a><span class="w">    </span><span class="nt">"node_count"</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span>
+</span><span id="__span-17-13"><a id="__codelineno-17-13" name="__codelineno-17-13" href="#__codelineno-17-13"></a><span class="w">    </span><span class="nt">"edge_count"</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
+</span><span id="__span-17-14"><a id="__codelineno-17-14" name="__codelineno-17-14" href="#__codelineno-17-14"></a><span class="w">    </span><span class="nt">"max_depth"</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span>
+</span><span id="__span-17-15"><a id="__codelineno-17-15" name="__codelineno-17-15" href="#__codelineno-17-15"></a><span class="w">    </span><span class="nt">"max_width"</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
+</span><span id="__span-17-16"><a id="__codelineno-17-16" name="__codelineno-17-16" href="#__codelineno-17-16"></a><span class="w">    </span><span class="nt">"critical_path_length"</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span>
+</span><span id="__span-17-17"><a id="__codelineno-17-17" name="__codelineno-17-17" href="#__codelineno-17-17"></a><span class="w">    </span><span class="nt">"parallel_group_count"</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span>
+</span><span id="__span-17-18"><a id="__codelineno-17-18" name="__codelineno-17-18" href="#__codelineno-17-18"></a><span class="w">  </span><span class="p">}</span>
+</span><span id="__span-17-19"><a id="__codelineno-17-19" name="__codelineno-17-19" href="#__codelineno-17-19"></a><span class="p">}</span>
+</span></code></pre></div>
+<p><code>--json</code> emits a document, not a diagram: it is rejected when a <strong>non-default</strong> diagram format is requested (<code>-f dot</code>/<code>tree</code>/<code>mermaid</code>/<code>metro</code>/<code>dot-clustered</code>) or when <code>--granularity</code> is passed (metro-only), since either would otherwise be silently ignored. The default <code>ascii</code> format is accepted alongside <code>--json</code> — the format flag is a no-op for JSON output. The document goes to stdout; human-readable notices (the save confirmation) stay on stderr, and <code>-o FILE</code> writes the JSON to a file with stdout left clean. Without <code>--json</code> the diagram output is unchanged.</p>
 <hr />
 <h2 id="notes">Notes<a class="headerlink" href="#notes" title="Permanent link">#</a></h2>
 <ul>

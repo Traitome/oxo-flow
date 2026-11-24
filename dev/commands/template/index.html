@@ -658,6 +658,8 @@
       
         
       
+        
+      
     
     
     
@@ -1142,6 +1144,34 @@
     
   
     16 — 16S Amplicon (QIIME2)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../gallery/typed-variant-calling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    17 — Typed Germline Variant Calling
   
 
     
@@ -1781,6 +1811,10 @@
       
         
       
+        
+      
+        
+      
     
     
     
@@ -2024,6 +2058,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../diagnostics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    diagnostics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../diff/" class="md-nav__link">
         
   
@@ -2144,6 +2206,34 @@
     
   
     export
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../export-dsl/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    export-dsl
   
 
     
@@ -4164,6 +4254,10 @@ definitions referenced by <code>conda = "envs/..."</code> in templates 04-15.</p
 <td><code>--ai-attempts &lt;N&gt;</code></td>
 <td>Fresh-draw attempts for the whole generation (best-of-N: up to N independent tries; the first one passing the deterministic gates wins, so later attempts are only paid when earlier ones fail) [default: 1]</td>
 </tr>
+<tr>
+<td><code>--ai-contract-feedback</code></td>
+<td>Harness-scoped (issue #1315): also run the engine's BioTypes (<code>TYPE-*</code>), scientific-preflight (<code>SCI-*</code>), and <code>deep_check</code> (<code>D00*</code>) contract checks inside the generation loop and feed their findings back as correction rounds. Off by default (normal users get syntax + structural feedback only, unchanged); the ablation harness enables it for Arm C (<code>full-contract</code>) and omits it for Arm B (<code>syntax-only</code>)</td>
+</tr>
 </tbody>
 </table>
 <h2 id="examples">Examples<a class="headerlink" href="#examples" title="Permanent link">#</a></h2>
@@ -4251,6 +4345,10 @@ definitions referenced by <code>conda = "envs/..."</code> in templates 04-15.</p
 <tr>
 <td><code>16_16s_qiime2_amplicon</code></td>
 <td>16S amplicon analysis with QIIME2</td>
+</tr>
+<tr>
+<td><code>17_typed_variant_calling</code></td>
+<td>Typed germline variant calling (<code>[types.*]</code> contracts on every edge)</td>
 </tr>
 </tbody>
 </table>

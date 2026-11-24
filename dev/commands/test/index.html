@@ -658,6 +658,8 @@
       
         
       
+        
+      
     
     
     
@@ -1142,6 +1144,34 @@
     
   
     16 — 16S Amplicon (QIIME2)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../gallery/typed-variant-calling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    17 — Typed Germline Variant Calling
   
 
     
@@ -1781,6 +1811,10 @@
       
         
       
+        
+      
+        
+      
     
     
     
@@ -2024,6 +2058,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../diagnostics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    diagnostics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../diff/" class="md-nav__link">
         
   
@@ -2144,6 +2206,34 @@
     
   
     export
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../export-dsl/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    export-dsl
   
 
     
@@ -4481,6 +4571,12 @@ into a run; with it, the problem is found in seconds:</p>
 <td>Biological header contract matches <code>[rules.types]</code> annotations (only for files that exist and are declared with a <code>[types.*]</code> spec or a type expression — e.g. FASTQ read groups, BAM sort order, VCF reference build)</td>
 <td>Header introspection is evidence-based; a mismatch is a data-level contract violation, not a workflow error</td>
 </tr>
+<tr>
+<td><code>D006</code></td>
+<td>warning</td>
+<td>A <code>[[reference_db]]</code> entry's declared <code>checksum</code> matches the reference file on disk (only when the entry declares a <code>checksum</code> and a local <code>source</code> path that exists)</td>
+<td>A declared checksum that no longer matches the file is a silent reproducibility/provenance failure</td>
+</tr>
 </tbody>
 </table>
 <p>All relative paths resolve against the workflow file's directory (or
@@ -4489,7 +4585,7 @@ placeholders are expanded; paths that still contain <code>{sample}</code> wildca
 are skipped and reported by <code>validate</code>/<code>dry-run</code> instead.</p>
 <h3 id="when-gated-rules">When-gated rules<a class="headerlink" href="#when-gated-rules" title="Permanent link">#</a></h3>
 <p>A rule whose <code>when</code> gate is statically false under the current <code>[config]</code>
-never executes, so deep checks <strong>skip it entirely</strong> — no D001–D005
+never executes, so deep checks <strong>skip it entirely</strong> — no D001–D006
 findings for paths only a skipped rule would touch, and its shell tokens
 do not trigger the <code>reference_dir</code>-derived tool-index probes (the gate
 verdict comes from the engine's own condition evaluator, the same call

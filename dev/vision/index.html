@@ -832,6 +832,8 @@
       
         
       
+        
+      
     
     
     
@@ -1316,6 +1318,34 @@
     
   
     16 — 16S Amplicon (QIIME2)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../gallery/typed-variant-calling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    17 — Typed Germline Variant Calling
   
 
     
@@ -1953,6 +1983,10 @@
       
         
       
+        
+      
+        
+      
     
     
     
@@ -2196,6 +2230,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../commands/diagnostics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    diagnostics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../commands/diff/" class="md-nav__link">
         
   
@@ -2316,6 +2378,34 @@
     
   
     export
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../commands/export-dsl/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    export-dsl
   
 
     
@@ -4281,7 +4371,7 @@
 <p>Each innovation states the claim, what ships today, and what evidence is still required. Maturity labels follow ROADMAP Phase 12.</p>
 <h3 id="31-biotypes-biological-semantics-on-dag-edges">3.1 BioTypes — biological semantics on DAG edges<a class="headerlink" href="#31-biotypes-biological-semantics-on-dag-edges" title="Permanent link">#</a></h3>
 <p><strong>Claim.</strong> Path-text matching is the wrong substrate for pipeline correctness. Files flowing between stages should carry biological contracts — format, sort order, index accompaniment, reference build, read groups, extensible attributes — that the compiler checks statically.</p>
-<p><strong>Shipped today.</strong> The optional <code>[types.*]</code> system: named contracts referenced by rules, checked in <code>oxo-flow validate</code> and in run preflight. Violations produce <code>TYPE-001</code>–<code>TYPE-007</code> diagnostics with remediation hints (plus advisory <code>TYPE-008</code>/<code>TYPE-009</code>/<code>TYPE-010</code> for unverifiable edges — a typed consumer fed by an untyped producer, a build-incomplete pair, or a typed pair whose channels do not line up); where the fix is mechanical the diagnostic synthesizes the command (e.g. <code>samtools sort</code> for a queryname-sorted BAM feeding a coordinate-indexed consumer; <code>samtools index</code> for a missing companion index). — <em>Implemented; broad truth-set validation outstanding.</em></p>
+<p><strong>Shipped today.</strong> The optional <code>[types.*]</code> system: named contracts referenced by rules, checked in <code>oxo-flow validate</code> and in run preflight. Violations produce <code>TYPE-001</code>–<code>TYPE-007</code> diagnostics with remediation hints (plus advisory <code>TYPE-008</code>/<code>TYPE-009</code>/<code>TYPE-010</code> for unverifiable edges — a typed consumer fed by an untyped producer, a build-incomplete pair, or a typed pair whose channels do not line up); where the fix is mechanical the diagnostic synthesizes the command (e.g. <code>samtools sort</code> for a queryname-sorted BAM feeding a coordinate-indexed consumer; <code>samtools index</code> for a missing companion index), surfaced verbatim as the diagnostic's <code>coercion_rule</code> field and a labelled <code>coercion:</code> line (issue #1322). — <em>Implemented; broad truth-set validation outstanding.</em></p>
 <p><strong>Exit evidence.</strong> False-positive analysis against a representative corpus of real pipelines; literature-backed rule review (ROADMAP Stage 12.2).</p>
 <h3 id="32-autonomous-self-healing-runtime">3.2 Autonomous self-healing runtime<a class="headerlink" href="#32-autonomous-self-healing-runtime" title="Permanent link">#</a></h3>
 <p><strong>Claim.</strong> Long genomic computations fail for four stacked reasons — system resources, data defects, algorithm parameters, biology-level surprises. A workflow engine should diagnose across those layers and apply <em>bounded</em> remediation, not just pattern-match stderr.</p>
@@ -4305,7 +4395,7 @@
 <h2 id="5-verification-snapshot-2026-11-17">5. Verification snapshot (2026-11-17)<a class="headerlink" href="#5-verification-snapshot-2026-11-17" title="Permanent link">#</a></h2>
 <p>The quantitative claims on this page were checked against <code>main@55dddf3c</code> on 2026-11-17; the cluster <code>--provenance</code> behavior was re-verified after #1096 (<code>main@3406208f</code>):</p>
 <ul>
-<li>35 CLI subcommands; 91 OpenAPI paths / 106 operations served by <code>GET /api/openapi.json</code> (default build, non-HPC mode).</li>
+<li>38 CLI subcommands; 91 OpenAPI paths / 106 operations served by <code>GET /api/openapi.json</code> (default build, non-HPC mode).</li>
 <li>31 built-in diagnostic patterns; biological type contracts firing on a deliberately mismatched workflow (<code>TYPE-001</code>–<code>TYPE-003</code> observed live, <code>TYPE-004</code>–<code>TYPE-010</code> covered by unit tests; <code>TYPE-008</code>/<code>TYPE-009</code>/<code>TYPE-010</code> are advisory unverifiable-edge codes).</li>
 <li>33 prebuilt cluster and re-entry integration tests passing on a Linux host.</li>
 <li>Live <code>[engine] dispatch_order</code> (local execution), run-aware <code>cluster status --json</code> / <code>cluster logs</code>, interrupted-rule re-queue, <code>provenance verify</code>, and the strict-placeholder gate exercised on a mock-Slurm Linux host.</li>
@@ -4318,7 +4408,7 @@
 <li>Type contracts detect declared state mismatches; they do not prove biological correctness.</li>
 <li>Provenance anchors reproducibility evidence; bitwise reproduction across all tools and hardware is not guaranteed.</li>
 <li>Repair proposals are experimental until independently verified by a successful rerun — in the seeded fault-injection campaign that loop currently closes 3/10 cases end-to-end (all 3 repairable infra faults; the other 7 are blocked upstream of the loop — measured evidence in <code>eval/frontier/PILOT_FINDINGS.md</code>).</li>
-<li>PostgreSQL storage parity, cloud-batch executors, and tenant isolation carry explicit unproven/prototype labels (ROADMAP Stage 12.1).</li>
+<li>PostgreSQL storage parity, cloud-batch executors, and tenant isolation carry explicit unproven/prototype labels (ROADMAP Stage 12.1). The tenant-isolation label is now dimensional, not wholesale: the environment allowlist and the CPU/memory/process rlimits are enforced on every web-spawned run (Linux rlimits where available), and — behind the opt-in <code>OXO_FLOW_WEB_SANDBOX=landlock</code> flag on Linux 5.13+ — filesystem isolation is kernel-enforced (TCP denial on kernel 6.7+), with the enforced dimensions adversarially tested through the real spawn path (<code>rb01_sandbox_adversarial.rs</code>). UDP/ICMP, PID namespaces, per-run uid identities, per-tenant containers, and the boundary itself when the operator leaves the sandbox off remain unenforced — the residual matrix in the web API reference is the source of truth.</li>
 </ul>
 <h2 id="citing">Citing<a class="headerlink" href="#citing" title="Permanent link">#</a></h2>
 <blockquote>

@@ -658,6 +658,8 @@
       
         
       
+        
+      
     
     
     
@@ -1142,6 +1144,34 @@
     
   
     16 — 16S Amplicon (QIIME2)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../gallery/typed-variant-calling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    17 — Typed Germline Variant Calling
   
 
     
@@ -1779,6 +1809,10 @@
       
         
       
+        
+      
+        
+      
     
     
     
@@ -2022,6 +2056,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../../commands/diagnostics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    diagnostics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../commands/diff/" class="md-nav__link">
         
   
@@ -2142,6 +2204,34 @@
     
   
     export
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands/export-dsl/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    export-dsl
   
 
     
@@ -3658,6 +3748,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Extending the Pattern Library">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#measured-fpfn-baseline" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Measured FP/FN baseline
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -4238,6 +4345,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Extending the Pattern Library">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#measured-fpfn-baseline" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Measured FP/FN baseline
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -4319,9 +4443,9 @@ Every diagnosis is reproducible given the same inputs.</p>
 </ul>
 <p>It does NOT use AI. It matches error signatures (log keywords, exit codes)
 against a curated library of 31 error patterns (tool, resource, data,
-system, and config classes — see
-<code>crates/oxo-flow-core/src/diagnostics.rs</code> for the full list; the web
-domain re-exports the same table).</p>
+system, and config classes), enumerated by <code>oxo-flow diagnostics list</code>
+(see the <a href="../../commands/diagnostics/">command reference</a>); the web domain
+re-exports the same table.</p>
 <h2 id="matching-semantics">Matching semantics<a class="headerlink" href="#matching-semantics" title="Permanent link">#</a></h2>
 <ul>
 <li><code>stderr_patterns</code> are <strong>case-insensitive regular expressions</strong>, compiled
@@ -4335,9 +4459,10 @@ domain re-exports the same table).</p>
 </ul>
 <h2 id="error-pattern-library">Error Pattern Library<a class="headerlink" href="#error-pattern-library" title="Permanent link">#</a></h2>
 <p>31 patterns total across five categories — Tool (5), Resource (5), Data (7),
-System (6), Config (8). The tables below cover the most common; the
-authoritative list is <code>crates/oxo-flow-core/src/diagnostics.rs</code> (the web
-crate re-exports it via
+System (6), Config (8). The tables below cover the most common; enumerate the
+authoritative list at the command line with
+<a href="../../commands/diagnostics/"><code>oxo-flow diagnostics list</code></a>, which reads the
+engine's own pattern table (the web crate re-exports it via
 <code>crates/oxo-flow-web/src/domains/execution/diagnostics.rs</code>).</p>
 <h3 id="tool-errors">Tool Errors<a class="headerlink" href="#tool-errors" title="Permanent link">#</a></h3>
 <table>
@@ -4648,6 +4773,39 @@ caption), and the retry POST is the only mutation sent.</p>
 <li>and, when near-miss words exist, a benign line in <code>BENIGN_LOG_LINES</code>
   that mentions the vocabulary without being a real error.</li>
 </ul>
+<h3 id="measured-fpfn-baseline">Measured FP/FN baseline<a class="headerlink" href="#measured-fpfn-baseline" title="Permanent link">#</a></h3>
+<p><code>crates/oxo-flow-core/tests/diagnostic_corpus.rs</code> (issue #1316) runs the real
+<code>DiagnosticsEngine</code> pattern table over a small corpus of multi-line tool
+stderr/stdout tails under <code>crates/oxo-flow-core/tests/fixtures/diag_corpus/</code>
+and asserts a documented baseline:</p>
+<ul>
+<li><strong>True positives:</strong> every positive block (a realistic multi-line failure
+  tail from STAR/BWA/samtools/GATK/conda/docker/etc.) fires its intended
+  pattern. The blocks are genuinely multi-line: each pattern's text appears
+  inside surrounding tool output (a prelude plus scheduler/shell context),
+  never as a bare canonical-trigger line — for the few signals whose real
+  signature is a single kernel/shell line, that decisive line is still wrapped
+  in the output that really surrounds it. The corpus covers all 31 patterns
+  exactly once; a drift gate keeps the corpus in sync with the ids declared in
+  <code>diagnostics.rs</code>.</li>
+<li><strong>False positives:</strong> benign handshake/banner blocks and mention-only blocks
+  fire no pattern at realistic non-zero exit codes. Both negative sets are
+  parsed and asserted by the harness — the report's <code>benign_fp</code> / <code>mention_fp</code>
+  counts are measurements, not documentation claims.</li>
+</ul>
+<p>This is <strong>report-only</strong>: the harness measures the existing table and changes no
+regex or engine behavior. It is a baseline, <strong>not</strong> a proof that the engine is
+correct — real-world breadth (large logs, unusual tool dialects, subtle
+multi-pattern collisions) remains unmeasured. The harness excludes the generic
+<code>unknown_error</code> fallback from counts; the content-independent <code>oom_killed</code> /
+<code>timeout</code> injections are retained, since exit code 137/152 is by design the
+only evidence for a cgroup OOM or CPU-time kill.</p>
+<p>Known collateral (measured, not a failure): a line matching two patterns fires
+both. In the current corpus the <code>bam_truncated</code> block also fires
+<code>truncated_file</code> (both match the word truncated) and the <code>shared_library</code> block
+also fires <code>command_not_found</code> (exit 127 is shared). Downstream self-healing
+ranks the listed patterns; this measurement records the overlap rather than
+asserting it away.</p>
 <h2 id="scientific-preflight-biological-contract-catalog">Scientific Preflight &amp; Biological Contract Catalog<a class="headerlink" href="#scientific-preflight-biological-contract-catalog" title="Permanent link">#</a></h2>
 <p>While runtime diagnostics analyze failed executions, the <strong>Scientific Preflight Engine</strong> (<code>crates/oxo-flow-core/src/scientific_preflight.rs</code>) and <strong>Biological Semantic Subtyping System</strong> (<code>crates/oxo-flow-core/src/types/</code>) inspect workflow DAGs <em>prior to execution</em>. They catch scientifically unsound configurations (e.g. training VQSR on single samples, unstranded quantification on stranded libraries, or uncompressed tabix inputs) before compute resources are wasted.</p>
 <h3 id="biological-subtyping-violations-type-">Biological Subtyping Violations (<code>TYPE-*</code>)<a class="headerlink" href="#biological-subtyping-violations-type-" title="Permanent link">#</a></h3>
@@ -4711,6 +4869,12 @@ caption), and the retry POST is the only mutation sent.</p>
 <td>Fixes the type name or adds the missing <code>[types.*]</code> declaration</td>
 </tr>
 <tr>
+<td><code>TYPE-INSPECT</code></td>
+<td>Introspection</td>
+<td>Header introspection of a declared typed file failed (unreadable/corrupt/empty header), so its biological contract cannot be checked</td>
+<td>Verifies file integrity and permissions, or restores the file from its producer</td>
+</tr>
+<tr>
 <td><code>TYPE-008</code></td>
 <td>Unverifiable edge (advisory)</td>
 <td>A typed consumer reads from a producer that declares no <code>[types]</code> at all, so the edge cannot be checked — the contract is unknown rather than violated</td>
@@ -4731,8 +4895,9 @@ caption), and the retry POST is the only mutation sent.</p>
 </tbody>
 </table>
 <p><code>TYPE-001</code> .. <code>TYPE-007</code> are proven violations: they fail <code>oxo-flow validate</code> and abort <code>oxo-flow run</code> in preflight. <code>TYPE-008</code>, <code>TYPE-009</code>, and <code>TYPE-010</code> are <strong>advisory</strong> — they report an <em>unverifiable</em> edge (a missing or unpairable contract rather than a mismatch), surface as warnings (e.g. in the scientific preflight catalog), and never fail a run.</p>
+<p>When the checker synthesizes a concrete conversion command for a <code>TYPE-001</code>–<code>TYPE-007</code> violation, it is surfaced verbatim on the emitted diagnostic — as the <code>coercion_rule</code> field in JSON output (<code>validate --json</code>, <code>lint --json</code>) and as a labelled <code>coercion:</code> line in the human-readable output — alongside the prose remediation hint, so the suggested fix is directly runnable (issue #1322).</p>
 <h3 id="curated-scientific-preflight-catalog-sci-">Curated Scientific Preflight Catalog (<code>SCI-*</code>)<a class="headerlink" href="#curated-scientific-preflight-catalog-sci-" title="Permanent link">#</a></h3>
-<p>Deterministic, evidence-backed rules covering genomics, transcriptomics, epigenomics, metagenomics, and DAG hardware execution.</p>
+<p>Deterministic, evidence-backed rules covering genomics, transcriptomics, epigenomics, metagenomics, and DAG hardware execution. Enumerate the authoritative list at the command line with <a href="../../commands/diagnostics/"><code>oxo-flow diagnostics list scientific</code></a>, which reads the engine's own rule table.</p>
 <h4 id="1-germline-somatic-variant-calling">1. Germline &amp; Somatic Variant Calling<a class="headerlink" href="#1-germline-somatic-variant-calling" title="Permanent link">#</a></h4>
 <ul>
 <li><code>SCI-VQSR-COHORT</code>: VariantRecalibrator runs on fewer than 30 samples; GATK recommends minimum ~30 samples for WGS/WES to train Gaussian mixture models. Use hard filtering (<code>VariantFiltration</code>) for small cohorts.</li>

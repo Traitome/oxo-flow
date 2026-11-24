@@ -658,6 +658,8 @@
       
         
       
+        
+      
     
     
     
@@ -1142,6 +1144,34 @@
     
   
     16 — 16S Amplicon (QIIME2)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../gallery/typed-variant-calling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    17 — Typed Germline Variant Calling
   
 
     
@@ -1781,6 +1811,10 @@
       
         
       
+        
+      
+        
+      
     
     
     
@@ -2024,6 +2058,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../diagnostics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    diagnostics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../diff/" class="md-nav__link">
         
   
@@ -2144,6 +2206,34 @@
     
   
     export
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../export-dsl/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    export-dsl
   
 
     
@@ -2579,6 +2669,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Description">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#checkpoint-format-version" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Checkpoint format version
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -2586,6 +2693,17 @@
     <span class="md-ellipsis">
       
         Options
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#json-output" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        JSON output
       
     </span>
   </a>
@@ -4033,6 +4151,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Description">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#checkpoint-format-version" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Checkpoint format version
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -4040,6 +4175,17 @@
     <span class="md-ellipsis">
       
         Options
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#json-output" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        JSON output
       
     </span>
   </a>
@@ -4139,6 +4285,22 @@ instances (pair/sample <code>when</code>, <code>{meta.*}</code> baking) re-judge
 and may drift from the recorded instance set. Re-pass the original
 overrides with <code>oxo-flow run</code> (which auto-resumes) to reproduce the
 recorded instance set exactly.</p>
+<h3 id="checkpoint-format-version">Checkpoint format version<a class="headerlink" href="#checkpoint-format-version" title="Permanent link">#</a></h3>
+<p>Every checkpoint records a <code>checkpoint_format_version</code> marker. If the version
+recorded is <strong>newer</strong> than the running engine's — i.e. the checkpoint was
+written by a future oxo-flow build whose completed-rule set this engine cannot
+prove it understands — <code>resume</code> (and <code>run</code>'s auto-resume path) <strong>refuses to
+start</strong> and says so, rather than silently trusting state it cannot verify.
+The standalone <code>resume</code> command refuses at its own load, before printing its
+banner or any <code>--json</code> counts, so no output is narrated from untrusted state;
+<code>--resume-failed</code> and every other Execute path refuse the same way. A
+read-only preview (<code>dry-run</code>) instead warns and plans as if every rule had
+never completed, so the preview stays usable, and <code>status</code> still shows the
+recorded listing but prints the same trust warning. A checkpoint with <strong>no</strong>
+marker (written before the marker existed) is treated as compatible. See the
+cross-version contract in
+<a href="https://github.com/traitome/oxo-flow/blob/main/docs/superpowers/audits/reentry-2026-11.md">docs/superpowers/audits/reentry-2026-11.md</a>
+(§5.2/§5.3).</p>
 <h2 id="options">Options<a class="headerlink" href="#options" title="Permanent link">#</a></h2>
 <table>
 <thead>
@@ -4189,14 +4351,90 @@ recorded instance set exactly.</p>
 <td>—</td>
 <td>Detach the resumed run into a background process and exit 0 immediately (see <a href="../run/#background-runs-background">Background runs (--background)</a>); <code>--detach</code> is an alias</td>
 </tr>
+<tr>
+<td><code>--json</code></td>
+<td>—</td>
+<td>Emit one machine-readable JSON document to stdout (human logs stay on stderr); see <a href="#json-output">JSON output</a></td>
+</tr>
 </tbody>
 </table>
+<h2 id="json-output">JSON output<a class="headerlink" href="#json-output" title="Permanent link">#</a></h2>
+<p><code>--json</code> (the global flag) emits a single JSON document to stdout. Human
+narration — the banner, the <code>Resume:</code> line, execution progress — stays on
+stderr, so a monitor can parse stdout without scrubbing prose. This is the
+same contract as <a href="../status/"><code>status</code></a> and the rest of the run-lifecycle
+family (<a href="../run/#json-output"><code>run</code></a>).</p>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="p">{</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span><span class="nt">"command"</span><span class="p">:</span><span class="w"> </span><span class="s2">"resume"</span><span class="p">,</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">  </span><span class="nt">"workflow"</span><span class="p">:</span><span class="w"> </span><span class="s2">"/abs/path/w.oxoflow"</span><span class="p">,</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">  </span><span class="nt">"checkpoint"</span><span class="p">:</span><span class="w"> </span><span class="s2">"/abs/path/.oxo-flow/checkpoint.json"</span><span class="p">,</span>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">  </span><span class="nt">"status"</span><span class="p">:</span><span class="w"> </span><span class="s2">"completed"</span><span class="p">,</span>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">  </span><span class="nt">"completed"</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span>
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">  </span><span class="nt">"failed"</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span>
+</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">  </span><span class="nt">"remaining"</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
+</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">  </span><span class="nt">"skipped_by_when"</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span>
+</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="p">}</span>
+</span></code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>command</code></td>
+<td>Always <code>"resume"</code></td>
+</tr>
+<tr>
+<td><code>workflow</code></td>
+<td>The workflow path recorded in (and re-checked against) the checkpoint</td>
+</tr>
+<tr>
+<td><code>checkpoint</code></td>
+<td>The checkpoint file that was loaded</td>
+</tr>
+<tr>
+<td><code>status</code></td>
+<td><code>nothing_to_resume</code> (nothing executed yet; exit 0, nothing re-run), <code>completed</code>, or <code>failed</code></td>
+</tr>
+<tr>
+<td><code>completed</code></td>
+<td>Rules already complete in the checkpoint (the "already-complete" half)</td>
+</tr>
+<tr>
+<td><code>failed</code></td>
+<td>Rules recorded as failed and retried by this resume</td>
+</tr>
+<tr>
+<td><code>remaining</code></td>
+<td>Rules this resume will execute (workflow rule count minus <code>completed</code>; wildcards expand later)</td>
+</tr>
+<tr>
+<td><code>skipped_by_when</code></td>
+<td>Present when rules were skipped by a <code>when</code> gate; re-judged on this resume</td>
+</tr>
+<tr>
+<td><code>running</code></td>
+<td>Present when the checkpoint recorded rules still running (the prior run died mid-flight); they re-run</td>
+</tr>
+</tbody>
+</table>
+<p>The non-<code>--json</code> path is unchanged: exit codes and output are byte-identical
+to prior releases. A malformed checkpoint or a missing workflow still fails
+with a non-zero exit and, under <code>--json</code>, the shared structured error
+envelope (<code>{"command":"resume","errors":[{"code":...,"message":...}]}</code>)
+instead of empty stdout.</p>
 <h2 id="examples">Examples<a class="headerlink" href="#examples" title="Permanent link">#</a></h2>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1"># Resume from the default checkpoint</span>
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>oxo-flow<span class="w"> </span>resume<span class="w"> </span>.oxo-flow/checkpoint.json
-</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>
-</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="c1"># Resume with 4 parallel jobs</span>
-</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>oxo-flow<span class="w"> </span>resume<span class="w"> </span>.oxo-flow/checkpoint.json<span class="w"> </span>-j<span class="w"> </span><span class="m">4</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># Resume from the default checkpoint</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>oxo-flow<span class="w"> </span>resume<span class="w"> </span>.oxo-flow/checkpoint.json
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="c1"># Resume with 4 parallel jobs</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>oxo-flow<span class="w"> </span>resume<span class="w"> </span>.oxo-flow/checkpoint.json<span class="w"> </span>-j<span class="w"> </span><span class="m">4</span>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="c1"># Machine-readable resume status</span>
+</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>oxo-flow<span class="w"> </span>resume<span class="w"> </span>.oxo-flow/checkpoint.json<span class="w"> </span>--json
 </span></code></pre></div>
 <h2 id="notes">Notes<a class="headerlink" href="#notes" title="Permanent link">#</a></h2>
 <ul>

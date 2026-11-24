@@ -658,6 +658,8 @@
       
         
       
+        
+      
     
     
     
@@ -1142,6 +1144,34 @@
     
   
     16 — 16S Amplicon (QIIME2)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../gallery/typed-variant-calling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    17 — Typed Germline Variant Calling
   
 
     
@@ -1779,6 +1809,10 @@
       
         
       
+        
+      
+        
+      
     
     
     
@@ -2022,6 +2056,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../../commands/diagnostics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    diagnostics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../commands/diff/" class="md-nav__link">
         
   
@@ -2142,6 +2204,34 @@
     
   
     export
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands/export-dsl/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    export-dsl
   
 
     
@@ -4092,21 +4182,59 @@ property of how oxo-flow records, composes, and publishes workflows.</p>
 <h2 id="pillar-1-provenance-results-know-their-workflow-version">Pillar 1 — Provenance: results know their workflow version<a class="headerlink" href="#pillar-1-provenance-results-know-their-workflow-version" title="Permanent link">#</a></h2>
 <p>At run start the engine resolves the <strong>HEAD commit SHA</strong> of the git
 repository containing the workflow and stores it in the checkpoint
-(<code>workflow_git_sha</code>). Every output file, benchmark, and report snapshot is
-thereby auditable to the exact workflow version that produced it.</p>
+(<code>workflow_git_sha</code>). It also records a <strong>content digest</strong> of the workflow
+file as read at run start (<code>workflow_content_hash</code>, a <code>sha256:&lt;hex&gt;</code> of the
+top-level file) and a marker for whether the workflow file had
+<strong>uncommitted changes</strong> (<code>workflow_git_dirty</code>, from
+<code>git status --porcelain</code> scoped to the workflow file). Every output file,
+benchmark, and report snapshot is thereby auditable to the exact workflow
+version that produced it.</p>
+<p>For a workflow built out of <code>[[include]]</code> modules, the content hash covers
+only the top-level file: the complete identity is that file plus the
+separately recorded include resolutions (<code>include_resolutions</code>, the
+per-include checkout SHAs), so a change in a pinned module's content is
+still captured there even though <code>workflow_content_hash</code> itself does not
+move.</p>
 <ul>
-<li>Best-effort by design: running outside a git repository omits the field
-  and never fails the run — plain directories remain fully supported for
-  experimentation, and become version-audited the moment the workflow is
-  committed.</li>
-<li><code>oxo-flow provenance verify</code> prints the recorded SHA alongside the
-  workflow path (see <a href="../../commands/provenance/">provenance</a>); the JSON
-  field is there for programmatic use.</li>
+<li>Best-effort by design: running outside a git repository omits the SHA
+  and dirty fields and never fails the run — plain directories remain fully
+  supported for experimentation, and become version-audited the moment the
+  workflow is committed.</li>
+<li>The HEAD SHA alone cannot distinguish two runs of the <strong>same</strong>
+  uncommitted workflow file. When <code>workflow_git_dirty</code> is <code>true</code>, the
+  recorded <code>workflow_content_hash</code> is the authoritative record of <em>which
+  bytes</em> executed: it changes with every edit, so two runs of a dirty file
+  never collide on provenance even though <code>workflow_git_sha</code> is identical.</li>
+<li>Neither the HEAD SHA nor the raw content digest can separate two runs of
+  the same file invoked with <strong>different <code>--arg KEY=VALUE</code> overrides</strong> —
+  both digests are override-blind by construction. The checkpoint
+  therefore also records <code>workflow_resolved_hash</code>, a <code>sha256:&lt;hex&gt;</code> over
+  the canonical JSON of the raw content digest combined with the engine's
+  resolved config snapshot (the same order-independent map that drives
+  config-change invalidation: built after CLI overrides, profile merge,
+  and wildcard expansion; engine-injected keys excluded; sensitive values
+  stored as digests). Two override-driven runs of one file always differ
+  on this fingerprint; it is an identity label for run-to-run comparison
+  — re-deriving it at verify time would need the full invocation context —
+  not a verified claim.</li>
+<li><code>oxo-flow provenance verify</code> now <strong>re-checks the raw content digest</strong>: it
+  re-hashes the workflow file named in the checkpoint and compares it with
+  the recorded <code>workflow_content_hash</code>. A workflow edited after the run is
+  a verification finding (exit 1; JSON
+  <code>workflow_content_check.status = "changed"</code>); a file missing or
+  unreadable at its recorded path (e.g. a relocated checkpoint) is
+  reported as <code>unverifiable</code> without failing the audit. Verify prints the
+  recorded SHA, content hash, and dirty marker alongside the workflow path
+  (see <a href="../../commands/provenance/">provenance</a>); the JSON fields
+  (<code>workflow_git_sha</code>, <code>workflow_content_hash</code>, <code>workflow_resolved_hash</code>,
+  <code>workflow_content_check</code>, <code>workflow_git_dirty</code>) are there for
+  programmatic use.</li>
 <li>The version travels with every run artifact, closing the audit chain:
   the <strong>run log</strong> (<code>.oxo-flow/logs/oxo-flow.log</code>, rotated per run, see
-  <a href="../../commands/run/#run-logs">run</a>) carries the SHA in its header, and
-  <strong>report snapshots</strong> embed <code>workflow_git_sha</code> in their JSON and show it
-  in the HTML provenance section.</li>
+  <a href="../../commands/run/#run-logs">run</a>) carries the SHA, content hash, and
+  dirty marker in its header, and <strong>report snapshots</strong> embed
+  <code>workflow_git_sha</code> in their JSON and show it in the HTML provenance
+  section.</li>
 <li>Practical guidance: <strong>commit before you run</strong>; tag milestones
   (<code>git tag v0.32.0</code>) so the bare SHA has a human-readable alias in your
   records.</li>

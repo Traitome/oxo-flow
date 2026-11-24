@@ -658,6 +658,8 @@
       
         
       
+        
+      
     
     
     
@@ -1142,6 +1144,34 @@
     
   
     16 — 16S Amplicon (QIIME2)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../gallery/typed-variant-calling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    17 — Typed Germline Variant Calling
   
 
     
@@ -1779,6 +1809,10 @@
       
         
       
+        
+      
+        
+      
     
     
     
@@ -2022,6 +2056,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../../commands/diagnostics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    diagnostics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../commands/diff/" class="md-nav__link">
         
   
@@ -2142,6 +2204,34 @@
     
   
     export
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands/export-dsl/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    export-dsl
   
 
     
@@ -4208,19 +4298,25 @@ no API key required, runs on every push.</p>
 <p><code>eval/frontier/</code> is a complementary, self-contained benchmark that measures
 the <strong>quality/cost frontier across generation paths</strong> rather than
 gold-set coverage on a single path. It runs a tiered intent set (easy /
-medium / hard) through two variants — the full CLI path
-(<code>template --ai</code>: rich prompt, knowledge tools, tool loop) and a
-single-shot naive prompt (no tools, no knowledge injection; a
-bare-prompt baseline, not a product path) — and judges every artifact
-with the three deterministic static gates (<code>validate</code>, <code>dry-run</code>,
-<code>lint</code>; exit code only, no LLM judge).</p>
-<p>Per-run token usage comes from the AI session archives (CLI variant) or
-the provider response (naive-prompt variant), so each cell of the
-{path × model} matrix reports gate pass@1 alongside tokens, estimated
-cost, and wall time. This is the evidence base for the unified
-generation harness (see <a href="../architecture/">Architecture → AI Subsystem</a>)
-and for sizing its cost tiers.</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>python3<span class="w"> </span>eval/frontier/run_eval.py<span class="w"> </span>--variants<span class="w"> </span>naive-prompt,cli
+medium / hard) through three variants matching the pre-registered
+matched three-arm ablation — <code>unconstrained</code> (Arm A: a single-shot naive
+prompt, no tools, no knowledge injection; a bare-prompt baseline, not a
+product path), <code>syntax-only</code> (Arm B: the full CLI path <code>template --ai</code>
+with TOML/DAG syntax + structural feedback only), and <code>full-contract</code>
+(Arm C: the same path plus a deep-check feedback loop over the engine's
+BioTypes, scientific-preflight, and <code>deep_check</code> checks, enabled by
+<code>--ai-contract-feedback</code>) — and judges every
+artifact with the three deterministic static gates (<code>validate</code>,
+<code>dry-run</code>, <code>lint</code>; exit code only, no LLM judge). Arm B and Arm C differ
+by the engine feedback toggle, not a label.</p>
+<p>Per-run token usage comes from the AI session archives (the
+<code>syntax-only</code>/<code>full-contract</code> variants) or the provider response (the
+<code>unconstrained</code> variant), so each cell of the {arm × model} matrix
+reports gate pass@1 alongside tokens, estimated cost, and wall time.
+This is the evidence base for the unified generation harness (see
+<a href="../architecture/">Architecture → AI Subsystem</a>) and for sizing its cost
+tiers.</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>python3<span class="w"> </span>eval/frontier/run_eval.py<span class="w"> </span>--variants<span class="w"> </span>unconstrained,syntax-only,full-contract
 </span></code></pre></div>
 <p>See <code>eval/frontier/README.md</code> for the full method, price-table
 configuration, and known limitations.</p>

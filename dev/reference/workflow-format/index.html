@@ -658,6 +658,8 @@
       
         
       
+        
+      
     
     
     
@@ -1142,6 +1144,34 @@
     
   
     16 — 16S Amplicon (QIIME2)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../gallery/typed-variant-calling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    17 — Typed Germline Variant Calling
   
 
     
@@ -1779,6 +1809,10 @@
       
         
       
+        
+      
+        
+      
     
     
     
@@ -2022,6 +2056,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../../commands/diagnostics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    diagnostics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../commands/diff/" class="md-nav__link">
         
   
@@ -2142,6 +2204,34 @@
     
   
     export
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands/export-dsl/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    export-dsl
   
 
     
@@ -7095,6 +7185,25 @@
 URLs in <code>path</code> are rejected without making a network request; mutable remote
 content would bypass both module pinning and the engine's network safety
 boundary.</p>
+<p>Local path endpoints are <strong>fail-closed</strong>:</p>
+<ul>
+<li>An include that declares <code>repo</code> but omits <code>ref</code> is refused ("pin the module
+  version") — an unpinned module is mutable content, the same hazard as a raw
+  URL.</li>
+<li>A local <code>path</code> is canonicalized and required to stay inside the workflow
+  root (the directory containing the workflow — the include base of the host
+  file, not the including module's own subdirectory). <code>..</code> segments, absolute
+  paths, and symlinks that point outside that directory are refused. A
+  legitimate in-tree nested <code>../</code> include is still accepted; only an alias
+  that escapes the whole workflow root is refused. A module file cannot
+  silently read a sibling tree (or the host's secrets) through a path alias.</li>
+<li>The same containment governs <code>repo</code> + <code>path</code> includes: the resolved
+  repository-relative <code>path</code> is canonicalized and required to stay inside the
+  pinned module cache checkout, so a <code>..</code> (or absolute) alias cannot read a
+  file outside the module cache.</li>
+<li>A self-including or mutually-including cycle is refused at the include depth
+  cap with a "circular includes" error.</li>
+</ul>
 <h3 id="namespace-behavior">Namespace Behavior<a class="headerlink" href="#namespace-behavior" title="Permanent link">#</a></h3>
 <p>When a <code>namespace</code> is specified:</p>
 <ol>
@@ -7375,10 +7484,19 @@ snakemake <code>onerror</code> pattern (completion emails, cleanup, notification
 </span></code></pre></div>
 <p>Both hooks run exactly once per <code>oxo-flow run</code> (the CLI) that reaches a
 terminal state (including <code>--keep-going</code> runs); <code>on_complete</code> fires only
-when no rule failed, <code>on_error</code> otherwise. The web UI executor has its
-own run loop and does not fire these hooks yet. Placeholders: every
+when no rule failed, <code>on_error</code> otherwise. A web-initiated run spawns the
+same <code>oxo-flow run</code> CLI as a subprocess (the web server has no run loop of
+its own), so these hooks fire there too. Placeholders: every
 <code>[config]</code> key is available as <code>{config.&lt;key&gt;}</code>, plus <code>{succeeded}</code>,
 <code>{failed}</code>, <code>{skipped}</code>, and <code>{workdir}</code>. Unknown keys stay literal.</p>
+<p>The cluster submission paths (<code>oxo-flow run --profile &lt;name&gt;</code> and
+<code>oxo-flow cluster submit</code>) do <strong>not</strong> run these hooks — the job script
+generator renders only the rule command and never enters the CLI run
+loop. A workflow that declares <code>on_complete</code>/<code>on_error</code> is <strong>rejected at
+plan time</strong> on the cluster path (issue #1340) rather than silently
+dropped; remove the hooks or run the workflow locally
+(<code>oxo-flow run</code>). The rule-level hooks below are rejected on the cluster
+path the same way.</p>
 <p><strong>Cross-run chaining.</strong> A command in <code>on_complete</code> runs synchronously
 inside the finishing run (bounded by <code>OXO_FLOW_HOOK_TIMEOUT_SECS</code>, default
 300 s), so a downstream <code>oxo-flow run</code> started there keeps the upstream
@@ -8623,6 +8741,13 @@ script under an auto-detected interpreter.</p>
 <li><strong><code>on_failure</code></strong>: Runs if the main command fails, <em>after</em> all <code>retries</code> have been exhausted.</li>
 </ul>
 <p>Hook commands support the same <code>{config.x}</code> / <code>{input}</code> / <code>{output}</code> placeholder expansion as <code>shell</code>.</p>
+<p><strong>Cluster submission does not run these hooks.</strong> The cluster job
+generators (<code>oxo-flow run --profile &lt;name&gt;</code>, <code>oxo-flow cluster submit</code>)
+render only the rule command, so a declared rule hook never reaches the
+scheduler. A workflow that declares <code>pre_exec</code>/<code>on_success</code>/<code>on_failure</code>
+is <strong>rejected at plan time</strong> on the cluster path (issue #1340) — the same
+for workflow-level <code>on_complete</code>/<code>on_error</code> — rather than silently
+dropped. Remove the hooks or run the workflow locally (<code>oxo-flow run</code>).</p>
 <p>Hooks are bounded like rule shells: their stdout/stderr is captured through the same
 capped collector (a chatty hook can no longer grow the engine's memory without
 limit), and each hook gets a timeout — 300 s by default, overridable with
@@ -10782,15 +10907,19 @@ The engine closes that gap in two layers:</p>
   <code>expand_inputs_baked</code> provenance (config-expanded, matching how the
   snapshot walks compare it), so snapshot invalidation still tracks every
   declared entry.</li>
-<li><strong>Full-run plan</strong> — a consumer whose every producer of some input group
-  was when-gated false (and whose inputs are not pre-built on disk and
+<li><strong>Full-run plan</strong> — a consumer whose every producer of some <strong>hard <code>input</code></strong>
+  group was when-gated false (and whose inputs are not pre-built on disk and
   not <code>optional = "any"</code>) is pruned from the full-run execution plan with
   a note ("rule … is unreachable — its upstream is when-gated false"),
   instead of failing at runtime on the absent file. The same
   death-propagation already applied to <code>--target</code> runs
-  applies when no targets are given. The when-gated rule itself stays in
-  the plan: the executor evaluates its <code>when</code> and counts it as skipped
-  exactly once.</li>
+  applies when no targets are given. <code>expand_inputs</code> channels — including
+  the concrete paths plan expansion bakes into <code>input</code> (<code>expand_inputs_baked</code>)
+  — are <strong>gathers</strong>: a channel whose only producer is when-gated false
+  expands to nothing at run time and never prunes the consumer (issue
+  #1378; the oxo-flow-rnaseq <code>multiqc</code> regression). The when-gated rule
+  itself stays in the plan: the executor evaluates its <code>when</code> and counts it
+  as skipped exactly once.</li>
 </ul>
 <p>The baked-input drop is <strong>live-producer aware</strong>: a recorded
 when-skipped path is dropped from the baked input list only when no live
@@ -11940,7 +12069,7 @@ rate-limited external resources (APIs, database connections).</p>
 <td>String</td>
 <td>No</td>
 <td><code>"queue"</code></td>
-<td>Declared wait strategy — <code>"queue"</code> or <code>"fail"</code>. The engine queues rules that cannot get a slot (FIFO fair dispatch, see below); a declared <code>"fail"</code> does not change that behavior today</td>
+<td>Wait strategy when the pool is at capacity — <code>"queue"</code> or <code>"fail"</code>. <code>"queue"</code> blocks the rule in the FIFO wait loop until a slot frees (see below); <code>"fail"</code> errors the rule out immediately with <code>ResourceGroupBusy</code> instead of waiting. Any other value is a parse error</td>
 </tr>
 </tbody>
 </table>
@@ -11950,9 +12079,12 @@ rate-limited external resources (APIs, database connections).</p>
   undeclared group) <strong>hard-fails immediately</strong> with
   <code>ResourceGroupExhausted</code> — it can never be satisfied, so no wait is
   attempted.</li>
-<li>Otherwise a rule that cannot get a slot <strong>waits</strong>: the scheduler
-  dispatches queued rules FIFO with priority aging, so starvation is
-  impossible — see
+<li>When the pool is at capacity but the requirement fits its declared maximum,
+  the <code>wait</code> strategy decides: <code>"queue"</code> (the default) <strong>waits</strong> — the
+  scheduler dispatches queued rules FIFO with priority aging, so starvation is
+  impossible — while <code>"fail"</code> <strong>hard-fails immediately</strong> with
+  <code>ResourceGroupBusy</code>, naming the group, the request, and the currently-free
+  slot count. See
   <a href="../dag-engine/#rules-print-running-but-never-spawn-a-process">DAG Engine → "Rules print Running but never spawn a process"</a>
   for the full fairness contract and the invisible-waiting diagnostic.</li>
 </ul>
@@ -11969,6 +12101,15 @@ rate-limited external resources (APIs, database connections).</p>
 depends on. Entries are recorded in the run's software-versions report
 (<code>name</code>, <code>version</code>, and <code>checksum</code>), so runs stay auditable against the
 reference data they consumed.</p>
+<p>When an entry declares a <code>checksum</code> and a local <code>source</code> path that exists
+on disk, <code>oxo-flow test --deep</code> verifies the file actually hashes to that
+value (deep-check code <code>D006</code>; a mismatch is a warning). The algorithm is
+taken from an <code>algo:</code> prefix when present — <code>sha256</code> (the default for a
+bare hex digest) and <code>md5</code> are supported — so a stale checksum surfaces as
+a finding instead of a silent reproducibility failure. Entries without a
+<code>checksum</code>, with a URL <code>source</code>, or whose file is not present locally are
+reported as nothing (never a false failure); see the <a href="../../commands/test/">test command
+reference</a>.</p>
 <table>
 <thead>
 <tr>

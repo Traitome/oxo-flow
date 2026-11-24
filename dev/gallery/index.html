@@ -660,6 +660,8 @@
       
         
       
+        
+      
     
     
     
@@ -1144,6 +1146,34 @@
     
   
     16 — 16S Amplicon (QIIME2)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="typed-variant-calling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    17 — Typed Germline Variant Calling
   
 
     
@@ -1781,6 +1811,10 @@
       
         
       
+        
+      
+        
+      
     
     
     
@@ -2024,6 +2058,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../commands/diagnostics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    diagnostics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../commands/diff/" class="md-nav__link">
         
   
@@ -2144,6 +2206,34 @@
     
   
     export
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../commands/export-dsl/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    export-dsl
   
 
     
@@ -3968,10 +4058,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#applied-patterns-workflows-1116" class="md-nav__link">
+  <a href="#applied-patterns-workflows-1117" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Applied Patterns (Workflows 11–16)
+        Applied Patterns (Workflows 11–17)
       
     </span>
   </a>
@@ -4131,6 +4221,12 @@
 <td>⭐⭐⭐⭐</td>
 <td>QIIME2 artifact chaining, DADA2 denoising, phylogenetic diversity</td>
 </tr>
+<tr>
+<td>17</td>
+<td><a href="typed-variant-calling/">Typed Germline Variant Calling</a></td>
+<td>⭐⭐⭐⭐</td>
+<td>BioType contracts: <code>[types.*]</code> / <code>[rules.types]</code> on every crossing edge</td>
+</tr>
 </tbody>
 </table>
 <hr />
@@ -4164,8 +4260,8 @@ instances and their concrete dependencies. For gallery workflows with
 <p>Master wildcards for multi-sample processing, scatter-gather parallelism patterns, and per-rule environment isolation with conda, docker, and singularity.</p>
 <h3 id="advanced-workflows-0610">Advanced (Workflows 06–10)<a class="headerlink" href="#advanced-workflows-0610" title="Permanent link">#</a></h3>
 <p>Build reference-scale bioinformatics pipelines covering RNA-seq, whole-genome sequencing, multi-omics integration, and single-cell analysis with checkpoint-driven reporting and complex DAG topologies, plus the unified <code>transform</code> operator for scatter-gather parallelism.</p>
-<h3 id="applied-patterns-workflows-1116">Applied Patterns (Workflows 11–16)<a class="headerlink" href="#applied-patterns-workflows-1116" title="Permanent link">#</a></h3>
-<p>Reference pipelines for real study designs: condition-gated branches, population cohorts with cohort-level joint genotyping, per-sample germline calling, paired tumor/control somatic calling (single pair and <code>[[pairs]]</code>-scaled), and 16S amplicon analysis with QIIME2.</p>
+<h3 id="applied-patterns-workflows-1117">Applied Patterns (Workflows 11–17)<a class="headerlink" href="#applied-patterns-workflows-1117" title="Permanent link">#</a></h3>
+<p>Reference pipelines for real study designs: condition-gated branches, population cohorts with cohort-level joint genotyping, per-sample germline calling, paired tumor/control somatic calling (single pair and <code>[[pairs]]</code>-scaled), 16S amplicon analysis with QIIME2, and a fully typed pipeline whose biological contracts are checked at preflight.</p>
 <hr />
 <h2 id="all-workflows-are-tested">All Workflows Are Tested<a class="headerlink" href="#all-workflows-are-tested" title="Permanent link">#</a></h2>
 <p>Every workflow in this gallery is validated as part of oxo-flow's continuous integration pipeline. The validation output shown in each page is the actual CLI output — not simulated.</p>

@@ -13,7 +13,7 @@
         <link rel="canonical" href="https://traitome.github.io/oxo-flow/dev/commands/diff/">
       
       
-        <link rel="prev" href="../debug/">
+        <link rel="prev" href="../diagnostics/">
       
       
         <link rel="next" href="../dry-run/">
@@ -658,6 +658,8 @@
       
         
       
+        
+      
     
     
     
@@ -1142,6 +1144,34 @@
     
   
     16 — 16S Amplicon (QIIME2)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../gallery/typed-variant-calling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    17 — Typed Germline Variant Calling
   
 
     
@@ -1781,6 +1811,10 @@
       
         
       
+        
+      
+        
+      
     
     
     
@@ -2021,6 +2055,34 @@
                 
   
   
+  
+  
+    <li class="md-nav__item">
+      <a href="../diagnostics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    diagnostics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
     
   
   
@@ -2139,6 +2201,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#emit-a-machine-readable-diff" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Emit a machine-readable diff
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -2149,6 +2222,17 @@
     <span class="md-ellipsis">
       
         Output
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#json-output" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        JSON output
       
     </span>
   </a>
@@ -2274,6 +2358,34 @@
     
   
     export
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../export-dsl/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    export-dsl
   
 
     
@@ -4086,6 +4198,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#emit-a-machine-readable-diff" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Emit a machine-readable diff
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -4096,6 +4219,17 @@
     <span class="md-ellipsis">
       
         Output
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#json-output" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        JSON output
       
     </span>
   </a>
@@ -4169,19 +4303,54 @@
 <p>Like all oxo-flow commands, <code>diff</code> accepts the global flags <code>--verbose</code> /
 <code>-v</code> (debug-level logging), <code>--quiet</code> (suppress informational output — the
 version banner is omitted; the <code>Diff:</code> report and the exit code are
-unaffected), and <code>--no-color</code> (disable colored output; also respects the
-<code>NO_COLOR</code> environment variable).</p>
+unaffected), <code>--no-color</code> (disable colored output; also respects the
+<code>NO_COLOR</code> environment variable), and <code>--json</code> (emit one machine-readable
+diff document on stdout; the human/colored report is suppressed — see
+<a href="#json-output">JSON output</a> below).</p>
 <hr />
 <h2 id="examples">Examples<a class="headerlink" href="#examples" title="Permanent link">#</a></h2>
 <h3 id="compare-two-workflows">Compare two workflows<a class="headerlink" href="#compare-two-workflows" title="Permanent link">#</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>oxo-flow<span class="w"> </span>diff<span class="w"> </span>v1.oxoflow<span class="w"> </span>v2.oxoflow
 </span></code></pre></div>
+<h3 id="emit-a-machine-readable-diff">Emit a machine-readable diff<a class="headerlink" href="#emit-a-machine-readable-diff" title="Permanent link">#</a></h3>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>oxo-flow<span class="w"> </span>diff<span class="w"> </span>--json<span class="w"> </span>v1.oxoflow<span class="w"> </span>v2.oxoflow
+</span></code></pre></div>
 <hr />
 <h2 id="output">Output<a class="headerlink" href="#output" title="Permanent link">#</a></h2>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>Diff: 2 difference(s) between v1.oxoflow and v2.oxoflow:
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>  • [rules] rule "bwa_align": shell command changed
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>  • [config] config variable changed: "threads"
+<div class="language-text highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>Diff: 2 difference(s) between v1.oxoflow and v2.oxoflow:
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>  • [rules] rule "bwa_align": shell command changed
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>  • [config] config variable changed: "threads"
 </span></code></pre></div>
+<hr />
+<h2 id="json-output">JSON output<a class="headerlink" href="#json-output" title="Permanent link">#</a></h2>
+<p>With <code>--json</code>, <code>diff</code> writes <strong>one</strong> JSON document to stdout and suppresses
+the human report, so CI and tooling can consume the diff directly:</p>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="p">{</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span><span class="nt">"difference_count"</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span><span class="nt">"differences"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">    </span><span class="nt">"config"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">      </span><span class="s2">"config variable changed: \"threads\""</span>
+</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">    </span><span class="p">],</span>
+</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="w">    </span><span class="nt">"rules"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="w">      </span><span class="s2">"rule \"bwa_align\": shell command changed"</span>
+</span><span id="__span-4-9"><a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="w">    </span><span class="p">]</span>
+</span><span id="__span-4-10"><a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a><span class="w">  </span><span class="p">},</span>
+</span><span id="__span-4-11"><a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a><span class="w">  </span><span class="nt">"equal"</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+</span><span id="__span-4-12"><a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a><span class="w">  </span><span class="nt">"tool"</span><span class="p">:</span><span class="w"> </span><span class="s2">"oxo-flow diff"</span><span class="p">,</span>
+</span><span id="__span-4-13"><a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a><span class="w">  </span><span class="nt">"workflow_a"</span><span class="p">:</span><span class="w"> </span><span class="s2">"v1.oxoflow"</span><span class="p">,</span>
+</span><span id="__span-4-14"><a id="__codelineno-4-14" name="__codelineno-4-14" href="#__codelineno-4-14"></a><span class="w">  </span><span class="nt">"workflow_b"</span><span class="p">:</span><span class="w"> </span><span class="s2">"v2.oxoflow"</span>
+</span><span id="__span-4-15"><a id="__codelineno-4-15" name="__codelineno-4-15" href="#__codelineno-4-15"></a><span class="p">}</span>
+</span></code></pre></div>
+<ul>
+<li><code>equal</code> is <code>true</code> when the workflows are identical (<code>differences</code> is then
+  <code>{}</code> and <code>difference_count</code> is <code>0</code>).</li>
+<li><code>differences</code> is an object keyed by diff category (<code>workflow</code>, <code>rules</code>,
+  <code>config</code>, <code>defaults</code>, <code>pairs</code>, <code>sample_groups</code>); keys appear in sorted
+  order and the descriptions within each category are sorted, so repeated
+  runs on the same pair emit byte-identical JSON.</li>
+<li>The exit code is unchanged: <code>0</code> when identical, <code>1</code> when differences are
+  found.</li>
+</ul>
 <hr />
 <h2 id="notes">Notes<a class="headerlink" href="#notes" title="Permanent link">#</a></h2>
 <ul>
@@ -4229,7 +4398,7 @@ unaffected), and <code>--no-color</code> (disable colored output; also respects 
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../debug/" class="md-footer__link md-footer__link--prev" aria-label="Previous: debug">
+          <a href="../diagnostics/" class="md-footer__link md-footer__link--prev" aria-label="Previous: diagnostics">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
@@ -4239,7 +4408,7 @@ unaffected), and <code>--no-color</code> (disable colored output; also respects 
                 Previous
               </span>
               <div class="md-ellipsis">
-                debug
+                diagnostics
               </div>
             </div>
           </a>

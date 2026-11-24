@@ -658,6 +658,8 @@
       
         
       
+        
+      
     
     
     
@@ -1142,6 +1144,34 @@
     
   
     16 — 16S Amplicon (QIIME2)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../gallery/typed-variant-calling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    17 — Typed Germline Variant Calling
   
 
     
@@ -2111,6 +2141,10 @@
       
         
       
+        
+      
+        
+      
     
     
     
@@ -2354,6 +2388,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../../commands/diagnostics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    diagnostics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../commands/diff/" class="md-nav__link">
         
   
@@ -2474,6 +2536,34 @@
     
   
     export
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands/export-dsl/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    export-dsl
   
 
     
@@ -4605,8 +4695,8 @@
 </tr>
 <tr>
 <td><strong>Kubernetes</strong></td>
-<td>Supported (spec generation)</td>
-<td>Prototype — CLI wrapper (<code>kubectl</code>), mock/wire tests only; live campaign pending (CL-05 / #1158)</td>
+<td>Supported (spec generation + shared-filesystem execution)</td>
+<td>Prototype — live single-node k3s campaign (submit/status/artifacts/logs/SIGINT-cancel) for <code>system</code>-environment rules; Job manifests mount the run workdir via <code>hostPath</code> and set <code>imagePullPolicy: IfNotPresent</code>. Residual: docker/singularity-env rules, array command-dir mounts, multi-node shared volumes, registry-restricted nodes — see <a href="../../superpowers/audits/kubernetes-live-campaign-2026-11-24.md"><code>kubernetes-live-campaign-2026-11-24.md</code></a></td>
 <td><code>k8s Job</code></td>
 </tr>
 <tr>
@@ -5136,14 +5226,24 @@ The wrapper appends a run-specific completion record to the stream
 it: a truncated pull fails the run instead of reporting a partial
 tree as complete, and <code>execution.log</code> plus <code>.exit-code</code> are required
 as well. The failure is recorded in the run's <code>artifacts_incomplete</code>
-note and the run is <strong>never</strong> reported as <code>completed</code>. The pull
-verifies that the complete tree arrived — it does not re-derive the
-expanded output list locally; declared outputs are verified by the
-engine on the remote host before the run exits 0, and a non-zero
-remote exit always fails the run. Result trees that intentionally
-leave symlinks pointing outside the workdir (for example an externally
-rooted <code>OXO_FLOW_ENV_STORE</code> link, or any link target containing <code>..</code>)
-are rejected by this check — pulled results must be self-contained.</p>
+note and the run is <strong>never</strong> reported as <code>completed</code>. Beyond the
+transfer checks, the pulled workdir is verified against the engine's own
+records before finalization: every declared output of every completed
+rule must exist (wildcard / <code>output_pattern</code> fan-out included, through
+the same oracle the local run loop uses), and when the run recorded
+checksums (<code>--provenance</code>, cluster <code>--provenance</code>, or a rule-level
+<code>checksum =</code>) each artifact is re-hashed — a changed file is <code>modified</code>,
+a zero-byte file whose recorded digest proves content is <code>truncated</code>, and
+an absent one is <code>missing</code>. Files that merely appear beside declared
+outputs are reported as <code>extra</code> for the audit trail but do not fail the
+closure (tools legitimately write sidecars such as <code>.bai</code>), and
+<code>temporary = true</code> outputs the engine cleaned are reported as <code>cleaned</code>,
+never missing. The structured report is stored in the run's
+<code>artifacts_incomplete</code> note. A non-zero remote exit always fails the
+run. Result trees that intentionally leave symlinks pointing outside the
+workdir (for example an externally rooted <code>OXO_FLOW_ENV_STORE</code> link, or
+any link target containing <code>..</code>) are rejected — pulled results must be
+self-contained.</p>
 </div>
 <p>Cluster connection management is admin-only outside personal mode.
 Details: <a href="../../reference/web-api/#cluster-connections-remote-execution">Cluster Connections &amp; Remote
@@ -5257,6 +5357,15 @@ prints a warning and the run proceeds (<code>-j</code> is dropped silently):</p>
 <p><code>--skip-ref-build</code> is accepted on the cluster path and is a no-op there by
 construction: the reference-build step runs only on the local execution
 path, and <code>run --profile</code> never builds references itself.</p>
+<p><strong>Lifecycle hooks do not run on the cluster path.</strong> Rule-level
+<code>pre_exec</code> / <code>on_success</code> / <code>on_failure</code> and workflow-level
+<code>on_complete</code> / <code>on_error</code> are run by the local executor and the CLI run
+loop, neither of which the cluster path enters. A workflow that declares
+any of them is <strong>rejected at plan time</strong> — before any job script is
+rendered — naming the offending rule and hook field (issue #1340), on
+both <code>run --profile &lt;name&gt;</code> and <code>cluster submit</code>, instead of silently
+dropping the hook on the scheduler. Remove the hooks or run the workflow
+locally (<code>oxo-flow run</code>).</p>
 <p><code>--provenance</code> <strong>is</strong> honored on the cluster path (issue #1093): each rule's
 expanded outputs are hashed when the job settles and recorded into the
 checkpoint's <code>checksums</code> map, exactly like a local run — <code>provenance verify</code>
