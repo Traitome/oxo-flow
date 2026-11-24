@@ -38,6 +38,16 @@ oxo-flow serve -p 9090
 open http://localhost:8080
 ```
 
+!!! warning "Personal mode in a container"
+
+    Personal mode always binds loopback (it refuses `--host 0.0.0.0`, see the
+    startup warning), so `docker run -p 3000:3000` is not reachable: the
+    container serves its own `127.0.0.1:3000` while the published port resolves
+    to the container's network IP. Run the container with `--network host`
+    (`OXO_FLOW_PORT` then names the host port), or use team mode with published
+    ports. The `docker compose` defaults already select team mode for this
+    reason.
+
 ## Mode 2: Team
 
 **Use when**: Multiple users share a server or cloud instance.
