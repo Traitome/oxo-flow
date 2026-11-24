@@ -831,6 +831,10 @@ pub async fn cluster_command(action: ClusterAction, json: bool) -> Result<()> {
                 account: account.clone(),
                 walltime: walltime.clone(),
                 extra_args: extra_args.clone(),
+                // Scope Job names to this submission directory so re-rendering
+                // into the same directory stays idempotent while a different
+                // directory never collides (issue #1158).
+                name_scope: Some(output.to_string_lossy().into_owned()),
             };
 
             // A dry run writes the very scripts a real submit would: an HPC
@@ -1377,6 +1381,7 @@ pub async fn cluster_command(action: ClusterAction, json: bool) -> Result<()> {
                         account: None,
                         walltime: None,
                         extra_args: Vec::new(),
+                        name_scope: None,
                     },
                 );
                 for id in &unknown {
@@ -1410,9 +1415,13 @@ pub async fn cluster_command(action: ClusterAction, json: bool) -> Result<()> {
         }
 
         ClusterAction::Cancel { backend, job_ids } => {
-            let cancel_cmd = oxo_flow_core::backend::cluster::cancel_command(&resolve_backend(
-                backend.as_deref(),
-            )?);
+            let cluster_backend = resolve_backend(backend.as_deref())?;
+            // One shared invocation mapping with the driver
+            // (`cancel_invocations`): k8s needs `kubectl delete job`, AWS/GCP
+            // cancel one id per API call, and the local schedulers take all
+            // ids at once (issue #1158 live campaign).
+            let invocations =
+                oxo_flow_core::backend::cluster::cancel_invocations(&cluster_backend, &job_ids);
 
             // job_ids is clap-enforced as required, so the empty case never
             // reaches here — usage errors surface at argument parsing with
@@ -1423,65 +1432,48 @@ pub async fn cluster_command(action: ClusterAction, json: bool) -> Result<()> {
                 oxo_flow_core::plural(job_ids.len(), "job", "jobs")
             );
 
-            if json {
-                let ids_for_cmd = job_ids.clone();
-                let output = tokio::task::spawn_blocking(move || {
-                    std::process::Command::new(cancel_cmd)
-                        .args(&ids_for_cmd)
-                        .output()
+            let mut outputs: Vec<(String, String)> = Vec::new();
+            for (program, args) in invocations {
+                let display = format!("{program} {}", args.join(" "));
+                let result = tokio::task::spawn_blocking(move || {
+                    std::process::Command::new(&program).args(&args).output()
                 })
                 .await
                 .context("cancel task failed")?;
-                match output {
+                match result {
                     Ok(out) if out.status.success() => {
-                        println!(
-                            "{}",
-                            serde_json::to_string_pretty(&serde_json::json!({
-                                "command": cancel_cmd,
-                                "job_ids": job_ids,
-                                "success": true,
-                                "output": String::from_utf8_lossy(&out.stdout),
-                            }))?
-                        );
+                        outputs.push((display, String::from_utf8_lossy(&out.stdout).into_owned()))
                     }
                     Ok(out) => anyhow::bail!(
                         "Command failed with exit code: {}",
                         out.status.code().unwrap_or(-1)
                     ),
                     Err(e) => {
-                        eprintln!("  Is {} installed on this system?", cancel_cmd);
+                        eprintln!("  Is the cancel command installed on this system?");
                         anyhow::bail!("Failed to execute cancel command: {}", e);
                     }
                 }
-                return Ok(());
             }
 
-            let cancel_status = {
-                let job_ids = job_ids.clone();
-                tokio::task::spawn_blocking(move || {
-                    std::process::Command::new(cancel_cmd)
-                        .args(&job_ids)
-                        .status()
-                })
-                .await
-                .context("cancel task failed")?
-            };
-            match cancel_status {
-                Ok(status) => {
-                    if status.success() {
-                        eprintln!("{} Successfully canceled jobs.", "✓".green());
-                    } else {
-                        anyhow::bail!(
-                            "Command failed with exit code: {}",
-                            status.code().unwrap_or(-1)
-                        );
-                    }
-                }
-                Err(e) => {
-                    eprintln!("  Is {} installed on this system?", cancel_cmd);
-                    anyhow::bail!("Failed to execute cancel command: {}", e);
-                }
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "backend": cluster_backend.to_string(),
+                        "job_ids": job_ids,
+                        "success": true,
+                        "invocations": outputs
+                            .iter()
+                            .map(|(command, output)| serde_json::json!({
+                                "command": command,
+                                "output": output,
+                            }))
+                            .collect::<Vec<_>>(),
+                    }))?
+                );
+                return Ok(());
             }
+            eprintln!("{} Successfully canceled jobs.", "✓".green());
         }
 
         ClusterAction::Logs {
@@ -1539,6 +1531,7 @@ pub async fn cluster_command(action: ClusterAction, json: bool) -> Result<()> {
                     account: None,
                     walltime: None,
                     extra_args: Vec::new(),
+                    name_scope: None,
                 },
             );
             let accounting = executor.logs(&resolved_id).await.ok();

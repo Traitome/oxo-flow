@@ -29,7 +29,7 @@ There are two ways to reach a scheduler, and they suit different jobs:
 | **PBS/Torque** | Supported | Real-scheduler matrix, OpenPBS 23.06 (2026-09-22/23 campaign; not re-run per commit) | `#PBS` |
 | **SGE** | Supported | Real-scheduler matrix, SoGE 8.1.9 (2026-09-22/23 campaign; not re-run per commit) | `#$` |
 | **LSF** | Supported | Experimental — no live campaign; directives/status semantics cross-checked against IBM's bsub reference | `#BSUB` |
-| **Kubernetes** | Supported (spec generation) | Prototype — CLI wrapper (`kubectl`), mock/wire tests only; live campaign pending (CL-05 / #1158) | `k8s Job` |
+| **Kubernetes** | Supported (spec generation + shared-filesystem execution) | Prototype — live single-node k3s campaign (submit/status/artifacts/logs/SIGINT-cancel) for `system`-environment rules; Job manifests mount the run workdir via `hostPath` and set `imagePullPolicy: IfNotPresent`. Residual: docker/singularity-env rules, array command-dir mounts, multi-node shared volumes, registry-restricted nodes — see [`kubernetes-live-campaign-2026-11-24.md`](../../superpowers/audits/kubernetes-live-campaign-2026-11-24.md) | `k8s Job` |
 | **AWS Batch** | Supported (spec generation) | Prototype — CLI wrapper (`aws`), mock/wire tests only; live campaign pending (CL-05 / #1158) | `aws-batch` |
 | **GCP Batch** | Supported (spec generation) | Prototype — CLI wrapper (`gcloud`), mock/wire tests only; live campaign pending (CL-05 / #1158) | `gcp-batch` |
 

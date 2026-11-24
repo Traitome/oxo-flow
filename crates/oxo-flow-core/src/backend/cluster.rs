@@ -470,6 +470,62 @@ pub fn parse_job_listing(
         .collect()
 }
 
+/// One or more complete cancel invocations for `job_ids` on `backend`.
+///
+/// The standalone `cluster cancel` command and the executor's `cancel`
+/// implementation share this mapping so the two can never drift (issue #1158 live campaign:
+/// the CLI used to pass the bare job id, which `kubectl` rejected as an
+/// unknown command). Scheduler-array-style backends cancel every id in one
+/// call; per-job APIs (AWS Batch, GCP Batch) get one invocation each.
+pub fn cancel_invocations(
+    backend: &ClusterBackend,
+    job_ids: &[String],
+) -> Vec<(String, Vec<String>)> {
+    match backend {
+        ClusterBackend::Slurm => vec![("scancel".to_string(), job_ids.to_vec())],
+        ClusterBackend::Pbs | ClusterBackend::Sge => {
+            vec![("qdel".to_string(), job_ids.to_vec())]
+        }
+        ClusterBackend::Lsf => vec![("bkill".to_string(), job_ids.to_vec())],
+        ClusterBackend::Kubernetes => {
+            let mut args = vec!["delete".to_string(), "job".to_string()];
+            args.extend(job_ids.iter().cloned());
+            vec![("kubectl".to_string(), args)]
+        }
+        ClusterBackend::AwsBatch => job_ids
+            .iter()
+            .map(|id| {
+                (
+                    "aws".to_string(),
+                    vec![
+                        "batch".to_string(),
+                        "cancel-job".to_string(),
+                        "--job-id".to_string(),
+                        id.clone(),
+                        "--reason".to_string(),
+                        "cancelled".to_string(),
+                    ],
+                )
+            })
+            .collect(),
+        ClusterBackend::GcpBatch => job_ids
+            .iter()
+            .map(|id| {
+                (
+                    "gcloud".to_string(),
+                    vec![
+                        "batch".to_string(),
+                        "jobs".to_string(),
+                        "delete".to_string(),
+                        id.clone(),
+                        "--quiet".to_string(),
+                    ],
+                )
+            })
+            .collect(),
+    }
+}
+
 /// The command that cancels a job, matching [`super::ExecutorBackend::cancel`]
 /// so the standalone `cluster cancel` command and the driver agree.
 pub fn cancel_command(backend: &ClusterBackend) -> &'static str {
@@ -775,6 +831,14 @@ impl ClusterExecutor {
     /// Set the directory array jobs run in.
     pub fn with_workdir(mut self, dir: PathBuf) -> Self {
         self.workdir = dir;
+        self
+    }
+
+    /// Scope Kubernetes Job names to this run/submission (issue #1158):
+    /// repeated runs of one workflow must not collide on `AlreadyExists`.
+    /// Other backends ignore it.
+    pub fn with_name_scope(mut self, scope: impl Into<String>) -> Self {
+        self.cluster.name_scope = Some(scope.into());
         self
     }
 
@@ -1364,36 +1428,13 @@ impl super::ExecutorBackend for ClusterExecutor {
     }
 
     async fn cancel(&self, job_id: &str) -> Result<()> {
-        let cmd = match self.backend {
-            ClusterBackend::Slurm => "scancel",
-            ClusterBackend::Pbs | ClusterBackend::Sge => "qdel",
-            ClusterBackend::Lsf => "bkill",
-            ClusterBackend::Kubernetes => "kubectl",
-            ClusterBackend::AwsBatch => "aws",
-            ClusterBackend::GcpBatch => "gcloud",
-        };
-        let args: Vec<String> = match self.backend {
-            ClusterBackend::Kubernetes => vec!["delete".into(), "job".into(), job_id.into()],
-            ClusterBackend::AwsBatch => vec![
-                "batch".into(),
-                "cancel-job".into(),
-                "--job-id".into(),
-                job_id.into(),
-                "--reason".into(),
-                "cancelled".into(),
-            ],
-            ClusterBackend::GcpBatch => {
-                let mut args = vec!["batch".to_string(), "jobs".to_string()];
-                args.extend(self.gcloud_location_args());
-                args.push("delete".to_string());
-                args.push(job_id.to_string());
-                args.push("--quiet".to_string());
-                args
-            }
-            _ => vec![job_id.to_string()],
-        };
-        let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
-        self.run_cmd(cmd, &arg_refs).await.map(|_| ())
+        // One shared mapping with the standalone `cluster cancel` command.
+        let invocations = cancel_invocations(&self.backend, &[job_id.to_string()]);
+        for (program, args) in invocations {
+            let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+            self.run_cmd(&program, &arg_refs).await?;
+        }
+        Ok(())
     }
 
     async fn logs(&self, job_id: &str) -> Result<String> {
@@ -1849,6 +1890,7 @@ mod tests {
             account: None,
             walltime: None,
             extra_args: vec![],
+            name_scope: None,
         }
     }
 
@@ -3459,5 +3501,34 @@ ru_wallclock 82\nru_maxrss    262144\ncpu          164\n";
             crate::cluster::submit_invocation_hint(&ClusterBackend::GcpBatch, dir)
                 .contains("gcloud batch jobs submit")
         );
+    }
+    #[test]
+    fn cancel_invocations_match_each_backends_cli_grammar() {
+        let ids = vec!["a".to_string(), "b".to_string()];
+        let k8s = cancel_invocations(&ClusterBackend::Kubernetes, &ids);
+        assert_eq!(
+            k8s,
+            vec![(
+                "kubectl".to_string(),
+                vec![
+                    "delete".to_string(),
+                    "job".to_string(),
+                    "a".to_string(),
+                    "b".to_string()
+                ]
+            )]
+        );
+        // Scheduler-array CLIs take every id in one call.
+        assert_eq!(
+            cancel_invocations(&ClusterBackend::Slurm, &ids),
+            vec![("scancel".to_string(), ids.clone())]
+        );
+        // Per-job cloud APIs get one invocation per id.
+        let aws = cancel_invocations(&ClusterBackend::AwsBatch, &ids);
+        assert_eq!(aws.len(), 2);
+        assert!(aws[0].1.contains(&"--job-id".to_string()));
+        let gcp = cancel_invocations(&ClusterBackend::GcpBatch, &ids);
+        assert_eq!(gcp.len(), 2);
+        assert_eq!(gcp[1].1[2], "delete");
     }
 }

@@ -115,6 +115,7 @@ fn cluster_config() -> ClusterJobConfig {
         account: None,
         walltime: None,
         extra_args: vec![],
+        name_scope: None,
     }
 }
 
@@ -722,6 +723,7 @@ async fn kubernetes_executor_renders_manifest_and_parses_status() {
         account: None,
         walltime: None,
         extra_args: Vec::new(),
+        name_scope: None,
     };
     let exec = ClusterExecutor::new(ClusterBackend::Kubernetes, cluster_config.clone())
         .with_workdir(dir.path().to_path_buf());
@@ -772,6 +774,7 @@ async fn aws_batch_executor_renders_spec_and_parses_status() {
         account: Some("job-def-arn".into()),
         walltime: None,
         extra_args: Vec::new(),
+        name_scope: None,
     };
     let exec = ClusterExecutor::new(ClusterBackend::AwsBatch, cluster_config.clone())
         .with_workdir(dir.path().to_path_buf());
@@ -821,6 +824,7 @@ async fn gcp_batch_executor_renders_spec_and_parses_status() {
         account: None,
         walltime: None,
         extra_args: Vec::new(),
+        name_scope: None,
     };
     let exec = ClusterExecutor::new(ClusterBackend::GcpBatch, cluster_config.clone())
         .with_workdir(dir.path().to_path_buf());

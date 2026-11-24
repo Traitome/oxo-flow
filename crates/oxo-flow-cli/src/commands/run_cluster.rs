@@ -173,6 +173,7 @@ fn job_config(cluster: &ClusterProfile) -> Result<(ClusterBackend, ClusterJobCon
             account: cluster.account.clone(),
             walltime: cluster.walltime.clone(),
             extra_args: cluster.extra_args.clone(),
+            name_scope: None,
         },
     ))
 }
@@ -954,6 +955,9 @@ pub(crate) async fn run_on_cluster(
     // (issue #1120 / ledger RB-12).
     let executor = ClusterExecutor::new(backend, cluster_config)
         .with_workdir(args.workdir.to_path_buf())
+        // K8s Job names carry this scope so a re-run never collides with the
+        // previous run's completed Jobs (issue #1158 live campaign).
+        .with_name_scope(run_dir.to_string_lossy().into_owned())
         .with_secret_refs(oxo_flow_core::backend::secret_refs_from_env());
     let driver = BackendDriver::new(Arc::new(executor), driver_config);
     // Submit-time checkpoint recording (issue #136 H6): a crashed driver
