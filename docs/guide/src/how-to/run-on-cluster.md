@@ -512,14 +512,24 @@ auth, `BatchMode`).
     it: a truncated pull fails the run instead of reporting a partial
     tree as complete, and `execution.log` plus `.exit-code` are required
     as well. The failure is recorded in the run's `artifacts_incomplete`
-    note and the run is **never** reported as `completed`. The pull
-    verifies that the complete tree arrived — it does not re-derive the
-    expanded output list locally; declared outputs are verified by the
-    engine on the remote host before the run exits 0, and a non-zero
-    remote exit always fails the run. Result trees that intentionally
-    leave symlinks pointing outside the workdir (for example an externally
-    rooted `OXO_FLOW_ENV_STORE` link, or any link target containing `..`)
-    are rejected by this check — pulled results must be self-contained.
+    note and the run is **never** reported as `completed`. Beyond the
+    transfer checks, the pulled workdir is verified against the engine's own
+    records before finalization: every declared output of every completed
+    rule must exist (wildcard / `output_pattern` fan-out included, through
+    the same oracle the local run loop uses), and when the run recorded
+    checksums (`--provenance`, cluster `--provenance`, or a rule-level
+    `checksum =`) each artifact is re-hashed — a changed file is `modified`,
+    a zero-byte file whose recorded digest proves content is `truncated`, and
+    an absent one is `missing`. Files that merely appear beside declared
+    outputs are reported as `extra` for the audit trail but do not fail the
+    closure (tools legitimately write sidecars such as `.bai`), and
+    `temporary = true` outputs the engine cleaned are reported as `cleaned`,
+    never missing. The structured report is stored in the run's
+    `artifacts_incomplete` note. A non-zero remote exit always fails the
+    run. Result trees that intentionally leave symlinks pointing outside the
+    workdir (for example an externally rooted `OXO_FLOW_ENV_STORE` link, or
+    any link target containing `..`) are rejected — pulled results must be
+    self-contained.
 
 Cluster connection management is admin-only outside personal mode.
 Details: [Cluster Connections & Remote

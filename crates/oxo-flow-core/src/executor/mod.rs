@@ -5,6 +5,7 @@
 
 use std::collections::HashMap;
 
+pub mod artifact_closure;
 pub mod checkpoint;
 pub mod content_cache;
 pub mod env_create_lock;
