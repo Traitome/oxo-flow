@@ -204,7 +204,7 @@ docker run --rm -v "$PWD:/work" -w /work ghcr.io/traitome/oxo-flow:latest \
 
 Health endpoint: `GET /api/health` returns `"status":"ok"` when the database is reachable.
 
-Container configuration is env-only: the image sets `OXO_FLOW_MODE=team`, `OXO_FLOW_HOST=0.0.0.0`, and `OXO_FLOW_PORT=3000` as defaults, and the CMD carries no CLI flags — so `docker run -e OXO_FLOW_PORT=9090 …` changes the actual bind port (the built-in healthcheck follows it). Note the published image is built **without** the `postgres` compile feature: pointing `DATABASE_URL` at a `postgres://` URL makes the container exit at startup (see the docker-compose.yml comment for how to build a feature-enabled image).
+Container configuration is env-only: the image sets `OXO_FLOW_MODE=team`, `OXO_FLOW_HOST=0.0.0.0`, and `OXO_FLOW_PORT=3000` as defaults, and the CMD carries no CLI flags — so `docker run -e OXO_FLOW_PORT=9090 …` changes the actual bind port (the built-in healthcheck follows it). Personal mode inside a container needs `--network host` instead of published ports, because personal mode always binds loopback (`docker run --network host -e OXO_FLOW_MODE=personal …`); see [Deployment Modes](docs/guide/src/how-to/deploy-modes.md). Note the published image is built **without** the `postgres` compile feature: pointing `DATABASE_URL` at a `postgres://` URL makes the container exit at startup (see the docker-compose.yml comment for how to build a feature-enabled image).
 
 ### Build from source
 
