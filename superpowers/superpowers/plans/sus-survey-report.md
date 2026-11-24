@@ -48,6 +48,20 @@ The final report must include:
 - negative, null, and contradictory findings;
 - raw response data or a controlled-access justification.
 
-## 4. Current Decision
+## 4. Generator Relationship (provenance note)
+
+This report is a **hand-authored status document**. It contains no measured
+numbers; its machine-readable provenance record is the key
+`docs/superpowers/plans/sus-survey-report.md` in
+`eval/benchmarks/provenance_manifest.json` (validated by `make provenance-check`),
+which pins the generator run behind the committed snapshot, not a measurement.
+The generator `eval/benchmarks/sus_survey_analysis.py` refuses to render
+anything but a synthetic "Synthetic Human-Factors Harness Check" table; it
+cannot regenerate this file byte-for-byte and does not produce study results.
+The generator produces the raw harness-check table (snapshot-committed at
+`eval/benchmarks/snapshots/sus_survey_harness_check.md` and byte-gated by
+`make reports-regen`), the report states the evidence status.
+
+## 5. Current Decision
 
 Human factors remain **Simulation only**. No usability claim may appear in a roadmap, release note, slide, or manuscript until real study data pass review.

@@ -1,6 +1,6 @@
 {
-  "generated_at": "2026-11-19T18:18:11Z",
-  "commit": "1dd70d4f94e3e95a1c66b3ba1179932a8b7e61bb",
+  "generated_at": "2026-11-22T12:22:32Z",
+  "commit": "b7a75ed23e1e37f8b8e9ccfceaa894784ddc82a9",
   "binary": "target/debug/oxo-flow",
   "cases": [
     {"case": "tests/truthset/biotype/cases/t01_star_bam_to_featurecounts.oxoflow", "expected": "accept", "actual": "accept", "verdict_correct": "yes", "expected_codes": "-", "actual_codes": "-", "codes_correct": "yes", "note": "nextflow STAR->featureCounts edge"},
@@ -38,16 +38,28 @@
     {"case": "tests/truthset/biotype/cases/b18_cram_implied_bgzip.oxoflow", "expected": "reject", "actual": "reject", "verdict_correct": "yes", "expected_codes": "TYPE-006", "actual_codes": "TYPE-006", "codes_correct": "yes", "note": "plain CRAM -> CRAM[compression=bgzip] (CRAM is NOT BGZF)"},
     {"case": "tests/truthset/biotype/cases/b19_build_incomplete_advisory.oxoflow", "expected": "accept", "actual": "accept", "verdict_correct": "yes", "expected_codes": "TYPE-009", "actual_codes": "TYPE-009", "codes_correct": "yes", "note": "producer names no build, consumer names GRCh38 (advisory TYPE-009)"},
     {"case": "tests/truthset/biotype/cases/b20_unsorted_consumer_accept.oxoflow", "expected": "accept", "actual": "accept", "verdict_correct": "yes", "expected_codes": "-", "actual_codes": "-", "codes_correct": "yes", "note": "coordinate BAM -> sort_order=unsorted consumer (no ordering constraint)"},
+    {"case": "tests/truthset/biotype/cases/b21_gff3_accept.oxoflow", "expected": "accept", "actual": "accept", "verdict_correct": "yes", "expected_codes": "-", "actual_codes": "-", "codes_correct": "yes", "note": "GFF3 -> GFF3 consumer (#1292 format coverage: gff3 variant)"},
+    {"case": "tests/truthset/biotype/cases/b22_gff3_to_gtf_consumer.oxoflow", "expected": "reject", "actual": "reject", "verdict_correct": "yes", "expected_codes": "TYPE-001", "actual_codes": "TYPE-001", "codes_correct": "yes", "note": "GFF3 producer -> GTF consumer (format boundary, no coercion arm)"},
+    {"case": "tests/truthset/biotype/cases/b23_h5ad_accept.oxoflow", "expected": "accept", "actual": "accept", "verdict_correct": "yes", "expected_codes": "-", "actual_codes": "-", "codes_correct": "yes", "note": "H5AD -> H5AD consumer (#1292 format coverage: h5ad variant)"},
+    {"case": "tests/truthset/biotype/cases/b24_h5ad_to_parquet_consumer.oxoflow", "expected": "reject", "actual": "reject", "verdict_correct": "yes", "expected_codes": "TYPE-001", "actual_codes": "TYPE-001", "codes_correct": "yes", "note": "H5AD producer -> PARQUET consumer (format boundary, no coercion arm)"},
+    {"case": "tests/truthset/biotype/cases/b25_rds_accept.oxoflow", "expected": "accept", "actual": "accept", "verdict_correct": "yes", "expected_codes": "-", "actual_codes": "-", "codes_correct": "yes", "note": "RDS -> RDS consumer (#1292 format coverage: rds variant)"},
+    {"case": "tests/truthset/biotype/cases/b26_rds_to_tsv_consumer.oxoflow", "expected": "reject", "actual": "reject", "verdict_correct": "yes", "expected_codes": "TYPE-001", "actual_codes": "TYPE-001", "codes_correct": "yes", "note": "RDS producer -> TSV consumer (format boundary, no coercion arm)"},
+    {"case": "tests/truthset/biotype/cases/b27_parquet_accept.oxoflow", "expected": "accept", "actual": "accept", "verdict_correct": "yes", "expected_codes": "-", "actual_codes": "-", "codes_correct": "yes", "note": "PARQUET -> PARQUET consumer (#1292 format coverage: parquet variant)"},
+    {"case": "tests/truthset/biotype/cases/b28_tsv_accept.oxoflow", "expected": "accept", "actual": "accept", "verdict_correct": "yes", "expected_codes": "-", "actual_codes": "-", "codes_correct": "yes", "note": "TSV -> TSV consumer (#1292 format coverage: tsv variant)"},
+    {"case": "tests/truthset/biotype/cases/b29_transform_scatter_reject.oxoflow", "expected": "reject", "actual": "reject", "verdict_correct": "yes", "expected_codes": "TYPE-001", "actual_codes": "TYPE-001", "codes_correct": "yes", "note": "transform.* scatter/combine GENERATED edge: VCF out vs BAM consumer (TYPE-001)"},
+    {"case": "tests/truthset/biotype/cases/b30_transform_scatter_accept.oxoflow", "expected": "accept", "actual": "accept", "verdict_correct": "yes", "expected_codes": "-", "actual_codes": "-", "codes_correct": "yes", "note": "transform.* scatter/combine GENERATED edge matching contract (#1292 control)"},
+    {"case": "tests/truthset/biotype/cases/b31_include_contributed_type.oxoflow", "expected": "reject", "actual": "reject", "verdict_correct": "yes", "expected_codes": "TYPE-004", "actual_codes": "TYPE-004", "codes_correct": "yes", "note": "include-contributed type GRCh38 -> consumer GRCh37 (include boundary)"},
     {"case": "examples/gallery/13_simple_variant_calling.oxoflow", "expected": "accept", "actual": "accept", "verdict_correct": "yes", "expected_codes": "-", "actual_codes": "-", "codes_correct": "yes", "note": "real repo example, untyped"},
     {"case": "examples/gallery/06_rnaseq_quantification.oxoflow", "expected": "accept", "actual": "accept", "verdict_correct": "yes", "expected_codes": "-", "actual_codes": "-", "codes_correct": "yes", "note": "real repo example, untyped"},
     {"case": "examples/gallery/09_single_cell_rnaseq.oxoflow", "expected": "accept", "actual": "accept", "verdict_correct": "yes", "expected_codes": "-", "actual_codes": "-", "codes_correct": "yes", "note": "real repo example, untyped"},
     {"case": "examples/gallery/07_wgs_germline.oxoflow", "expected": "accept", "actual": "accept", "verdict_correct": "yes", "expected_codes": "-", "actual_codes": "-", "codes_correct": "yes", "note": "real repo example, untyped"},
     {"case": "examples/gallery/08_multiomics_integration.oxoflow", "expected": "accept", "actual": "accept", "verdict_correct": "yes", "expected_codes": "-", "actual_codes": "-", "codes_correct": "yes", "note": "real repo example, untyped"},
     {"case": "examples/gallery/14_paired_experiment_control.oxoflow", "expected": "accept", "actual": "accept", "verdict_correct": "yes", "expected_codes": "-", "actual_codes": "-", "codes_correct": "yes", "note": "real repo example, untyped"},
-    {"case": "examples/gallery/16_16s_qiime2_amplicon.oxoflow", "expected": "accept", "actual": "accept", "verdict_correct": "yes", "expected_codes": "-", "actual_codes": "-", "codes_correct": "yes", "note": "real repo example, untyped"}
+    {"case": "examples/gallery/16_16s_qiime2_amplicon.oxoflow", "expected": "accept", "actual": "accept", "verdict_correct": "yes", "expected_codes": "-", "actual_codes": "-", "codes_correct": "yes", "note": "real repo example, untyped"},
+    {"case": "examples/gallery/17_typed_variant_calling.oxoflow", "expected": "accept", "actual": "accept", "verdict_correct": "yes", "expected_codes": "-", "actual_codes": "-", "codes_correct": "yes", "note": "real repo example, TYPED [types.*]/[rules.types] contracts (#1272)"}
   ],
-  "confusion_matrix": {"true_accept": 25, "false_accept": 0, "true_reject": 17, "false_reject": 0},
-  "codes_correct": 42,
+  "confusion_matrix": {"true_accept": 32, "false_accept": 0, "true_reject": 22, "false_reject": 0},
+  "codes_correct": 54,
   "codes_fail": 0,
-  "cases_total": 42
+  "cases_total": 54
 }

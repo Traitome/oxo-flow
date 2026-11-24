@@ -1,0 +1,47 @@
+# Kubernetes live campaign evidence — tx-ubuntu 2026-11-24
+## host
+VM-4-4-ubuntu
+Linux 6.8.0-137-generic
+k3s version v1.31.4+k3s1 (a562d090)
+go version go1.22.9
+oxo-flow 0.32.0
+7b5123d
+
+## campaign run (2 rules, --provenance)
+  Warning: 2 rules were skipped because declared outputs exist but the checkpoint has no completion record — a killed job can leave partial outputs; pass --rerun to force re-execution: make, derive
+Cluster: everything is up to date — nothing to submit
+  ⚠ --provenance recorded 0 checksums — no literal outputs completed (templated or wildcard outputs are tracked per instance only after fan-out); 'provenance verify' will find nothing to check
+✓ Report snapshot: /tmp/k8scamp/.oxo-flow/reports/report-20261124-153704.json
+
+## declared outputs and checksums
+b.txt=6
+matched 0 mismatched 0 missing 0
+
+## rerun after checkpoint delete with previous Jobs present (unique names)
+Cluster: 2 succeeded, 0 failed, 0 skipped
+✓ Report snapshot: /tmp/k8scamp/.oxo-flow/reports/report-20261124-153716.json
+NAME                      STATUS     COMPLETIONS   DURATION   AGE
+oxoflow-derive-615a3183   Complete   1/1           4s         5s
+oxoflow-derive-9c4ead23   Complete   1/1           3s         49s
+oxoflow-derive-ea724299   Complete   1/1           3s         38s
+oxoflow-logger-d0a8cdd3   Complete   1/1           2s         25s
+oxoflow-make-557458cc     Complete   1/1           3s         56s
+
+## log retrieval (pod stdout)
+{
+  "instance": null,
+  "job_id": "oxoflow-logger-d0a8cdd3",
+  "logs": "hello-from-k8s-pod\n",
+  "source": "accounting"
+}
+
+## SIGINT cancellation (in-flight Job deleted, run failed)
+2026-11-24T15:25:19.482610Z  WARN interrupt received — cancelling in-flight jobs signal=SIGINT cancelled=1
+Cancelled: interrupted by SIGINT; in-flight jobs cancelled
+Cluster: 0 succeeded, 1 failed, 0 skipped
+
+## standalone cancel (running Job)
+running: job.batch/oxoflow-slow2-14fc538d
+Cluster: Canceling 1 job...
+✓ Successfully canceled jobs.
+slow2 job deleted

@@ -177,7 +177,8 @@ environments, I/O, shell shape) of every workflow it claims to support?"
   was invoked. The full #1165 ask — per-workflow execution equivalence on
   identical hosts/containers/resources — is **not** achievable in this
   environment (no container runtime, no toolchain, no real data) and is **not
-  claimed**.
+  claimed**. The execution half is now instrumented separately; see §9, which
+  reports the same conclusion from an actual run attempt.
 - **"MATCHED" is not "equivalent".** It means the declared facts in §1 agree
   after documented normalization. It says nothing about whether the generated
   shell produces the same files, or whether the workflow runs at all.
@@ -208,3 +209,164 @@ container host, and a second independent derivation of the truth table.
 | Claimed boundary | `docs/guide/src/commands/import.md` |
 | Corpus baseline commit | `b7be10ba844df04b51299264184c207cca95286c` — the fixtures under `tests/fixtures/import/**` and the importer are unchanged from this commit to the PR's head (verified with `git diff --stat b7be10ba 5e90bd05 -- tests/fixtures/import crates/oxo-flow-core/src/transpile`, empty) |
 | Harness + truth table commit | `5e90bd05` — this PR's head; `scripts/import-equivalence.sh` and the truth table were introduced here, not in the corpus baseline commit |
+
+## 9. Execution equivalence (issue #1300)
+
+**What this is.** The honest execution half of the #1165 ask, now instrumented:
+`scripts/import-execution-equivalence.sh` (+ `scripts/import_execution_equivalence_run.py`)
+runs the SOURCE workflow and the IMPORTED `.oxoflow` on identical planted
+inputs and compares the produced output-artifact sets by SHA-256. It enumerates
+its fixtures from the same truth table (`status == "supported"`), so it never
+drifts from the declared-artifact corpus above.
+
+**The honesty rule this harness enforces.** A fixture is `MATCHED` only when
+BOTH arms genuinely executed (exit 0) and their artifact sets agree. Any missing
+runtime / container / conda backend, any non-zero arm, or any missing arm makes
+the verdict `SKIPPED` with the reason — never `MATCHED`. And two arms that both
+exit 0 while producing zero artifacts make the verdict `NO_ARTIFACTS` — also
+never `MATCHED`: equal empty sets are not evidence of equivalence (#1349). The
+two arms are made
+comparable by seeding each with its own workflow file (source arm: the fixture
+basename; imported arm: `W.oxoflow`) and dropping BOTH seed paths from the
+collected artifact set, so a wrapper that leaves its input seed behind cannot
+masquerade as a one-sided artifact and a genuinely-equivalent run reports
+`MATCHED`, not `DRIFTED`.
+
+`--strict` is falsifiable, not a no-op: the runner exits non-zero iff an
+**executed** fixture drifted (`DRIFTED > 0`) and 0 when nothing executed, so
+`--strict` fails on drift for fixtures that actually executed and stays 0 on an
+all-`SKIPPED` run. A green tally therefore means runs happened and every
+executed comparison agreed on non-empty artifact sets; an all-`SKIPPED` tally
+means no run happened. The rule is exercised end-to-end by
+`eval/scripts/test_import_execution_equivalence.py`: `MeasureEndToEndStubTests`
+drives `measure()`/`collect_artifacts` with two stub arms (identical output →
+`MATCHED`; differing output → `DRIFTED`; two arms that exit 0 writing nothing →
+`NO_ARTIFACTS`) and `StrictExitCodeTests` proves the
+exit code is 1 on drift and 0 when nothing executed.
+
+**Measured result (2026-11-21).** `executed = 0`, `skipped = 4`, `matched = 0`,
+`drifted = 0`. **Nothing was executed to a matched comparison — execution
+equivalence remains unproven and is not claimed.** Two environments were tried:
+
+- *Local build host* (macOS): no `nextflow`, no `snakemake`, no `docker` — all
+  four fixtures `SKIPPED (no execution environment: missing …)`.
+- *Verification host* (`tx-ubuntu`: docker present, `nextflow` 26.10.6,
+  `snakemake` 9.27.2 in a venv, no conda/mamba, no HPC `module`): still all four
+  `SKIPPED`. Raw per-arm evidence (recorded by hand from the two runs' logs —
+  the harness itself emits only one `RESULT` line per fixture carrying the
+  first blocking arm's reason, and the backend probe fires before either arm
+  is invoked, so on a conda-less host both arms are never reached; this
+  per-arm matrix is curated prose, not harness output — #1349):
+
+| Fixture | SOURCE arm | IMPORTED arm |
+| :--- | :--- | :--- |
+| `nextflow/nfcore_module.ok.nf` | `nextflow run … -with-docker` → exit 1, **ERROR ~ Script compilation failed** (the `fastqc: $( fastqc --version )` line is not valid DSL2 that this Nextflow compiles). No outputs. | `oxo-flow run` → exit 1, `fastqc_auto-discovered_s1` `rule_failed`, exit_code 1. No declared outputs. |
+| `nextflow/rnaseq.ok.nf` | `nextflow run … -with-docker` → exit 1, input-tuple mismatch in process `TRIM`. No outputs. | `oxo-flow run` → exit 1, **`conda is not installed or not in PATH`** — required by 12 pending rules (`bioconda::trimmomatic=0.39`, …); no rules ran. |
+| `snakemake/expand.ok.smk` | `snakemake -s … --cores 2` → exit 1, **`WorkflowError: Target rules may not contain wildcards.`** No outputs. | `oxo-flow run` → exit 1, `quantify` failed: `output pattern 'quant/{sample}.sf' contains unbound wildcard {sample}` (declares HPC `modules` backend, also absent). |
+| `snakemake/rnaseq.ok.smk` | `snakemake -s … --cores 2` → exit 1, **`WorkflowError: Target rules may not contain wildcards.`** No outputs. | `oxo-flow run` → exit 1, **`conda is not installed or not in PATH`** — required by 2 pending rules (`envs/trimmomatic.yaml`); no rules ran. |
+
+Two independent walls block a matched run, and neither is an importer defect
+this PR may paper over: (1) the SOURCE fixtures are not runnable as written —
+two need a Snakemake `rule all` target and two are not valid Nextflow for the
+installed engine; (2) the IMPORTED arms that do reach a rule need a conda
+backend the verification host lacks. Inventing a run, or loosening an arm to
+call a non-run `MATCHED`, is exactly what the honesty rule forbids.
+
+**What would move it forward.** A container host with conda/mamba (or
+module-loaded envs) plus source fixtures that actually run standalone — a
+Snakemake `rule all` collecting concrete outputs, and Nextflow that the
+installed engine compiles. Until then this section stands as the boundary: the
+execution path is instrumented and falsifiable, and it reports zero executed.
+
+**#1349 harness hardening (2026-11-22; no re-measurement — the measured result
+above predates it and remains the latest real run).** Three non-blocking gaps
+from the #1303 adversarial review, closed without changing the honesty rule:
+
+- The runner requires Python ≥ 3.11 (`tomllib`) and now refuses to start on an
+  older interpreter with exit 2 and an explicit message, instead of dying
+  mid-run with a traceback that report-only mode swallowed into a
+  silent-green empty result; the bash wrapper also prints a stderr warning on
+  any non-zero runner exit in report-only mode (`--strict` still propagates it).
+- `classify()` never reports `MATCHED` for two executed arms with empty
+  artifact sets — that is an explicit `NO_ARTIFACTS` verdict, tallied under
+  `executed` (both arms ran) and printed in the tally, while only `DRIFTED`
+  flips the exit code.
+- The per-arm evidence table above is labeled **recorded by hand** (the
+  harness cannot emit it, as the note above states).
+
+All covered by new hermetic tests in
+`eval/scripts/test_import_execution_equivalence.py` (zero-output stub arms →
+`NO_ARTIFACTS`; `tomllib` floor refusal → exit 2; tally counting).
+
+**Raw-data lineage (execution half).**
+
+| Artifact | Path |
+| :--- | :--- |
+| Harness (bash) | `scripts/import-execution-equivalence.sh` |
+| Execution runner (python) | `scripts/import_execution_equivalence_run.py` |
+| Hermetic verdict test | `eval/scripts/test_import_execution_equivalence.py` |
+| Fixtures | enumerated from `scripts/import_equivalence_expectations.py` (`supported`) |
+---
+
+## Addendum — real-world corpus expansion (2026-11-20, issue #1273)
+
+§7 named the exact gap: *"4 supported fixtures is the entire current corpus,
+not a sample of real-world Nextflow/Snakefile code … no nf-core pipeline, no
+large community workflow is in it."* This addendum narrows it by adding **7
+fixtures derived faithfully from published community workflows** (upstream
+cited in each file's header, retrieved 2026-11-20) — not from the repo's own
+hand-written fixtures.
+
+**Mass balance: corpus 18 → 25 fixtures** (2 new accepted, 5 new rejected).
+
+| new fixture | source (upstream) | arm | verdict |
+| :--- | :--- | :--- | :--- |
+| `nextflow/samtools_sort.ok.nf` | nf-core/modules `modules/nf-core/samtools/sort/main.nf` (master) | supported | matched |
+| `snakemake/rseqc_stat.ok.smk` | snakemake-workflows/rna-seq-star-deseq2 `workflow/rules/qc.smk` rule `rseqc_stat` | supported | matched |
+| `nextflow/nfcore_dynamic_conda.err.nf` | nf-core/modules `samtools/faidx/main.nf` (dynamic `conda`) | rejected | importer-rejected |
+| `nextflow/rnaseq_nf_interpolation.err.nf` | nextflow-io/rnaseq-nf `modules/fastqc/main.nf` (bare `id`) | rejected | importer-rejected |
+| `snakemake/unpack_input.err.smk` | rna-seq-star-deseq2 `rules/align.smk` rule `star_align` (`unpack(get_fq)`) | rejected | importer-rejected |
+| `snakemake/script_directive.err.smk` | rna-seq-star-deseq2 `rules/qc.smk` rule `rseqc_gtf2bed` (`script:`) | rejected | importer-rejected |
+| `snakemake/multiext_output.err.smk` | rna-seq-star-deseq2 `rules/ref.smk` rule `bwa_index` (`multiext(...)`) | rejected | importer-rejected |
+
+**Re-run (real CLI, `target/debug/oxo-flow` 0.32.0, 2026-11-20T01:47Z):**
+
+**MATCHED 6 / DRIFTED 0 / IMPORTER-REJECTED 19 / NOT-ATTEMPTED 0** over corpus
+25. `scripts/import-equivalence.sh --strict` exits 0.
+
+**What the real-world arms actually show (no tuning).**
+
+- Both accepted real-world modules import *cleanly on the declared-artifact
+  criterion* — an nf-core DSL2 module and a community-Snakefile rule are
+  inside the documented subset. This is the first evidence that the boundary
+  is not an artifact of the repo's own fixtures.
+- The two lambda-free stalwarts of nf-core (the per-module `conda "${
+  moduleDir}/environment.yml"` and modules that bind a bare `id` instead of
+  `meta.id`) are **rejected**, so the importer does not silently mistranslate
+  them. Both are extremely common in the ecosystem, which bounds how much of
+  nf-core is reachable today.
+
+**Two honest off-criterion findings (recorded, NOT fixed — out of scope).**
+
+- **O12 — bare (non-`def`) Nextflow prelude leaks.** Upstream
+  `samtools/sort/main.nf` writes `prefix = task.ext.prefix ?: "${meta.id}"`
+  *without* `def`. The importer strips only `def X = …` preludes
+  (`nextflow.rs:1917`, `strip_prefix("def ")`), so the emitted `shell` **begins
+  with the literal Scala line** `prefix = task.ext.prefix ?: "{sample}"` before
+  the real `samtools sort …`. The workflow still validates/lints (the leaked
+  line is inert bash text, not a placeholder), but it is a genuine translation
+  defect on a shape real upstream code uses. The fixture is kept faithful (bare
+  assignment preserved); this audit does not fix the importer.
+- **O13 — multi-line Snakemake `log:` trailing-quote artifact.** The upstream
+  `rseqc_stat` rule's `log:` spans lines; the importer emits
+  `log = "logs/rseqc/rseqc_stat/{sample}-{unit}.log\","` — a stray `",` glued
+  onto the value. Same below-threshold class as O5 (the shell's `2> {log}`
+  still compiles); a single-instance fixture cannot distinguish it from a
+  formatting quirk.
+
+**Honesty boundary (unchanged, restated).** This addendum is *still* declared-
+artifact equivalence, *still* no execution, and *still* a small hand-picked
+sample: 7 community-derived fixtures is a floor, not coverage. It does **not**
+close #1165 — execution equivalence on a container host and a second
+independent derivation of the truth table remain outstanding.
+

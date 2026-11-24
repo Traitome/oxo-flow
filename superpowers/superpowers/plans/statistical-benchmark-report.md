@@ -62,6 +62,24 @@ Do not report any of the following without measured matched data:
 - a claim that biological errors are eliminated;
 - a claim that a synthetic fixture predicts production or publication performance.
 
-## 6. Current Decision
+## 6. Generator Relationship (provenance note)
+
+This report is a **hand-authored status document**. It contains no measured
+numbers; its machine-readable provenance record is the key
+`docs/superpowers/plans/statistical-benchmark-report.md` in
+`eval/benchmarks/provenance_manifest.json` (validated by `make provenance-check`),
+which pins the generator run behind the committed snapshot, not a measurement.
+The generator `eval/frontier/statistical_report.py` is a separate artifact: run
+in its non-inferential mode it emits a "Synthetic Statistical Analysis Fixture
+(Non-Inferential)" table, and run against matched three-arm measurement JSON it
+would emit a paired analysis. Neither mode regenerates this file byte-for-byte;
+the generator produces raw measurement tables (the non-inferential fixture
+output is snapshot-committed at
+`eval/benchmarks/snapshots/statistical_synthetic_fixture.md` and byte-gated by
+`make reports-regen`), the report states the evidence status. A
+byte-reproduction claim for this report is therefore not achievable and is not
+made.
+
+## 7. Current Decision
 
 The confirmatory benchmark remains **Planned / blocked**. The next admissible output is a pre-registration and data manifest, not a results table.
