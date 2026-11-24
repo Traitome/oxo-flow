@@ -115,8 +115,9 @@ matched three-arm ablation — `unconstrained` (Arm A: a single-shot naive
 prompt, no tools, no knowledge injection; a bare-prompt baseline, not a
 product path), `syntax-only` (Arm B: the full CLI path `template --ai`
 with TOML/DAG syntax + structural feedback only), and `full-contract`
-(Arm C: the same path plus the engine's BioTypes + scientific-preflight
-+ deep-check feedback loop, `--ai-contract-feedback`) — and judges every
+(Arm C: the same path plus a deep-check feedback loop over the engine's
+BioTypes, scientific-preflight, and `deep_check` checks, enabled by
+`--ai-contract-feedback`) — and judges every
 artifact with the three deterministic static gates (`validate`,
 `dry-run`, `lint`; exit code only, no LLM judge). Arm B and Arm C differ
 by the engine feedback toggle, not a label.

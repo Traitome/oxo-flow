@@ -414,6 +414,14 @@ jobs:
       - name: Docs (rustdoc -D warnings)
         run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 
+      # #551/#1385: the MD032 docs-list gate used to run only in the
+      # main-branch deploy job, so a PR could merge a docs list error and turn
+      # main red ("reference/ai-eval.md" did). Same pinned invocation through
+      # the shared make target; the rules config is committed at
+      # docs/md032.jsonc.
+      - name: Lint docs lists (MD032)
+        run: make docs-lint
+
       - name: Test
         run: |
           export PATH="$PWD/target/debug:$PATH"
@@ -2357,19 +2365,12 @@ jobs:
         run: pip install -r docs/guide/requirements.txt
 
       # #551: MD032 (blank line before a list) is the repo's documented
-      # markdown invariant (AGENTS.md "Markdown lists") — gate it on the
-      # docs deploy so it cannot rot again. Config: MD032 only.
-      # Traps (both live-verified): markdownlint-cli2 rejects process-
-      # substitution paths (/dev/fd/N has no recognized extension), and a
-      # *.markdownlint-cli2.jsonc file is parsed as an OPTIONS object (needs
-      # a "config" wrapper) — a plain *.jsonc file is parsed as a rules
-      # config, which is what we want here.
+      # markdown invariant (AGENTS.md "Markdown lists") — gated here and, since
+      # #1385, in the Test job too (a PR that broke it used to turn main red
+      # only after merge). One definition: the shared make target, whose rules
+      # config is the committed docs/md032.jsonc.
       - name: Lint docs lists (MD032)
-        run: |
-          printf '%s' '{"default":false,"MD032":true}' > "$RUNNER_TEMP/md032.jsonc"
-          # M-16: pinned so an upstream release cannot flip the gate with no
-          # change in this repository.
-          npx --yes markdownlint-cli2@0.24.0 --config "$RUNNER_TEMP/md032.jsonc" "docs/guide/src/**/*.md"
+        run: make docs-lint
 
       - name: Configure git identity (mike pushes the gh-pages branch)
         run: |

@@ -1,10 +1,10 @@
-.PHONY: ci fmt clippy build test coverage bench bench-macro bench-compare audit deny aws-legacy-tripwire issue-id-tripwire npmmirror-tripwire truthset-stamp secrets docs frontend-lint frontend-test schema-drift skill-drift sync-skill version-check eval-tests eval-lint eval-verify provenance-check reports-regen extension-test extension-integration desktop-smoke contributors frontend-build frontend-dev dev bundle-static bundle-desktop bundle-macos bundle-deb bundle-rpm bundle-appimage help
+.PHONY: ci fmt clippy build test coverage bench bench-macro bench-compare audit deny aws-legacy-tripwire issue-id-tripwire npmmirror-tripwire truthset-stamp secrets docs docs-lint frontend-lint frontend-test schema-drift skill-drift sync-skill version-check eval-tests eval-lint eval-verify provenance-check reports-regen extension-test extension-integration desktop-smoke contributors frontend-build frontend-dev dev bundle-static bundle-desktop bundle-macos bundle-deb bundle-rpm bundle-appimage help
 
 ## Run all local CI quality-gate checks. Same gates as the "Test" job in
 ## ci.yml, but the invocations are not identical: `test` runs single-threaded
 ## (--test-threads=1, deterministic locally; CI runs the default parallelism)
 ## and `frontend-lint` uses `npm install` where CI uses `npm ci`.
-ci: fmt clippy build test schema-drift skill-drift version-check audit deny aws-legacy-tripwire issue-id-tripwire npmmirror-tripwire truthset-stamp secrets docs frontend-lint eval-tests eval-lint provenance-check reports-regen extension-test
+ci: fmt clippy build test schema-drift skill-drift version-check audit deny aws-legacy-tripwire issue-id-tripwire npmmirror-tripwire truthset-stamp secrets docs docs-lint frontend-lint eval-tests eval-lint provenance-check reports-regen extension-test
 
 fmt:
 	cargo fmt -- --check
@@ -95,6 +95,18 @@ secrets:
 ## silently; -D warnings makes this a real gate.
 docs:
 	RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
+
+## #551/#1385: MD032 (blank line before a list) is the repo's documented
+## markdown invariant (AGENTS.md "Markdown lists"). It used to be gated only
+## in the main-branch docs deploy, so a PR could merge a list error and turn
+## main red (`reference/ai-eval.md` did exactly that). The rules config is a
+## committed plain `*.jsonc` file: markdownlint-cli2 parses a plain jsonc as
+## a rules config, whereas a `*.markdownlint-cli2.jsonc` is parsed as an
+## OPTIONS object (needs a "config" wrapper), and process-substitution paths
+## are rejected (no recognized extension). Pinned so an upstream release
+## cannot flip the gate with no change in this repository.
+docs-lint:
+	npx --yes markdownlint-cli2@0.24.0 --config docs/md032.jsonc "docs/guide/src/**/*.md"
 
 ## Lint and type-check the frontend SPA (same gate as the "Frontend" job in
 ## ci.yml; uses `npm install` rather than CI's `npm ci`).
