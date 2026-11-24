@@ -2926,15 +2926,19 @@ The engine closes that gap in two layers:
   `expand_inputs_baked` provenance (config-expanded, matching how the
   snapshot walks compare it), so snapshot invalidation still tracks every
   declared entry.
-- **Full-run plan** — a consumer whose every producer of some input group
-  was when-gated false (and whose inputs are not pre-built on disk and
+- **Full-run plan** — a consumer whose every producer of some **hard `input`**
+  group was when-gated false (and whose inputs are not pre-built on disk and
   not `optional = "any"`) is pruned from the full-run execution plan with
   a note ("rule … is unreachable — its upstream is when-gated false"),
   instead of failing at runtime on the absent file. The same
   death-propagation already applied to `--target` runs
-  applies when no targets are given. The when-gated rule itself stays in
-  the plan: the executor evaluates its `when` and counts it as skipped
-  exactly once.
+  applies when no targets are given. `expand_inputs` channels — including
+  the concrete paths plan expansion bakes into `input` (`expand_inputs_baked`)
+  — are **gathers**: a channel whose only producer is when-gated false
+  expands to nothing at run time and never prunes the consumer (issue
+  #1378; the oxo-flow-rnaseq `multiqc` regression). The when-gated rule
+  itself stays in the plan: the executor evaluates its `when` and counts it
+  as skipped exactly once.
 
 The baked-input drop is **live-producer aware**: a recorded
 when-skipped path is dropped from the baked input list only when no live
