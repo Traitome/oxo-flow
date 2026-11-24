@@ -58,6 +58,16 @@ pub struct WorkflowDag {
     /// input is satisfiable when ANY of its producers survives, while
     /// `depends_on`-only edges never gate a consumer's dataflow at all.
     input_producers: HashMap<String, HashMap<String, HashSet<String>>>,
+
+    /// Consumer rule name → the expanded paths it declared in the HARD
+    /// `input` list. `input_producers` also records `expand_inputs`
+    /// template patterns (they are real dataflow edges), but those are
+    /// GATHER declarations: a pattern that matches nothing (or whose only
+    /// producer is when-gated false, e.g. an unselected aligner's log
+    /// channel) expands to an empty set at run time and must never prune
+    /// the consumer (issue #1378). Only these hard groups gate dead-node
+    /// propagation.
+    hard_inputs: HashMap<String, HashSet<String>>,
 }
 
 impl WorkflowDag {
@@ -94,6 +104,8 @@ impl WorkflowDag {
         // Consumer name → expanded input → producer names (see
         // `input_producers`). Populated during edge inference below.
         let mut input_producers: HashMap<String, HashMap<String, HashSet<String>>> = HashMap::new();
+        // Hard `input` declarations only (see `WorkflowDag::hard_inputs`).
+        let mut hard_inputs: HashMap<String, HashSet<String>> = HashMap::new();
 
         // Helper closure: record that `consumer_name` reads `input_path`
         // (config-expanded) from `producer_name`. OR-per-output semantics
@@ -362,6 +374,23 @@ impl WorkflowDag {
 
             for input in rule.input.iter() {
                 infer(input, &mut graph, declared_dir.as_ref());
+                // Record the HARD requirement in the config-expanded form
+                // `input_producers` keys use. Baked `expand_inputs` literals
+                // injected at plan time are gathers, not hard inputs: their
+                // producer may be a when-skipped variant whose twin keeps the
+                // path "live" in another instance, and the consumer is still
+                // expected to run with an empty channel (issue #1378).
+                let expanded = expand(input);
+                if !rule
+                    .expand_inputs_baked
+                    .iter()
+                    .any(|baked| baked == &expanded)
+                {
+                    hard_inputs
+                        .entry(rule.name.clone())
+                        .or_default()
+                        .insert(expanded);
+                }
             }
 
             // expand_inputs patterns declare dataflow that only materializes
@@ -394,6 +423,7 @@ impl WorkflowDag {
             name_to_node,
             output_to_node,
             input_producers,
+            hard_inputs,
         };
 
         // Step 3: Verify it's actually a DAG (no cycles)
@@ -692,7 +722,15 @@ impl WorkflowDag {
                         // `optional = "any"` stays executor-owned — see the
                         // base method's note before touching this gate.
                         let optional_any = self.graph[idx].optional.is_any();
+                        // Only HARD `input` groups gate: `expand_inputs`
+                        // patterns are gathers whose empty expansion is
+                        // legitimate (issue #1378 — an unselected
+                        // aligner's log channel killed multiqc).
+                        let hard = self.hard_inputs.get(name);
                         let is_unrunnable = groups.iter().any(|(input_path, producers)| {
+                            if !hard.is_some_and(|h| h.contains(input_path)) {
+                                return false;
+                            }
                             if source_exists(input_path) {
                                 return false;
                             }
@@ -755,7 +793,12 @@ impl WorkflowDag {
                     // sat behind a when-false sole producer of
                     // target_regions.bed).
                     let optional_any = self.graph[idx].optional.is_any();
+                    let hard = self.hard_inputs.get(name);
                     let is_unrunnable = groups.iter().any(|(input_path, producers)| {
+                        // Gather (expand_inputs) groups never gate (issue #1378).
+                        if !hard.is_some_and(|h| h.contains(input_path)) {
+                            return false;
+                        }
                         // Pre-built input: the file is already on disk — the
                         // group is satisfiable even with every producer
                         // pruned (existence-aware propagation).
@@ -2972,6 +3015,142 @@ mod tests {
             );
         }
         assert!(!order.contains(&"gated_producer".to_string()), "{order:?}");
+    }
+
+    #[test]
+    fn baked_expand_inputs_literals_do_not_gate_pruning() {
+        // The real #1378 shape: plan expansion bakes `expand_inputs` results
+        // into `rule.input` (and records provenance in
+        // `expand_inputs_baked`). One baked channel belongs to an unselected
+        // aligner whose instances are when-skipped; the consumer must still
+        // run with the remaining (possibly empty) channel.
+        let mut consumer = make_rule(
+            "multiqc",
+            vec![
+                "custom.tsv",
+                "results/star/log/S1.bowtie2.log",
+                "results/star/log/S2.bowtie2.log",
+            ],
+            vec!["report.html"],
+        );
+        consumer.expand_inputs_baked = std::collections::BTreeSet::from([
+            "results/star/log/S1.bowtie2.log".to_string(),
+            "results/star/log/S2.bowtie2.log".to_string(),
+        ]);
+        let rules = vec![
+            make_rule("custom", vec!["assets.yml"], vec!["custom.tsv"]),
+            make_rule(
+                "bowtie2_s1",
+                vec!["reads1.fq"],
+                vec!["results/star/log/S1.bowtie2.log"],
+            ),
+            make_rule(
+                "bowtie2_s2",
+                vec!["reads2.fq"],
+                vec!["results/star/log/S2.bowtie2.log"],
+            ),
+            consumer,
+            make_rule("reporter", vec!["report.html"], vec!["report.pdf"]),
+        ];
+        let dag = WorkflowDag::from_rules(&rules).unwrap();
+        let skip =
+            std::collections::HashSet::from(["bowtie2_s1".to_string(), "bowtie2_s2".to_string()]);
+
+        let (order, pruned) = dag
+            .execution_order_for_targets_skipping_with_source_check(&[], &skip, &|_| false)
+            .unwrap();
+        assert!(
+            order.contains(&"multiqc".to_string()) && order.contains(&"reporter".to_string()),
+            "baked gathers must not prune the consumer: order={order:?} pruned={pruned:?}"
+        );
+
+        // A genuinely HARD input with only pruned producers still prunes.
+        let mut hard = make_rule(
+            "hard_consumer",
+            vec!["results/star/log/S1.bowtie2.log"],
+            vec!["hard.txt"],
+        );
+        hard.expand_inputs_baked.clear();
+        let rules = vec![
+            make_rule(
+                "bowtie2_s1",
+                vec!["reads1.fq"],
+                vec!["results/star/log/S1.bowtie2.log"],
+            ),
+            hard,
+        ];
+        let dag = WorkflowDag::from_rules(&rules).unwrap();
+        let (order, pruned) = dag
+            .execution_order_for_targets_skipping_with_source_check(
+                &[],
+                &std::collections::HashSet::from(["bowtie2_s1".to_string()]),
+                &|_| false,
+            )
+            .unwrap();
+        assert!(!order.contains(&"hard_consumer".to_string()), "{order:?}");
+        assert!(pruned.contains(&"hard_consumer".to_string()), "{pruned:?}");
+    }
+
+    #[test]
+    fn expand_inputs_channel_of_skipped_variant_never_prunes_consumer() {
+        // Issue #1378 (oxo-flow-rnaseq regression): an aggregator lists an
+        // unselected aligner's log channel in `expand_inputs`. That variant
+        // is when-gated false, so its template pattern has no surviving
+        // producer — but the pattern is a GATHER, and its empty expansion is
+        // legitimate. Only the hard `input` list may gate the consumer.
+        let mut consumer = make_rule(
+            "multiqc",
+            vec!["custom_content.tsv"],
+            vec!["multiqc/report.html"],
+        );
+        consumer.expand_inputs.push(crate::rule::ExpandConfig {
+            pattern: "{out}/bowtie2/log/{sample}.bowtie2.log".to_string(),
+            variables: HashMap::new(),
+        });
+        let rules = vec![
+            make_rule("custom", vec!["assets.yml"], vec!["custom_content.tsv"]),
+            make_rule(
+                "star",
+                vec!["reads.fq"],
+                vec!["{out}/star/log/s.Log.final.out"],
+            ),
+            make_rule(
+                "bowtie2",
+                vec!["reads.fq"],
+                vec!["{out}/bowtie2/log/s.bowtie2.log"],
+            ),
+            consumer,
+            make_rule("reporter", vec!["multiqc/report.html"], vec!["report.pdf"]),
+        ];
+        let dag = WorkflowDag::from_rules(&rules).unwrap();
+        let skip = std::collections::HashSet::from(["bowtie2".to_string()]);
+
+        // Full run: the gated variant leaves the plan, the gather consumer
+        // and its downstream stay.
+        let (order, pruned) = dag
+            .execution_order_for_targets_skipping_with_source_check(&[], &skip, &|_| false)
+            .unwrap();
+        for expected in ["custom", "star", "multiqc", "reporter"] {
+            assert!(
+                order.contains(&expected.to_string()),
+                "missing {expected}: order={order:?} pruned={pruned:?}"
+            );
+        }
+        assert!(!pruned.contains(&"multiqc".to_string()), "{pruned:?}");
+
+        // Targeted run through the reporter keeps the same liveliness. `star`
+        // is not an ancestor of the reporter (its output feeds no referenced
+        // channel), so only the selected chain appears.
+        let (order, pruned) = dag
+            .execution_order_for_targets_skipping(&["reporter"], &skip)
+            .unwrap();
+        assert!(pruned.is_empty(), "{pruned:?}");
+        for expected in ["custom", "multiqc", "reporter"] {
+            assert!(
+                order.contains(&expected.to_string()),
+                "missing {expected}: {order:?}"
+            );
+        }
     }
 
     #[test]
