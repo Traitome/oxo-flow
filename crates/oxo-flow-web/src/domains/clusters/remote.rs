@@ -717,7 +717,26 @@ async fn verify_remote_outputs(run_id: &str, local_workdir: &Path) -> Result<(),
                     return None;
                 }
             };
-        Some(remote_outputs_complete(&config, &checkpoint, &workdir))
+        // Issue #1369: existence is necessary but not sufficient. Verify the
+        // recorded artifact closure (missing / modified / truncated / extra)
+        // and fail the finalize with the structured report when it does not
+        // hold. `cleaned_checksums` entries are documented removals and never
+        // count as missing.
+        Some(
+            remote_outputs_complete(&config, &checkpoint, &workdir).and_then(|()| {
+                let report = oxo_flow_core::executor::artifact_closure::verify_artifact_closure(
+                    &config,
+                    &checkpoint,
+                    &workdir,
+                );
+                if report.ok {
+                    Ok(())
+                } else {
+                    let detail = serde_json::to_string(&report).unwrap_or_default();
+                    Err(format!("{} | {detail}", report.reason()))
+                }
+            }),
+        )
     })
     .await;
     match joined {
