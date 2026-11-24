@@ -91,6 +91,24 @@ and run the rule under `env -i … bash -c '<command>'` (the RB-15 allowlist).
 - Cross-architecture reproduction (#1166) — a different measurement.
 - Desktop shell lifecycle (`make desktop-smoke`) — separate target/CI job.
 
+## Re-run on the final released main (`6215a0f7`)
+
+After the remaining PRs merged (attestation #1377, #1378 pruning fix #1380, web reliability
+#1375), the full gate suite was re-run on `main` @ `6215a0f76` with the same host settings:
+
+- `make ci` — **PASS** (no `make: ***` line; ends at the extension VSIX packaging step).
+  Raw log: [`data/linux-qualification-make-ci-final-main-2026-11-24.log`](data/linux-qualification-make-ci-final-main-2026-11-24.log).
+- `make extension-integration` under xvfb — **10 passing**, extension host exit 0.
+  Raw log: [`data/linux-qualification-extension-integration-final-main-2026-11-24.log`](data/linux-qualification-extension-integration-final-main-2026-11-24.log).
+- Signed attestation smoke on a real checkpoint (docker two-rule run from the section above):
+  `provenance attest --sign --key <64-hex seed>` emitted `oxo-flow.attestation/v1` with
+  workflow/content/resolved hashes, per-output checksums, environment identity and outcome;
+  `attest-verify` returned `signature_status: "valid"` (exit 0), and a mutated document
+  failed verification.
+
+The qualification claims in this page therefore hold for the final main commit as well as
+for `293761205`.
+
 ## Readiness statement
 
 The source build, full gate suite, headless extension integration, a real
