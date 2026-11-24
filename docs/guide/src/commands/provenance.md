@@ -260,6 +260,77 @@ the human table stays on stderr):
 `entries` is byte-stable (sorted artifact path order). A missing or malformed
 checkpoint is a clear error (nonzero exit), never a panic.
 
+## Portable run attestations (`provenance attest`)
+
+A run's evidence lives in its own `checkpoint.json`. `oxo-flow provenance
+attest` binds the recorded pieces into one canonical, portable document —
+`oxo-flow.attestation/v1` — that can be handed to another party and,
+optionally, signed.
+
+### Usage
+
+```bash
+# Unsigned document (JSON on stdout)
+oxo-flow provenance attest .oxo-flow/checkpoint.json --json
+
+# Signed, written to a file
+openssl rand -hex 32 > attest.key            # or any 32-byte / 64-hex seed
+oxo-flow provenance attest .oxo-flow/checkpoint.json \
+    --sign --key attest.key -o run.attestation.json
+
+# Verify (exit 0 valid, 2 invalid signature, 3 key mismatch, 4 malformed)
+oxo-flow provenance attest-verify run.attestation.json --key attest.key --json
+```
+
+`CHECKPOINT` may be a checkpoint file or a run workdir containing
+`checkpoint.json` / `.oxo-flow/checkpoint.json`.
+
+### What the document binds
+
+- `workflow`: path, git HEAD SHA, dirty marker, raw content digest and the
+  override-aware resolved fingerprint (#1350)
+- `includes`: recorded include checkout SHAs (repo@ref → HEAD)
+- `config`: the resolved config snapshot; sensitive values are already
+  SHA-256 digests in the checkpoint, never plaintext
+- `inputs`: recorded input manifests (`rule:path` → hash, or size/mtime
+  fallback for large/legacy files)
+- `outputs` / `cleaned_outputs`: recorded per-artifact SHA-256 checksums,
+  with intentionally cleaned temporary outputs kept separate
+- `environment`: recorded environment identity map
+- `outcome`: completed/failed rules and the derived status
+- `checkpoint.format_version`
+
+All maps are key-ordered, so emitting twice yields byte-identical output.
+
+### What it does NOT bind
+
+- Biological correctness of any output, or the presence of files on another
+  machine.
+- Legal or regulatory qualification, and no PKI/key-service identity: a
+  valid signature proves *these bytes* were signed by the key that verifies
+  it, not who holds that key.
+
+### Signing
+
+Ed25519 over the document with its `signature` field removed; the document
+carries `{alg, public_key, signature}` (hex). `--sign` requires an explicit
+`--key` file (64 hex characters or 32 raw bytes) — the command never mints
+key material silently.
+
+### Exit codes (`attest-verify`)
+
+| Code | Meaning |
+| --- | --- |
+| 0 | Signature valid, or document unsigned (`signature_status: "unsigned"`) |
+| 2 | Signature invalid — the signed bytes changed |
+| 3 | Key mismatch — `--key` names a different signer than the document |
+| 4 | Malformed/unreadable document, or an unknown format tag |
+
+### JSON output
+
+`--json` prints `{command, file, signature_status, format, workflow_content_hash,
+outcome_status}` on stdout; the human report stays on stderr.
+
 ## See Also
 
 - [oxo-flow run](run.md) — use `--provenance` to enable checksum tracking;
