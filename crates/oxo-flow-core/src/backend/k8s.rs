@@ -12,6 +12,47 @@ use crate::rule::Rule;
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
 
+/// Extract the `cd '<path>' &&` workdir prefix the shared plan builder folds
+/// into every rule command. Kubernetes Jobs run in a pod with its own
+/// filesystem, so the run workdir must be mounted at the SAME absolute path
+/// for the rule's declared outputs (and the engine's checkpoint/log files) to
+/// land on the shared host tree. Returns `None` when the prefix is absent
+/// (backends/plans that do not fold `cd`, e.g. hand-written commands).
+fn workdir_from_shell_cmd(shell_cmd: &str) -> Option<String> {
+    // The plan builder escapes a literal quote as '\'' (four shell bytes:
+    // quote, backslash, quote, quote) inside the single-quoted path.
+    const ESCAPED_QUOTE: &str = "'\\''";
+    let rest = shell_cmd.strip_prefix("cd '")?;
+    let mut out = String::new();
+    let mut index = 0usize;
+    while index < rest.len() {
+        if rest[index..].starts_with(ESCAPED_QUOTE) {
+            out.push('\'');
+            index += ESCAPED_QUOTE.len();
+            continue;
+        }
+        if rest.as_bytes()[index] == b'\'' {
+            rest[index + 1..].strip_prefix(" && ")?;
+            return Some(out);
+        }
+        let ch = rest[index..].chars().next()?;
+        out.push(ch);
+        index += ch.len_utf8();
+    }
+    None
+}
+/// Mount the run workdir at its host path when the plan folded a `cd` guard
+/// into the command (single-node / shared-filesystem clusters; the documented
+/// Kubernetes deployment mode). Multus/PVC deployments pin their own mounts.
+fn attach_workdir_volume(container: &mut Value, shell_cmd: &str) {
+    let Some(workdir) = workdir_from_shell_cmd(shell_cmd) else {
+        return;
+    };
+    container["volumeMounts"] = json!([
+        { "name": "oxoflow-workdir", "mountPath": workdir }
+    ]);
+}
+
 /// Sanitise a string for use as a Kubernetes resource name or label value.
 /// RFC 1123 label: lowercase alphanumeric characters or minus (-), max 63 chars.
 pub fn sanitize_k8s_name(name: &str) -> String {
@@ -126,11 +167,27 @@ pub fn generate_k8s_job_manifest(
     let mut container = json!({
         "name": sanitize_k8s_name(&rule.name),
         "image": container_image,
+        // Local/single-node clusters preload images (kind/k3s `load`); an
+        // implicit `Always` pull on `:latest` would need a registry the
+        // compute node may not reach.
+        "imagePullPolicy": "IfNotPresent",
         "command": ["/bin/bash", "-c"],
         "args": [shell_cmd],
         "resources": container_resources(rule),
     });
     attach_sensitive_env(&mut container, &sensitive_env_refs(shell_cmd));
+    attach_workdir_volume(&mut container, shell_cmd);
+    let workdir = workdir_from_shell_cmd(shell_cmd);
+
+    let mut pod_spec = json!({
+        "restartPolicy": "Never",
+        "containers": [container]
+    });
+    if let Some(workdir) = &workdir {
+        pod_spec["volumes"] = json!([
+            { "name": "oxoflow-workdir", "hostPath": { "path": workdir, "type": "Directory" } }
+        ]);
+    }
 
     let manifest = json!({
         "apiVersion": "batch/v1",
@@ -151,10 +208,7 @@ pub fn generate_k8s_job_manifest(
                         "oxoflow.io/rule": sanitize_k8s_name(&rule.name),
                     }
                 },
-                "spec": {
-                    "restartPolicy": "Never",
-                    "containers": [container]
-                }
+                "spec": pod_spec
             }
         }
     });
@@ -195,6 +249,7 @@ pub fn generate_k8s_array_job_manifest(
     let mut container = json!({
         "name": sanitize_k8s_name(&rule.name),
         "image": container_image,
+        "imagePullPolicy": "IfNotPresent",
         "command": ["/bin/bash", "-c"],
         "args": [dispatch_cmd],
         "resources": container_resources(rule),
@@ -334,6 +389,65 @@ mod tests {
     use crate::cluster::ClusterBackend;
     use crate::rule::Rule;
     use serde_json::Value;
+
+    fn k8s_test_config() -> ClusterJobConfig {
+        ClusterJobConfig {
+            backend: crate::cluster::ClusterBackend::Kubernetes,
+            queue: None,
+            account: None,
+            walltime: None,
+            extra_args: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn job_manifest_mounts_the_folded_workdir_at_its_host_path() {
+        let rule = Rule {
+            name: "hello".to_string(),
+            output: crate::rule::FilePatterns::List(vec!["hello.txt".to_string()]),
+            shell: Some("echo hi > hello.txt".to_string()),
+            ..Default::default()
+        };
+        let cmd = "cd '/tmp/run work' && echo hi > hello.txt";
+        let manifest: Value = serde_json::from_str(
+            &generate_k8s_job_manifest(&rule, cmd, &k8s_test_config()).unwrap(),
+        )
+        .unwrap();
+        let container = &manifest["spec"]["template"]["spec"]["containers"][0];
+        assert_eq!(container["volumeMounts"][0]["mountPath"], "/tmp/run work");
+        assert_eq!(
+            manifest["spec"]["template"]["spec"]["volumes"][0]["hostPath"]["path"],
+            "/tmp/run work"
+        );
+        assert_eq!(
+            manifest["spec"]["template"]["spec"]["volumes"][0]["hostPath"]["type"],
+            "Directory"
+        );
+
+        // A command without the folded `cd` keeps the previous manifest
+        // shape (no volumes) — never an empty hostPath.
+        let bare: Value = serde_json::from_str(
+            &generate_k8s_job_manifest(&rule, "echo hi > hello.txt", &k8s_test_config()).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            bare["spec"]["template"]["spec"].get("volumes").is_none(),
+            "{bare}"
+        );
+    }
+
+    #[test]
+    fn workdir_parser_handles_single_quote_escapes() {
+        assert_eq!(
+            workdir_from_shell_cmd("cd '/tmp/a' && true").as_deref(),
+            Some("/tmp/a")
+        );
+        assert_eq!(
+            workdir_from_shell_cmd("cd '/tmp/it'\\''s' && true").as_deref(),
+            Some("/tmp/it's")
+        );
+        assert_eq!(workdir_from_shell_cmd("true"), None);
+    }
 
     fn test_config() -> ClusterJobConfig {
         ClusterJobConfig {
