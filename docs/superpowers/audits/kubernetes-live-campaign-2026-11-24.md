@@ -12,6 +12,7 @@ backend end to end against a **real scheduler** (k3s), not a mock:
 | Logs | `cluster logs -b kubernetes oxoflow-logger` returned the pod's real stdout (`hello-from-k8s-pod`) |
 | Cancel | SIGINT on the driver cancelled the in-flight Job (`cancelled=1`), the Job left the API, run recorded failed |
 | Standalone cancel | `cluster cancel -b kubernetes <job>` → `✓ Successfully canceled jobs`; Job deleted |
+| Repeat run | running the same workflow again with the previous run's completed Jobs still in the API succeeds — names are run-scoped (`oxoflow-make-557458cc`, `…-fe5bada8`, …) |
 
 ## Environment (§8 provenance)
 
@@ -37,6 +38,13 @@ backend end to end against a **real scheduler** (k3s), not a mock:
    `unknown command "oxoflow-slow"`. Cancel invocations are now shared between the
    executor and the CLI: Kubernetes gets `kubectl delete job <ids...>`, AWS/GCP one
    invocation per id, the local schedulers one call with all ids.
+3. **Job names collided across runs.** The name was the bare `oxoflow-<rule>`, so a second
+   run failed with `Error from server (AlreadyExists): jobs.batch "oxoflow-make" already
+   exists` while the first run's completed Jobs were still in the API. `ClusterJobConfig`
+   now carries a `name_scope` (the run directory for `run --profile`, the output directory
+   for `cluster submit`) folded into an 8-hex Job-name suffix; the driver still reads the
+   created name back from `kubectl create`, so tracking/logs/cancel are unchanged. Re-runs
+   now succeed beside the previous run's Jobs (captured in the raw log).
 
 ## Honest residual (not qualified by this campaign)
 
@@ -54,6 +62,9 @@ backend end to end against a **real scheduler** (k3s), not a mock:
   their maturity labels in `run-on-cluster.md` remain Prototype.
 - The trailing `sleep` in a cancelled run may leave a Job's pod terminating briefly;
   SIGINT path deletes the Job and the driver exits (verified above).
+- Completed Jobs are not garbage-collected by the engine; operators should set a
+  namespace-level TTL or clean them up. Run-scoped names make that safe.
+- Raw transcript: [`data/kubernetes-live-campaign-2026-11-24.log`](data/kubernetes-live-campaign-2026-11-24.log).
 
 ## Reproduction sketch
 

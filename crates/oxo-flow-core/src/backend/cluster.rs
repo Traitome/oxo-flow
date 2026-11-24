@@ -472,8 +472,8 @@ pub fn parse_job_listing(
 
 /// One or more complete cancel invocations for `job_ids` on `backend`.
 ///
-/// The standalone `cluster cancel` command and [`ClusterExecutor::cancel`]
-/// share this mapping so the two can never drift (issue #1158 live campaign:
+/// The standalone `cluster cancel` command and the executor's `cancel`
+/// implementation share this mapping so the two can never drift (issue #1158 live campaign:
 /// the CLI used to pass the bare job id, which `kubectl` rejected as an
 /// unknown command). Scheduler-array-style backends cancel every id in one
 /// call; per-job APIs (AWS Batch, GCP Batch) get one invocation each.
