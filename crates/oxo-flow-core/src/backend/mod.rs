@@ -1399,6 +1399,7 @@ mod tests {
             account: None,
             walltime: None,
             extra_args: Vec::new(),
+            name_scope: None,
         };
 
         let (single, array) = match backend_name.as_str() {

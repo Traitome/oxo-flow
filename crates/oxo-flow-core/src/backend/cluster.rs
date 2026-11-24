@@ -834,6 +834,14 @@ impl ClusterExecutor {
         self
     }
 
+    /// Scope Kubernetes Job names to this run/submission (issue #1158):
+    /// repeated runs of one workflow must not collide on `AlreadyExists`.
+    /// Other backends ignore it.
+    pub fn with_name_scope(mut self, scope: impl Into<String>) -> Self {
+        self.cluster.name_scope = Some(scope.into());
+        self
+    }
+
     /// Resolve scheduler commands from `dir` instead of `PATH`.
     pub fn with_scheduler_dir(mut self, dir: std::path::PathBuf) -> Self {
         self.bin_dir = Some(dir);
@@ -1882,6 +1890,7 @@ mod tests {
             account: None,
             walltime: None,
             extra_args: vec![],
+            name_scope: None,
         }
     }
 

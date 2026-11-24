@@ -1887,6 +1887,7 @@ mod tests {
             account: None,
             walltime: None,
             extra_args: vec![],
+            name_scope: None,
         }
     }
 
@@ -3948,6 +3949,7 @@ shell = "echo asm > out/{assembler}.txt"
                     account: None,
                     walltime: None,
                     extra_args: Vec::new(),
+                    name_scope: None,
                 },
             )
             .with_scheduler_dir(bin.path().to_path_buf()),

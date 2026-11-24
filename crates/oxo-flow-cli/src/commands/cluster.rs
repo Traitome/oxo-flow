@@ -831,6 +831,10 @@ pub async fn cluster_command(action: ClusterAction, json: bool) -> Result<()> {
                 account: account.clone(),
                 walltime: walltime.clone(),
                 extra_args: extra_args.clone(),
+                // Scope Job names to this submission directory so re-rendering
+                // into the same directory stays idempotent while a different
+                // directory never collides (issue #1158).
+                name_scope: Some(output.to_string_lossy().into_owned()),
             };
 
             // A dry run writes the very scripts a real submit would: an HPC
@@ -1377,6 +1381,7 @@ pub async fn cluster_command(action: ClusterAction, json: bool) -> Result<()> {
                         account: None,
                         walltime: None,
                         extra_args: Vec::new(),
+                        name_scope: None,
                     },
                 );
                 for id in &unknown {
@@ -1526,6 +1531,7 @@ pub async fn cluster_command(action: ClusterAction, json: bool) -> Result<()> {
                     account: None,
                     walltime: None,
                     extra_args: Vec::new(),
+                    name_scope: None,
                 },
             );
             let accounting = executor.logs(&resolved_id).await.ok();

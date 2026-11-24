@@ -152,11 +152,24 @@ fn container_resources(rule: &Rule) -> serde_json::Value {
 pub fn generate_k8s_job_manifest(
     rule: &Rule,
     shell_cmd: &str,
-    // Kept for dispatch uniformity with the other generators; Kubernetes
-    // manifests currently derive everything from the rule itself.
-    _cluster_config: &ClusterJobConfig,
+    cluster_config: &ClusterJobConfig,
 ) -> Result<String> {
-    let job_name = format!("oxoflow-{}", sanitize_k8s_name(&rule.name));
+    // A run/submission scope (the run directory or `cluster submit` output
+    // directory) is folded into the name so two runs of the same workflow do
+    // not collide on AlreadyExists (issue #1158 live campaign: the second
+    // `run --profile k8s` failed with `jobs.batch "oxoflow-make" already
+    // exists`). No scope keeps the historical stable name.
+    let base = sanitize_cloud_name(&rule.name, 40, true, "");
+    let job_name = match cluster_config.name_scope.as_deref() {
+        Some(scope) if !scope.is_empty() => {
+            use sha2::{Digest, Sha256};
+            let suffix = hex::encode(Sha256::digest(format!("{scope}|{}", rule.name).as_bytes()))
+                [..8]
+                .to_string();
+            format!("oxoflow-{base}-{suffix}")
+        }
+        _ => format!("oxoflow-{base}"),
+    };
 
     let container_image = rule
         .environment
@@ -397,6 +410,7 @@ mod tests {
             account: None,
             walltime: None,
             extra_args: Vec::new(),
+            name_scope: None,
         }
     }
 
@@ -437,6 +451,31 @@ mod tests {
     }
 
     #[test]
+    fn job_names_are_scoped_per_run_so_reruns_do_not_collide() {
+        let rule = Rule {
+            name: "make".to_string(),
+            output: crate::rule::FilePatterns::List(vec!["a.txt".to_string()]),
+            shell: Some("true".to_string()),
+            ..Default::default()
+        };
+        let cmd = "cd '/tmp/w' && true";
+        let name_for = |scope: Option<&str>| -> String {
+            let mut config = k8s_test_config();
+            config.name_scope = scope.map(str::to_string);
+            let manifest: Value =
+                serde_json::from_str(&generate_k8s_job_manifest(&rule, cmd, &config).unwrap())
+                    .unwrap();
+            manifest["metadata"]["name"].as_str().unwrap().to_string()
+        };
+        assert_eq!(name_for(None), "oxoflow-make");
+        let first = name_for(Some("/runs/2026-11-24T15-00"));
+        let second = name_for(Some("/runs/2026-11-24T15-05"));
+        assert_ne!(first, second, "two run scopes must not share a Job name");
+        assert!(first.starts_with("oxoflow-make-"), "{first}");
+        assert!(first.len() <= 63, "{first}");
+    }
+
+    #[test]
     fn workdir_parser_handles_single_quote_escapes() {
         assert_eq!(
             workdir_from_shell_cmd("cd '/tmp/a' && true").as_deref(),
@@ -456,6 +495,7 @@ mod tests {
             account: None,
             walltime: None,
             extra_args: Vec::new(),
+            name_scope: None,
         }
     }
 

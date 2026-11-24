@@ -169,6 +169,7 @@ mod tests {
             account: Some("arn:aws:batch:job-def:1".into()),
             walltime: None,
             extra_args: Vec::new(),
+            name_scope: None,
         }
     }
 
