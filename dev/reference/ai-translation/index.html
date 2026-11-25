@@ -4348,23 +4348,39 @@ endpoints — it does not bypass them.</p>
 </span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>     orchestrator: engine-accurate prompt, read-only knowledge tools
 </span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>     (Bioconda lookup, bioSkills, pipeline graph), and the provider
 </span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>     fallback chain (the caller's own provider → configured provider →
-</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>     env-discovered Claude → OpenAI → Ollama)
-</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>  2. Requests fail fast with a structured `AI_NOT_CONFIGURED` error when
-</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>     no provider is usable
-</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>  3. Template names enter the prompt as hints; keyword matching also
-</span><span id="__span-1-11"><a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>     shapes the structured failure message when AI generation fails
-</span><span id="__span-1-12"><a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a>     ("Try the '{name}' template") — it never produces a pipeline
-</span><span id="__span-1-13"><a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a>  4. Every draft is validated by the engine via the web workflow service;
-</span><span id="__span-1-14"><a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a>     validation errors feed the orchestrator's correction loop (bounded)
-</span><span id="__span-1-15"><a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a>Output: { pipeline_id, toml_content, explanation, alternatives, confidence }
-</span><span id="__span-1-16"><a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a>
-</span><span id="__span-1-17"><a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a>**Draft id semantics**: the returned `pipeline_id` is an unsaved draft id —
-</span><span id="__span-1-18"><a id="__codelineno-1-18" name="__codelineno-1-18" href="#__codelineno-1-18"></a>the generated TOML lives only in the server's in-memory request cache and is
-</span><span id="__span-1-19"><a id="__codelineno-1-19" name="__codelineno-1-19" href="#__codelineno-1-19"></a>never persisted to the pipeline store. `GET /api/pipelines/{pipeline_id}`
-</span><span id="__span-1-20"><a id="__codelineno-1-20" name="__codelineno-1-20" href="#__codelineno-1-20"></a>returns 404 for it. To keep a translated pipeline, save the returned
-</span><span id="__span-1-21"><a id="__codelineno-1-21" name="__codelineno-1-21" href="#__codelineno-1-21"></a>`toml_content` yourself (e.g. `POST /api/pipelines` or `oxo-flow run`), then
-</span><span id="__span-1-22"><a id="__codelineno-1-22" name="__codelineno-1-22" href="#__codelineno-1-22"></a>pass the resulting saved id to `POST /api/ai/optimize`.
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>     env-discovered Claude → OpenAI → Ollama; `OXO_FLOW_AI_FALLBACK=disabled`
+</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>     limits it to the first usable provider)
+</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>  2. Requests fail fast with a structured `AI_NOT_CONFIGURED` error when
+</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>     no provider is usable
+</span><span id="__span-1-11"><a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>  3. Template names enter the prompt as hints; keyword matching also
+</span><span id="__span-1-12"><a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a>     shapes the structured failure message when AI generation fails
+</span><span id="__span-1-13"><a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a>     ("Try the '{name}' template") — it never produces a pipeline
+</span><span id="__span-1-14"><a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a>  4. Every draft is validated by the engine via the web workflow service;
+</span><span id="__span-1-15"><a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a>     validation errors feed the orchestrator's correction loop (bounded)
+</span><span id="__span-1-16"><a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a>Output: { pipeline_id, toml_content, explanation, alternatives, confidence,
+</span><span id="__span-1-17"><a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a>          provider, model, fallback_used, attempts }
+</span><span id="__span-1-18"><a id="__codelineno-1-18" name="__codelineno-1-18" href="#__codelineno-1-18"></a>
+</span><span id="__span-1-19"><a id="__codelineno-1-19" name="__codelineno-1-19" href="#__codelineno-1-19"></a>**Draft id semantics**: the returned `pipeline_id` is an unsaved draft id —
+</span><span id="__span-1-20"><a id="__codelineno-1-20" name="__codelineno-1-20" href="#__codelineno-1-20"></a>the generated TOML lives only in the server's in-memory request cache and is
+</span><span id="__span-1-21"><a id="__codelineno-1-21" name="__codelineno-1-21" href="#__codelineno-1-21"></a>never persisted to the pipeline store. `GET /api/pipelines/{pipeline_id}`
+</span><span id="__span-1-22"><a id="__codelineno-1-22" name="__codelineno-1-22" href="#__codelineno-1-22"></a>returns 404 for it. To keep a translated pipeline, save the returned
+</span><span id="__span-1-23"><a id="__codelineno-1-23" name="__codelineno-1-23" href="#__codelineno-1-23"></a>`toml_content` yourself (e.g. `POST /api/pipelines` or `oxo-flow run`), then
+</span><span id="__span-1-24"><a id="__codelineno-1-24" name="__codelineno-1-24" href="#__codelineno-1-24"></a>pass the resulting saved id to `POST /api/ai/optimize`.
 </span></code></pre></div>
+<p>The attribution fields are additive: <code>provider</code>/<code>model</code> name the backend that
+actually produced the pipeline, <code>fallback_used</code> says whether an earlier
+provider failed, and <code>attempts[]</code> (<code>{provider, model, success, reason}</code>)
+records each attempt in order with its failure reason. Every fallback logs a
+warning; an exhausted chain returns a structured error naming the last
+provider/model and the cause (including <code>Agent exceeded max rounds (N)</code>).
+The chain stops after a billed attempt (max rounds, empty/invalid response,
+tool error); only network, authentication, rate-limit, 5xx, and timeout
+failures fall through to the next provider — see
+<a href="../web-api/#translate-provider-attribution-and-fallback">translate provider attribution and fallback</a>
+for the spend guard.
+Failure reasons are sanitized categories (<code>network error</code>,
+<code>authentication failed</code>, <code>provider error (HTTP 502)</code>, …) — no API key,
+endpoint URL, host, path, or upstream body appears in these fields.</p>
 <h3 id="post-apiaiexplain">POST /api/ai/explain<a class="headerlink" href="#post-apiaiexplain" title="Permanent link">#</a></h3>
 <p>Explain why a run failed and suggest fixes.</p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>Input:  { run_id, language?: "zh"|"en" }

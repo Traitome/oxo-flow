@@ -457,10 +457,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#5-verification-snapshot-2026-11-25" class="md-nav__link">
+  <a href="#5-verification-snapshot-2026-11-26" class="md-nav__link">
     <span class="md-ellipsis">
       
-        5. Verification snapshot (2026-11-25)
+        5. Verification snapshot (2026-11-26)
       
     </span>
   </a>
@@ -4287,10 +4287,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#5-verification-snapshot-2026-11-25" class="md-nav__link">
+  <a href="#5-verification-snapshot-2026-11-26" class="md-nav__link">
     <span class="md-ellipsis">
       
-        5. Verification snapshot (2026-11-25)
+        5. Verification snapshot (2026-11-26)
       
     </span>
   </a>
@@ -4405,7 +4405,7 @@
 <p><strong>Exit evidence.</strong> False-positive analysis against a representative corpus of real pipelines; literature-backed rule review (ROADMAP Stage 12.2).</p>
 <h3 id="32-autonomous-self-healing-runtime">3.2 Autonomous self-healing runtime<a class="headerlink" href="#32-autonomous-self-healing-runtime" title="Permanent link">#</a></h3>
 <p><strong>Claim.</strong> Long genomic computations fail for four stacked reasons — system resources, data defects, algorithm parameters, biology-level surprises. A workflow engine should diagnose across those layers and apply <em>bounded</em> remediation, not just pattern-match stderr.</p>
-<p><strong>Shipped today.</strong> 31 domain diagnostic patterns with stable codes; curated scientific preflight (<code>SCI-*</code>: e.g. VQSR cohort-size, BQSR known-sites, Mutect2 tumor-only pitfalls) executed in <code>dry-run</code>; <code>--ai-recover</code> diagnosis with safety-gated repair proposals; a separate seeded-failure harness (<code>eval/interpretation/</code>) that scores <code>report --ai</code> interpretation across three providers. — <em>Diagnosis implemented; interpretation is measured; repair now runs a verified-repair loop (<code>REPAIR_RERUN_SUCCEEDED</code> on the run path), and ROADMAP Stage 12.3 records the measured campaign at 3/10 applied and 3/10 verified — all 3 repairable seeded cases — stated plainly, not hidden.</em></p>
+<p><strong>Shipped today.</strong> 31 domain diagnostic patterns with stable codes; curated scientific preflight (<code>SCI-*</code>: e.g. VQSR cohort-size, BQSR known-sites, Mutect2 tumor-only pitfalls) executed in <code>dry-run</code>; <code>--ai-recover</code> diagnosis with safety-gated repair proposals; a separate seeded-failure harness (<code>eval/interpretation/</code>) that scores <code>report --ai</code> interpretation across three providers. — <em>Diagnosis implemented; interpretation is measured; repair now runs a verified-repair loop (<code>REPAIR_RERUN_SUCCEEDED</code> on the run path), and ROADMAP Stage 12.3 records the measured 13-case campaign at 6/13 applied, 6/13 verified, and 6/13 rerun successfully — all 6 repairable seeded classes (the 3 original infra seeds plus cpu_limit, ulimit, and shared_library added by #1278); the other 7 cases are blocked upstream of the loop — stated plainly, not hidden.</em></p>
 <p><strong>Exit evidence.</strong> Probabilistic fault-attribution model beyond deterministic patterns; applied-repair verified by successful reruns on a seeded fault-injection benchmark; pre-registered analysis.</p>
 <h3 id="33-universal-ecosystem-transpiler">3.3 Universal ecosystem transpiler<a class="headerlink" href="#33-universal-ecosystem-transpiler" title="Permanent link">#</a></h3>
 <p><strong>Claim.</strong> A new engine cannot ask the field to abandon nf-core modules and community Snakemake rules; it must ingest them — and the translation should itself be an analysis artifact (typed, reviewed, diffable), not a lossy copy-paste.</p>
@@ -4422,8 +4422,8 @@
 <li><strong>Deterministic AI evaluations.</strong> <code>eval/frontier/</code>, <code>eval/gold/</code>, and <code>eval/interpretation/</code> score generation and interpretation quality with deterministic checks and negative controls; provider-backed runs record git SHA, gold/knowledge hashes, and per-trial metadata in capture manifests so results are auditable. The CI gate runs the deterministic harness and gold-consistency checks, not paid provider calls.</li>
 <li><strong>Controlled benchmark campaigns.</strong> The remaining exit evidence for publication-tier claims (matched arms, held-out intents, multiple seeds, run-level cost/failure data, human-factors study) is specified in ROADMAP Stage 12.4 — and none of it has run yet. Production deployments are the intended substrate for a future pre-registered scalability campaign.</li>
 </ul>
-<h2 id="5-verification-snapshot-2026-11-25">5. Verification snapshot (2026-11-25)<a class="headerlink" href="#5-verification-snapshot-2026-11-25" title="Permanent link">#</a></h2>
-<p>The quantitative claims on this page were checked against <code>main@55dddf3c</code> on 2026-11-17; the cluster <code>--provenance</code> behavior was re-verified after #1096 (<code>main@3406208f</code>); the CLI/OpenAPI counts were re-checked on 2026-11-25 on the reviewed branch <code>feat/1372-audit-chain</code> at <code>6416732b</code> — <code>main@d0618816</code> plus #1372, which is not yet on main — the branch that contains the <code>audit</code> subcommand and its two endpoints:</p>
+<h2 id="5-verification-snapshot-2026-11-26">5. Verification snapshot (2026-11-26)<a class="headerlink" href="#5-verification-snapshot-2026-11-26" title="Permanent link">#</a></h2>
+<p>The quantitative claims on this page were re-checked against <code>main@99bb8b56</code> on 2026-11-26, after the audit-chain merge <code>dedc1121</code> (which added the <code>audit</code> subcommand and its two endpoints) plus the metadata-contract and Kubernetes-image-render merges; the cluster <code>--provenance</code> behavior was re-verified after #1096 (<code>main@3406208f</code>); the mechanism-level claims were first checked against <code>main@55dddf3c</code> on 2026-11-17. The numeric claims that have a machine-readable source are enforced by <code>make claims-check</code> against <a href="https://github.com/Traitome/oxo-flow/blob/main/docs/claims.json"><code>docs/claims.json</code></a>, so this snapshot cannot drift silently:</p>
 <ul>
 <li>39 CLI subcommands; 96 OpenAPI paths / 111 operations served by <code>GET /api/openapi.json</code> (default build, non-HPC mode).</li>
 <li>31 built-in diagnostic patterns; biological type contracts firing on a deliberately mismatched workflow (<code>TYPE-001</code>–<code>TYPE-003</code> observed live, <code>TYPE-004</code>–<code>TYPE-010</code> covered by unit tests; <code>TYPE-008</code>/<code>TYPE-009</code>/<code>TYPE-010</code> are advisory unverifiable-edge codes).</li>
@@ -4437,8 +4437,8 @@
 <li>No peer-reviewed claim is made; a bioRxiv preprint is cited on this page, but there is no journal acceptance, independent replication, or journal-ready artifact package (ROADMAP Stage 12.4: <em>Planned / blocked</em>).</li>
 <li>Type contracts detect declared state mismatches; they do not prove biological correctness.</li>
 <li>Provenance anchors reproducibility evidence; bitwise reproduction across all tools and hardware is not guaranteed.</li>
-<li>Repair proposals are experimental until independently verified by a successful rerun — in the seeded fault-injection campaign that loop currently closes 3/10 cases end-to-end (all 3 repairable infra faults; the other 7 are blocked upstream of the loop — measured evidence in <code>eval/frontier/PILOT_FINDINGS.md</code>).</li>
-<li>PostgreSQL storage parity, cloud-batch executors, and tenant isolation carry explicit unproven/prototype labels (ROADMAP Stage 12.1). The tenant-isolation label is now dimensional, not wholesale: the environment allowlist and the CPU/memory/process rlimits are enforced on every web-spawned run (Linux rlimits where available), and — behind the opt-in <code>OXO_FLOW_WEB_SANDBOX=landlock</code> flag on Linux 5.13+ — filesystem isolation is kernel-enforced (TCP denial on kernel 6.7+), with the enforced dimensions adversarially tested through the real spawn path (<code>rb01_sandbox_adversarial.rs</code>). UDP/ICMP, PID namespaces, per-run uid identities, per-tenant containers, and the boundary itself when the operator leaves the sandbox off remain unenforced — the residual matrix in the web API reference is the source of truth.</li>
+<li>Repair proposals are experimental until independently verified by a successful rerun — in the enlarged 13-case seeded fault-injection campaign the loop closes 6/13 cases end-to-end (6/6 of the repairable classes: the 3 original infra faults plus 3 held-out classes added by #1278; the other 7 cases are blocked upstream of the loop — measured evidence in <code>eval/frontier/PILOT_FINDINGS.md</code>).</li>
+<li>PostgreSQL storage parity, cloud-batch executors, and tenant isolation carry explicit unproven/prototype labels (ROADMAP Stage 12.1). The tenant-isolation label is now dimensional, not wholesale: the environment allowlist and the CPU/memory/process rlimits are enforced on every web-spawned run (Linux rlimits where available), and — behind the opt-in kernel Landlock sandbox (<code>OXO_FLOW_WEB_SANDBOX=landlock</code>) on Linux 5.13+ — filesystem isolation is kernel-enforced (TCP denial on kernel 6.7+), with the enforced dimensions adversarially tested through the real spawn path (<code>rb01_sandbox_adversarial.rs</code>). UDP/ICMP, PID namespaces, per-run uid identities, per-tenant containers, and the boundary itself when the operator leaves the sandbox off remain unenforced — the residual matrix in the web API reference is the source of truth.</li>
 </ul>
 <h2 id="citing">Citing<a class="headerlink" href="#citing" title="Permanent link">#</a></h2>
 <blockquote>

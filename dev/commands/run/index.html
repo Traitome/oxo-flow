@@ -5943,7 +5943,7 @@ path (<code>--retry</code>, <code>--timeout</code>,
 recorded as jobs settle, and <code>-k</code> keeps in-flight independents running
 past a required failure).</p>
 <p>Cluster scheduler submission (SLURM, PBS, SGE, LSF, Kubernetes, AWS Batch,
-GCP Batch) is configured
+GCP Batch, Tencent Batch) is configured
 separately — see the <a href="../cluster/"><code>cluster</code></a> command.</p>
 <h3 id="partial-module-runs-module">Partial module runs (<code>--module</code>)<a class="headerlink" href="#partial-module-runs-module" title="Permanent link">#</a></h3>
 <p>A composed workflow (clinical pipelines like clindet: several
@@ -5986,6 +5986,14 @@ the site's accounting store does not report are omitted rather than guessed.
 See <a href="../cluster/#what-a-finished-job-records">What a finished job records</a>
 for the record format, the accounting-variance caveats, and the
 interrupt/re-attach semantics.</p>
+<p>Every executed rule — local or cluster — also persists a normalized
+<code>resource_usage</code> record into the checkpoint (issue #1371): exact peak-RSS
+bytes, I/O bytes when the source reports them (Linux <code>/proc/&lt;pid&gt;/io</code>,
+<code>sacct</code> disk averages), scheduler wait, node/core allocation, and the
+backend/tool/raw fields behind each number. It is reused by
+<code>oxo-flow report --resource-ledger</code> (see
+<a href="../report/#resource-ledger-resource-ledger"><code>report</code></a>); values no source
+reported stay absent, never <code>0</code>.</p>
 <h3 id="failed-rule-output-rollback">Failed-rule output rollback<a class="headerlink" href="#failed-rule-output-rollback" title="Permanent link">#</a></h3>
 <p>A failed rule's declared outputs are rolled back: files created by the
 attempt are deleted, and pre-existing files are moved aside as

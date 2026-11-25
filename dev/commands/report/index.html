@@ -2879,6 +2879,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#normalized-resource-ledger" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Normalized resource ledger
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#export-declared-software-versions" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3022,6 +3033,17 @@
     <span class="md-ellipsis">
       
         Resource Accounting (--acct)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#resource-ledger-resource-ledger" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Resource ledger (--resource-ledger)
       
     </span>
   </a>
@@ -4710,6 +4732,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#normalized-resource-ledger" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Normalized resource ledger
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#export-declared-software-versions" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4853,6 +4886,17 @@
     <span class="md-ellipsis">
       
         Resource Accounting (--acct)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#resource-ledger-resource-ledger" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Resource ledger (--resource-ledger)
       
     </span>
   </a>
@@ -5039,7 +5083,13 @@ auto-discovered — see <a href="#workflow-discovery">Workflow discovery</a>.</p
 <td><code>--acct</code></td>
 <td>—</td>
 <td>—</td>
-<td><code>PATH</code> — import sacct-style CSV accounting (JobID,JobName,State,Elapsed,CPUTime,MaxRSS) into a Resource Accounting section</td>
+<td><code>PATH</code> — import sacct-style CSV accounting (JobID,JobName,State,Elapsed,CPUTime,MaxRSS) into a Resource Accounting section; with <code>--resource-ledger</code> it becomes the raw scheduler side of reconciliation, which requires <code>-f json</code> (CSV cannot carry scheduler totals, reconciliation, or conflicts — the combination is a usage error)</td>
+</tr>
+<tr>
+<td><code>--resource-ledger</code></td>
+<td>—</td>
+<td>—</td>
+<td>Emit the normalized <code>oxo-flow.resource-ledger/v1</code> document instead of a report: <code>-f json</code> (default) or <code>-f csv</code> (also inferred from a <code>.csv</code> <code>-o</code> extension). Requires a checkpoint. See <a href="#resource-ledger-resource-ledger">Resource ledger</a></td>
 </tr>
 <tr>
 <td><code>--r-data</code></td>
@@ -5094,11 +5144,11 @@ auto-discovered — see <a href="#workflow-discovery">Workflow discovery</a>.</p
 </tr>
 <tr>
 <td><code>1</code></td>
-<td>Rendering/usage error (e.g. unsupported format, multiple <code>[report].format</code> entries under <code>--strict</code>, <code>--diff</code> without both checkpoints)</td>
+<td>Rendering/usage error (e.g. unsupported format, multiple <code>[report].format</code> entries under <code>--strict</code>, <code>--diff</code> without both checkpoints, <code>--acct</code> with <code>--resource-ledger -f csv</code>)</td>
 </tr>
 <tr>
 <td><code>2</code></td>
-<td>Data source unavailable — under <code>--strict</code> when the checkpoint is missing or the configured template fails to render</td>
+<td>Data source unavailable — under <code>--strict</code> when the checkpoint is missing or the configured template fails to render; when <code>--resource-ledger</code> finds no checkpoint and no usage error precedes it (an unsupported format or CSV + <code>--acct</code> exits <code>1</code> first; a ledger without execution records is not an empty report)</td>
 </tr>
 </tbody>
 </table>
@@ -5207,12 +5257,24 @@ ScatterPlot) in both top-level sections and subsections.</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="c1"># sacct -o JobID,JobName,State,Elapsed,CPUTime,MaxRSS --parsable2</span>
 </span><span id="__span-15-2"><a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a>oxo-flow<span class="w"> </span>report<span class="w"> </span>--run<span class="w"> </span>results/experiment1<span class="w"> </span>--acct<span class="w"> </span>sacct.csv
 </span></code></pre></div>
-<h3 id="export-declared-software-versions">Export declared software versions<a class="headerlink" href="#export-declared-software-versions" title="Permanent link">#</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="c1"># stdout</span>
-</span><span id="__span-16-2"><a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a>oxo-flow<span class="w"> </span>report<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>--versions-yml<span class="w"> </span>-
+<h3 id="normalized-resource-ledger">Normalized resource ledger<a class="headerlink" href="#normalized-resource-ledger" title="Permanent link">#</a></h3>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="c1"># JSON document on stdout (the default format)</span>
+</span><span id="__span-16-2"><a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a>oxo-flow<span class="w"> </span>report<span class="w"> </span>--run<span class="w"> </span>results/experiment1<span class="w"> </span>--resource-ledger<span class="w"> </span>-f<span class="w"> </span>json<span class="w"> </span>-o<span class="w"> </span>-
 </span><span id="__span-16-3"><a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a>
-</span><span id="__span-16-4"><a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a><span class="c1"># commit the file and diff it in CI to catch undeclared dependency drift</span>
-</span><span id="__span-16-5"><a id="__codelineno-16-5" name="__codelineno-16-5" href="#__codelineno-16-5"></a>oxo-flow<span class="w"> </span>report<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>--versions-yml<span class="w"> </span>versions.yml
+</span><span id="__span-16-4"><a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a><span class="c1"># CSV: one row per rule plus a TOTAL row (extension selects CSV)</span>
+</span><span id="__span-16-5"><a id="__codelineno-16-5" name="__codelineno-16-5" href="#__codelineno-16-5"></a>oxo-flow<span class="w"> </span>report<span class="w"> </span>--run<span class="w"> </span>results/experiment1<span class="w"> </span>--resource-ledger<span class="w"> </span>-o<span class="w"> </span>ledger.csv
+</span><span id="__span-16-6"><a id="__codelineno-16-6" name="__codelineno-16-6" href="#__codelineno-16-6"></a>
+</span><span id="__span-16-7"><a id="__codelineno-16-7" name="__codelineno-16-7" href="#__codelineno-16-7"></a><span class="c1"># Reconcile the checkpoint's numbers against an independent sacct export</span>
+</span><span id="__span-16-8"><a id="__codelineno-16-8" name="__codelineno-16-8" href="#__codelineno-16-8"></a>oxo-flow<span class="w"> </span>report<span class="w"> </span>--run<span class="w"> </span>results/experiment1<span class="w"> </span>--resource-ledger<span class="w"> </span>--acct<span class="w"> </span>sacct.csv
+</span></code></pre></div>
+<p>See <a href="#resource-ledger-resource-ledger">Resource ledger</a> for the schema,
+the unknown-is-not-zero rule, and reconciliation semantics.</p>
+<h3 id="export-declared-software-versions">Export declared software versions<a class="headerlink" href="#export-declared-software-versions" title="Permanent link">#</a></h3>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="c1"># stdout</span>
+</span><span id="__span-17-2"><a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a>oxo-flow<span class="w"> </span>report<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>--versions-yml<span class="w"> </span>-
+</span><span id="__span-17-3"><a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a>
+</span><span id="__span-17-4"><a id="__codelineno-17-4" name="__codelineno-17-4" href="#__codelineno-17-4"></a><span class="c1"># commit the file and diff it in CI to catch undeclared dependency drift</span>
+</span><span id="__span-17-5"><a id="__codelineno-17-5" name="__codelineno-17-5" href="#__codelineno-17-5"></a>oxo-flow<span class="w"> </span>report<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>--versions-yml<span class="w"> </span>versions.yml
 </span></code></pre></div>
 <p>Emits an nf-core-style <code>versions.yml</code> — the same data as the report's
 <a href="#software-versions-software-versions-versions-yml"><code>software-versions</code> section</a>,
@@ -5312,8 +5374,8 @@ frameworks only.</p>
 declares when it applies (e.g. <code>failure-diagnosis</code> only when rules failed,
 <code>execution-status</code> only with a checkpoint). Filter them with
 <code>[report].sections</code>:</p>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="k">[report]</span>
-</span><span id="__span-17-2"><a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a><span class="n">sections</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"universal"</span><span class="p">,</span><span class="w"> </span><span class="s2">"workflow-info"</span><span class="p">,</span><span class="w"> </span><span class="s2">"commands"</span><span class="p">]</span>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-18-1"><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="k">[report]</span>
+</span><span id="__span-18-2"><a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a><span class="n">sections</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"universal"</span><span class="p">,</span><span class="w"> </span><span class="s2">"workflow-info"</span><span class="p">,</span><span class="w"> </span><span class="s2">"commands"</span><span class="p">]</span>
 </span></code></pre></div>
 <ul>
 <li>Available built-in section IDs (generator names used by the filter):
@@ -5424,9 +5486,274 @@ record. Column detection is header-based and case-insensitive; <code>JobName</co
 <code>State</code>, <code>Elapsed</code>, <code>CPUTime</code> and <code>MaxRSS</code> are required (<code>JobID</code> optional,
 used to prefer the batch row over step rows). <code>Elapsed</code>/<code>CPUTime</code> accept
 <code>MM:SS</code>, <code>HH:MM:SS</code> or <code>[D-]HH:MM:SS</code> (with optional fractional seconds);
-<code>MaxRSS</code> accepts <code>K</code>/<code>M</code>/<code>G</code>/<code>T</code>/<code>c</code> suffixes (case-insensitive, base-1024,
-rounded up so a peak is never under-reported). A missing required column is
-a hard error — silently dropping a column would fake a complete table.</p>
+<code>MaxRSS</code> uses the same grammar as the scheduler adapters (one shared
+<code>oxo_flow_core::backend::cluster::parse_rss_bytes</code> parser): <code>K</code>/<code>KB</code>,
+<code>M</code>/<code>MB</code>, <code>G</code>/<code>GB</code>, <code>T</code>/<code>TB</code> suffixes (case-insensitive, base-1024), a
+trailing <code>n</code> as SLURM's per-node qualifier, and a bare number meaning
+kilobytes. The <code>c</code> suffix is positional: after a unit letter it is SLURM's
+per-core qualifier and leaves the unit unchanged (<code>512Kc</code> = 512 KiB,
+<code>512Mc</code> = 512 MiB), while directly after the number it is SLURM's byte unit
+(<code>2048c</code> = 2,048 bytes, the value <code>sacct</code> prints for a non-whole-KiB
+figure). A store that uses <code>c</code> for the other meaning will disagree with
+this reading. The figure is rounded to the nearest whole MB, and a measured
+sub-MiB peak reports as 1 MB — never a fabricated zero; <code>0</code> is the "not
+reported" sentinel (unknown, not a measured zero), whatever its suffix. A
+missing required column is a hard error — silently dropping a column would
+fake a complete table.</p>
+<h3 id="resource-ledger-resource-ledger">Resource ledger (<code>--resource-ledger</code>)<a class="headerlink" href="#resource-ledger-resource-ledger" title="Permanent link">#</a></h3>
+<p><code>--resource-ledger</code> replaces the rendered report with a normalized,
+machine-readable accounting document — schema <code>oxo-flow.resource-ledger/v1</code>.
+It is built only from the checkpoint (plus an optional raw <code>--acct</code> export),
+never from AI or template data, so identical checkpoint state always renders
+byte-identical JSON/CSV. The document spans the local, HPC, and cloud paths
+with one set of canonical field names.</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-19-1"><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a>oxo-flow<span class="w"> </span>report<span class="w"> </span>--run<span class="w"> </span>results/experiment1<span class="w"> </span>--resource-ledger<span class="w"> </span>-f<span class="w"> </span>json<span class="w"> </span>-o<span class="w"> </span>-
+</span><span id="__span-19-2"><a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a>oxo-flow<span class="w"> </span>report<span class="w"> </span>--run<span class="w"> </span>results/experiment1<span class="w"> </span>--resource-ledger<span class="w"> </span>-f<span class="w"> </span>csv<span class="w"> </span>-o<span class="w"> </span>ledger.csv
+</span></code></pre></div>
+<p><code>-f json</code> is the default; <code>-f csv</code> (or a <code>.csv</code> output extension) selects
+CSV. Other <code>-f</code> values are a usage error — the ledger is not a report
+format. <code>-o -</code> writes to stdout; with no <code>-o</code> the document goes to stdout
+too (unlike a rendered report, it is never auto-written under
+<code>.oxo-flow/reports/</code>). <code>--resource-ledger</code> conflicts with the report-only
+flags (<code>--ai</code>, <code>--plan</code>, <code>--failed</code>, <code>--r-data</code>, <code>--diff</code>,
+<code>--versions-yml</code>, <code>--list-sections</code>, <code>--list-templates</code>,
+<code>--init-template</code>). <code>--acct</code> reconciliation is available only with
+<code>-f json</code>: CSV has no representation for scheduler totals, reconciliation,
+or conflicts, so combining the two is a usage error (exit <code>1</code>) raised
+before the export is read — never a clean table that silently dropped the
+comparison. A missing checkpoint exits <code>2</code>: the ledger describes an
+executed run, so "no execution records" is a data-source failure, not an
+empty report.</p>
+<p>The command still resolves a workflow file (explicit <code>WORKFLOW</code>, <code>--run</code>, or
+directory discovery) before rendering, because that is how the checkpoint is
+found — a bare copied <code>checkpoint.json</code> without a resolvable workflow cannot
+be rendered yet. Pass the original workflow path (and <code>--checkpoint</code>) when
+the run directory no longer contains one.</p>
+<h4 id="json-schema">JSON schema<a class="headerlink" href="#json-schema" title="Permanent link">#</a></h4>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-20-1"><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a><span class="p">{</span>
+</span><span id="__span-20-2"><a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a><span class="w">  </span><span class="nt">"schema"</span><span class="p">:</span><span class="w"> </span><span class="s2">"oxo-flow.resource-ledger/v1"</span><span class="p">,</span>
+</span><span id="__span-20-3"><a id="__codelineno-20-3" name="__codelineno-20-3" href="#__codelineno-20-3"></a><span class="w">  </span><span class="nt">"run"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-20-4"><a id="__codelineno-20-4" name="__codelineno-20-4" href="#__codelineno-20-4"></a><span class="w">    </span><span class="nt">"workflow"</span><span class="p">:</span><span class="w"> </span><span class="s2">"pipeline.oxoflow"</span><span class="p">,</span>
+</span><span id="__span-20-5"><a id="__codelineno-20-5" name="__codelineno-20-5" href="#__codelineno-20-5"></a><span class="w">    </span><span class="nt">"started_at"</span><span class="p">:</span><span class="w"> </span><span class="s2">"2026-11-25T10:00:00Z"</span><span class="p">,</span>
+</span><span id="__span-20-6"><a id="__codelineno-20-6" name="__codelineno-20-6" href="#__codelineno-20-6"></a><span class="w">    </span><span class="nt">"finished_at"</span><span class="p">:</span><span class="w"> </span><span class="s2">"2026-11-25T10:12:00Z"</span><span class="p">,</span>
+</span><span id="__span-20-7"><a id="__codelineno-20-7" name="__codelineno-20-7" href="#__codelineno-20-7"></a><span class="w">    </span><span class="nt">"totals"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-20-8"><a id="__codelineno-20-8" name="__codelineno-20-8" href="#__codelineno-20-8"></a><span class="w">      </span><span class="nt">"rules_total"</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span>
+</span><span id="__span-20-9"><a id="__codelineno-20-9" name="__codelineno-20-9" href="#__codelineno-20-9"></a><span class="w">      </span><span class="nt">"rules_executed"</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span>
+</span><span id="__span-20-10"><a id="__codelineno-20-10" name="__codelineno-20-10" href="#__codelineno-20-10"></a><span class="w">      </span><span class="nt">"wall_time_secs"</span><span class="p">:</span><span class="w"> </span><span class="mf">750.0</span><span class="p">,</span>
+</span><span id="__span-20-11"><a id="__codelineno-20-11" name="__codelineno-20-11" href="#__codelineno-20-11"></a><span class="w">      </span><span class="nt">"wall_time_secs_complete"</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+</span><span id="__span-20-12"><a id="__codelineno-20-12" name="__codelineno-20-12" href="#__codelineno-20-12"></a><span class="w">      </span><span class="nt">"cpu_seconds"</span><span class="p">:</span><span class="w"> </span><span class="mf">5700.0</span><span class="p">,</span>
+</span><span id="__span-20-13"><a id="__codelineno-20-13" name="__codelineno-20-13" href="#__codelineno-20-13"></a><span class="w">      </span><span class="nt">"cpu_seconds_complete"</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+</span><span id="__span-20-14"><a id="__codelineno-20-14" name="__codelineno-20-14" href="#__codelineno-20-14"></a><span class="w">      </span><span class="nt">"max_rss_bytes"</span><span class="p">:</span><span class="w"> </span><span class="mi">1073741824</span><span class="p">,</span>
+</span><span id="__span-20-15"><a id="__codelineno-20-15" name="__codelineno-20-15" href="#__codelineno-20-15"></a><span class="w">      </span><span class="nt">"max_rss_bytes_complete"</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+</span><span id="__span-20-16"><a id="__codelineno-20-16" name="__codelineno-20-16" href="#__codelineno-20-16"></a><span class="w">      </span><span class="nt">"io_read_bytes"</span><span class="p">:</span><span class="w"> </span><span class="mi">4000000000</span><span class="p">,</span>
+</span><span id="__span-20-17"><a id="__codelineno-20-17" name="__codelineno-20-17" href="#__codelineno-20-17"></a><span class="w">      </span><span class="nt">"io_read_bytes_complete"</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+</span><span id="__span-20-18"><a id="__codelineno-20-18" name="__codelineno-20-18" href="#__codelineno-20-18"></a><span class="w">      </span><span class="nt">"scheduler_wait_secs"</span><span class="p">:</span><span class="w"> </span><span class="mi">15</span><span class="p">,</span>
+</span><span id="__span-20-19"><a id="__codelineno-20-19" name="__codelineno-20-19" href="#__codelineno-20-19"></a><span class="w">      </span><span class="nt">"scheduler_wait_secs_complete"</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span>
+</span><span id="__span-20-20"><a id="__codelineno-20-20" name="__codelineno-20-20" href="#__codelineno-20-20"></a><span class="w">    </span><span class="p">},</span>
+</span><span id="__span-20-21"><a id="__codelineno-20-21" name="__codelineno-20-21" href="#__codelineno-20-21"></a><span class="w">    </span><span class="nt">"sources"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-20-22"><a id="__codelineno-20-22" name="__codelineno-20-22" href="#__codelineno-20-22"></a><span class="w">      </span><span class="p">{</span><span class="nt">"backend"</span><span class="p">:</span><span class="w"> </span><span class="s2">"local"</span><span class="p">,</span><span class="w"> </span><span class="nt">"tool"</span><span class="p">:</span><span class="w"> </span><span class="s2">"sysinfo"</span><span class="p">},</span>
+</span><span id="__span-20-23"><a id="__codelineno-20-23" name="__codelineno-20-23" href="#__codelineno-20-23"></a><span class="w">      </span><span class="p">{</span><span class="nt">"backend"</span><span class="p">:</span><span class="w"> </span><span class="s2">"slurm"</span><span class="p">,</span><span class="w"> </span><span class="nt">"tool"</span><span class="p">:</span><span class="w"> </span><span class="s2">"sacct"</span><span class="p">,</span><span class="w"> </span><span class="nt">"raw_fields"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"MaxRSS"</span><span class="p">:</span><span class="w"> </span><span class="s2">"1G"</span><span class="p">}}</span>
+</span><span id="__span-20-24"><a id="__codelineno-20-24" name="__codelineno-20-24" href="#__codelineno-20-24"></a><span class="w">    </span><span class="p">]</span>
+</span><span id="__span-20-25"><a id="__codelineno-20-25" name="__codelineno-20-25" href="#__codelineno-20-25"></a><span class="w">  </span><span class="p">},</span>
+</span><span id="__span-20-26"><a id="__codelineno-20-26" name="__codelineno-20-26" href="#__codelineno-20-26"></a><span class="w">  </span><span class="nt">"rules"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-20-27"><a id="__codelineno-20-27" name="__codelineno-20-27" href="#__codelineno-20-27"></a><span class="w">    </span><span class="p">{</span>
+</span><span id="__span-20-28"><a id="__codelineno-20-28" name="__codelineno-20-28" href="#__codelineno-20-28"></a><span class="w">      </span><span class="nt">"rule"</span><span class="p">:</span><span class="w"> </span><span class="s2">"align"</span><span class="p">,</span>
+</span><span id="__span-20-29"><a id="__codelineno-20-29" name="__codelineno-20-29" href="#__codelineno-20-29"></a><span class="w">      </span><span class="nt">"status"</span><span class="p">:</span><span class="w"> </span><span class="s2">"completed"</span><span class="p">,</span>
+</span><span id="__span-20-30"><a id="__codelineno-20-30" name="__codelineno-20-30" href="#__codelineno-20-30"></a><span class="w">      </span><span class="nt">"wall_time_secs"</span><span class="p">:</span><span class="w"> </span><span class="mf">720.5</span><span class="p">,</span>
+</span><span id="__span-20-31"><a id="__codelineno-20-31" name="__codelineno-20-31" href="#__codelineno-20-31"></a><span class="w">      </span><span class="nt">"cpu_seconds"</span><span class="p">:</span><span class="w"> </span><span class="mf">5700.0</span><span class="p">,</span>
+</span><span id="__span-20-32"><a id="__codelineno-20-32" name="__codelineno-20-32" href="#__codelineno-20-32"></a><span class="w">      </span><span class="nt">"max_rss_bytes"</span><span class="p">:</span><span class="w"> </span><span class="mi">1073741824</span><span class="p">,</span>
+</span><span id="__span-20-33"><a id="__codelineno-20-33" name="__codelineno-20-33" href="#__codelineno-20-33"></a><span class="w">      </span><span class="nt">"io_read_bytes"</span><span class="p">:</span><span class="w"> </span><span class="mi">4000000000</span><span class="p">,</span>
+</span><span id="__span-20-34"><a id="__codelineno-20-34" name="__codelineno-20-34" href="#__codelineno-20-34"></a><span class="w">      </span><span class="nt">"scheduler_wait_secs"</span><span class="p">:</span><span class="w"> </span><span class="mi">15</span><span class="p">,</span>
+</span><span id="__span-20-35"><a id="__codelineno-20-35" name="__codelineno-20-35" href="#__codelineno-20-35"></a><span class="w">      </span><span class="nt">"nodes"</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
+</span><span id="__span-20-36"><a id="__codelineno-20-36" name="__codelineno-20-36" href="#__codelineno-20-36"></a><span class="w">      </span><span class="nt">"cores"</span><span class="p">:</span><span class="w"> </span><span class="mi">8</span><span class="p">,</span>
+</span><span id="__span-20-37"><a id="__codelineno-20-37" name="__codelineno-20-37" href="#__codelineno-20-37"></a><span class="w">      </span><span class="nt">"source"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-20-38"><a id="__codelineno-20-38" name="__codelineno-20-38" href="#__codelineno-20-38"></a><span class="w">        </span><span class="nt">"backend"</span><span class="p">:</span><span class="w"> </span><span class="s2">"slurm"</span><span class="p">,</span>
+</span><span id="__span-20-39"><a id="__codelineno-20-39" name="__codelineno-20-39" href="#__codelineno-20-39"></a><span class="w">        </span><span class="nt">"tool"</span><span class="p">:</span><span class="w"> </span><span class="s2">"sacct"</span><span class="p">,</span>
+</span><span id="__span-20-40"><a id="__codelineno-20-40" name="__codelineno-20-40" href="#__codelineno-20-40"></a><span class="w">        </span><span class="nt">"raw_fields"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"MaxRSS"</span><span class="p">:</span><span class="w"> </span><span class="s2">"1G"</span><span class="p">,</span><span class="w"> </span><span class="nt">"TotalCPU"</span><span class="p">:</span><span class="w"> </span><span class="s2">"01:35:00"</span><span class="p">,</span><span class="w"> </span><span class="nt">"NNodes"</span><span class="p">:</span><span class="w"> </span><span class="s2">"1"</span><span class="p">}</span>
+</span><span id="__span-20-41"><a id="__codelineno-20-41" name="__codelineno-20-41" href="#__codelineno-20-41"></a><span class="w">      </span><span class="p">}</span>
+</span><span id="__span-20-42"><a id="__codelineno-20-42" name="__codelineno-20-42" href="#__codelineno-20-42"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-20-43"><a id="__codelineno-20-43" name="__codelineno-20-43" href="#__codelineno-20-43"></a><span class="w">  </span><span class="p">]</span>
+</span><span id="__span-20-44"><a id="__codelineno-20-44" name="__codelineno-20-44" href="#__codelineno-20-44"></a><span class="p">}</span>
+</span></code></pre></div>
+<p>Unknown fields are omitted from JSON (<code>run.conflicts</code> is omitted when
+empty; <code>run.scheduler_totals</code>, <code>run.scheduler_source</code>, and
+<code>run.reconciliation</code> when no raw export was given); the example shows only
+recorded values.</p>
+<p>Per rule: <code>rule</code>, <code>status</code> (<code>completed</code>, <code>failed</code>, <code>cancelled</code>,
+<code>timed_out</code>, <code>skipped</code>, or <code>unknown</code> for an interrupted attempt),
+<code>wall_time_secs</code>, <code>cpu_seconds</code>, <code>user_seconds</code>, <code>system_seconds</code>,
+<code>max_rss_bytes</code>, <code>peak_memory_bytes</code>, <code>io_read_bytes</code>, <code>io_write_bytes</code>,
+<code>gpu_seconds</code>, <code>scheduler_wait_secs</code>, <code>nodes</code>, <code>cores</code>, <code>cost</code>,
+<code>source</code>, and <code>recorded_as</code>.</p>
+<h4 id="unknown-is-never-zero">Unknown is never zero<a class="headerlink" href="#unknown-is-never-zero" title="Permanent link">#</a></h4>
+<p>Every metric is optional. A backend that did not report it leaves the field
+absent in JSON and an empty cell in CSV — never <code>0</code>, which would claim a
+measurement nobody made. <code>source</code> is always present and says who reported
+what: <code>backend</code> (execution backend), <code>tool</code> (the program that answered),
+optional <code>version</code>, an optional <code>note</code> explaining an absence, and
+<code>raw_fields</code> — the store's own raw values, key-ordered, for auditing the
+conversion. Rules the checkpoint never measured (legacy checkpoints, a rule
+that never executed) carry an <code>unknown</code> source with a note instead of
+plausible-looking numbers. <code>recorded_as</code> marks synthetic
+"outputs up-to-date" completions: the rule did not execute in this run, so
+every metric is absent — including I/O a stale record from an earlier
+attempt might carry — and the source note says so.</p>
+<p>A checkpoint is shared across invocations, so the ledger draws an explicit
+invocation boundary. Every <code>run</code> (local or cluster) begins by marking all
+rules that already have a recorded attempt as <strong>not executed in this
+invocation</strong> (<code>skipped_attempts</code>, kept beside — not inside — <code>rule_runs</code> so
+the last real execution's exit code, command, tails, and timings survive).
+A terminal attempt clears the marker; a skip rewrites it; a crash mid-flight
+leaves it (the invocation did not complete that rule). This covers:</p>
+<ul>
+<li>the all-up-to-date re-run in the same workdir;</li>
+<li>a local subset run (<code>--target</code> / <code>--from-rule</code>), whose preserved
+  completions outside the execution set did not run;</li>
+<li>a cluster re-run with nothing to submit, or a subset submission;</li>
+<li>rules blocked behind a failure.</li>
+</ul>
+<p>Such rules read <code>status: "skipped"</code> with no metrics and a source note naming
+the reason. Without a marker (legacy checkpoints), the pre-boundary behavior
+applies: a completed rule reads as completed with its recorded metrics.</p>
+<p>A benchmark only describes the latest attempt. A benchmark survives a
+failure (<code>mark_failed</code> keeps it for history), and a synthetic completion can
+leave a <code>recorded_as</code> placeholder behind, so the ledger uses a benchmark's
+wall/CPU only when the latest <code>rule_runs</code> attempt is <code>success</code> — or when the
+record predates attempt status (legacy checkpoints). A failed, cancelled, or
+timed-out re-execution renders its own recorded start/finish duration and its
+<code>resource_usage</code> (CPU, peak RSS, I/O, source), and counts in
+<code>rules_executed</code> / the <code>--acct</code> executed set even if an earlier invocation
+left a synthetic marker. An old success's wall/CPU never describes the
+failed attempt, and the run totals sum only the current attempt.</p>
+<p>No supported backend reports GPU-seconds, user/system CPU split, a
+control-plane peak-memory metric, or a price today, so <code>gpu_seconds</code>,
+<code>user_seconds</code>, <code>system_seconds</code>, <code>peak_memory_bytes</code>, and <code>cost</code> are
+always absent. The schema reserves their shape; it never invents an amount
+or a currency.</p>
+<h4 id="additive-vs-peak">Additive vs peak<a class="headerlink" href="#additive-vs-peak" title="Permanent link">#</a></h4>
+<p><code>wall_time_secs</code>, <code>cpu_seconds</code>, <code>io_read_bytes</code>, <code>io_write_bytes</code>, and
+<code>scheduler_wait_secs</code> sum across rules. Memory is a <strong>peak</strong>: a rule's
+<code>max_rss_bytes</code> is the maximum resident set size observed, and the run
+total is the maximum across rules — adding peaks would double-count the
+same bytes. <code>rules_total</code> counts every rule the checkpoint mentions;
+<code>rules_executed</code> counts the ones that actually ran in this run — synthetic
+"outputs up-to-date" completions and rules whose latest attempt was an
+up-to-date skip are excluded (completion bookkeeping, not execution). A
+<code>*_complete</code> flag says whether every executed rule reported the metric, so a
+partial sum is never presented as a full one.</p>
+<h4 id="per-backend-sources">Per-backend sources<a class="headerlink" href="#per-backend-sources" title="Permanent link">#</a></h4>
+<table>
+<thead>
+<tr>
+<th>Backend</th>
+<th>Tool</th>
+<th>Fields reported</th>
+<th>Unknown by design</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>local</td>
+<td><code>sysinfo</code> + Linux <code>/proc/&lt;pid&gt;/io</code></td>
+<td>wall time, CPU seconds, peak RSS bytes (sampled subtree), I/O bytes on Linux (every 200 ms tick, including successful attempts)</td>
+<td>scheduler wait, nodes, cores, GPU; I/O off Linux; kernel writeback may under-count <code>write_bytes</code></td>
+</tr>
+<tr>
+<td>SLURM</td>
+<td><code>sacct</code></td>
+<td><code>ElapsedRaw</code>/<code>Elapsed</code>, <code>MaxRSS</code>, <code>TotalCPU</code>, <code>Submit</code>→<code>Start</code> wait, <code>AllocCPUS</code>, <code>NNodes</code>, <code>AveDiskRead</code>/<code>AveDiskWrite</code></td>
+<td>fields the store omits (each stays absent)</td>
+</tr>
+<tr>
+<td>PBS</td>
+<td><code>qstat -x</code></td>
+<td><code>resources_used.walltime</code>, <code>.mem</code>, <code>.cput</code></td>
+<td>scheduler wait, I/O, allocation</td>
+</tr>
+<tr>
+<td>SGE</td>
+<td><code>qacct</code></td>
+<td><code>ru_wallclock</code>, <code>ru_maxrss</code>, <code>cpu</code></td>
+<td>scheduler wait, I/O, allocation</td>
+</tr>
+<tr>
+<td>LSF</td>
+<td><code>bacct</code></td>
+<td>terminal state only (source note says so)</td>
+<td>elapsed, memory, CPU, I/O, wait</td>
+</tr>
+<tr>
+<td>SLURM without <code>slurmdbd</code></td>
+<td><code>scontrol</code></td>
+<td><code>JobState</code>, <code>ExitCode</code></td>
+<td>every measurement</td>
+</tr>
+<tr>
+<td>Kubernetes / AWS Batch / GCP Batch / Tencent Batch</td>
+<td>—</td>
+<td>none (no accounting API in this adapter)</td>
+<td>every measurement; the source note names the backend</td>
+</tr>
+</tbody>
+</table>
+<p><code>MaxRSS</code> and <code>TotalCPU</code> come from the step rows, where SLURM records them;
+the reported figure is the maximum across the job's rows (the allocation
+and <code>.batch</code> rows describe the same work, so summing would double-count).
+Memory figures accept SLURM's qualifiers positionally: <code>512Mn</code>/<code>512Kc</code>/
+<code>512Mc</code> keep the preceding unit (per-node/per-core), while a bare
+<code>&lt;number&gt;c</code> is the byte unit and a plain <code>&lt;number&gt;</code> is kilobytes; zero with
+any suffix is unknown. A store that emits <code>c</code> with the other meaning falls
+outside this mapping (see the <code>--acct</code> grammar above).
+<code>AveDiskRead</code>/<code>AveDiskWrite</code> are per-task averages; the engine submits one
+task per job, so the average is the rule's total.</p>
+<h4 id="reconciliation-with-acct">Reconciliation with <code>--acct</code><a class="headerlink" href="#reconciliation-with-acct" title="Permanent link">#</a></h4>
+<p>Passing <code>--acct &lt;CSV&gt;</code> to a ledger run treats that export as the raw
+scheduler side of a reconciliation. This requires <code>-f json</code> (the default):
+<code>-f csv</code> combined with <code>--acct</code> is a usage error (exit <code>1</code>) raised before
+the file is read, because the CSV surface has no scheduler-total,
+reconciliation, or conflict columns — silently dropping the comparison
+would present a clean table for a check that never happened. Rows are first
+<strong>reduced to the rules that actually executed in this run</strong> — a whole-account
+export (<code>sacct -a</code>) may contain unrelated jobs, which are ignored rather
+than allowed to inflate the raw side. The note reports them as job names <strong>not matched to an
+executed rule</strong> (not "not executed": a site may truncate job names, or array
+elements may share one base name), with the count and up to five names in
+<code>run.scheduler_source.note</code>. The remaining merged batch rows are summed into
+<code>run.scheduler_totals</code> (same shape as <code>run.totals</code>) and compared with the
+checkpoint's per-rule sums.</p>
+<p>The raw side always carries its own provenance in
+<code>run.scheduler_source</code> (backend, tool, version/note/raw fields), present
+exactly when <code>run.scheduler_totals</code> is. <code>run.reconciliation</code> records what the
+comparison actually did: <code>covered_rules</code>, <code>compared_metrics</code>,
+<code>skipped_metrics</code> (each with a reason such as an incomplete side or a
+coverage gap), and a human <code>note</code> — so an agreeing comparison is
+distinguishable from one that never happened.</p>
+<p>A disagreement beyond the tolerance — 5% of the larger value, with a 1 s
+floor for time and a 1 MiB floor for memory — is listed under
+<code>run.conflicts</code>, naming both numbers and both sources; the ledger reports
+the disagreement instead of picking a winner. A metric is compared only when
+both sides are complete and the export covers every executed rule: a
+coverage gap is not a numeric conflict. sacct's bare <code>MaxRSS=0</code> is SLURM's
+"not reported" sentinel and is treated as unknown (never a measured zero),
+matching the core parser.</p>
+<h4 id="csv-format">CSV format<a class="headerlink" href="#csv-format" title="Permanent link">#</a></h4>
+<p>One row per rule plus a <code>TOTAL</code> row. Column names are stable:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-21-1"><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a>record_type,rule,status,wall_time_secs,cpu_seconds,user_seconds,system_seconds,
+</span><span id="__span-21-2"><a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a>max_rss_bytes,peak_memory_bytes,io_read_bytes,io_write_bytes,
+</span><span id="__span-21-3"><a id="__codelineno-21-3" name="__codelineno-21-3" href="#__codelineno-21-3"></a>scheduler_wait_secs,nodes,cores,gpu_seconds,cost_amount,cost_currency,
+</span><span id="__span-21-4"><a id="__codelineno-21-4" name="__codelineno-21-4" href="#__codelineno-21-4"></a>cost_method,source_backend,source_tool,source_version,source_note,
+</span><span id="__span-21-5"><a id="__codelineno-21-5" name="__codelineno-21-5" href="#__codelineno-21-5"></a>source_raw_fields,recorded_as,incomplete_metrics
+</span></code></pre></div>
+<p>Unknown values are empty cells. Seconds render with millisecond precision
+(<code>10.000</code>); bytes are integers. The reserved metric columns
+(<code>user_seconds</code>, <code>system_seconds</code>, <code>peak_memory_bytes</code>) mirror the JSON
+schema and stay empty until a backend reports them — they are carried now
+so a future measurement cannot silently reach JSON consumers only.
+<code>source_raw_fields</code> is the same key-ordered scheduler field map JSON
+carries, serialized as compact JSON in one quoted cell (empty when the
+source recorded none). The <code>TOTAL</code> row leaves rule-only columns empty and
+lists any partially reported metrics in <code>incomplete_metrics</code> (the same
+information as the JSON <code>*_complete</code> flags).</p>
 <h3 id="benchmarks-cpu-column">Benchmarks CPU column<a class="headerlink" href="#benchmarks-cpu-column" title="Permanent link">#</a></h3>
 <p>On <strong>local</strong> runs the <strong>Benchmarks</strong> table's CPU column shows <strong>sampled</strong>
 CPU seconds: the executor's sampler reads each rule process's CPU time (all

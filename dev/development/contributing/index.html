@@ -4709,8 +4709,10 @@ the window before adding retries.</p>
 </span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="c1">#       cargo build, cargo test, schema-drift, skill-drift, version-check,</span>
 </span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="c1">#       cargo audit, cargo-deny, aws-legacy-tripwire (fails if the legacy AWS</span>
 </span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="c1">#       TLS stack re-enters the s3-storage graph), issue-id-tripwire (fails if</span>
-</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="c1">#       internal issue IDs leak into user-facing pages), secrets scan, docs</span>
-</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="c1">#       build, frontend-lint, eval-tests, eval-lint, extension-test</span>
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="c1">#       internal issue IDs leak into user-facing pages), npmmirror-tripwire,</span>
+</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="c1">#       truthset-stamp, secrets scan, docs build, docs-lint, frontend-lint,</span>
+</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="c1">#       eval-tests, eval-lint, provenance-check, reports-regen, claims-check,</span>
+</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="c1">#       extension-test</span>
 </span></code></pre></div>
 <hr />
 <h2 id="project-structure">Project Structure<a class="headerlink" href="#project-structure" title="Permanent link">#</a></h2>
@@ -4776,7 +4778,7 @@ the window before adding retries.</p>
 <h3 id="3-run-ci-checks">3. Run CI checks<a class="headerlink" href="#3-run-ci-checks" title="Permanent link">#</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>make<span class="w"> </span>ci
 </span></code></pre></div>
-<p>All seventeen checks must pass:</p>
+<p>All required checks must pass:</p>
 <ul class="task-list">
 <li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled checked/><span class="task-list-indicator"></span></label> <code>cargo fmt -- --check</code></li>
 <li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled checked/><span class="task-list-indicator"></span></label> <code>cargo clippy --workspace --all-targets -- -D warnings</code></li>
@@ -4789,11 +4791,17 @@ the window before adding retries.</p>
 <li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled checked/><span class="task-list-indicator"></span></label> <code>cargo deny check</code></li>
 <li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled checked/><span class="task-list-indicator"></span></label> <code>aws-legacy-tripwire</code> (legacy AWS TLS stack stays out of the s3-storage graph)</li>
 <li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled checked/><span class="task-list-indicator"></span></label> <code>issue-id-tripwire</code> (no internal issue IDs in user-facing pages)</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled checked/><span class="task-list-indicator"></span></label> <code>npmmirror-tripwire</code> (package-lock resolved URLs use the canonical npm registry)</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled checked/><span class="task-list-indicator"></span></label> <code>truthset-stamp</code> (BioType truth-set evidence is reproducible from its stamped commit)</li>
 <li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled checked/><span class="task-list-indicator"></span></label> <code>secrets</code> scan</li>
 <li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled checked/><span class="task-list-indicator"></span></label> <code>docs</code> build (rustdoc with warnings denied)</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled checked/><span class="task-list-indicator"></span></label> <code>docs-lint</code> (MD032 blank-line-before-list gate)</li>
 <li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled checked/><span class="task-list-indicator"></span></label> <code>frontend-lint</code></li>
 <li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled checked/><span class="task-list-indicator"></span></label> <code>eval-tests</code></li>
 <li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled checked/><span class="task-list-indicator"></span></label> <code>eval-lint</code></li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled checked/><span class="task-list-indicator"></span></label> <code>provenance-check</code> (publication artifacts carry provenance)</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled checked/><span class="task-list-indicator"></span></label> <code>reports-regen</code> (checked-in reports regenerate from their harnesses)</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled checked/><span class="task-list-indicator"></span></label> <code>claims-check</code> (quantitative and maturity claims in README/ROADMAP/vision match their machine-readable sources, registry in <code>docs/claims.json</code>)</li>
 <li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled checked/><span class="task-list-indicator"></span></label> <code>extension-test</code> (VS Code extension fast gate)</li>
 </ul>
 <h3 id="4-commit-with-conventional-commits">4. Commit with Conventional Commits<a class="headerlink" href="#4-commit-with-conventional-commits" title="Permanent link">#</a></h3>

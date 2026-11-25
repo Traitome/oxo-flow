@@ -3739,6 +3739,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Provider failure handling">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#web-translate-provider-fallback" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Web translate provider fallback
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -4619,6 +4636,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Provider failure handling">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#web-translate-provider-fallback" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Web translate provider fallback
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -5090,6 +5124,37 @@ is fail-closed end to end:</p>
   orchestrator run that pairs Ollama with a non-empty tool registry logs a
   one-time warning.</li>
 </ul>
+<h3 id="web-translate-provider-fallback">Web translate provider fallback<a class="headerlink" href="#web-translate-provider-fallback" title="Permanent link">#</a></h3>
+<p><code>POST /api/ai/translate</code> is the only surface with a cross-provider fallback
+chain (the CLI and web chat resolve one provider). By default (<code>auto</code>) it
+tries, in order: the acting user's provider, the configured runtime
+provider, then env-discovered Claude/OpenAI/Ollama — the same chain that
+keeps an intent translatable when one credential is exhausted. The response
+is attributable: top-level <code>provider</code>, <code>model</code>, <code>fallback_used</code>, and
+<code>attempts[]</code> (<code>{provider, model, success, reason}</code>) describe exactly which
+backend produced the pipeline and why earlier attempts failed (a cache hit
+returns the original attribution). Every fallback logs a warning naming the
+from/to provider, model, and the prior failure. When the chain is exhausted
+the structured <code>400 AI_TRANSLATE_ERROR</code> names the last provider/model and
+the orchestrator cause (for example <code>Agent exceeded max rounds (10)</code>). A
+provider-side timeout's <code>504 AI_TIMEOUT</code> <code>detail</code> names the last attempted
+provider; expiry of the whole-route budget returns the generic 504 detail
+(the chain future is dropped before the last attempt is known).</p>
+<p><strong>A billed attempt is terminal.</strong> A failure that may already have billed the
+provider — max-round exhaustion, an empty or invalid response, a tool error
+— stops the chain instead of trying the next candidate, so a second
+credential cannot pay twice for one generation. Only failures with no
+completion evidence (network, authentication, rate limit, HTTP 5xx,
+timeout) fall through to the next provider. An <code>Agent exceeded max rounds</code>
+attempt therefore cannot be rescued by a fallback: with <code>auto</code> the request
+still ends with the exhausted-chain <code>400</code>, naming the max-round cause.</p>
+<p>Set <code>OXO_FLOW_AI_FALLBACK=disabled</code> to limit the chain to the first usable
+provider (the acting user's, else the runtime). This is the spend-boundary
+switch: an explicit provider pin can then never run on another credential.
+An explicit <code>OXO_FLOW_AI_PROVIDER</code> alone does NOT disable the chain — the
+default <code>auto</code> keeps it for resilience — so set this knob when the pin must
+be absolute. Unrecognized values warn and keep <code>auto</code>. Attribution never
+includes an API key or endpoint URL.</p>
 <hr />
 <h2 id="configuration">Configuration<a class="headerlink" href="#configuration" title="Permanent link">#</a></h2>
 <h3 id="global-config-oxo-flowai_configjson">Global Config (<code>~/.oxo-flow/ai_config.json</code>)<a class="headerlink" href="#global-config-oxo-flowai_configjson" title="Permanent link">#</a></h3>
@@ -5275,13 +5340,18 @@ repository.</p>
 </tr>
 <tr>
 <td><code>OXO_FLOW_AI_MAX_TOKENS</code></td>
-<td>Output-token ceiling for the Anthropic Messages backend. Calibrated for thinking-style backends whose reasoning blocks count against <code>max_tokens</code> (e.g. DeepSeek or GLM behind an Anthropic-compatible endpoint) — the old 4096 default truncated before any text was produced</td>
-<td><code>16384</code></td>
+<td>Output-token ceiling. The Anthropic Messages backend always sends it; calibrated for thinking-style backends whose reasoning blocks count against <code>max_tokens</code> (e.g. DeepSeek or GLM behind an Anthropic-compatible endpoint) — the old 4096 default truncated before any text was produced. OpenAI-compatible requests send it as <code>max_tokens</code> ONLY when this variable is explicitly set (unset = omit the field and use the endpoint's default; invalid values warn once and stay omitted). The field is deliberately <code>max_tokens</code> — the shape every tested gateway accepts; endpoints that demand <code>max_completion_tokens</code> (some OpenAI reasoning models) are not auto-mapped, so leave the knob unset there. Ollama ignores it</td>
+<td><code>16384</code> (Claude) / unset (OpenAI-compatible)</td>
 </tr>
 <tr>
 <td><code>OXO_FLOW_AI_CONTEXT_TOKENS</code></td>
-<td>Declared context window for Anthropic-compatible third-party proxies fronting a smaller model (e.g. <code>131072</code>). The Claude backend clamps <code>max_tokens</code> per request: estimated input size (safety-factored) is subtracted from the window before the output budget is sent, floored at 1024. Unset = no clamping (real Anthropic models size the window server-side)</td>
+<td>Declared context window for third-party proxies fronting a smaller model (e.g. <code>131072</code>). The shared estimator/clamp subtracts estimated input size (1.5× safety factor + 4096-token margin, floored at 1024) from the window before the output budget is sent. Applies always on the Claude backend, and on OpenAI-compatible requests only when <code>OXO_FLOW_AI_MAX_TOKENS</code> is explicitly set. Unset = no clamping (real Anthropic models size the window server-side). Ollama ignores it</td>
 <td>unset</td>
+</tr>
+<tr>
+<td><code>OXO_FLOW_AI_FALLBACK</code></td>
+<td>Web <code>POST /api/ai/translate</code> provider-fallback policy: <code>auto</code> keeps the chain (acting user's provider → configured runtime → env-discovered Claude/OpenAI/Ollama) and logs a warning on every fallback; <code>disabled</code> limits the chain to the first usable provider (acting user's, else runtime), so a provider pin cannot spend another credential. Unrecognized values warn and keep <code>auto</code>. No effect on the CLI or web chat, which use one resolved provider</td>
+<td><code>auto</code></td>
 </tr>
 <tr>
 <td><code>OXO_FLOW_AI_TIMEOUT_SECS</code></td>

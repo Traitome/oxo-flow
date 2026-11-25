@@ -4801,7 +4801,7 @@ execution substrate.</p>
     subgraph world["Execution substrate"]
         fs["Working directory&lt;br/&gt;inputs / outputs / logs"]
         env["Environment engines&lt;br/&gt;conda · mamba · pixi&lt;br/&gt;docker · singularity&lt;br/&gt;venv · modules · system"]
-        hpc["HPC schedulers&lt;br/&gt;SLURM · PBS · SGE · LSF&lt;br/&gt;k8s · AWS Batch · GCP Batch"]
+        hpc["HPC schedulers&lt;br/&gt;SLURM · PBS · SGE · LSF&lt;br/&gt;k8s · AWS Batch · GCP Batch · Tencent Batch"]
         obj["Object storage&lt;br/&gt;S3 · GCS"]
         llm["LLM providers&lt;br/&gt;DeepSeek · Claude&lt;br/&gt;OpenAI-compatible · Ollama"]
         git["Git remotes&lt;br/&gt;workflow repositories"]
@@ -4929,7 +4929,7 @@ the execution layer knows the planning layer's outputs, never the reverse.</p>
         direction LR
         envm["environment.rs&lt;br/&gt;8 backends"]
         storm["storage/&lt;br/&gt;local · s3 · gcs"]
-        clum["cluster.rs&lt;br/&gt;7 backends: SLURM · PBS · SGE · LSF&lt;br/&gt;k8s · AWS Batch · GCP Batch"]
+        clum["cluster.rs&lt;br/&gt;8 backends: SLURM · PBS · SGE · LSF&lt;br/&gt;k8s · AWS Batch · GCP Batch · Tencent Batch"]
         misc["report · container&lt;br/&gt;webhook · git · format"]
     end
 
@@ -5437,7 +5437,7 @@ taught a schema the engine rejects (Snakemake-style tables → <a href="../gloss
 <tr>
 <td>Provider resolution</td>
 <td>env / <code>ai_config.json</code></td>
-<td>per-user → server → env, with Claude/OpenAI/Ollama fallback chain</td>
+<td>per-user → server → env, with a Claude/OpenAI/Ollama fallback chain (<code>OXO_FLOW_AI_FALLBACK=disabled</code> limits it to the first usable provider; responses carry provider/model/fallback attribution)</td>
 <td>per-user → server → env</td>
 </tr>
 <tr>
@@ -5474,22 +5474,26 @@ taught a schema the engine rejects (Snakemake-style tables → <a href="../gloss
 </table>
 <p>Two provider-level ceilings matter for thinking-style backends (models
 that emit reasoning blocks counting against the output budget):
-<code>OXO_FLOW_AI_MAX_TOKENS</code> (default 16384 — the old 4096 was consumed by
-reasoning blocks before any TOML; 16384 clears thinking with room for the
-draft) and
+<code>OXO_FLOW_AI_MAX_TOKENS</code> (default 16384 on the Claude backend — the old 4096
+was consumed by reasoning blocks before any TOML; 16384 clears thinking with
+room for the draft; on OpenAI-compatible requests the field is sent only
+when the variable is explicitly set, so unconfigured deployments keep the
+endpoint's default) and
 <code>OXO_FLOW_AI_TIMEOUT_SECS</code> (default 300 — non-thinking generations run
 12–20 s, but a single thinking round routinely passes two minutes; a
 measured GLM round took 145 s, which the old 120 s default killed
 mid-round). A third knob covers third-party Anthropic-compatible proxies
 fronting a <em>smaller</em> model: <code>OXO_FLOW_AI_CONTEXT_TOKENS</code> declares the
 endpoint's full context window (e.g. 131072 for a GLM/DeepSeek relay that
-rejects overflow with HTTP 400), and the Claude backend then clamps
-<code>max_tokens</code> per request — estimated input size (UTF-16-weighted chars/4
-with a 1.5× safety factor and 4096-token margin) is subtracted from the
-window before the configured output budget is sent, floored at 1024 so a
-hopelessly oversized request still reaches the server and its 400 drives
-the transcript-compression retry. Unset, the budget is sent as configured
-(real Anthropic models size their window server-side). Below the
+rejects overflow with HTTP 400), and the backend then clamps <code>max_tokens</code>
+per request — estimated input size (UTF-16-weighted chars/4 with a 1.5×
+safety factor and 4096-token margin) is subtracted from the window before
+the configured output budget is sent, floored at 1024 so a hopelessly
+oversized request still reaches the server and its 400 drives the
+transcript-compression retry. Clamping is always on for Claude; on
+OpenAI-compatible requests it applies when <code>OXO_FLOW_AI_MAX_TOKENS</code> is
+explicitly set. Unset context, the budget is sent as configured (real
+Anthropic models size their window server-side). Below the
 orchestrator, the
 provider backends retry transient transport failures (dropped or
 reset connections, response bodies that fail to decode), plus the

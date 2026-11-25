@@ -1667,6 +1667,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Monitoring Jobs">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#resource-ledger-and-scheduler-limits" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Resource ledger and scheduler limits
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -4620,6 +4637,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Monitoring Jobs">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#resource-ledger-and-scheduler-limits" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Resource ledger and scheduler limits
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -5560,6 +5594,90 @@ once (<code>export OXO_FLOW_CLUSTER_BACKEND=pbs</code>). An explicit-but-typoed 
 is still rejected outright (<code>unknown cluster backend '…' — expected slurm,
 pbs, sge, lsf, kubernetes (k8s), aws-batch, gcp-batch, or tencent-batch
 (Tencent Cloud BatchCompute)</code>) — the default never swallows a bad name.</p>
+<h3 id="resource-ledger-and-scheduler-limits">Resource ledger and scheduler limits<a class="headerlink" href="#resource-ledger-and-scheduler-limits" title="Permanent link">#</a></h3>
+<p><code>oxo-flow report --run &lt;DIR&gt; --resource-ledger</code> turns the stored accounting
+records into the normalized <code>oxo-flow.resource-ledger/v1</code> document (JSON or
+CSV — see
+<a href="../../commands/report/#resource-ledger-resource-ledger"><code>report</code></a>). The
+cluster path persists the scheduler's measurements in the checkpoint's
+<code>resource_usage</code> map together with the program that answered, so every
+number in the ledger can be traced back to a raw field.</p>
+<p>What each scheduler can supply:</p>
+<table>
+<thead>
+<tr>
+<th>Scheduler</th>
+<th>Accounting source</th>
+<th>Reported</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>SLURM</td>
+<td><code>sacct</code></td>
+<td>exit code, <code>ElapsedRaw</code>/<code>Elapsed</code>, <code>MaxRSS</code>, <code>TotalCPU</code>, <code>Submit</code>→<code>Start</code> wait, <code>AllocCPUS</code>, <code>NNodes</code>, <code>AveDiskRead</code>/<code>AveDiskWrite</code></td>
+</tr>
+<tr>
+<td>PBS</td>
+<td><code>qstat -x</code></td>
+<td>exit code, <code>resources_used.walltime</code> / <code>.mem</code> / <code>.cput</code></td>
+</tr>
+<tr>
+<td>SGE</td>
+<td><code>qacct</code></td>
+<td>exit code, <code>ru_wallclock</code>, <code>ru_maxrss</code>, <code>cpu</code></td>
+</tr>
+<tr>
+<td>LSF</td>
+<td><code>bacct</code></td>
+<td>terminal state only</td>
+</tr>
+<tr>
+<td>SLURM without <code>slurmdbd</code></td>
+<td><code>scontrol</code></td>
+<td><code>JobState</code> + <code>ExitCode</code> (controller cache only)</td>
+</tr>
+<tr>
+<td>Kubernetes / AWS Batch / GCP Batch / Tencent Batch</td>
+<td>—</td>
+<td>nothing; the ledger carries a source note, not a fabricated zero</td>
+</tr>
+</tbody>
+</table>
+<p>Limits worth knowing before comparing numbers:</p>
+<ul>
+<li><strong><code>sacct</code> omissions are honored.</strong> A site whose accounting store leaves a
+  column blank (or a store that predates the extended <code>--format</code> request)
+  gets <code>null</code>/an empty CSV cell for that metric, never <code>0</code>. The same applies
+  to every cloud backend: no accounting API is called, so every measurement
+  is unknown rather than assumed.</li>
+<li><strong>Memory is a peak.</strong> <code>MaxRSS</code> is the maximum over the job's step rows
+  (the allocation and <code>.batch</code> rows describe the same work, so summing them
+  would double-count). The ledger's run-level memory is the maximum across
+  rules.</li>
+<li><strong>Array elements on PBS/LSF/SGE are aggregate verdicts.</strong> This adapter
+  polls those backends by the array base id; the record names its provenance
+  in <code>skip_reason</code> and withdraws the aggregate's exit code, memory, and CPU.
+  The ledger reports those elements' measurements as unknown instead of
+  attributing the aggregate to one element.</li>
+<li><strong>Invocation boundary.</strong> Every cluster run marks previously recorded
+  rules as not executed before submitting anything; a rule that settles
+  clears its mark, while a no-op re-run (nothing to submit), a subset
+  submission, or a rule blocked behind a failure stays marked. The ledger
+  therefore reports a cluster no-op as <code>rules_executed: 0</code> rather than
+  recycling the earlier run's benchmarks.</li>
+<li><strong>Reconcile with an independent export.</strong> <code>--resource-ledger --acct
+  &lt;sacct.csv&gt;</code> (JSON only — CSV has no reconciliation columns, so
+  <code>-f csv</code> + <code>--acct</code> fails closed as a usage error) reduces the CSV to the rules that executed in this run (a
+  whole-account <code>sacct -a</code> export's unrelated jobs are ignored and counted
+  in the source note), sums the remaining batch rows into
+  <code>run.scheduler_totals</code>, and names that raw side's own provenance in
+  <code>run.scheduler_source</code>. Disagreements beyond 5 % (1 s / 1 MiB floor) are
+  listed under <code>run.conflicts</code>, naming both numbers and both sources;
+  <code>run.reconciliation</code> records which metrics were compared and which were
+  skipped (and why). A CSV that does not cover every executed rule is
+  treated as a coverage gap, not a conflict.</li>
+</ul>
 <hr />
 <h2 id="driver-defaults-and-the-cluster-profile-block">Driver Defaults and the <code>[cluster]</code> Profile Block<a class="headerlink" href="#driver-defaults-and-the-cluster-profile-block" title="Permanent link">#</a></h2>
 <p><code>run --profile</code> submits and tracks jobs through the backend driver, whose
