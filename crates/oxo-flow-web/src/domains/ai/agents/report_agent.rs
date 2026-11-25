@@ -170,10 +170,14 @@ fn build_narrative(
             oxo_flow_core::plural(total, "output file", "output files")
         ));
     }
-    md.push_str(&format!(
-        "Total output size: **{}**.\n\n",
-        qc_summary["total_size_mb"].as_str().unwrap_or("unknown")
-    ));
+    // The structured field stays a unitless number string (chart/stat-card
+    // consumers); the narrative adds the unit so a reader never sees a bare
+    // "Total output size: **0.0**" (audit M6).
+    let total_size_mb = qc_summary["total_size_mb"]
+        .as_str()
+        .map(|size| format!("{size} MB"))
+        .unwrap_or_else(|| "unknown".to_string());
+    md.push_str(&format!("Total output size: **{total_size_mb}**.\n\n"));
 
     if !findings.is_empty() {
         md.push_str("## Key Findings\n\n");
@@ -762,6 +766,27 @@ mod tests {
         assert!(
             charts.iter().any(|c| c.chart_type == "volcano"),
             "RNA-seq should suggest volcano"
+        );
+    }
+
+    /// Audit M6: the narrative prints a unit; the structured field stays a
+    /// unitless number string for the stat-card/chart consumers.
+    #[test]
+    fn narrative_output_size_carries_the_mb_unit() {
+        let files = vec![ReportFile {
+            path: "/results/out.bam".into(),
+            name: "out.bam".into(),
+            size_bytes: 1_048_576,
+            is_dir: false,
+        }];
+        let report = generate_report("p", &files, "", &[], "completed", Vec::new());
+        assert_eq!(report.qc_summary["total_size_mb"], "1.0");
+        assert!(
+            report
+                .narrative_md
+                .contains("Total output size: **1.0 MB**"),
+            "{}",
+            report.narrative_md
         );
     }
 }

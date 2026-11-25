@@ -422,6 +422,7 @@ pub async fn get_webhook_config(
     put,
     path = "/api/webhook",
     tag = "observability",
+    request_body = serde_json::Value,
     responses(
         (status = 200, description = "Success", body = serde_json::Value),
         (status = 403, description = "Error", body = ApiError),

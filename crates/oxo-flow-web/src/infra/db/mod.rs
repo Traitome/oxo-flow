@@ -384,6 +384,14 @@ pub trait StorageBackend: Send + Sync {
         &self,
         user_id: Option<&str>,
     ) -> Result<Option<models::AiProviderConfigRow>, String>;
+    /// Persist an AI provider row and return the row AS STORED.
+    ///
+    /// When `preserve_api_key` is true, an existing row's `api_key` is kept
+    /// and `config.api_key` is ignored. Both backends re-read the row after
+    /// the write, so the return value reflects the durable key/provider
+    /// values (callers rely on this for blank-key saves and runtime
+    /// activation — a backend returning the input row would reintroduce the
+    /// blank-key activation bug).
     async fn save_ai_provider_config(
         &self,
         config: &models::AiProviderConfigRow,

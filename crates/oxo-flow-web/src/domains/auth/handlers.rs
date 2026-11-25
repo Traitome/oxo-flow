@@ -201,6 +201,7 @@ async fn resolve_admin(
     post,
     path = "/api/auth/login",
     tag = "auth",
+    request_body = LoginRequest,
     responses(
         (status = 200, description = "Success", body = LoginResponse),
         (status = 401, description = "Error", body = ApiError),
@@ -533,6 +534,7 @@ pub async fn list_users(headers: axum::http::HeaderMap) -> ApiResult<Vec<UserRes
     post,
     path = "/api/users",
     tag = "auth",
+    request_body = CreateUserRequest,
     security(("bearerAuth" = [])),
     responses(
         (status = 200, description = "Success", body = UserResponse),
@@ -665,6 +667,7 @@ pub async fn license_status() -> ApiResult<LicenseResponse> {
     post,
     path = "/api/auth/oauth/authorize",
     tag = "auth",
+    request_body = OAuthAuthorizeRequest,
     responses(
         (status = 200, description = "Success", body = OAuthAuthorizeResponse),
         (status = 400, description = "Error", body = ApiError),
@@ -726,6 +729,7 @@ pub async fn oauth_authorize(
     post,
     path = "/api/auth/oauth/callback",
     tag = "auth",
+    request_body = OAuthCallbackRequest,
     responses(
         (status = 200, description = "Success", body = OAuthCallbackResponse),
         (status = 400, description = "Error", body = ApiError),
@@ -918,6 +922,7 @@ async fn oauth_callback_inner(
     post,
     path = "/api/license/upload",
     tag = "license",
+    request_body = serde_json::Value,
     responses(
         (status = 200, description = "Success", body = LicenseResponse),
         (status = 400, description = "Error", body = ApiError),

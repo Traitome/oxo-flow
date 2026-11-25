@@ -99,6 +99,7 @@ pub async fn fork_pipeline(
     post,
     path = "/api/pipelines/{id}/share",
     tag = "collaboration",
+    request_body = ShareRequest,
     responses(
         (status = 200, description = "Success", body = ShareResponse),
         (status = 404, description = "Error", body = ApiError),
@@ -203,6 +204,7 @@ pub async fn share_pipeline(
     post,
     path = "/api/pipelines/import",
     tag = "collaboration",
+    request_body = ImportRequest,
     responses(
         (status = 200, description = "Success", body = ImportResponse),
         (status = 400, description = "Error", body = ApiError),

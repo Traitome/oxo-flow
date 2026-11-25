@@ -209,12 +209,22 @@ export interface AiConfig { provider: string; model: string | null; api_url: str
  *  with an explicit field-level provenance map for the status panel. */
 export interface AiConfigEffective {
   effective: AiConfig;
+  /** Whether `OXO_FLOW_AI_PROVIDER=disabled` pins the runtime off. */
+  disabled_by_env?: boolean;
   tiers: {
     env_provider: string | null; env_model: string | null; env_url: string | null;
-    server_provider: string; server_model: string | null;
+    server_provider: string | null; server_model: string | null; server_api_url?: string | null;
     user_provider: string | null; user_model: string | null; user_api_url: string | null;
   };
   resolution_order: string[];
+}
+/** PUT /api/ai/config/server|user — the durable tier write response. */
+export interface AiConfigPersistResponse {
+  status: string;
+  provider: string;
+  applied_to_runtime: boolean;
+  /** True under the OXO_FLOW_AI_PROVIDER=disabled pin (the row saved, runtime unchanged). */
+  disabled_by_env?: boolean;
 }
 export interface AiExplainResponse { summary: string; root_cause: { rule: string; error_type: string; evidence: string; confidence: number } | null; fix_suggestion: { action: string; automated: boolean; estimated_impact: string } | null; }
 

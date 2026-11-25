@@ -79,6 +79,13 @@ export default function Settings() {
   const [apiKeys, setApiKeys] = useState<Array<{ id: string; name: string; created_at: string; last_used_at: string | null }>>([]);
   const [newKeyName, setNewKeyName] = useState('');
   const [loadErrors, setLoadErrors] = useState<string[]>([]);
+  // Role-aware Settings (Task 7b I1/M8): the primary Save writes the shared
+  // server tier for an admin (personal mode's local operator is the admin)
+  // and the caller's own user tier otherwise; admin-only sections (webhook)
+  // are not fetched for roles the route would reject.
+  const [isAdmin, setIsAdmin] = useState(false);
+  // Until the role is known, Save must not guess a tier (review Minor 4).
+  const [roleResolved, setRoleResolved] = useState(false);
 
   const loadApiKeys = async () => {
     try { setApiKeys(await api.listApiKeys()); } catch { setApiKeys([]); }
@@ -92,48 +99,104 @@ export default function Settings() {
     // from "the webhook endpoint 500'd". Collect every failure and
     // surface the list once all loaders settle — the same treatment the
     // quota loader already gets via setNotice.
+    let cancelled = false;
     const failures: string[] = [];
     const loadFailed = (key: string) => (err: unknown) => { failures.push(describeApiError(err, t(key))); };
-    Promise.allSettled([
-      api.health().then(setHealth).catch(loadFailed('settings.loadFailed.health')),
-      api.aiConfig().then((c) => { setAiConfig(c); setProvider(c.provider); if (c.api_url) setApiUrl(c.api_url); if (c.model) setModel(c.model); }).catch(loadFailed('settings.loadFailed.aiConfig')),
-      api.aiConfigEffective().then(setEffectiveAiConfig).catch(loadFailed('settings.loadFailed.aiConfigEffective')),
-      api.quota().then((q) => { setQuota(q); setQuotaForm(q.limits); }).catch(() => setNotice(t('settings.quota.loadFailed'))),
-      api.referenceStatus().then(setRefs).catch(loadFailed('settings.loadFailed.references')),
-    api.aiConfigUser().then((c) => {
-      const u = c.user_config as Partial<typeof adv> | undefined;
-      if (u) setAdv({
-        search_enabled: u.search_enabled ?? true,
-        monitor_enabled: u.monitor_enabled ?? true,
-        auto_retry_enabled: u.auto_retry_enabled ?? false,
-        max_correction_rounds: u.max_correction_rounds ?? 3,
-      });
-    }).catch(loadFailed('settings.loadFailed.aiConfigUser')),
-      api.webhookConfig().then(setWebhook).catch(loadFailed('settings.loadFailed.webhook')),
-      api.listApiKeys().then(setApiKeys).catch(() => setApiKeys([])),
-    ]).then(() => setLoadErrors(failures));
+    const load = async () => {
+      // Identity and mode first: they decide whether the admin-only webhook
+      // loader runs and which durable tier Save writes (I1/M8).
+      const [healthResult, meResult] = await Promise.allSettled([api.health(), api.authMe()]);
+      let admin = false;
+      if (healthResult.status === 'fulfilled') {
+        if (!cancelled) setHealth(healthResult.value);
+        // Personal mode is loopback single-user; its operator is the admin.
+        admin = healthResult.value.mode === 'personal';
+      } else {
+        failures.push(describeApiError(healthResult.reason, t('settings.loadFailed.health')));
+      }
+      if (meResult.status === 'fulfilled') {
+        admin = admin || meResult.value.role === 'admin';
+      }
+      if (!cancelled) {
+        setIsAdmin(admin);
+        setRoleResolved(true);
+      }
 
+      const tasks: Array<Promise<unknown>> = [
+        api.aiConfig().then((c) => { setAiConfig(c); setProvider(c.provider); if (c.api_url) setApiUrl(c.api_url); if (c.model) setModel(c.model); }).catch(loadFailed('settings.loadFailed.aiConfig')),
+        api.aiConfigEffective().then(setEffectiveAiConfig).catch(loadFailed('settings.loadFailed.aiConfigEffective')),
+        api.quota().then((q) => { setQuota(q); setQuotaForm(q.limits); }).catch(() => setNotice(t('settings.quota.loadFailed'))),
+        api.referenceStatus().then(setRefs).catch(loadFailed('settings.loadFailed.references')),
+        api.aiConfigUser().then((c) => {
+          const u = c.user_config as Partial<typeof adv> | undefined;
+          if (u) setAdv({
+            search_enabled: u.search_enabled ?? true,
+            monitor_enabled: u.monitor_enabled ?? true,
+            auto_retry_enabled: u.auto_retry_enabled ?? false,
+            max_correction_rounds: u.max_correction_rounds ?? 3,
+          });
+        }).catch(loadFailed('settings.loadFailed.aiConfigUser')),
+        api.listApiKeys().then(setApiKeys).catch(() => setApiKeys([])),
+      ];
+      // The webhook read is admin-only outside personal mode; requesting it
+      // as a regular user only produced a misleading "admin role required"
+      // banner on a page that is theirs (audit M8).
+      if (admin) {
+        tasks.push(api.webhookConfig().then(setWebhook).catch(loadFailed('settings.loadFailed.webhook')));
+      }
+      await Promise.allSettled(tasks);
+      if (!cancelled) setLoadErrors(failures);
+    };
+    void load();
+    return () => { cancelled = true; };
   }, [t]);
 
   const handleSave = async () => {
     setSaving(true); setTestResult(null);
     try {
-      // Two channels (issue #79 §9b claim #9 was falsified: Save only
-      // touched memory and the config vanished on restart):
-      //  1. POST /api/ai/config — reconfigures the live provider now
-      //  2. PUT /api/ai/config/user — persists to DB, restored on startup
-      await api.aiUpdateConfig(provider, apiKey || undefined, apiUrl || undefined, model || undefined);
-      await api.aiUpdateConfigUser({
+      // Role/state-aware durable save (Task 7b I1):
+      //  - admin (personal mode included): PUT /api/ai/config/server — the
+      //    shared tier restored on restart, applied to the runtime by the
+      //    server itself unless the provider is pinned disabled — AND the
+      //    acting user's row, because provider_for() prefers a private row
+      //    (the historical Settings row, or an admin's advanced-options row)
+      //    for that caller's requests (review C1);
+      //  - non-admin: PUT /api/ai/config/user — their own per-call provider,
+      //    skipping the admin-only runtime POST that used to abort the save;
+      //  - under OXO_FLOW_AI_PROVIDER=disabled both PUTs persist and report
+      //    applied_to_runtime:false, which the UI surfaces instead of
+      //    treating the pin as a failed save.
+      const payload = {
         provider,
         api_key: apiKey || undefined,
         api_url: apiUrl || undefined,
         model: model || undefined,
-      });
+        search_enabled: adv.search_enabled,
+        monitor_enabled: adv.monitor_enabled,
+        auto_retry_enabled: adv.auto_retry_enabled,
+        max_correction_rounds: adv.max_correction_rounds,
+      };
+      let saved;
+      if (isAdmin) {
+        saved = await api.aiUpdateConfigServer(payload);
+        // Keep the private row in sync with the shared tier so this admin's
+        // (or personal mode's "default") per-call resolution and the startup
+        // restore use the value the operator just saved.
+        await api.aiUpdateConfigUser(payload);
+      } else {
+        saved = await api.aiUpdateConfigUser(payload);
+      }
       const c = await api.aiConfig(); setAiConfig(c);
       // The status panel renders the resolved chain; refresh it too so a
       // save that changes the model is visible without a reload.
       api.aiConfigEffective().then(setEffectiveAiConfig).catch(() => { /* keep the previous status */ });
-      setTestResult({ ok: true, text: t('settings.ai.saveSuccess').replace('{{provider}}', c.provider) });
+      if (saved.disabled_by_env) {
+        setTestResult({ ok: true, text: t('settings.ai.savePersistedNotApplied').replace('{{provider}}', saved.provider) });
+      } else if (isAdmin) {
+        setTestResult({ ok: true, text: t('settings.ai.saveSuccess').replace('{{provider}}', c.provider || saved.provider) });
+      } else {
+        setTestResult({ ok: true, text: t('settings.ai.saveUserSuccess').replace('{{provider}}', saved.provider) });
+      }
     } catch (err: unknown) {
       const msg = describeApiError(err, t('common.unknownError'));
       setTestResult({ ok: false, text: t('settings.ai.saveFailed').replace('{{error}}', msg) });
@@ -222,8 +285,11 @@ export default function Settings() {
               <div><SettingLabel text={t('settings.ai.model')} /><SettingInput type="text" value={model} onChange={(e) => setModel(e.target.value)} placeholder="deepseek-v4-pro" /></div>
               <div><SettingLabel text={t('settings.ai.url')} /><SettingInput type="text" value={apiUrl} onChange={(e) => setApiUrl(e.target.value)} placeholder="https://api.deepseek.com/v1/chat/completions" /></div>
               <div className="row">
-                <button onClick={handleSave} disabled={saving} className="btn-run">{saving ? t('settings.ai.saving') : t('settings.ai.save')}</button>
-                <button onClick={handleTest} className="action-btn" disabled={testing}>{t('settings.ai.test')}</button>
+                <button onClick={handleSave} disabled={saving || !roleResolved} className="btn-run">{saving ? t('settings.ai.saving') : t('settings.ai.save')}</button>
+                {/* POST /api/ai/test is admin-only outside personal mode
+                    (review Minor 6): a regular user saw an "Admin role
+                    required" error on the page this change role-adapted. */}
+                {isAdmin && <button onClick={handleTest} className="action-btn" disabled={testing}>{t('settings.ai.test')}</button>}
               </div>
               {testResult && <div className={`result-bar ${testResult.ok ? 'success' : 'error'}`} style={{ marginTop: 0 }}>{testResult.text}</div>}
             </div>
@@ -360,6 +426,8 @@ export default function Settings() {
                 <StatCard value={quota.usage.runs_today} label={t('settings.quota.runsToday')} />
               </div>
               <div style={{ color: 'var(--color-text-secondary)', fontWeight: 600, marginBottom: '0.5rem' }}>{t('settings.quota.usage')}</div>
+              {isAdmin ? (
+              <>
               <div className="settings-form" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))' }}>
                 <div>
                   <SettingLabel text={t('settings.quota.maxConcurrent')} htmlFor="settings-quota-max-concurrent" />
@@ -388,6 +456,10 @@ export default function Settings() {
                 </button>
                 <span style={{ fontSize: '0.75rem', color: 'var(--color-text-tertiary)' }}>{t('settings.quota.adminOnly')}</span>
               </div>
+              </>
+              ) : (
+              <span style={{ color: 'var(--color-text-secondary)' }}>{t('settings.quota.adminOnly')}</span>
+              )}
             </>
           ) : (
             <span style={{ color: 'var(--color-text-secondary)' }}>{t('settings.quota.disabled')}</span>
@@ -439,7 +511,8 @@ export default function Settings() {
         </div>
       </Section>
 
-      {/* ── Webhooks (issue #82 P1-12) ── */}
+      {/* ── Webhooks (issue #82 P1-12; admin-only, so hidden otherwise) ── */}
+      {isAdmin && (
       <Section title={t('settings.webhook.title')} icon={<Shield size={16} color="var(--color-primary)" />}>
         <div style={{ fontSize: '0.85rem' }}>
           <p style={{ color: 'var(--color-text-secondary)', marginBottom: '0.5rem' }}>
@@ -480,6 +553,7 @@ export default function Settings() {
           </div>
         </div>
       </Section>
+      )}
 
       {/* ── License ── */}
       <Section title={t('settings.license.title')} icon={<Shield size={16} color="var(--color-primary)" />}>

@@ -9,15 +9,33 @@
 //!
 //! The drift gate is `tests/openapi_gate.rs`: it asserts that every route
 //! registered in [`crate::server::build_router`] is present in the
-//! generated spec, so a new route without an annotation fails CI.
+//! generated spec, every handler parsing `ApiJson<T>` declares a
+//! `request_body`, and every operation declares its security posture
+//! (Task 7b / I3), so a new route missing those annotations fails CI.
 
-use utoipa::openapi::security::{ApiKey, ApiKeyValue, HttpAuthScheme, HttpBuilder, SecurityScheme};
+use utoipa::openapi::path::{Operation, PathItem};
+use utoipa::openapi::security::{
+    ApiKey, ApiKeyValue, HttpAuthScheme, HttpBuilder, SecurityRequirement, SecurityScheme,
+};
 use utoipa::{Modify, OpenApi};
 
-/// Adds `bearerAuth` (opaque server-issued session token) and `apiKey`
-/// (`X-API-Key`) security schemes to the generated OpenAPI document.
-/// Protected endpoints declare which schemes they accept via `security(...)`
-/// in their `#[utoipa::path]` macro.
+/// Name of the session-token scheme (opaque server-issued bearer token).
+const BEARER_AUTH: &str = "bearerAuth";
+/// Name of the machine-credential scheme (`X-API-Key`).
+const API_KEY_AUTH: &str = "apiKey";
+
+/// Adds `bearerAuth` and `apiKey` security schemes and declares the
+/// per-operation requirement for every route (Task 7b / I3).
+///
+/// Before this, only six handlers carried a `security(...)` attribute: a
+/// generated client could not tell which operations need credentials, and
+/// the advertised `apiKey` scheme was never referenced even though the
+/// auth middleware accepts `X-API-Key` on every protected route. The
+/// classification below calls [`crate::server::is_public_route`] — the
+/// SAME predicate the team/hpc auth middleware uses — so the published
+/// spec cannot drift from the runtime gate. Public operations declare an
+/// empty requirement array; protected ones accept either scheme (the
+/// middleware treats them as equivalent credentials).
 ///
 /// `bearerAuth` intentionally carries no `bearerFormat`: session tokens are
 /// opaque random ids persisted server-side, not JWTs, and declaring `"JWT"`
@@ -28,14 +46,53 @@ impl Modify for SecurityAddon {
     fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
         let components = openapi.components.get_or_insert_with(Default::default);
         components.add_security_scheme(
-            "bearerAuth",
+            BEARER_AUTH,
             SecurityScheme::Http(HttpBuilder::new().scheme(HttpAuthScheme::Bearer).build()),
         );
         components.add_security_scheme(
-            "apiKey",
+            API_KEY_AUTH,
             SecurityScheme::ApiKey(ApiKey::Header(ApiKeyValue::new("X-API-Key"))),
         );
+
+        for (path, item) in openapi.paths.paths.iter_mut() {
+            for (method, operation) in path_operations(item) {
+                operation.security = Some(operation_security(path, method));
+            }
+        }
     }
+}
+
+/// Every operation in a [`PathItem`], paired with its uppercase HTTP method.
+fn path_operations(item: &mut PathItem) -> Vec<(&'static str, &mut Operation)> {
+    [
+        ("GET", item.get.as_mut()),
+        ("PUT", item.put.as_mut()),
+        ("POST", item.post.as_mut()),
+        ("DELETE", item.delete.as_mut()),
+        ("PATCH", item.patch.as_mut()),
+        ("OPTIONS", item.options.as_mut()),
+        ("HEAD", item.head.as_mut()),
+        ("TRACE", item.trace.as_mut()),
+    ]
+    .into_iter()
+    .filter_map(|(method, operation)| operation.map(|operation| (method, operation)))
+    .collect()
+}
+
+/// The requirement list for one operation, derived from the auth
+/// middleware's own public-route predicate (anonymous view: no credentials
+/// presented). Returned as `Vec::new()` for public routes so the document
+/// says so explicitly: `"security": []`.
+fn operation_security(path: &str, method: &str) -> Vec<SecurityRequirement> {
+    let method = axum::http::Method::from_bytes(method.as_bytes())
+        .expect("path_operations only emits valid HTTP methods");
+    if crate::server::is_public_route(path, &method, false) {
+        return Vec::new();
+    }
+    vec![
+        SecurityRequirement::new(BEARER_AUTH, Vec::<String>::new()),
+        SecurityRequirement::new(API_KEY_AUTH, Vec::<String>::new()),
+    ]
 }
 
 /// The complete generated OpenAPI document for the oxo-flow web API.
@@ -45,7 +102,19 @@ impl Modify for SecurityAddon {
     info(
         title = "oxo-flow Web API",
         description = "REST API for the oxo-flow bioinformatics pipeline engine: pipeline authoring, run lifecycle, file service, AI assistant, cluster connections, collaboration, and observability.",
-        version = env!("CARGO_PKG_VERSION")
+        version = env!("CARGO_PKG_VERSION"),
+        // Explicit contact/license: utoipa's environment defaults parsed the
+        // workspace authors entry ("Traitome <https://github.com/Traitome>")
+        // as a contact EMAIL ("http") and emitted an empty license name
+        // (the crate uses `license-file`) — audit M2.
+        contact(
+            name = "Traitome",
+            url = "https://github.com/Traitome/oxo-flow"
+        ),
+        license(
+            name = "Academic / Commercial (dual)",
+            url = "https://github.com/Traitome/oxo-flow/blob/main/LICENSE-ACADEMIC"
+        )
     ),
     paths(
         // workflow

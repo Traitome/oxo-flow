@@ -1706,3 +1706,30 @@ async fn dry_run_launches_are_flagged_in_the_run_record() {
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["dry_run"], false, "{body}");
 }
+
+/// Audit M1: a wrong method on a known path must answer the same
+/// `{code, message, detail, suggestion}` envelope as every other error —
+/// the default axum 405 is an empty body.
+#[tokio::test]
+async fn method_not_allowed_answers_the_structured_error_envelope() {
+    ensure_db().await;
+    let app = server::build_router("personal");
+
+    let (status, body) = request(&app, "DELETE", "/api/health", None).await;
+    assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED, "{body}");
+    assert_eq!(body["code"], "METHOD_NOT_ALLOWED", "{body}");
+    assert!(
+        body["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("/api/health")),
+        "{body}"
+    );
+    assert!(
+        body.get("detail").is_some(),
+        "detail must be present: {body}"
+    );
+    assert!(
+        body.get("suggestion").is_some(),
+        "suggestion must be present: {body}"
+    );
+}

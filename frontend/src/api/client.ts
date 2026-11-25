@@ -4,7 +4,7 @@ import type {
   ClusterInfo, ClusterUpsert, ClusterProbeResult, DryRunPreview,
   ValidateResponse, ParseResponse, Pipeline, DagJson, DagStatus,
   RunList, RunDetail, Diagnostics, RetryPlan, RunResponse,
-  AiConfig, AiConfigEffective, AiExplainResponse,
+  AiConfig, AiConfigEffective, AiExplainResponse, AiConfigPersistResponse,
   Template, ForkResponse, ShareResponse, ImportResponse, ShareLanding,
   ReferenceStatus, AuditLogResponse,
   DagEditResponse, MonitorStatus, RunInstance,
@@ -312,7 +312,12 @@ export const api = {
   aiConfigUser: () => get<UserAiConfig>('/api/ai/config/user'),
   aiUpdateConfig: (provider: string, apiKey?: string, apiUrl?: string, model?: string) =>
     post<AiConfig>('/api/ai/config', { provider, api_key: apiKey, api_url: apiUrl, model }),
-  aiUpdateConfigUser: (cfg: AiConfigUpdate) => put<{ status: string }>('/api/ai/config/user', cfg),
+  // Durable shared tier (admin-only outside personal mode). The server
+  // applies it to the runtime itself unless the provider is pinned
+  // disabled, which the response reports as applied_to_runtime:false.
+  aiUpdateConfigServer: (cfg: AiConfigUpdate) =>
+    put<AiConfigPersistResponse>('/api/ai/config/server', cfg),
+  aiUpdateConfigUser: (cfg: AiConfigUpdate) => put<AiConfigPersistResponse>('/api/ai/config/user', cfg),
   aiTest: () => post<{ success: boolean; message: string; provider: string; model: string | null }>('/api/ai/test', {}),
   aiExplain: (run_id: string, language = 'en') => post<AiExplainResponse>('/api/ai/explain', { run_id, language }),
 

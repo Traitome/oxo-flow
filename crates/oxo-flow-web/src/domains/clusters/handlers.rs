@@ -49,6 +49,7 @@ pub async fn list_clusters() -> ApiResult<Vec<ClusterInfo>> {
     post,
     path = "/api/clusters",
     tag = "clusters",
+    request_body = ClusterUpsertRequest,
     responses(
         (status = 200, description = "Success", body = ClusterInfo),
         (status = 403, description = "Error", body = ApiError),

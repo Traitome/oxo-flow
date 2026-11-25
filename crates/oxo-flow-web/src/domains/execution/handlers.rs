@@ -1968,6 +1968,7 @@ pub async fn get_run_results(
     post,
     path = "/api/runs/{id}/retry",
     tag = "runs",
+    request_body = serde_json::Value,
     responses(
         (status = 200, description = "Success", body = RetryResponse),
         (status = 400, description = "Error", body = ApiError),
@@ -2460,6 +2461,7 @@ fn remote_cluster_for_cancel(run: &models::RunRow, run_id: &str) -> Option<Strin
     post,
     path = "/api/runs/{id}/pause",
     tag = "runs",
+    request_body = Option<serde_json::Value>,
     responses(
         (status = 200, description = "Success", body = serde_json::Value),
         (status = 400, description = "Error", body = ApiError),
@@ -2587,6 +2589,7 @@ pub async fn pause_run(
     post,
     path = "/api/runs/{id}/resume",
     tag = "runs",
+    request_body = Option<serde_json::Value>,
     responses(
         (status = 200, description = "Success", body = serde_json::Value),
         (status = 400, description = "Error", body = ApiError),
@@ -3198,6 +3201,7 @@ pub async fn get_run_report(
     post,
     path = "/api/runs/{id}/report/ask",
     tag = "runs",
+    request_body = serde_json::Value,
     responses(
         (status = 200, description = "Success", body = String),
         (status = 400, description = "Error", body = ApiError),
@@ -3227,6 +3231,7 @@ pub async fn ask_report_question(
     post,
     path = "/api/runs/{id}/report/visualize",
     tag = "runs",
+    request_body = serde_json::Value,
     responses(
         (status = 200, description = "Success", body = serde_json::Value),
         (status = 400, description = "Error", body = ApiError),
@@ -3826,6 +3831,7 @@ pub async fn verify_run_provenance(
     post,
     path = "/api/runs/{id}/resume-checkpoint",
     tag = "runs",
+    request_body = serde_json::Value,
     responses(
         (status = 200, description = "Success", body = serde_json::Value),
         (status = 400, description = "Error", body = ApiError),

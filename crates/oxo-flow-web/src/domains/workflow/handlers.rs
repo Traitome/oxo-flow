@@ -213,6 +213,7 @@ pub async fn top_template_names() -> Vec<String> {
     post,
     path = "/api/pipelines/parse",
     tag = "workflow",
+    request_body = ParseRequest,
     responses(
         (status = 200, description = "Success", body = ParseResponse),
         (status = 400, description = "Error", body = ApiError),
@@ -229,6 +230,7 @@ pub async fn parse_pipeline(ApiJson(req): ApiJson<ParseRequest>) -> ApiResult<Pa
     post,
     path = "/api/pipelines/validate",
     tag = "workflow",
+    request_body = serde_json::Value,
     responses(
         (status = 200, description = "Success", body = ValidateResponse),
         (status = 400, description = "Error", body = ApiError),
@@ -273,6 +275,7 @@ pub async fn validate_pipeline(
     post,
     path = "/api/pipelines/prepare",
     tag = "workflow",
+    request_body = serde_json::Value,
     responses(
         (status = 200, description = "Success", body = PrepareResponse),
         (status = 400, description = "Error", body = ApiError),
@@ -309,6 +312,7 @@ pub async fn prepare_pipeline(
     post,
     path = "/api/pipelines/dag",
     tag = "workflow",
+    request_body = serde_json::Value,
     responses(
         (status = 200, description = "Success", body = DagJsonResponse),
         (status = 400, description = "Error", body = ApiError),
@@ -335,6 +339,7 @@ pub async fn build_dag(ApiJson(req): ApiJson<serde_json::Value>) -> ApiResult<Da
     post,
     path = "/api/pipelines/format",
     tag = "workflow",
+    request_body = ParseRequest,
     responses(
         (status = 200, description = "Success", body = FormatResponse),
         (status = 400, description = "Error", body = ApiError),
@@ -351,6 +356,7 @@ pub async fn format_pipeline(ApiJson(req): ApiJson<ParseRequest>) -> ApiResult<F
     post,
     path = "/api/pipelines/lint",
     tag = "workflow",
+    request_body = ParseRequest,
     responses(
         (status = 200, description = "Success", body = ValidateResponse),
         (status = 400, description = "Error", body = ApiError),
@@ -367,6 +373,7 @@ pub async fn lint_pipeline(ApiJson(req): ApiJson<ParseRequest>) -> ApiResult<Val
     post,
     path = "/api/pipelines/stats",
     tag = "workflow",
+    request_body = ParseRequest,
     responses(
         (status = 200, description = "Success", body = WorkflowStatsResponse),
         (status = 400, description = "Error", body = ApiError),
@@ -385,6 +392,7 @@ pub async fn pipeline_stats(
     post,
     path = "/api/pipelines/diff",
     tag = "workflow",
+    request_body = DiffRequest,
     responses(
         (status = 200, description = "Success", body = DiffResponse),
         (status = 400, description = "Error", body = ApiError),
@@ -442,6 +450,7 @@ pub async fn diff_pipelines(
     post,
     path = "/api/pipelines/export",
     tag = "workflow",
+    request_body = ExportRequest,
     responses(
         (status = 200, description = "Success", body = ExportResponse),
         (status = 400, description = "Error", body = ApiError),
@@ -490,6 +499,7 @@ pub async fn export_pipeline(
     post,
     path = "/api/pipelines/search",
     tag = "workflow",
+    request_body = SearchRequest,
     responses(
         (status = 200, description = "Success", body = SearchResponse),
         (status = 400, description = "Error", body = ApiError),
@@ -549,6 +559,7 @@ pub async fn search_pipelines(
     post,
     path = "/api/pipelines",
     tag = "workflow",
+    request_body = serde_json::Value,
     responses(
         (status = 200, description = "Success", body = Pipeline),
         (status = 400, description = "Error", body = ApiError),
@@ -739,6 +750,7 @@ pub async fn get_pipeline(
     put,
     path = "/api/pipelines/{id}",
     tag = "workflow",
+    request_body = serde_json::Value,
     responses(
         (status = 200, description = "Success (ETag carries the new revision)", body = Pipeline),
         (status = 400, description = "Malformed If-Match (INVALID_IF_MATCH)", body = ApiError),
@@ -1036,6 +1048,7 @@ pub async fn get_template(Path(id): Path<String>) -> ApiResult<Template> {
     post,
     path = "/api/templates",
     tag = "templates",
+    request_body = serde_json::Value,
     responses(
         (status = 200, description = "Success", body = Template),
         (status = 400, description = "Error", body = ApiError),
@@ -1227,6 +1240,7 @@ pub async fn delete_template(
     post,
     path = "/api/data/analyze",
     tag = "data",
+    request_body = DataAnalysisRequest,
     responses(
         (status = 200, description = "Success", body = DataAnalysisResponse),
         (status = 400, description = "Error", body = ApiError),
@@ -1252,6 +1266,7 @@ pub async fn analyze_data(
     post,
     path = "/api/data/reference",
     tag = "data",
+    request_body = ReferenceRequest,
     responses(
         (status = 200, description = "Success", body = ReferenceResponse),
         (status = 400, description = "Error", body = ApiError),
@@ -1274,6 +1289,7 @@ pub async fn discover_reference(
     post,
     path = "/api/plugins/validate",
     tag = "workflow",
+    request_body = ValidatePluginRequest,
     responses(
         (status = 200, description = "Success", body = ValidatePluginResponse),
         (status = 400, description = "Error", body = ApiError),
@@ -1296,6 +1312,7 @@ pub async fn validate_plugin(
     post,
     path = "/api/data/perceive",
     tag = "data",
+    request_body = serde_json::Value,
     responses(
         (status = 200, description = "Success", body = serde_json::Value),
         (status = 400, description = "Error", body = ApiError),
@@ -1466,6 +1483,7 @@ pub async fn reference_status() -> ApiResult<serde_json::Value> {
     post,
     path = "/api/data/samplesheet/parse",
     tag = "data",
+    request_body = serde_json::Value,
     responses(
         (status = 200, description = "Success", body = serde_json::Value),
         (status = 400, description = "Error", body = ApiError),
@@ -1636,6 +1654,7 @@ pub async fn get_revision(
     post,
     path = "/api/pipelines/{id}/rollback",
     tag = "workflow",
+    request_body = serde_json::Value,
     responses(
         (status = 200, description = "Success (ETag carries the new revision)", body = Pipeline),
         (status = 400, description = "Unparsable revision / malformed If-Match", body = ApiError),
