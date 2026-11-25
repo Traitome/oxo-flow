@@ -4840,16 +4840,16 @@ or cancel/collect jobs after an interrupted run.</p>
 <td><code>--backend</code></td>
 <td><code>-b</code></td>
 <td><code>$OXO_FLOW_CLUSTER_BACKEND</code>, then <code>slurm</code></td>
-<td>Cluster backend (<code>slurm</code>, <code>pbs</code>, <code>sge</code>, <code>lsf</code>, <code>kubernetes</code>/<code>k8s</code>, <code>aws-batch</code>, <code>gcp-batch</code>) — on a SLURM site you never need to type it</td>
+<td>Cluster backend (<code>slurm</code>, <code>pbs</code>, <code>sge</code>, <code>lsf</code>, <code>kubernetes</code>/<code>k8s</code>, <code>aws-batch</code>, <code>gcp-batch</code>, <code>tencent-batch</code>) — on a SLURM site you never need to type it</td>
 </tr>
 </tbody>
 </table>
 <p>An <strong>explicit</strong> value is always validated — <code>-b slrm</code> fails with
-<code>unknown cluster backend 'slrm' — expected slurm, pbs, sge, lsf, kubernetes (k8s), aws-batch, or tencent-batch (Tencent Cloud BatchCompute)</code> rather
+<code>unknown cluster backend 'slrm' — expected slurm, pbs, sge, lsf, kubernetes (k8s), aws-batch, gcp-batch, or tencent-batch (Tencent Cloud BatchCompute)</code> rather
 than silently querying SLURM. The default applies only when the flag is
 omitted entirely. On a non-SLURM site set the default once in your shell
 profile:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">OXO_FLOW_CLUSTER_BACKEND</span><span class="o">=</span>pbs<span class="w">   </span><span class="c1"># or sge / lsf / kubernetes / aws-batch / gcp-batch</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">OXO_FLOW_CLUSTER_BACKEND</span><span class="o">=</span>pbs<span class="w">   </span><span class="c1"># or sge / lsf / kubernetes / aws-batch / gcp-batch / tencent-batch</span>
 </span></code></pre></div>
 <hr />
 <h2 id="options-submit">Options (Submit)<a class="headerlink" href="#options-submit" title="Permanent link">#</a></h2>
@@ -4997,7 +4997,17 @@ another run are not answered in this mode; use <code>--all</code> for the raw
 scheduler view.</p>
 <p><code>--all</code>, or a checkout with no run directory, keeps the raw scheduler view.
 With no ids that lists <strong>your</strong> queued jobs — the natural first question
-after a plain <code>cluster submit</code>:</p>
+after a plain <code>cluster submit</code>. For AWS Batch the view asks <code>list-jobs</code>
+once per non-terminal status (the API returns only RUNNING jobs without
+<code>--job-status</code>) on the queue named by <code>--queue</code> or the engine's submit
+default; for GCP Batch pass <code>--queue &lt;LOCATION&gt;</code> because a bare job id is
+not resolvable without <code>--location</code>. Tencent Batch has no per-user/per-queue
+listing: with no ids the command says so instead of printing an empty table,
+and <code>cluster status --queue &lt;ZONE&gt; &lt;JOB_ID&gt;...</code> answers by id through
+<code>DescribeJobs</code>. Engine-owned array element handles are not vendor job ids:
+a GCP <code>{job}:{task}</code> handle is left unanswered by this per-id view (the
+driver settles tasks through <code>gcloud batch tasks list</code>), and a Tencent
+<code>{job}:{instance}</code> handle resolves to its base job's verdict.</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>$<span class="w"> </span>oxo-flow<span class="w"> </span>cluster<span class="w"> </span>status<span class="w"> </span>--all
 </span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>Cluster:<span class="w"> </span>Executing<span class="w"> </span><span class="s1">'squeue -u alice --noheader -o %i|%T'</span>...
 </span><span id="__span-13-3"><a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a>Cluster:<span class="w"> </span><span class="m">2</span><span class="w"> </span>queued<span class="w"> </span><span class="nb">jobs</span>
@@ -5010,6 +5020,11 @@ after a plain <code>cluster submit</code>:</p>
 <h3 id="cancel-specific-jobs">Cancel specific jobs<a class="headerlink" href="#cancel-specific-jobs" title="Permanent link">#</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>oxo-flow<span class="w"> </span>cluster<span class="w"> </span>cancel<span class="w"> </span>-b<span class="w"> </span>slurm<span class="w"> </span><span class="m">12345</span><span class="w"> </span><span class="m">12346</span>
 </span></code></pre></div>
+<p>Cloud backends resolve bare ids with <code>--queue</code>: the GCP location
+(<code>--queue us-central1</code>) and the Tencent placement zone (<code>--queue
+ap-shanghai-5</code>, whose region is derived for <code>tccli</code>). AWS Batch needs no
+selector. GCP cancellation uses <code>gcloud batch jobs cancel</code> (the job record
+and its <code>CANCELLED</code> state stay queryable; <code>delete</code> would erase the record).</p>
 <p><code>cancel --json</code> reports the command, the job ids, a success flag, and the
 scheduler's output.</p>
 <h3 id="fetch-a-jobs-logs">Fetch a job's logs<a class="headerlink" href="#fetch-a-jobs-logs" title="Permanent link">#</a></h3>
@@ -5229,7 +5244,7 @@ suffix does not block the match — it bounds concurrency, not the index set.</p
 to a scheduler instead of executing locally:</p>
 <div class="language-toml highlight"><pre><span></span><code><span id="__span-25-1"><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a><span class="c1"># profiles/slurm.toml</span>
 </span><span id="__span-25-2"><a id="__codelineno-25-2" name="__codelineno-25-2" href="#__codelineno-25-2"></a><span class="k">[cluster]</span>
-</span><span id="__span-25-3"><a id="__codelineno-25-3" name="__codelineno-25-3" href="#__codelineno-25-3"></a><span class="n">backend</span><span class="w">       </span><span class="o">=</span><span class="w"> </span><span class="s2">"slurm"</span><span class="w">      </span><span class="c1"># required: slurm | pbs | sge | lsf | kubernetes (k8s) | aws-batch | gcp-batch</span>
+</span><span id="__span-25-3"><a id="__codelineno-25-3" name="__codelineno-25-3" href="#__codelineno-25-3"></a><span class="n">backend</span><span class="w">       </span><span class="o">=</span><span class="w"> </span><span class="s2">"slurm"</span><span class="w">      </span><span class="c1"># required: slurm | pbs | sge | lsf | kubernetes (k8s) | aws-batch | gcp-batch | tencent-batch</span>
 </span><span id="__span-25-4"><a id="__codelineno-25-4" name="__codelineno-25-4" href="#__codelineno-25-4"></a><span class="n">partition</span><span class="w">     </span><span class="o">=</span><span class="w"> </span><span class="s2">"compute"</span>
 </span><span id="__span-25-5"><a id="__codelineno-25-5" name="__codelineno-25-5" href="#__codelineno-25-5"></a><span class="n">account</span><span class="w">       </span><span class="o">=</span><span class="w"> </span><span class="s2">"lab01"</span>
 </span><span id="__span-25-6"><a id="__codelineno-25-6" name="__codelineno-25-6" href="#__codelineno-25-6"></a><span class="n">walltime</span><span class="w">      </span><span class="o">=</span><span class="w"> </span><span class="s2">"24h"</span><span class="w">        </span><span class="c1"># a rule's own time_limit wins</span>
@@ -5376,10 +5391,10 @@ array</strong> automatically:</p>
   exposes one — SLURM element ids, Kubernetes Indexed Job completion
   indexes, AWS Batch child job ids, GCP Batch task indexes — so one
   element's failure never marks its successful siblings failed. PBS/LSF/SGE
-  report only the array base id through this adapter; those element records
-  name that aggregate provenance in <code>skip_reason</code> and carry no base-level
-  exit code, and a Successful job with no accounting record records an
-  unknown (<code>null</code>) exit code rather than <code>0</code>. See
+  and Tencent Batch report only the array base id through this adapter;
+  those element records name that aggregate provenance in <code>skip_reason</code>
+  and carry no base-level exit code, and a Successful job with no
+  accounting record records an unknown (<code>null</code>) exit code rather than <code>0</code>. See
   <a href="../../how-to/run-on-cluster/#supported-schedulers">Run on a Cluster</a> for
   the per-backend maturity labels.</li>
 </ul>

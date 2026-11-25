@@ -1445,6 +1445,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Supported Schedulers">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#cloud-backend-profile-keys" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cloud backend profile keys
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -4340,6 +4357,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Supported Schedulers">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#cloud-backend-profile-keys" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cloud backend profile keys
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -4629,7 +4663,7 @@
 
 
 <h1 id="run-on-a-cluster">Run on a Cluster<a class="headerlink" href="#run-on-a-cluster" title="Permanent link">#</a></h1>
-<p>This guide explains how to execute oxo-flow workflows on HPC and cloud backends: the schedulers SLURM, PBS, SGE, and LSF, plus Kubernetes, AWS Batch, and GCP Batch for cloud runs.</p>
+<p>This guide explains how to execute oxo-flow workflows on HPC and cloud backends: the schedulers SLURM, PBS, SGE, and LSF, plus Kubernetes, AWS Batch, GCP Batch, and Tencent Batch for cloud runs.</p>
 <hr />
 <h2 id="overview">Overview<a class="headerlink" href="#overview" title="Permanent link">#</a></h2>
 <p>oxo-flow's cluster module translates each rule into a cluster job submission. Resource requirements declared in the <code>.oxoflow</code> file (<code>threads</code>, <code>memory</code>, <code>gpu</code>, <code>time_limit</code>) are mapped to the appropriate scheduler directives. The <code>disk</code> field is <strong>not</strong> mapped to any scheduler directive — it only produces a local warning during <code>oxo-flow run</code>.</p>
@@ -4702,25 +4736,63 @@
 <tr>
 <td><strong>AWS Batch</strong></td>
 <td>Supported (spec generation)</td>
-<td>Prototype — CLI wrapper (<code>aws</code>), mock/wire tests only; live campaign pending (#1390). Submit/list/cancel shapes verified against the AWS CLI reference (2026-11-25 audit)</td>
+<td>Prototype — CLI wrapper (<code>aws</code>), mock/wire tests only; live campaign pending (#1390). Submit/describe/list/cancel shapes verified against the botocore Batch service model and the AWS CLI v2 reference (2026-11-25 audit); array child ids, <code>terminate-job</code> cancel, and the 100-id DescribeJobs cap are pinned by wire tests — <a href="../../../superpowers/audits/cloud-cli-accuracy-2026-11-26.md">Audit evidence</a>.</td>
 <td><code>aws-batch</code></td>
 </tr>
 <tr>
 <td><strong>GCP Batch</strong></td>
 <td>Supported (spec generation)</td>
-<td>Prototype — CLI wrapper (<code>gcloud</code>), mock/wire tests only; live campaign pending (#1390; endpoint unreachable from the qualification host). Submit/describe/delete shapes verified against the gcloud reference (2026-11-25 audit)</td>
+<td>Prototype — CLI wrapper (<code>gcloud</code>), mock/wire tests only; live campaign pending (#1390; endpoint unreachable from the qualification host). Submit (plain <code>--config</code> path, minted positional id)/describe/tasks-list/cancel shapes verified against the gcloud reference and <code>google/cloud/batch/v1</code> protos (2026-11-25 audit); cancel uses <code>CancelJob</code>, not <code>DeleteJob</code> — <a href="../../../superpowers/audits/cloud-cli-accuracy-2026-11-26.md">Audit evidence</a>.</td>
 <td><code>gcp-batch</code></td>
 </tr>
 <tr>
 <td><strong>Tencent Batch</strong></td>
 <td>Supported (spec generation)</td>
-<td>Prototype — CLI wrapper (<code>tccli batch</code>, API 2017-03-12); parameter surface verified against tccli's own API definitions; live smoke pending (issue #1389)</td>
+<td>Prototype — CLI wrapper (<code>tccli batch</code>, API 2017-03-12); payload/state/cancel/log shapes verified against tccli's own <code>api.json</code>/<code>examples.json</code> (2026-11-25 audit). Live smoke (2026-11-25, issue #1389): a named compute environment (<code>TENCENTBATCH_ENV_ID</code>) submit ran to <code>SUCCEED</code>; anonymous inline-env creation failed on the qualification account, so use <code>TENCENTBATCH_ENV_ID</code> when it does. Poll/log/cancel/array paths remain mock-verified only, and arrays settle on the base job verdict (no per-instance <code>DescribeTask</code> call yet) — <a href="../../../superpowers/audits/cloud-cli-accuracy-2026-11-26.md">Audit evidence</a>.</td>
 <td><code>tencent-batch</code></td>
 </tr>
 </tbody>
 </table>
-<p><strong>Per-element outcomes.</strong> Array elements settle on their own scheduler record whenever the backend exposes one: SLURM <code>squeue</code> element ids, Kubernetes Indexed Job completion indexes (<code>status.completedIndexes</code> / <code>status.failedIndexes</code>), AWS Batch child job ids (<code>{parent}:{arrayIndex}</code>), and GCP Batch task indexes (<code>gcloud batch tasks list</code>). One element failing never turns its successful siblings into failures, and a missing accounting record leaves the exit code unknown rather than reporting <code>0</code>. PBS/LSF/SGE are polled by the array base id in this adapter; their per-instance records name that aggregate provenance in <code>skip_reason</code> and carry no base-level exit code or resource numbers, so an array-level verdict is never presented as an independently observed element outcome.</p>
-<p>None of the cloud backends is qualified by a live campaign: their maturity label stays <strong>Prototype</strong> until the per-backend submit/queue/run/cancel/fail/retry/artifact campaign tracked by CL-05 (#1158) exists.</p>
+<p><strong>Per-element outcomes.</strong> Array elements settle on their own scheduler record whenever the backend exposes one: SLURM <code>squeue</code> element ids, Kubernetes Indexed Job completion indexes (<code>status.completedIndexes</code> / <code>status.failedIndexes</code>), AWS Batch child job ids (<code>{parent}:{arrayIndex}</code>), and GCP Batch task indexes (<code>gcloud batch tasks list</code>; <code>UNEXECUTED</code> tasks settle failed). One element failing never turns its successful siblings into failures, and a missing accounting record leaves the exit code unknown rather than reporting <code>0</code>. PBS/LSF/SGE and Tencent Batch are polled by the array base id in this adapter (Tencent's per-instance records sit behind a separate <code>DescribeTask</code> call); their per-instance records name that aggregate provenance in <code>skip_reason</code> and carry no base-level exit code or resource numbers, so an array-level verdict is never presented as an independently observed element outcome.</p>
+<p>AWS Batch and GCP Batch are not qualified by a live campaign, and Tencent Batch has only the single named-env submit smoke noted above: every cloud backend's maturity label stays <strong>Prototype</strong> until the per-backend submit/queue/run/cancel/fail/retry/artifact campaign tracked by CL-05 (#1158) exists.</p>
+<h3 id="cloud-backend-profile-keys">Cloud backend profile keys<a class="headerlink" href="#cloud-backend-profile-keys" title="Permanent link">#</a></h3>
+<p>The shared <code>[cluster]</code> keys carry a backend-specific meaning on cloud
+backends, the same way <code>partition</code> names a scheduler partition on the HPC
+backends:</p>
+<table>
+<thead>
+<tr>
+<th>Backend</th>
+<th><code>partition</code></th>
+<th><code>account</code></th>
+<th>Environment knobs</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>aws-batch</code></td>
+<td><code>SubmitJob.jobQueue</code> (default <code>oxoflow-queue</code>)</td>
+<td><code>SubmitJob.jobDefinition</code> (default <code>oxoflow-job-def</code>)</td>
+<td>The job definition must carry the <code>OXO_FLOW_SENSITIVE_&lt;n&gt;</code> names (<code>containerProperties.secrets</code> or <code>environment</code>); SubmitJob has no secrets field</td>
+</tr>
+<tr>
+<td><code>gcp-batch</code></td>
+<td><code>--location</code> (region, e.g. <code>us-central1</code>)</td>
+<td>—</td>
+<td><code>OXO_FLOW_SECRET_REFS</code> projects routed names into <code>taskSpec.environment.secretVariables</code></td>
+</tr>
+<tr>
+<td><code>tencent-batch</code></td>
+<td><code>Placement.Zone</code> (<strong>required</strong>, e.g. <code>ap-shanghai-5</code>; the <code>tccli --region</code> is derived from it)</td>
+<td>CVM <code>ImageId</code> the batch nodes boot (<strong>required</strong>; list with <code>tccli cvm DescribeImages</code>)</td>
+<td><code>TENCENTBATCH_INSTANCE_TYPE</code> (default <code>S5.MEDIUM4</code>), <code>TENCENTBATCH_ENV_ID</code> (target a pre-created compute environment instead of an inline anonymous one)</td>
+</tr>
+</tbody>
+</table>
+<p><code>cluster status</code> / <code>cluster cancel</code> take the same value through
+<code>--queue</code> where the cloud CLI needs it to resolve a bare job id (the GCP
+location, the Tencent zone). AWS Batch's raw listing uses it as the
+<code>list-jobs --job-queue</code> selector, falling back to the submit default.</p>
 <hr />
 <h2 id="declaring-resources">Declaring Resources<a class="headerlink" href="#declaring-resources" title="Permanent link">#</a></h2>
 <p>Set resource requirements per rule:</p>
@@ -5152,7 +5224,7 @@ reported as a completed run.</p>
 </div>
 <div class="admonition note">
 <p class="admonition-title">What environment a cloud job sees</p>
-<p>Cloud jobs (Kubernetes, AWS Batch, GCP Batch) never inherit the
+<p>Cloud jobs (Kubernetes, AWS Batch, GCP Batch, Tencent Batch) never inherit the
 submitting host's environment. The generated manifest/spec carries the
 rendered rule command (and, when sensitive values are routed, a
 <code>secretKeyRef</code> env block referencing the operator's Secret), so the job
@@ -5176,8 +5248,8 @@ environment, so they apply the <code>env -i</code> allowlist described in
 <div class="admonition warning">
 <p class="admonition-title"><code>sensitive = true</code> values need an operator-side secret on cloud backends</p>
 <p>Cloud runs (<code>run --profile &lt;NAME&gt;</code> with <code>[cluster] backend = "kubernetes"</code>,
-<code>"aws-batch"</code>, or <code>"gcp-batch"</code>, and <code>cluster submit -b</code> with the same
-backends) route every <code>sensitive = true</code> config value out of the job body
+<code>"aws-batch"</code>, <code>"gcp-batch"</code>, or <code>"tencent-batch"</code>, and <code>cluster submit -b</code>
+with the same backends) route every <code>sensitive = true</code> config value out of the job body
 before the manifest is generated: the body carries only an
 <code>OXO_FLOW_SENSITIVE_&lt;n&gt;</code> reference. Names are assigned longest-value-first
 (then lexically; values under 4 characters stay on the command line), and
@@ -5189,7 +5261,9 @@ definition's <code>containerProperties.secrets</code>, or GCP Batch
 for you; point each name at its Secret Manager path with
 <code>OXO_FLOW_SECRET_REFS</code>, a <code>NAME=REFERENCE</code> map — see
 <a href="../../reference/workflow-format/#config-configuration-variables">workflow-format: <code>[config]</code></a>) —
-or the reference expands empty
+Tencent Batch's <code>Task.EnvVars</code> is plaintext-only (there is no submit-time
+secret-reference field), so map the names on the CVM image or job
+environment yourself — or the reference expands empty
 and the rule fails.
 HPC scheduler scripts (SLURM/PBS/SGE/LSF) route the same way: the driver
 writes a private <code>0o600</code> env file beside the run holding only the
@@ -5307,8 +5381,8 @@ settling finished jobs from the scheduler's accounting store:</p>
 SLURM site you never type <code>-b</code>; on a PBS site set the environment variable
 once (<code>export OXO_FLOW_CLUSTER_BACKEND=pbs</code>). An explicit-but-typoed value
 is still rejected outright (<code>unknown cluster backend '…' — expected slurm,
-pbs, sge, lsf, kubernetes (k8s), aws-batch, or tencent-batch (Tencent Cloud BatchCompute)</code>) — the default
-never swallows a bad name.</p>
+pbs, sge, lsf, kubernetes (k8s), aws-batch, gcp-batch, or tencent-batch
+(Tencent Cloud BatchCompute)</code>) — the default never swallows a bad name.</p>
 <hr />
 <h2 id="driver-defaults-and-the-cluster-profile-block">Driver Defaults and the <code>[cluster]</code> Profile Block<a class="headerlink" href="#driver-defaults-and-the-cluster-profile-block" title="Permanent link">#</a></h2>
 <p><code>run --profile</code> submits and tracks jobs through the backend driver, whose

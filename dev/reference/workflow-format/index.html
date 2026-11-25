@@ -7652,8 +7652,8 @@ paths, and <code>when</code> conditions:</p>
 <p><strong><code>sensitive = true</code> and execution artifacts (issue #1120).</strong> A sensitive
 value is not only masked in captured output — on the cloud cluster backends
 (<code>run --profile &lt;NAME&gt;</code> with <code>[cluster] backend = "kubernetes"</code>,
-<code>"aws-batch"</code>, or <code>"gcp-batch"</code>, and the same backends via
-<code>cluster submit -b …</code>) it is also routed out of the rendered job body
+<code>"aws-batch"</code>, <code>"gcp-batch"</code>, or <code>"tencent-batch"</code>, and the same backends
+via <code>cluster submit -b …</code>) it is also routed out of the rendered job body
 before any manifest is built. Each value becomes a numbered
 <code>OXO_FLOW_SENSITIVE_&lt;n&gt;</code> environment reference, identical across every rule
 and every array element. Names are assigned once per run: values are
@@ -7678,6 +7678,11 @@ safely. The value itself must come from the backend's secret channel:</p>
   <code>OXO_FLOW_SECRET_REFS='OXO_FLOW_SENSITIVE_0=projects/my-project/secrets/token/versions/latest'</code>.
   Grant the Batch service account <code>roles/secretmanager.secretAccessor</code>
   on the referenced secrets.</li>
+<li><strong>Tencent Batch</strong> — <code>Task.EnvVars</code> is plaintext-only and SubmitJob has
+  no secret-reference field (Tencent's <code>Authentications</code> are a COS-mount
+  mechanism, not environment variables). The CVM image or job
+  environment must provide each <code>OXO_FLOW_SENSITIVE_&lt;n&gt;</code> name; the
+  reference expands empty otherwise and the rule fails.</li>
 </ul>
 <p>Local <code>docker</code>/<code>singularity</code> runs forward the same variables by name
 (<code>docker run -e NAME</code>, and <code>APPTAINERENV_NAME</code>/<code>SINGULARITYENV_NAME</code> in the
@@ -8588,10 +8593,11 @@ registry token, a site variable) requires a rule-level <code>envvars</code> entr
 the operator-level <code>OXO_FLOW_ENV_PASSTHROUGH</code> list. No <code>podman</code> backend is
 wired, so <code>PODMAN_*</code> is not admitted.</p>
 <p><strong>Cloud job environment (issue #1171):</strong> cloud rules (Kubernetes, AWS
-Batch, GCP Batch) do not run as shell commands of the submitting process.
-The engine writes only the rendered rule command into the manifest/spec
-(the Kubernetes Job <code>args</code>, the AWS Batch <code>containerOverrides.command</code>, or
-the GCP Batch runnable), so the job's environment is:</p>
+Batch, GCP Batch, Tencent Batch) do not run as shell commands of the
+submitting process. The engine writes only the rendered rule command into
+the manifest/spec (the Kubernetes Job <code>args</code>, the AWS Batch
+<code>containerOverrides.command</code>, the GCP Batch runnable, or the Tencent
+<code>Task.Application.Command</code>), so the job's environment is:</p>
 <ul>
 <li>the container image's own <code>ENV</code> (or the VM image's environment for a
   GCP Batch script runnable), plus</li>
@@ -8603,12 +8609,13 @@ the GCP Batch runnable), so the job's environment is:</p>
 <p>The submit host's ambient environment is never forwarded: a generated
 body carries no <code>env</code>/<code>environment</code> channel for ambient state (only the
 sensitive-value references above create one), and the submit-side CLI
-(<code>kubectl</code>, <code>aws</code>, <code>gcloud</code>) runs in the operator's own process
+(<code>kubectl</code>, <code>aws</code>, <code>gcloud</code>, <code>tccli</code>) runs in the operator's own process
 environment, which is likewise never written into the job. Regression
 tests pin the boundary per backend
 (<code>kubernetes_job_body_carries_no_submit_host_environment</code>,
 <code>aws_batch_job_body_carries_no_submit_host_environment</code>,
-<code>gcp_batch_job_body_carries_no_submit_host_environment</code>).</p>
+<code>gcp_batch_job_body_carries_no_submit_host_environment</code>,
+<code>test_sensitive_value_never_in_tencent_batch_body</code>).</p>
 <p><strong>Stale pixi.lock fallback:</strong> a rule declared with
 <code>environment = { pixi = "envs/pixi.toml" }</code> installs from the committed
 <code>pixi.lock</code> beside that manifest. When the pinned package builds have
