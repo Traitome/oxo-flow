@@ -1,0 +1,16 @@
+Info: Using workflow file: wf.oxoflow
+Profile: Applied config values from profile 'k8s'
+2026-11-25T17:05:36.429328Z  INFO workflow run started (log: /tmp/oxo-1388-final2/.oxo-flow/logs/oxo-flow.log) workflow=k8s-image-live version=1.0.1 git_sha="(none)" workdir=/tmp/oxo-1388-final2
+2026-11-25T17:05:36.429933Z  INFO {"event":"workflow_started","timestamp":"2026-11-25T17:05:36.429873307+00:00","total_rules":5,"workflow":"k8s-image-live"}
+DAG: 5 rules in dependency order
+  1. fanout_lane_L2
+  2. fanout_lane_L1
+  3. image_probe
+  4. fallback_probe
+  5. busybox_probe
+  Note: checkpoint predates config tracking: recorded a baseline snapshot; future config changes will invalidate affected rules automatically
+Cluster: submitting 5 jobs to kubernetes (max 2 in flight)
+  run directory: /tmp/oxo-1388-final2/.oxo-flow/runs/2026-11-25T17-05-37-588
+
+Cluster: 5 succeeded, 0 failed, 0 skipped
+✓ Report snapshot: /tmp/oxo-1388-final2/.oxo-flow/reports/report-20261125-170558.json

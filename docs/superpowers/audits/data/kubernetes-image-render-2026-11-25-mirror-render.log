@@ -1,0 +1,5 @@
+Cluster: Generating kubernetes job scripts for 1 rule instances
+  ✓ mirror-scripts/mirror_probe.sh
+
+Done: 1 scripts written to mirror-scripts
+  Submit with: kubectl create -f mirror-scripts/*.sh

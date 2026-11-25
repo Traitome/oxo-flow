@@ -1,0 +1,14 @@
+Info: Using workflow file: wf-prelude.oxoflow
+Profile: Applied config values from profile 'k8s'
+2026-11-25T17:06:06.291283Z  INFO workflow run started (log: /tmp/oxo-1388-prelude/.oxo-flow/logs/oxo-flow.log) workflow=k8s-image-prelude version=1.0.0 git_sha="(none)" workdir=/tmp/oxo-1388-prelude
+2026-11-25T17:06:06.291656Z  INFO {"event":"workflow_started","timestamp":"2026-11-25T17:06:06.291588435+00:00","total_rules":3,"workflow":"k8s-image-prelude"}
+DAG: 3 rules in dependency order
+  1. bash_array_lane_A2
+  2. bash_array_lane_A1
+  3. bash_single
+  Note: checkpoint predates config tracking: recorded a baseline snapshot; future config changes will invalidate affected rules automatically
+Cluster: submitting 3 jobs to kubernetes (max 2 in flight)
+  run directory: /tmp/oxo-1388-prelude/.oxo-flow/runs/2026-11-25T17-06-06-481
+
+Cluster: 3 succeeded, 0 failed, 0 skipped
+✓ Report snapshot: /tmp/oxo-1388-prelude/.oxo-flow/reports/report-20261125-170618.json

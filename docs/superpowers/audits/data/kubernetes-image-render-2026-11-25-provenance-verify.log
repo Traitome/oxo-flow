@@ -1,0 +1,29 @@
+Provenance Verify /tmp/oxo-1388-final2/.oxo-flow/checkpoint.json
+
+  • workflow path: /tmp/oxo-1388-final2/wf.oxoflow
+  • environment-lock identity: 4/5 rule(s) resolved
+    • busybox_probe: docker|busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662
+    ! fallback_probe: system|unavailable
+    • fanout_lane_L1: docker|ubuntu@sha256:f64b2ffc2f10ab8f8505aa56b2664bd846cbb9df87c7e2532e30f7667021c0e6
+    • fanout_lane_L2: docker|ubuntu@sha256:f64b2ffc2f10ab8f8505aa56b2664bd846cbb9df87c7e2532e30f7667021c0e6
+    • image_probe: docker|ubuntu@sha256:f64b2ffc2f10ab8f8505aa56b2664bd846cbb9df87c7e2532e30f7667021c0e6
+  • cluster images: 5 rule(s)
+    • busybox_probe: image busybox:1.36 (busybox:1.36) — busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662
+    • fallback_probe: system environment (no wrapper), pod base image ubuntu:latest
+    • fanout_lane_L1: image ubuntu:22.04 (ubuntu:22.04) — ubuntu@sha256:f64b2ffc2f10ab8f8505aa56b2664bd846cbb9df87c7e2532e30f7667021c0e6
+    • fanout_lane_L2: image ubuntu:22.04 (ubuntu:22.04) — ubuntu@sha256:f64b2ffc2f10ab8f8505aa56b2664bd846cbb9df87c7e2532e30f7667021c0e6
+    • image_probe: image ubuntu:22.04 (ubuntu:22.04) — ubuntu@sha256:f64b2ffc2f10ab8f8505aa56b2664bd846cbb9df87c7e2532e30f7667021c0e6
+  • workflow content hash: sha256:c074ffd0108c16445f2b50d46bdffa39be9a0eeabbde70228c75889bb6dcc4f6
+  • workflow content check: verified (sha256:c074ffd0108c16445f2b50d46bdffa39be9a0eeabbde70228c75889bb6dcc4f6)
+
+  ✓ L1.txt sha256:e7cc81bf09ab9cfed0484401a95110a233b0ebe005a48c57990ea5a8874cfacb
+  ✓ L2.txt sha256:c8d53e80cf9b1aa10c902e3e3c6dda7cfffc6737550280c7b22664fa517de9a0
+  ✓ base.txt sha256:7b7da54111a82c2e8f204b385b5710a5485ae246d937b6533e223eb22c328904
+  ✓ busybox-bash.txt sha256:ebc3f2e337a6d4da1e46a3c1fd997477a984bfa2b28e8b9f257672c61ed639ff
+  ✓ busybox.txt sha256:9ef1f5511f7b190c8e3dc2d6b6ce41a43ea9f2a0dd7414eea226a15106311575
+  ✓ docker-cli.txt sha256:d50c5a7064df7a35f28a1ae127c8b5915e84358af16b4306a1a747d481bd4ec0
+  ✓ os.txt sha256:3b4c4f28e8e0631eaa0293f55b286592b0192ee76093a77c61fa67dd505dc765
+  ✓ result.txt sha256:491e9405ac797849e4c47cd8e6afd457c61be0b2bfd03084b252894ab4883d5f
+  ✓ socket.txt sha256:af17c122ef7b926a13026fa8df526fae862aa8622db35df61636c7fbef2d3200
+
+Summary: 9 matched, 0 mismatched, 0 missing

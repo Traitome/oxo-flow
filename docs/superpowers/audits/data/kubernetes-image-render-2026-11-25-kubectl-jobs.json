@@ -1,0 +1,884 @@
+{
+    "apiVersion": "v1",
+    "items": [
+        {
+            "apiVersion": "batch/v1",
+            "kind": "Job",
+            "metadata": {
+                "annotations": {
+                    "oxoflow.io/environment-image": "busybox:1.36",
+                    "oxoflow.io/environment-kind": "docker",
+                    "oxoflow.io/environment-render": "image"
+                },
+                "creationTimestamp": "2026-11-25T17:05:38Z",
+                "generation": 1,
+                "labels": {
+                    "oxoflow.io/managed-by": "oxo-flow",
+                    "oxoflow.io/rule": "busybox-probe"
+                },
+                "name": "oxoflow-busybox-probe-c560b809",
+                "namespace": "default",
+                "resourceVersion": "9298",
+                "uid": "a62094cf-3d3b-4ee9-b7c9-a78410915611"
+            },
+            "spec": {
+                "backoffLimit": 0,
+                "completionMode": "NonIndexed",
+                "completions": 1,
+                "manualSelector": false,
+                "parallelism": 1,
+                "podReplacementPolicy": "TerminatingOrFailed",
+                "selector": {
+                    "matchLabels": {
+                        "batch.kubernetes.io/controller-uid": "a62094cf-3d3b-4ee9-b7c9-a78410915611"
+                    }
+                },
+                "suspend": false,
+                "template": {
+                    "metadata": {
+                        "creationTimestamp": null,
+                        "labels": {
+                            "batch.kubernetes.io/controller-uid": "a62094cf-3d3b-4ee9-b7c9-a78410915611",
+                            "batch.kubernetes.io/job-name": "oxoflow-busybox-probe-c560b809",
+                            "controller-uid": "a62094cf-3d3b-4ee9-b7c9-a78410915611",
+                            "job-name": "oxoflow-busybox-probe-c560b809",
+                            "oxoflow.io/managed-by": "oxo-flow",
+                            "oxoflow.io/rule": "busybox-probe"
+                        }
+                    },
+                    "spec": {
+                        "containers": [
+                            {
+                                "args": [
+                                    "if command -v bash \u003e/dev/null 2\u003e\u00261; then exec bash -c \"$1\"; else exec sh -c \"$1\"; fi",
+                                    "sh",
+                                    "cd '/tmp/oxo-1388-final2' \u0026\u0026 echo busybox-ok \u003e busybox.txt; if [ -x /bin/bash ]; then echo bash-present \u003e busybox-bash.txt; else echo bash-absent \u003e busybox-bash.txt; fi"
+                                ],
+                                "command": [
+                                    "/bin/sh",
+                                    "-c"
+                                ],
+                                "image": "busybox:1.36",
+                                "imagePullPolicy": "IfNotPresent",
+                                "name": "busybox-probe",
+                                "resources": {
+                                    "limits": {
+                                        "cpu": "1",
+                                        "memory": "1Gi"
+                                    },
+                                    "requests": {
+                                        "cpu": "1",
+                                        "memory": "1Gi"
+                                    }
+                                },
+                                "terminationMessagePath": "/dev/termination-log",
+                                "terminationMessagePolicy": "File",
+                                "volumeMounts": [
+                                    {
+                                        "mountPath": "/tmp/oxo-1388-final2",
+                                        "name": "oxoflow-workdir"
+                                    }
+                                ]
+                            }
+                        ],
+                        "dnsPolicy": "ClusterFirst",
+                        "restartPolicy": "Never",
+                        "schedulerName": "default-scheduler",
+                        "securityContext": {},
+                        "terminationGracePeriodSeconds": 30,
+                        "volumes": [
+                            {
+                                "hostPath": {
+                                    "path": "/tmp/oxo-1388-final2",
+                                    "type": "Directory"
+                                },
+                                "name": "oxoflow-workdir"
+                            }
+                        ]
+                    }
+                }
+            },
+            "status": {
+                "completionTime": "2026-11-25T17:05:42Z",
+                "conditions": [
+                    {
+                        "lastProbeTime": "2026-11-25T17:05:42Z",
+                        "lastTransitionTime": "2026-11-25T17:05:42Z",
+                        "message": "Reached expected number of succeeded pods",
+                        "reason": "CompletionsReached",
+                        "status": "True",
+                        "type": "SuccessCriteriaMet"
+                    },
+                    {
+                        "lastProbeTime": "2026-11-25T17:05:43Z",
+                        "lastTransitionTime": "2026-11-25T17:05:43Z",
+                        "message": "Reached expected number of succeeded pods",
+                        "reason": "CompletionsReached",
+                        "status": "True",
+                        "type": "Complete"
+                    }
+                ],
+                "ready": 0,
+                "startTime": "2026-11-25T17:05:38Z",
+                "succeeded": 1,
+                "terminating": 0,
+                "uncountedTerminatedPods": {}
+            }
+        },
+        {
+            "apiVersion": "batch/v1",
+            "kind": "Job",
+            "metadata": {
+                "annotations": {
+                    "oxoflow.io/environment-image": "ubuntu:22.04",
+                    "oxoflow.io/environment-kind": "docker",
+                    "oxoflow.io/environment-render": "image"
+                },
+                "creationTimestamp": "2026-11-25T17:05:46Z",
+                "generation": 1,
+                "labels": {
+                    "oxoflow.io/managed-by": "oxo-flow",
+                    "oxoflow.io/rule": "image-probe"
+                },
+                "name": "oxoflow-image-probe-6ad9b23b",
+                "namespace": "default",
+                "resourceVersion": "9334",
+                "uid": "ce00e1d8-8f15-45b9-b478-db4c7d8d3693"
+            },
+            "spec": {
+                "backoffLimit": 0,
+                "completionMode": "NonIndexed",
+                "completions": 1,
+                "manualSelector": false,
+                "parallelism": 1,
+                "podReplacementPolicy": "TerminatingOrFailed",
+                "selector": {
+                    "matchLabels": {
+                        "batch.kubernetes.io/controller-uid": "ce00e1d8-8f15-45b9-b478-db4c7d8d3693"
+                    }
+                },
+                "suspend": false,
+                "template": {
+                    "metadata": {
+                        "creationTimestamp": null,
+                        "labels": {
+                            "batch.kubernetes.io/controller-uid": "ce00e1d8-8f15-45b9-b478-db4c7d8d3693",
+                            "batch.kubernetes.io/job-name": "oxoflow-image-probe-6ad9b23b",
+                            "controller-uid": "ce00e1d8-8f15-45b9-b478-db4c7d8d3693",
+                            "job-name": "oxoflow-image-probe-6ad9b23b",
+                            "oxoflow.io/managed-by": "oxo-flow",
+                            "oxoflow.io/rule": "image-probe"
+                        }
+                    },
+                    "spec": {
+                        "containers": [
+                            {
+                                "args": [
+                                    "if command -v bash \u003e/dev/null 2\u003e\u00261; then exec bash -c \"$1\"; else exec sh -c \"$1\"; fi",
+                                    "sh",
+                                    "cd '/tmp/oxo-1388-final2' \u0026\u0026 . /etc/os-release\nprintf 'VERSION_ID=%s\n' \"$VERSION_ID\" \u003e os.txt\nif command -v docker \u003e/dev/null 2\u003e\u00261; then echo docker-cli-present \u003e docker-cli.txt; else echo docker-cli-absent \u003e docker-cli.txt; fi\nif [ -S /var/run/docker.sock ]; then echo socket-present \u003e socket.txt; else echo socket-absent \u003e socket.txt; fi\necho image-mode-ok \u003e result.txt\n"
+                                ],
+                                "command": [
+                                    "/bin/sh",
+                                    "-c"
+                                ],
+                                "image": "ubuntu:22.04",
+                                "imagePullPolicy": "IfNotPresent",
+                                "name": "image-probe",
+                                "resources": {
+                                    "limits": {
+                                        "cpu": "1",
+                                        "memory": "1Gi"
+                                    },
+                                    "requests": {
+                                        "cpu": "1",
+                                        "memory": "1Gi"
+                                    }
+                                },
+                                "terminationMessagePath": "/dev/termination-log",
+                                "terminationMessagePolicy": "File",
+                                "volumeMounts": [
+                                    {
+                                        "mountPath": "/tmp/oxo-1388-final2",
+                                        "name": "oxoflow-workdir"
+                                    }
+                                ]
+                            }
+                        ],
+                        "dnsPolicy": "ClusterFirst",
+                        "restartPolicy": "Never",
+                        "schedulerName": "default-scheduler",
+                        "securityContext": {},
+                        "terminationGracePeriodSeconds": 30,
+                        "volumes": [
+                            {
+                                "hostPath": {
+                                    "path": "/tmp/oxo-1388-final2",
+                                    "type": "Directory"
+                                },
+                                "name": "oxoflow-workdir"
+                            }
+                        ]
+                    }
+                }
+            },
+            "status": {
+                "completionTime": "2026-11-25T17:05:50Z",
+                "conditions": [
+                    {
+                        "lastProbeTime": "2026-11-25T17:05:50Z",
+                        "lastTransitionTime": "2026-11-25T17:05:50Z",
+                        "message": "Reached expected number of succeeded pods",
+                        "reason": "CompletionsReached",
+                        "status": "True",
+                        "type": "SuccessCriteriaMet"
+                    },
+                    {
+                        "lastProbeTime": "2026-11-25T17:05:50Z",
+                        "lastTransitionTime": "2026-11-25T17:05:50Z",
+                        "message": "Reached expected number of succeeded pods",
+                        "reason": "CompletionsReached",
+                        "status": "True",
+                        "type": "Complete"
+                    }
+                ],
+                "ready": 0,
+                "startTime": "2026-11-25T17:05:46Z",
+                "succeeded": 1,
+                "terminating": 0,
+                "uncountedTerminatedPods": {}
+            }
+        },
+        {
+            "apiVersion": "batch/v1",
+            "kind": "Job",
+            "metadata": {
+                "annotations": {
+                    "oxoflow.io/environment-image": "ubuntu:22.04",
+                    "oxoflow.io/environment-kind": "docker",
+                    "oxoflow.io/environment-render": "image"
+                },
+                "creationTimestamp": "2026-11-25T17:05:46Z",
+                "generation": 1,
+                "labels": {
+                    "oxoflow.io/managed-by": "oxo-flow",
+                    "oxoflow.io/rule": "fanout-lane-l2"
+                },
+                "name": "oxoflow-fanout-lane-l2-e8cdbc7e",
+                "namespace": "default",
+                "resourceVersion": "9330",
+                "uid": "48fb8d13-aba5-447d-92eb-4107f9bafa22"
+            },
+            "spec": {
+                "backoffLimit": 0,
+                "completionMode": "NonIndexed",
+                "completions": 1,
+                "manualSelector": false,
+                "parallelism": 1,
+                "podReplacementPolicy": "TerminatingOrFailed",
+                "selector": {
+                    "matchLabels": {
+                        "batch.kubernetes.io/controller-uid": "48fb8d13-aba5-447d-92eb-4107f9bafa22"
+                    }
+                },
+                "suspend": false,
+                "template": {
+                    "metadata": {
+                        "creationTimestamp": null,
+                        "labels": {
+                            "batch.kubernetes.io/controller-uid": "48fb8d13-aba5-447d-92eb-4107f9bafa22",
+                            "batch.kubernetes.io/job-name": "oxoflow-fanout-lane-l2-e8cdbc7e",
+                            "controller-uid": "48fb8d13-aba5-447d-92eb-4107f9bafa22",
+                            "job-name": "oxoflow-fanout-lane-l2-e8cdbc7e",
+                            "oxoflow.io/managed-by": "oxo-flow",
+                            "oxoflow.io/rule": "fanout-lane-l2"
+                        }
+                    },
+                    "spec": {
+                        "containers": [
+                            {
+                                "args": [
+                                    "if command -v bash \u003e/dev/null 2\u003e\u00261; then exec bash -c \"$1\"; else exec sh -c \"$1\"; fi",
+                                    "sh",
+                                    "cd '/tmp/oxo-1388-final2' \u0026\u0026 echo 'L2' \u003e 'L2.txt'"
+                                ],
+                                "command": [
+                                    "/bin/sh",
+                                    "-c"
+                                ],
+                                "image": "ubuntu:22.04",
+                                "imagePullPolicy": "IfNotPresent",
+                                "name": "fanout-lane-l2",
+                                "resources": {
+                                    "limits": {
+                                        "cpu": "1",
+                                        "memory": "1Gi"
+                                    },
+                                    "requests": {
+                                        "cpu": "1",
+                                        "memory": "1Gi"
+                                    }
+                                },
+                                "terminationMessagePath": "/dev/termination-log",
+                                "terminationMessagePolicy": "File",
+                                "volumeMounts": [
+                                    {
+                                        "mountPath": "/tmp/oxo-1388-final2",
+                                        "name": "oxoflow-workdir"
+                                    }
+                                ]
+                            }
+                        ],
+                        "dnsPolicy": "ClusterFirst",
+                        "restartPolicy": "Never",
+                        "schedulerName": "default-scheduler",
+                        "securityContext": {},
+                        "terminationGracePeriodSeconds": 30,
+                        "volumes": [
+                            {
+                                "hostPath": {
+                                    "path": "/tmp/oxo-1388-final2",
+                                    "type": "Directory"
+                                },
+                                "name": "oxoflow-workdir"
+                            }
+                        ]
+                    }
+                }
+            },
+            "status": {
+                "completionTime": "2026-11-25T17:05:49Z",
+                "conditions": [
+                    {
+                        "lastProbeTime": "2026-11-25T17:05:49Z",
+                        "lastTransitionTime": "2026-11-25T17:05:49Z",
+                        "message": "Reached expected number of succeeded pods",
+                        "reason": "CompletionsReached",
+                        "status": "True",
+                        "type": "SuccessCriteriaMet"
+                    },
+                    {
+                        "lastProbeTime": "2026-11-25T17:05:50Z",
+                        "lastTransitionTime": "2026-11-25T17:05:50Z",
+                        "message": "Reached expected number of succeeded pods",
+                        "reason": "CompletionsReached",
+                        "status": "True",
+                        "type": "Complete"
+                    }
+                ],
+                "ready": 0,
+                "startTime": "2026-11-25T17:05:46Z",
+                "succeeded": 1,
+                "terminating": 0,
+                "uncountedTerminatedPods": {}
+            }
+        },
+        {
+            "apiVersion": "batch/v1",
+            "kind": "Job",
+            "metadata": {
+                "annotations": {
+                    "oxoflow.io/environment-kind": "system",
+                    "oxoflow.io/environment-render": "system"
+                },
+                "creationTimestamp": "2026-11-25T17:05:54Z",
+                "generation": 1,
+                "labels": {
+                    "oxoflow.io/managed-by": "oxo-flow",
+                    "oxoflow.io/rule": "fallback-probe"
+                },
+                "name": "oxoflow-fallback-probe-c4693745",
+                "namespace": "default",
+                "resourceVersion": "9353",
+                "uid": "34a24b21-5459-42c5-bd43-2e0442d30e45"
+            },
+            "spec": {
+                "backoffLimit": 0,
+                "completionMode": "NonIndexed",
+                "completions": 1,
+                "manualSelector": false,
+                "parallelism": 1,
+                "podReplacementPolicy": "TerminatingOrFailed",
+                "selector": {
+                    "matchLabels": {
+                        "batch.kubernetes.io/controller-uid": "34a24b21-5459-42c5-bd43-2e0442d30e45"
+                    }
+                },
+                "suspend": false,
+                "template": {
+                    "metadata": {
+                        "creationTimestamp": null,
+                        "labels": {
+                            "batch.kubernetes.io/controller-uid": "34a24b21-5459-42c5-bd43-2e0442d30e45",
+                            "batch.kubernetes.io/job-name": "oxoflow-fallback-probe-c4693745",
+                            "controller-uid": "34a24b21-5459-42c5-bd43-2e0442d30e45",
+                            "job-name": "oxoflow-fallback-probe-c4693745",
+                            "oxoflow.io/managed-by": "oxo-flow",
+                            "oxoflow.io/rule": "fallback-probe"
+                        }
+                    },
+                    "spec": {
+                        "containers": [
+                            {
+                                "args": [
+                                    "cd '/tmp/oxo-1388-final2' \u0026\u0026 printf 'base-image=%s\n' \"$(. /etc/os-release; echo $VERSION_ID)\" \u003e base.txt"
+                                ],
+                                "command": [
+                                    "/bin/bash",
+                                    "-c"
+                                ],
+                                "image": "ubuntu:latest",
+                                "imagePullPolicy": "IfNotPresent",
+                                "name": "fallback-probe",
+                                "resources": {
+                                    "limits": {
+                                        "cpu": "1",
+                                        "memory": "1Gi"
+                                    },
+                                    "requests": {
+                                        "cpu": "1",
+                                        "memory": "1Gi"
+                                    }
+                                },
+                                "terminationMessagePath": "/dev/termination-log",
+                                "terminationMessagePolicy": "File",
+                                "volumeMounts": [
+                                    {
+                                        "mountPath": "/tmp/oxo-1388-final2",
+                                        "name": "oxoflow-workdir"
+                                    }
+                                ]
+                            }
+                        ],
+                        "dnsPolicy": "ClusterFirst",
+                        "restartPolicy": "Never",
+                        "schedulerName": "default-scheduler",
+                        "securityContext": {},
+                        "terminationGracePeriodSeconds": 30,
+                        "volumes": [
+                            {
+                                "hostPath": {
+                                    "path": "/tmp/oxo-1388-final2",
+                                    "type": "Directory"
+                                },
+                                "name": "oxoflow-workdir"
+                            }
+                        ]
+                    }
+                }
+            },
+            "status": {
+                "completionTime": "2026-11-25T17:05:57Z",
+                "conditions": [
+                    {
+                        "lastProbeTime": "2026-11-25T17:05:57Z",
+                        "lastTransitionTime": "2026-11-25T17:05:57Z",
+                        "message": "Reached expected number of succeeded pods",
+                        "reason": "CompletionsReached",
+                        "status": "True",
+                        "type": "SuccessCriteriaMet"
+                    },
+                    {
+                        "lastProbeTime": "2026-11-25T17:05:57Z",
+                        "lastTransitionTime": "2026-11-25T17:05:57Z",
+                        "message": "Reached expected number of succeeded pods",
+                        "reason": "CompletionsReached",
+                        "status": "True",
+                        "type": "Complete"
+                    }
+                ],
+                "ready": 0,
+                "startTime": "2026-11-25T17:05:54Z",
+                "succeeded": 1,
+                "terminating": 0,
+                "uncountedTerminatedPods": {}
+            }
+        },
+        {
+            "apiVersion": "batch/v1",
+            "kind": "Job",
+            "metadata": {
+                "annotations": {
+                    "oxoflow.io/environment-image": "ubuntu:22.04",
+                    "oxoflow.io/environment-kind": "docker",
+                    "oxoflow.io/environment-render": "image"
+                },
+                "creationTimestamp": "2026-11-25T17:05:38Z",
+                "generation": 1,
+                "labels": {
+                    "oxoflow.io/managed-by": "oxo-flow",
+                    "oxoflow.io/rule": "fanout-lane-l1"
+                },
+                "name": "oxoflow-fanout-lane-l1-689b43ff",
+                "namespace": "default",
+                "resourceVersion": "9301",
+                "uid": "085f9310-2877-4f74-b6a2-93dac770ef6a"
+            },
+            "spec": {
+                "backoffLimit": 0,
+                "completionMode": "NonIndexed",
+                "completions": 1,
+                "manualSelector": false,
+                "parallelism": 1,
+                "podReplacementPolicy": "TerminatingOrFailed",
+                "selector": {
+                    "matchLabels": {
+                        "batch.kubernetes.io/controller-uid": "085f9310-2877-4f74-b6a2-93dac770ef6a"
+                    }
+                },
+                "suspend": false,
+                "template": {
+                    "metadata": {
+                        "creationTimestamp": null,
+                        "labels": {
+                            "batch.kubernetes.io/controller-uid": "085f9310-2877-4f74-b6a2-93dac770ef6a",
+                            "batch.kubernetes.io/job-name": "oxoflow-fanout-lane-l1-689b43ff",
+                            "controller-uid": "085f9310-2877-4f74-b6a2-93dac770ef6a",
+                            "job-name": "oxoflow-fanout-lane-l1-689b43ff",
+                            "oxoflow.io/managed-by": "oxo-flow",
+                            "oxoflow.io/rule": "fanout-lane-l1"
+                        }
+                    },
+                    "spec": {
+                        "containers": [
+                            {
+                                "args": [
+                                    "if command -v bash \u003e/dev/null 2\u003e\u00261; then exec bash -c \"$1\"; else exec sh -c \"$1\"; fi",
+                                    "sh",
+                                    "cd '/tmp/oxo-1388-final2' \u0026\u0026 echo 'L1' \u003e 'L1.txt'"
+                                ],
+                                "command": [
+                                    "/bin/sh",
+                                    "-c"
+                                ],
+                                "image": "ubuntu:22.04",
+                                "imagePullPolicy": "IfNotPresent",
+                                "name": "fanout-lane-l1",
+                                "resources": {
+                                    "limits": {
+                                        "cpu": "1",
+                                        "memory": "1Gi"
+                                    },
+                                    "requests": {
+                                        "cpu": "1",
+                                        "memory": "1Gi"
+                                    }
+                                },
+                                "terminationMessagePath": "/dev/termination-log",
+                                "terminationMessagePolicy": "File",
+                                "volumeMounts": [
+                                    {
+                                        "mountPath": "/tmp/oxo-1388-final2",
+                                        "name": "oxoflow-workdir"
+                                    }
+                                ]
+                            }
+                        ],
+                        "dnsPolicy": "ClusterFirst",
+                        "restartPolicy": "Never",
+                        "schedulerName": "default-scheduler",
+                        "securityContext": {},
+                        "terminationGracePeriodSeconds": 30,
+                        "volumes": [
+                            {
+                                "hostPath": {
+                                    "path": "/tmp/oxo-1388-final2",
+                                    "type": "Directory"
+                                },
+                                "name": "oxoflow-workdir"
+                            }
+                        ]
+                    }
+                }
+            },
+            "status": {
+                "completionTime": "2026-11-25T17:05:42Z",
+                "conditions": [
+                    {
+                        "lastProbeTime": "2026-11-25T17:05:42Z",
+                        "lastTransitionTime": "2026-11-25T17:05:42Z",
+                        "message": "Reached expected number of succeeded pods",
+                        "reason": "CompletionsReached",
+                        "status": "True",
+                        "type": "SuccessCriteriaMet"
+                    },
+                    {
+                        "lastProbeTime": "2026-11-25T17:05:43Z",
+                        "lastTransitionTime": "2026-11-25T17:05:43Z",
+                        "message": "Reached expected number of succeeded pods",
+                        "reason": "CompletionsReached",
+                        "status": "True",
+                        "type": "Complete"
+                    }
+                ],
+                "ready": 0,
+                "startTime": "2026-11-25T17:05:38Z",
+                "succeeded": 1,
+                "terminating": 0,
+                "uncountedTerminatedPods": {}
+            }
+        },
+        {
+            "apiVersion": "batch/v1",
+            "kind": "Job",
+            "metadata": {
+                "annotations": {
+                    "oxoflow.io/environment-image": "ubuntu:22.04",
+                    "oxoflow.io/environment-kind": "docker",
+                    "oxoflow.io/environment-render": "image"
+                },
+                "creationTimestamp": "2026-11-25T17:06:06Z",
+                "generation": 1,
+                "labels": {
+                    "oxoflow.io/managed-by": "oxo-flow",
+                    "oxoflow.io/rule": "bash-array"
+                },
+                "name": "oxoflow-array-bash-array-b40e264a",
+                "namespace": "default",
+                "resourceVersion": "9383",
+                "uid": "e0e427de-174d-43c6-b71d-a3895424de97"
+            },
+            "spec": {
+                "backoffLimit": 0,
+                "completionMode": "Indexed",
+                "completions": 2,
+                "manualSelector": false,
+                "parallelism": 2,
+                "podReplacementPolicy": "TerminatingOrFailed",
+                "selector": {
+                    "matchLabels": {
+                        "batch.kubernetes.io/controller-uid": "e0e427de-174d-43c6-b71d-a3895424de97"
+                    }
+                },
+                "suspend": false,
+                "template": {
+                    "metadata": {
+                        "creationTimestamp": null,
+                        "labels": {
+                            "batch.kubernetes.io/controller-uid": "e0e427de-174d-43c6-b71d-a3895424de97",
+                            "batch.kubernetes.io/job-name": "oxoflow-array-bash-array-b40e264a",
+                            "controller-uid": "e0e427de-174d-43c6-b71d-a3895424de97",
+                            "job-name": "oxoflow-array-bash-array-b40e264a",
+                            "oxoflow.io/managed-by": "oxo-flow",
+                            "oxoflow.io/rule": "bash-array"
+                        }
+                    },
+                    "spec": {
+                        "containers": [
+                            {
+                                "args": [
+                                    "INDEX=$((JOB_COMPLETION_INDEX + 1)); sh -c 'if command -v bash \u003e/dev/null 2\u003e\u00261; then exec bash \"$1\"; else exec sh \"$1\"; fi' sh \"/tmp/oxo-1388-prelude/.oxo-flow/runs/2026-11-25T17-06-06-481/jobs/bash_array/chunk-1/cmd.${INDEX}.sh\""
+                                ],
+                                "command": [
+                                    "/bin/sh",
+                                    "-c"
+                                ],
+                                "image": "ubuntu:22.04",
+                                "imagePullPolicy": "IfNotPresent",
+                                "name": "bash-array",
+                                "resources": {
+                                    "limits": {
+                                        "cpu": "1",
+                                        "memory": "1Gi"
+                                    },
+                                    "requests": {
+                                        "cpu": "1",
+                                        "memory": "1Gi"
+                                    }
+                                },
+                                "terminationMessagePath": "/dev/termination-log",
+                                "terminationMessagePolicy": "File",
+                                "volumeMounts": [
+                                    {
+                                        "mountPath": "/tmp/oxo-1388-prelude/.oxo-flow/runs/2026-11-25T17-06-06-481/jobs/bash_array/chunk-1",
+                                        "name": "oxoflow-cmds"
+                                    },
+                                    {
+                                        "mountPath": "/tmp/oxo-1388-prelude",
+                                        "name": "oxoflow-workdir"
+                                    }
+                                ]
+                            }
+                        ],
+                        "dnsPolicy": "ClusterFirst",
+                        "restartPolicy": "Never",
+                        "schedulerName": "default-scheduler",
+                        "securityContext": {},
+                        "terminationGracePeriodSeconds": 30,
+                        "volumes": [
+                            {
+                                "hostPath": {
+                                    "path": "/tmp/oxo-1388-prelude/.oxo-flow/runs/2026-11-25T17-06-06-481/jobs/bash_array/chunk-1",
+                                    "type": "Directory"
+                                },
+                                "name": "oxoflow-cmds"
+                            },
+                            {
+                                "hostPath": {
+                                    "path": "/tmp/oxo-1388-prelude",
+                                    "type": "Directory"
+                                },
+                                "name": "oxoflow-workdir"
+                            }
+                        ]
+                    }
+                }
+            },
+            "status": {
+                "completedIndexes": "0,1",
+                "completionTime": "2026-11-25T17:06:10Z",
+                "conditions": [
+                    {
+                        "lastProbeTime": "2026-11-25T17:06:10Z",
+                        "lastTransitionTime": "2026-11-25T17:06:10Z",
+                        "message": "Reached expected number of succeeded pods",
+                        "reason": "CompletionsReached",
+                        "status": "True",
+                        "type": "SuccessCriteriaMet"
+                    },
+                    {
+                        "lastProbeTime": "2026-11-25T17:06:10Z",
+                        "lastTransitionTime": "2026-11-25T17:06:10Z",
+                        "message": "Reached expected number of succeeded pods",
+                        "reason": "CompletionsReached",
+                        "status": "True",
+                        "type": "Complete"
+                    }
+                ],
+                "ready": 0,
+                "startTime": "2026-11-25T17:06:06Z",
+                "succeeded": 2,
+                "terminating": 0,
+                "uncountedTerminatedPods": {}
+            }
+        },
+        {
+            "apiVersion": "batch/v1",
+            "kind": "Job",
+            "metadata": {
+                "annotations": {
+                    "oxoflow.io/environment-image": "ubuntu:22.04",
+                    "oxoflow.io/environment-kind": "docker",
+                    "oxoflow.io/environment-render": "image"
+                },
+                "creationTimestamp": "2026-11-25T17:06:13Z",
+                "generation": 1,
+                "labels": {
+                    "oxoflow.io/managed-by": "oxo-flow",
+                    "oxoflow.io/rule": "bash-single"
+                },
+                "name": "oxoflow-bash-single-b1de6f36",
+                "namespace": "default",
+                "resourceVersion": "9402",
+                "uid": "87c14dd1-e05e-4e33-8a51-704629d75782"
+            },
+            "spec": {
+                "backoffLimit": 0,
+                "completionMode": "NonIndexed",
+                "completions": 1,
+                "manualSelector": false,
+                "parallelism": 1,
+                "podReplacementPolicy": "TerminatingOrFailed",
+                "selector": {
+                    "matchLabels": {
+                        "batch.kubernetes.io/controller-uid": "87c14dd1-e05e-4e33-8a51-704629d75782"
+                    }
+                },
+                "suspend": false,
+                "template": {
+                    "metadata": {
+                        "creationTimestamp": null,
+                        "labels": {
+                            "batch.kubernetes.io/controller-uid": "87c14dd1-e05e-4e33-8a51-704629d75782",
+                            "batch.kubernetes.io/job-name": "oxoflow-bash-single-b1de6f36",
+                            "controller-uid": "87c14dd1-e05e-4e33-8a51-704629d75782",
+                            "job-name": "oxoflow-bash-single-b1de6f36",
+                            "oxoflow.io/managed-by": "oxo-flow",
+                            "oxoflow.io/rule": "bash-single"
+                        }
+                    },
+                    "spec": {
+                        "containers": [
+                            {
+                                "args": [
+                                    "if command -v bash \u003e/dev/null 2\u003e\u00261; then exec bash -c \"$1\"; else exec sh -c \"$1\"; fi",
+                                    "sh",
+                                    "cd '/tmp/oxo-1388-prelude' \u0026\u0026 set -euo pipefail\n[[ -n \"single\" ]] \u0026\u0026 echo single-bash-ok \u003e single.txt"
+                                ],
+                                "command": [
+                                    "/bin/sh",
+                                    "-c"
+                                ],
+                                "image": "ubuntu:22.04",
+                                "imagePullPolicy": "IfNotPresent",
+                                "name": "bash-single",
+                                "resources": {
+                                    "limits": {
+                                        "cpu": "1",
+                                        "memory": "1Gi"
+                                    },
+                                    "requests": {
+                                        "cpu": "1",
+                                        "memory": "1Gi"
+                                    }
+                                },
+                                "terminationMessagePath": "/dev/termination-log",
+                                "terminationMessagePolicy": "File",
+                                "volumeMounts": [
+                                    {
+                                        "mountPath": "/tmp/oxo-1388-prelude",
+                                        "name": "oxoflow-workdir"
+                                    }
+                                ]
+                            }
+                        ],
+                        "dnsPolicy": "ClusterFirst",
+                        "restartPolicy": "Never",
+                        "schedulerName": "default-scheduler",
+                        "securityContext": {},
+                        "terminationGracePeriodSeconds": 30,
+                        "volumes": [
+                            {
+                                "hostPath": {
+                                    "path": "/tmp/oxo-1388-prelude",
+                                    "type": "Directory"
+                                },
+                                "name": "oxoflow-workdir"
+                            }
+                        ]
+                    }
+                }
+            },
+            "status": {
+                "completionTime": "2026-11-25T17:06:17Z",
+                "conditions": [
+                    {
+                        "lastProbeTime": "2026-11-25T17:06:17Z",
+                        "lastTransitionTime": "2026-11-25T17:06:17Z",
+                        "message": "Reached expected number of succeeded pods",
+                        "reason": "CompletionsReached",
+                        "status": "True",
+                        "type": "SuccessCriteriaMet"
+                    },
+                    {
+                        "lastProbeTime": "2026-11-25T17:06:17Z",
+                        "lastTransitionTime": "2026-11-25T17:06:17Z",
+                        "message": "Reached expected number of succeeded pods",
+                        "reason": "CompletionsReached",
+                        "status": "True",
+                        "type": "Complete"
+                    }
+                ],
+                "ready": 0,
+                "startTime": "2026-11-25T17:06:13Z",
+                "succeeded": 1,
+                "terminating": 0,
+                "uncountedTerminatedPods": {}
+            }
+        }
+    ],
+    "kind": "List",
+    "metadata": {
+        "resourceVersion": ""
+    }
+}
