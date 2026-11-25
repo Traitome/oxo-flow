@@ -1,0 +1,35 @@
+[workflow]
+name = "missing-required-column"
+metadata_file = "missing_required_column.tsv"
+
+[workflow.metadata_schema]
+id_column = "sample"
+required_columns = ["batch", "sample_prep"]
+allow_extra_columns = true
+coverage = "off"
+
+[[workflow.metadata_schema.columns]]
+name = "batch"
+regex = "^b\\d+$"
+
+[[workflow.metadata_schema.columns]]
+name = "age"
+type = "integer"
+
+[[workflow.metadata_schema.columns]]
+name = "value"
+type = "float"
+unique = true
+
+[[workflow.metadata_schema.columns]]
+name = "qc"
+enum = ["true", "false"]
+
+[[sample_groups]]
+name = "cohort"
+samples = ["S1", "S2"]
+
+[[rules]]
+name = "step"
+output = ["out.txt"]
+shell = "touch out.txt"

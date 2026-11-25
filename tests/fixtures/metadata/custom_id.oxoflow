@@ -1,0 +1,35 @@
+[workflow]
+name = "custom-id"
+metadata_file = "custom_id.tsv"
+
+[workflow.metadata_schema]
+id_column = "sample_id"
+required_columns = ["batch"]
+allow_extra_columns = true
+coverage = "off"
+
+[[workflow.metadata_schema.columns]]
+name = "batch"
+regex = "^b\\d+$"
+
+[[workflow.metadata_schema.columns]]
+name = "age"
+type = "integer"
+
+[[workflow.metadata_schema.columns]]
+name = "value"
+type = "float"
+unique = true
+
+[[workflow.metadata_schema.columns]]
+name = "qc"
+enum = ["true", "false"]
+
+[[sample_groups]]
+name = "cohort"
+samples = ["S1", "S2"]
+
+[[rules]]
+name = "step"
+output = ["out.txt"]
+shell = "touch out.txt"

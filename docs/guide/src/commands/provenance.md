@@ -47,6 +47,19 @@ in the `--json` `verify` document (`workflow_git_sha`,
 `workflow_content_hash`, `workflow_resolved_hash`, `workflow_content_check`
 with `status` `matched`/`changed`/`unverifiable`, `workflow_git_dirty`).
 
+A workflow with a metadata table or a `[workflow.metadata_schema]` contract
+also records a **canonical metadata digest** (issue #1368):
+`sha256:<hex>` over the resolved typed schema plus the effective metadata
+rows, with rows sorted by id, columns by name, values trimmed, and empty
+values omitted. It is byte-stable across TSV/CSV/JSON sources carrying the
+same logical rows and across input row order, so it names *which* typed
+table the run consumed (and it is folded into `workflow_resolved_hash`).
+Verify reports it as `metadata_digest` (human: `• metadata digest: …`;
+absent for legacy checkpoints and contract-free workflows) but does **not**
+re-hash the metadata file: re-deriving it needs the exact loaded table
+bytes, which the checkpoint does not store — the digest is a recorded
+identity, like `workflow_resolved_hash`, not a re-verified claim.
+
 This is essential for reproducible, auditable analysis.
 
 ## Options
@@ -165,6 +178,7 @@ carries nothing else):
     ],
     "workflow_content_hash": "sha256:e3b0c442...",
     "workflow_resolved_hash": "sha256:9f86d081...",
+    "metadata_digest": "sha256:6b1d3c7f...",
     "workflow_content_check": {"status": "matched", "recorded": "sha256:e3b0c442...", "actual": "sha256:e3b0c442..."}
   }
 }
@@ -287,8 +301,9 @@ oxo-flow provenance attest-verify run.attestation.json --key attest.key --json
 
 ### What the document binds
 
-- `workflow`: path, git HEAD SHA, dirty marker, raw content digest and the
-  override-aware resolved fingerprint (#1350)
+- `workflow`: path, git HEAD SHA, dirty marker, raw content digest, the
+  override-aware resolved fingerprint (#1350), and the canonical metadata
+  digest of the typed cohort table when one was consumed (#1368)
 - `includes`: recorded include checkout SHAs (repo@ref → HEAD)
 - `config`: the resolved config snapshot; sensitive values are already
   SHA-256 digests in the checkpoint, never plaintext

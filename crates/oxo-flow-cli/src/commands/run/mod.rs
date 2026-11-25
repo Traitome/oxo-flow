@@ -385,6 +385,37 @@ async fn run_command_inner(
         WorkflowConfig::from_file_with_discovery_fallback(&workflow, discovery_fallback)
             .with_context(|| format!("failed to parse {}", workflow.display()))?;
 
+    // ── Metadata contract gate (issue #1368) ─────────────────────────────
+    // Evaluated on the AS-AUTHORED config, before `--samples` filtering (a
+    // filtered cohort must not turn every other metadata row into an
+    // out-of-domain finding). Error findings refuse the run before any
+    // file is touched; warnings are reported and the run proceeds.
+    let metadata_report = config.metadata_contract_report();
+    for finding in &metadata_report.findings {
+        let label = match finding.severity {
+            oxo_flow_core::config::MetadataSeverity::Error => "error".red().bold(),
+            oxo_flow_core::config::MetadataSeverity::Warning => "warning".yellow().bold(),
+        };
+        eprintln!(
+            "  {} [{}]: {}{}",
+            label,
+            finding.code,
+            finding.message,
+            finding
+                .suggestion
+                .as_deref()
+                .map(|hint| format!("\n    hint: {hint}"))
+                .unwrap_or_default()
+        );
+    }
+    if metadata_report.has_errors() {
+        anyhow::bail!(
+            "metadata contract failed: {} — fix the metadata table or relax \
+             [workflow.metadata_schema]",
+            oxo_flow_core::plural(metadata_report.error_count, "error", "errors")
+        );
+    }
+
     // ── Parse and merge CLI config overrides (the shared phase, overrides.rs) ─────
     // Captured before the move: the repair loop forwards the raw override
     // tokens into its verification rerun so the child re-derives the same
@@ -809,6 +840,10 @@ async fn run_command_inner(
         if let Some(dirty) = workflow_git_dirty {
             ck.set_workflow_git_dirty(dirty);
         }
+        // Record the canonical metadata-contract digest (issue #1368): which
+        // typed metadata table this run actually consumed. `None` for a
+        // workflow with no metadata table and no schema.
+        ck.set_metadata_digest(config.metadata_digest.clone());
         // Record resolved include provenance (issue #899): per repo-include,
         // the repo@ref and the checkout's HEAD SHA at parse time. Empty for
         // workflows without repo includes — a no-op in that case.
@@ -900,6 +935,7 @@ async fn run_command_inner(
         let resolved = oxo_flow_core::executor::checkpoint::compute_workflow_resolved_hash(
             raw_hash,
             &ck.config_snapshot,
+            config.metadata_digest.as_deref(),
         );
         ck.set_workflow_resolved_hash(resolved);
         if let Err(e) = ck.save_to_file(&checkpoint_path) {

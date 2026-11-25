@@ -425,6 +425,31 @@ below list every code the engine currently emits.
 | `E022` | A rule has no runnable command: `shell` is missing, empty, or whitespace-only and no non-empty `script` is declared. `E002` sees `shell = ""` as a present field, and the engine then skips the rule at run time ("no shell or script defined") — this code makes that state a hard validation error. Rules driven by `transform` are exempt (their command lives in `transform.map`/`transform.combine`). The classic trigger is an imported Nextflow process whose `script:` block was not captured |
 | `E023` | A fan-out domain is statically degenerate, so the workflow would plan zero instances or plan literal placeholders while reporting success (issue #1153, WF-02). Covers: a `[[rules.scatter]]` with an empty value domain (`values = []`, no `values_from`, or a `values_from` that resolves to an empty list) or an empty `variable`; a `transform` rule with an empty/missing `split.by`, no split source at all, a `split.values_from` that resolves to an empty list, or a `split.n` that is zero, negative, non-integer, or above the 100,000-instance expansion cap. An unresolvable `config.<key>` reference is left to expansion (a CLI `--arg` override or parent include may supply it); a `sample_pattern`/`split.glob` that matches zero files is a data-dependent plan-time error, not E023. The same inputs also hard-fail `run`/`dry-run` at expansion time |
 
+### Metadata contract findings (`META-*`)
+
+Emitted by `validate` and `dry-run` (and enforced by `run`) when a workflow
+has a per-sample metadata table or declares a
+`[workflow.metadata_schema]` contract (issue #1368). They are stable,
+row-level, sorted by `(code, row, column, id)`, and exposed in the
+`metadata` array of the `--json` documents. Errors fail validation; warnings
+do not. See the [metadata contract reference](./workflow-format.md#metadata-contract-workflowmetadata_schema)
+for the field semantics.
+
+| Code | Meaning |
+|---|---|
+| `META-001` | A required column is missing from the metadata table header/rows |
+| `META-002` | A required column has no value in a row (`row` is the 1-based data row) |
+| `META-003` | Duplicate metadata id — the later row is reported and the first occurrence's row is named |
+| `META-004` | Duplicate value in a column declared `unique` |
+| `META-005` | Value outside the column's declared `enum` |
+| `META-006` | Value does not match the column's declared `regex` (or the regex declaration itself is invalid) |
+| `META-007` | Value is not a valid declared `type` (`integer` / `float` / `boolean`) |
+| `META-008` | Pair conflict: `experiment == control`, or a duplicate `pair_id` |
+| `META-009` | A pair's experiment/control sample has no metadata row — severity follows `coverage` (`off` / `warn` / `error`) |
+| `META-010` | A `[[sample_groups]]` member has no metadata row — severity follows `coverage` |
+| `META-011` | A metadata row id is outside every sample group and pair domain (pair ids/experiments/controls count as domain ids) — severity follows `coverage` |
+| `META-012` | A column is not declared and `allow_extra_columns = false` |
+
 ### Lint warnings (`lint`)
 
 | Code | Meaning |

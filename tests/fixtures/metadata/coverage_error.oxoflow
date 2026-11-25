@@ -1,0 +1,34 @@
+[workflow]
+name = "coverage-error"
+metadata_file = "coverage.tsv"
+
+[workflow.metadata_schema]
+id_column = "sample"
+required_columns = ["batch"]
+allow_extra_columns = true
+coverage = "error"
+
+[[workflow.metadata_schema.columns]]
+name = "batch"
+regex = "^b\\d+$"
+
+[[workflow.metadata_schema.columns]]
+name = "age"
+type = "integer"
+
+[[workflow.metadata_schema.columns]]
+name = "value"
+type = "float"
+unique = true
+
+[[workflow.metadata_schema.columns]]
+name = "qc"
+enum = ["true", "false"]
+[[sample_groups]]
+name = "cohort"
+samples = ["S1", "S2", "S3"]
+
+[[rules]]
+name = "step"
+output = ["out.txt"]
+shell = "touch out.txt"

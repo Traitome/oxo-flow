@@ -49,6 +49,7 @@ reference_dir = "..."   # Optional: base directory for auto-derived reference pa
 [[sample_groups]]   # Optional: multi-sample groups (WC-02)
 [[values]]          # Optional: named value lists for parameter wildcards
 [metadata]          # Optional: per-sample metadata columns ({meta.<column>})
+[workflow.metadata_schema] # Optional: validated contract for the metadata table (META-*)
 [resource_budget]   # Optional: resource caps (max_jobs clamps concurrency; max_threads/max_memory cap both local runs and cluster submissions)
 [env_groups]        # Optional: named reusable environment specs
 [resource_groups]   # Optional: shared resource pools (API limits, DB connections)
@@ -257,6 +258,7 @@ author = "Your Name"
 | `pairs_file` | String | No | — | External TSV/CSV/JSON file defining experiment-control pairs |
 | `sample_groups_file` | String | No | — | External TSV/CSV/JSON file defining sample groups |
 | `metadata_file` | String | No | — | External TSV/CSV/JSON file of per-sample metadata columns, addressed as `{meta.<column>}` (see [Sample Metadata](#sample-metadata-metadata_file)) |
+| `metadata_schema` | Table | No | — | Validated contract for the metadata table: id column, required/typed/unique/enumerated/regex-checked columns, extra-column policy, and sample/pair coverage (see [Metadata Contract](#metadata-contract-workflowmetadata_schema)) |
 | `pairs_pattern` | String | No | — | File glob pattern for auto-discovering pairs (e.g., `"aligned/{pair_id}/{exp}_vs_{ctrl}.bam"`) |
 | `sample_pattern` | String | No | — | File glob pattern for auto-discovering samples (e.g., `"raw/{sample}_R1.fastq.gz"`) |
 | `on_complete` | String | No | — | Shell command run once after the whole workflow completes successfully (no failed rules). Rendered with `{config.*}` and the counters `{succeeded}`/`{failed}`/`{skipped}` plus `{workdir}`; runs in the workflow root with the workflow `shell_prelude`. Best-effort: a failing hook warns, never changes the run status. |
@@ -2739,6 +2741,116 @@ name  = "mapping_qc"
 input = ["{meta.bam_path}"]
 shell = "samtools stats {input[0]} > {output[0]}"
 ```
+
+### Metadata Contract (`workflow.metadata_schema`)
+
+The metadata table is a lookup by default; `[workflow.metadata_schema]`
+turns it into a **checked contract** (issue #1368). The contract is
+optional — omitting it keeps the table free-form — and is validated at
+plan time by `validate`, `dry-run`, and `run` (which refuses to start on an
+error finding). `validate --json` and `dry-run --json` expose every
+finding in a stable `metadata` array, and the canonical digest of the
+contract plus rows is recorded in the run checkpoint's provenance.
+
+```toml
+[workflow]
+name = "cohort"
+metadata_file = "metadata/samples.tsv"
+
+[workflow.metadata_schema]
+id_column = "sample"                 # default: "sample"
+required_columns = ["batch"]
+allow_extra_columns = false          # default: true
+coverage = "warn"                    # "off" | "warn" (default) | "error"
+
+[[workflow.metadata_schema.columns]]
+name = "batch"
+regex = "^b\\d+$"
+
+[[workflow.metadata_schema.columns]]
+name = "age"
+type = "integer"                     # "string" (default) | "integer" | "float" | "boolean"
+
+[[workflow.metadata_schema.columns]]
+name = "library_id"
+unique = true
+
+[[workflow.metadata_schema.columns]]
+name = "qc"
+required = true
+enum = ["pass", "fail"]
+```
+
+**Contract fields:**
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `id_column` | string | `"sample"` | TSV/CSV header name and JSON object key holding the row id. The id is always required, non-empty, and unique (`META-003`). For the default `sample` id, a TSV/CSV whose header has no `sample` column keeps the historical first-column-is-the-id layout; any other value must name an existing header (or the load fails naming the column and the declared headers). |
+| `required_columns` | array of strings | `[]` | Columns every row must carry a non-empty value for. |
+| `allow_extra_columns` | boolean | `true` | When `false`, a column outside `columns[].name` + `required_columns` is `META-012`. |
+| `coverage` | `"off"` / `"warn"` / `"error"` | `"warn"` | How gaps between the table and the declared sample/pair domain are reported (`META-009`, `META-010`, `META-011`). |
+| `columns` | array of tables | `[]` | Per-column constraints: `name` (required), `required` (bool), `unique` (bool), `type`, `regex`, `enum`. |
+
+**Value semantics:**
+
+- `type = "integer"` accepts a signed 64-bit integer (`12`, `-3`);
+  `"float"` a finite floating-point number (`3.5`, `-1e-4`); `"boolean"`
+  `true` or `false` (case-insensitive). Empty cells are **absent values**,
+  never type errors — use `required` / `required_columns` for presence.
+- `regex` uses Rust regex semantics and is **unanchored** — write `^…$`
+  for a whole-value match.
+- `enum` values are compared exactly (case-sensitive).
+- `unique` checks non-empty values across all rows; declaring it on the id
+  column is redundant (duplicate ids are always `META-003`).
+- The declaration itself is validated at load: an empty `id_column`,
+  duplicate column names, an uncompilable regex, or an empty `enum` list
+  fail with a config error naming the offending key.
+
+**Findings** are stable and row-level (`row` is the 1-based data row in
+the metadata table, `null` for table-level findings and for inline
+`[metadata]` rows), carry the offending `column` / `id`, and are sorted by
+`(code, row, column, id)`:
+
+| Code | Severity | Meaning |
+|---|---|---|
+| `META-001` | error | A required column is missing from the table header/rows. |
+| `META-002` | error | A required column has no value in a row. |
+| `META-003` | error | Duplicate metadata id (the later row is reported; the first occurrence's row is named). |
+| `META-004` | error | Duplicate value in a `unique` column. |
+| `META-005` | error | Value outside the declared `enum`. |
+| `META-006` | error | Value does not match the declared `regex` (or the regex itself is invalid). |
+| `META-007` | error | Value is not a valid declared `type`. |
+| `META-008` | error | Pair conflict: `experiment == control`, or a duplicate `pair_id`. |
+| `META-009` | `coverage` | A pair's experiment/control sample has no metadata row. |
+| `META-010` | `coverage` | A sample-group member has no metadata row. |
+| `META-011` | `coverage` | A metadata row id is outside every sample group and pair domain (pair ids, experiments, and controls all count as domain ids because `{meta.*}` lookup falls back to them). |
+| `META-012` | error | A column is not declared and `allow_extra_columns = false`. |
+
+`coverage = "off"` emits nothing for `META-009`–`META-011`; `"warn"` (the
+default) reports warnings and continues; `"error"` fails validation and
+refuses `run`. Coverage is only evaluated when a contract exists **and** a
+sample/pair domain is declared — a metadata table used as a pure constant
+lookup is never a coverage violation. Empty ids are a parse error naming
+the data row, never silently skipped.
+
+**Canonical metadata digest.** Every workflow with a metadata table or a
+declared contract gets a content digest — `sha256:<hex>` over
+`{format, schema, rows}` — materialized with the schema defaults applied
+(`required_columns` sorted/deduped, `columns` sorted by name, enum values
+sorted), rows sorted by id, columns sorted by name, values trimmed, and
+empty values omitted. The row numbers are not part of the digest. The
+digest is therefore byte-stable across TSV, CSV, and JSON sources carrying
+the same logical rows and across input row order (an empty cell and an
+absent key are the same logical value). It is recorded in the run
+checkpoint next to the workflow content hash and is folded into the
+override-aware `workflow_resolved_hash`, so two runs whose metadata
+contract or rows differ can never share a resolved fingerprint. It is
+surfaced by `validate --json` / `dry-run --json` as `metadata_digest`, and
+`provenance verify` / `provenance attest` report and bind it. It proves
+*which* typed table a run consumed — not that the values are biologically
+correct, and `provenance verify` does not re-derive it (the table bytes as
+loaded are not stored in the checkpoint; see
+[`provenance`](../commands/provenance.md)).
 
 ### Partial Pair Tolerance & Tumor-Only Mode
 

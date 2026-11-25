@@ -1,0 +1,12 @@
+[workflow]
+name = "pair-conflict"
+
+[[pairs]]
+pair_id = "P1"
+experiment = "T1"
+control = "T1"
+
+[[rules]]
+name = "step"
+output = ["out.txt"]
+shell = "touch out.txt"

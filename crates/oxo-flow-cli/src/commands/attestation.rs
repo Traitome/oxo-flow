@@ -93,6 +93,14 @@ pub fn build_attestation(checkpoint_path: &Path) -> Result<Value> {
         "resolved_hash",
         object.get("workflow_resolved_hash"),
     );
+    // Issue #1368: bind the canonical metadata-contract digest — the typed
+    // schema plus effective rows the run consumed — so a signed attestation
+    // covers the cohort table, not only the workflow/config text.
+    insert_optional(
+        &mut workflow,
+        "metadata_digest",
+        object.get("metadata_digest"),
+    );
 
     let mut doc = Map::new();
     doc.insert(
@@ -488,6 +496,7 @@ mod tests {
                 "workflow_git_dirty": true,
                 "workflow_content_hash": "sha256:aaaa",
                 "workflow_resolved_hash": "sha256:bbbb",
+                "metadata_digest": "sha256:dddd",
                 "include_resolutions": { "repo@v1 mods/x.oxoflow": "cafebabe" },
                 "config_snapshot": { "samples_list": "S1,S2", "secret_key": "sha256:cccc" },
                 "checksums": { "out/a.txt": "sha256:1111" },
@@ -534,6 +543,7 @@ mod tests {
         assert_eq!(doc["format"], ATTESTATION_FORMAT);
         assert_eq!(doc["workflow"]["content_hash"], "sha256:aaaa");
         assert_eq!(doc["workflow"]["resolved_hash"], "sha256:bbbb");
+        assert_eq!(doc["workflow"]["metadata_digest"], "sha256:dddd");
         assert_eq!(doc["includes"]["repo@v1 mods/x.oxoflow"], "cafebabe");
         assert_eq!(doc["outputs"]["out/a.txt"], "sha256:1111");
         assert_eq!(doc["cleaned_outputs"]["tmp/t.txt"], "sha256:2222");
@@ -565,6 +575,7 @@ mod tests {
         for (section, field) in [
             ("workflow", "content_hash"),
             ("workflow", "git_sha"),
+            ("workflow", "metadata_digest"),
             ("outputs", "out/a.txt"),
             ("config", "secret_key"),
             ("outcome", "status"),

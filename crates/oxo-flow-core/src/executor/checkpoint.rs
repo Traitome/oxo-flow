@@ -525,6 +525,16 @@ pub struct CheckpointState {
     /// workflow is not inside a git repository or git is unavailable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workflow_git_dirty: Option<bool>,
+    /// Canonical digest of the executed metadata contract (issue #1368):
+    /// `sha256:<hex>` over the resolved `[workflow.metadata_schema]` plus
+    /// the effective metadata rows, with rows sorted by id, columns by name,
+    /// values trimmed, and empty values omitted. Byte-stable across
+    /// TSV/CSV/JSON sources carrying the same logical rows and across input
+    /// row order, so two runs whose metadata table or declared contract
+    /// differs in any checked value record different digests. `None` when
+    /// the workflow declares neither a metadata table nor a schema.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata_digest: Option<String>,
     /// Resolved include provenance (issue #899): per repo-include, the
     /// repo@ref and the checkout's HEAD SHA recorded at include resolution
     /// time. Branch/tag pins re-fetch on every activation, so this is the
@@ -806,6 +816,7 @@ impl CheckpointState {
             workflow_content_hash: None,
             workflow_resolved_hash: None,
             workflow_git_dirty: None,
+            metadata_digest: None,
             include_resolutions: BTreeMap::new(),
             env_store_refs: BTreeMap::new(),
             workdir: None,
@@ -1015,6 +1026,13 @@ impl CheckpointState {
     /// [`CheckpointState::workflow_resolved_hash`].
     pub fn set_workflow_resolved_hash(&mut self, hash: String) {
         self.workflow_resolved_hash = Some(hash);
+    }
+
+    /// Record the canonical metadata-contract digest (issue #1368). `None`
+    /// clears it (a workflow that declares no metadata contract records
+    /// nothing).
+    pub fn set_metadata_digest(&mut self, digest: Option<String>) {
+        self.metadata_digest = digest;
     }
 
     /// Record whether the workflow's git repository had uncommitted changes
@@ -1440,20 +1458,31 @@ pub fn compute_file_checksum(path: &Path) -> Result<String> {
 /// the same resolved state always hashes to the same digest regardless of
 /// insertion order. The `format` tag versions the canonical form, letting a
 /// future change to the snapshot shape coexist with old checkpoints.
+///
+/// `metadata_digest` (issue #1368) folds the canonical metadata contract
+/// into the identity: the config snapshot covers `[config]` values only, so
+/// without it two runs whose metadata rows differ would share a resolved
+/// hash. The field is omitted when there is no metadata contract, keeping
+/// the digest of metadata-free workflows byte-identical to earlier
+/// releases.
 pub fn compute_workflow_resolved_hash(
     workflow_content_hash: &str,
     config_snapshot: &BTreeMap<String, String>,
+    metadata_digest: Option<&str>,
 ) -> String {
     #[derive(serde::Serialize)]
     struct ResolvedWorkflowIdentity<'a> {
         format: &'static str,
         workflow_content_hash: &'a str,
         config_snapshot: &'a BTreeMap<String, String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        metadata_digest: Option<&'a str>,
     }
     let identity = ResolvedWorkflowIdentity {
         format: "oxo-flow.resolved-workflow/v1",
         workflow_content_hash,
         config_snapshot,
+        metadata_digest,
     };
     let canonical = serde_json::to_vec(&identity)
         .expect("serializing the resolved-workflow identity cannot fail");
@@ -4456,6 +4485,44 @@ mod tests {
     }
 
     #[test]
+    fn metadata_digest_roundtrip_legacy_default_and_resolved_hash_fold() {
+        // Issue #1368: the metadata digest is recorded provenance — it
+        // survives a save/load roundtrip and is absent on legacy checkpoints.
+        let mut state = CheckpointState::new();
+        state.set_metadata_digest(Some("sha256:feedface".to_string()));
+        let json = state.to_json().unwrap();
+        assert!(json.contains("metadata_digest") && json.contains("sha256:feedface"));
+        let loaded: CheckpointState = serde_json::from_str(&json).unwrap();
+        assert_eq!(loaded.metadata_digest.as_deref(), Some("sha256:feedface"));
+        let legacy = r#"{"completed_rules":[],"failed_rules":[],"benchmarks":{}}"#;
+        let loaded: CheckpointState = serde_json::from_str(legacy).unwrap();
+        assert!(loaded.metadata_digest.is_none());
+        // A fresh checkpoint omits the key entirely (byte-stable legacy JSON).
+        assert!(
+            !CheckpointState::new()
+                .to_json()
+                .unwrap()
+                .contains("metadata_digest")
+        );
+
+        // The resolved-workflow identity folds the metadata digest in, and
+        // omitting it keeps the historical bytes (metadata-free workflows
+        // hash exactly as before).
+        let snapshot: BTreeMap<String, String> = [("min_reads".to_string(), "20000".to_string())]
+            .into_iter()
+            .collect();
+        let without = compute_workflow_resolved_hash("sha256:abc", &snapshot, None);
+        let with_a = compute_workflow_resolved_hash("sha256:abc", &snapshot, Some("sha256:aaaa"));
+        let with_b = compute_workflow_resolved_hash("sha256:abc", &snapshot, Some("sha256:bbbb"));
+        assert_ne!(without, with_a);
+        assert_ne!(with_a, with_b);
+        assert_eq!(
+            without,
+            compute_workflow_resolved_hash("sha256:abc", &snapshot, None)
+        );
+    }
+
+    #[test]
     fn resolved_hash_is_byte_stable_and_formatted_like_a_recorded_digest() {
         // Same inputs → byte-identical digest, `sha256:<hex>` shape. The
         // canonical form is hashed twice to pin determinism (the same
@@ -4464,8 +4531,8 @@ mod tests {
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect();
-        let first = compute_workflow_resolved_hash("sha256:abc", &snapshot);
-        let second = compute_workflow_resolved_hash("sha256:abc", &snapshot);
+        let first = compute_workflow_resolved_hash("sha256:abc", &snapshot, None);
+        let second = compute_workflow_resolved_hash("sha256:abc", &snapshot, None);
         assert_eq!(first, second);
         assert!(first.starts_with("sha256:"));
         assert_eq!(first["sha256:".len()..].len(), 64);
@@ -4479,18 +4546,18 @@ mod tests {
         // raw digest alone changes it too.
         let mut snapshot: BTreeMap<String, String> = BTreeMap::new();
         snapshot.insert("min_reads".to_string(), "20000".to_string());
-        let base = compute_workflow_resolved_hash("sha256:abc", &snapshot);
+        let base = compute_workflow_resolved_hash("sha256:abc", &snapshot, None);
         let mut overridden = snapshot.clone();
         overridden.insert("min_reads".to_string(), "30000".to_string());
-        let overridden_hash = compute_workflow_resolved_hash("sha256:abc", &overridden);
+        let overridden_hash = compute_workflow_resolved_hash("sha256:abc", &overridden, None);
         assert_ne!(base, overridden_hash);
         assert_eq!(
             base,
-            compute_workflow_resolved_hash("sha256:abc", &snapshot)
+            compute_workflow_resolved_hash("sha256:abc", &snapshot, None)
         );
         assert_ne!(
             base,
-            compute_workflow_resolved_hash("sha256:def", &snapshot)
+            compute_workflow_resolved_hash("sha256:def", &snapshot, None)
         );
         // Key insertion order cannot leak into the digest: a snapshot built
         // in reverse pair order hashes identically (BTreeMap canonicalizes).
@@ -4501,13 +4568,13 @@ mod tests {
         forward.insert("min_reads".to_string(), "20000".to_string());
         forward.insert("species".to_string(), "hg38".to_string());
         assert_eq!(
-            compute_workflow_resolved_hash("sha256:abc", &forward),
-            compute_workflow_resolved_hash("sha256:abc", &reversed)
+            compute_workflow_resolved_hash("sha256:abc", &forward, None),
+            compute_workflow_resolved_hash("sha256:abc", &reversed, None)
         );
         // The empty snapshot is still a distinct identity (a workflow with
         // no [config] keys hashes differently from one that has them).
         assert_ne!(
-            compute_workflow_resolved_hash("sha256:abc", &BTreeMap::new()),
+            compute_workflow_resolved_hash("sha256:abc", &BTreeMap::new(), None),
             base
         );
     }

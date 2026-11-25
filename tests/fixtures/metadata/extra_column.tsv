@@ -1,0 +1,3 @@
+sample	batch	age	value	qc	notes
+S1	b1	30	1.5	true	x
+S2	b2	40	2.5	false	y

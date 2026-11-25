@@ -379,6 +379,16 @@ pub struct WorkflowMeta {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub profile_mode: Option<ProfileMode>,
+
+    /// Optional validated metadata/cohort contract for the `metadata_file`
+    /// table (issue #1368): declared columns, types, uniqueness, enums,
+    /// regexes, extra-column policy, and sample/pair domain coverage.
+    /// Findings are `META-001` … `META-012`; the canonical digest of the
+    /// resolved contract plus rows is recorded in the checkpoint
+    /// provenance.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata_schema: Option<super::metadata::MetadataSchema>,
 }
 
 impl WorkflowMeta {
@@ -1356,14 +1366,17 @@ fn read_tabular_file(path: &Path, label: &str) -> Result<String> {
 
 /// Shared extension dispatch for the tabular sidecar loaders; the per-type
 /// error labels keep pointing at the file kind the user actually wrote.
+/// Generic over the loader's return type so the metadata loader can share
+/// the extension/read gates while returning a header-carrying
+/// [`super::metadata::MetadataTable`] instead of a bare row list.
 fn dispatch_tabular_format<T>(
     path: &Path,
     content: &str,
     label: &str,
-    json: fn(&str, &Path) -> Result<Vec<T>>,
-    csv: fn(&str, &Path) -> Result<Vec<T>>,
-    tsv: fn(&str, &Path) -> Result<Vec<T>>,
-) -> Result<Vec<T>> {
+    json: impl FnOnce(&str, &Path) -> Result<T>,
+    csv: impl FnOnce(&str, &Path) -> Result<T>,
+    tsv: impl FnOnce(&str, &Path) -> Result<T>,
+) -> Result<T> {
     let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("");
     match extension {
         "json" => json(content, path),
@@ -2035,68 +2048,125 @@ impl SampleMetadata {
     ///   {"sample": "SE1", "endedness": "SE", "adapters": "AGATCGGAAG"}
     /// ]
     /// ```
+    ///
+    /// The default id column/JSON key is `sample`; the first TSV/CSV column
+    /// is the id when no column is literally named `sample` (legacy
+    /// layout). A workflow declaring
+    /// `[workflow.metadata_schema] id_column = "…"` uses
+    /// [`Self::load_from_file_with_id_column`] instead.
     pub fn load_from_file(path: &Path) -> Result<Vec<Self>> {
+        Self::load_from_file_with_id_column(path, super::metadata::DEFAULT_ID_COLUMN)
+    }
+
+    /// [`Self::load_from_file`] honoring an explicit id column/key.
+    ///
+    /// An empty id is a parse error naming the row — a row without an id is
+    /// unreachable by `{meta.*}` lookup and silently dropping it hides a
+    /// broken table.
+    pub fn load_from_file_with_id_column(path: &Path, id_column: &str) -> Result<Vec<Self>> {
+        let table = Self::load_table_from_file(path, id_column)?;
+        Ok(table
+            .rows
+            .into_iter()
+            .map(|row| Self {
+                sample: row.id,
+                values: row.values.into_iter().collect(),
+            })
+            .collect())
+    }
+
+    /// Load the metadata table with its header and per-row source numbers —
+    /// the representation the `[workflow.metadata_schema]` validator and the
+    /// canonical digest consume (issue #1368).
+    ///
+    /// `id_column` names the TSV/CSV header column and the JSON object key.
+    /// For the default `sample` id, a TSV/CSV whose header has no `sample`
+    /// column keeps the historical first-column-is-the-id behavior; a
+    /// non-default `id_column` must be present or the load fails naming the
+    /// column and the headers that were declared.
+    pub fn load_table_from_file(
+        path: &Path,
+        id_column: &str,
+    ) -> Result<super::metadata::MetadataTable> {
         let content = read_tabular_file(path, "metadata")?;
         dispatch_tabular_format(
             path,
             &content,
             "metadata",
-            Self::parse_json,
-            Self::parse_csv,
-            Self::parse_tsv,
+            |content, path| Self::parse_json_table(content, path, id_column),
+            |content, path| Self::parse_delimited_table(content, path, ',', id_column),
+            |content, path| Self::parse_delimited_table(content, path, '\t', id_column),
         )
     }
 
-    fn parse_json(content: &str, path: &Path) -> Result<Vec<Self>> {
+    fn parse_json_table(
+        content: &str,
+        path: &Path,
+        id_column: &str,
+    ) -> Result<super::metadata::MetadataTable> {
         let rows: Vec<toml::Value> =
             serde_json::from_str(content).map_err(|e| OxoFlowError::Parse {
                 path: path.to_path_buf(),
                 message: format!("invalid JSON metadata file: {}", e),
             })?;
-        let mut out = Vec::with_capacity(rows.len());
-        for row in rows {
+        let mut parsed: Vec<super::metadata::MetadataRow> = Vec::with_capacity(rows.len());
+        let mut columns: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        for (index, row) in rows.into_iter().enumerate() {
+            let data_row = index + 1;
             let toml::Value::Table(table) = row else {
                 return Err(OxoFlowError::Parse {
                     path: path.to_path_buf(),
-                    message: "metadata JSON rows must be objects".to_string(),
+                    message: format!("metadata JSON row {data_row} must be an object"),
                 });
             };
-            let sample = table
-                .get("sample")
-                .and_then(toml::Value::as_str)
-                .unwrap_or("")
-                .to_string();
-            if sample.is_empty() {
+            let id = table
+                .get(id_column)
+                .map(|value| match value {
+                    toml::Value::String(text) => text.clone(),
+                    other => other.to_string(),
+                })
+                .unwrap_or_default();
+            let id = id.trim().to_string();
+            if id.is_empty() {
                 return Err(OxoFlowError::Parse {
                     path: path.to_path_buf(),
-                    message: "metadata JSON rows must have a non-empty 'sample' key".to_string(),
+                    message: format!(
+                        "metadata JSON row {data_row} has a missing or empty '{id_column}' key — \
+                         every row needs a non-empty id"
+                    ),
                 });
             }
-            let values = table
-                .into_iter()
-                .filter(|(k, _)| k != "sample")
-                .map(|(k, v)| {
-                    let v = match v {
-                        toml::Value::String(s) => s,
-                        other => other.to_string(),
-                    };
-                    (k, v)
-                })
-                .collect();
-            out.push(Self { sample, values });
+            let mut values = std::collections::BTreeMap::new();
+            for (key, value) in table {
+                if key == id_column {
+                    continue;
+                }
+                columns.insert(key.clone());
+                let value = match value {
+                    toml::Value::String(text) => text,
+                    other => other.to_string(),
+                };
+                values.insert(key, value);
+            }
+            parsed.push(super::metadata::MetadataRow {
+                row: Some(data_row),
+                id,
+                values,
+            });
         }
-        Ok(out)
+        Ok(super::metadata::MetadataTable {
+            id_column: id_column.to_string(),
+            columns: columns.into_iter().collect(),
+            rows: parsed,
+        })
     }
 
-    fn parse_csv(content: &str, path: &Path) -> Result<Vec<Self>> {
-        Self::parse_delimited(content, ',', path)
-    }
-
-    fn parse_tsv(content: &str, path: &Path) -> Result<Vec<Self>> {
-        Self::parse_delimited(content, '\t', path)
-    }
-
-    fn parse_delimited(content: &str, delimiter: char, path: &Path) -> Result<Vec<Self>> {
+    fn parse_delimited_table(
+        content: &str,
+        path: &Path,
+        delimiter: char,
+        id_column: &str,
+    ) -> Result<super::metadata::MetadataTable> {
         let mut reader = csv::ReaderBuilder::new()
             .delimiter(delimiter as u8)
             .has_headers(true)
@@ -2118,25 +2188,70 @@ impl SampleMetadata {
             });
         }
 
-        let mut out = Vec::new();
+        // Resolve the id column by name; the default `sample` keeps the
+        // historical first-column layout for older tables whose header does
+        // not spell `sample`.
+        let id_index = match headers.iter().position(|header| header == id_column) {
+            Some(index) => index,
+            None if id_column == super::metadata::DEFAULT_ID_COLUMN => 0,
+            None => {
+                let declared: Vec<&str> = headers.iter().collect();
+                return Err(OxoFlowError::Parse {
+                    path: path.to_path_buf(),
+                    message: format!(
+                        "metadata file is missing id column '{id_column}' — declared headers: {}. \
+                         Set [workflow.metadata_schema] id_column to the header that holds the row id.",
+                        declared.join(", ")
+                    ),
+                });
+            }
+        };
+
+        let mut columns: std::collections::BTreeSet<String> = headers
+            .iter()
+            .enumerate()
+            .filter(|(index, header)| *index != id_index && !header.is_empty())
+            .map(|(_, header)| header.to_string())
+            .collect();
+        let mut parsed = Vec::new();
         for (row_idx, result) in reader.records().enumerate() {
+            let data_row = row_idx + 1;
             let record = result.map_err(|e| OxoFlowError::Parse {
                 path: path.to_path_buf(),
-                message: format!("error parsing row {}: {}", row_idx + 2, e),
+                message: format!("error parsing metadata row {}: {}", data_row + 1, e),
             })?;
-            let sample = record.get(0).unwrap_or("").to_string();
-            if sample.is_empty() {
-                continue;
+            let id = record.get(id_index).unwrap_or("").trim().to_string();
+            if id.is_empty() {
+                return Err(OxoFlowError::Parse {
+                    path: path.to_path_buf(),
+                    message: format!(
+                        "metadata data row {data_row} has an empty id in column '{id_column}' — \
+                         every row needs a non-empty id"
+                    ),
+                });
             }
-            let values = headers
-                .iter()
-                .enumerate()
-                .skip(1)
-                .map(|(i, header)| (header.to_string(), record.get(i).unwrap_or("").to_string()))
-                .collect();
-            out.push(Self { sample, values });
+            let mut values = std::collections::BTreeMap::new();
+            for (index, header) in headers.iter().enumerate() {
+                if index == id_index || header.is_empty() {
+                    continue;
+                }
+                columns.insert(header.to_string());
+                values.insert(
+                    header.to_string(),
+                    record.get(index).unwrap_or("").to_string(),
+                );
+            }
+            parsed.push(super::metadata::MetadataRow {
+                row: Some(data_row),
+                id,
+                values,
+            });
         }
-        Ok(out)
+        Ok(super::metadata::MetadataTable {
+            id_column: id_column.to_string(),
+            columns: columns.into_iter().collect(),
+            rows: parsed,
+        })
     }
 }
 
@@ -2352,6 +2467,29 @@ pub struct WorkflowConfig {
     #[serde(skip_serializing_if = "HashMap::is_empty")]
     #[serde(serialize_with = "serialize_sorted_nested_string_map")]
     pub metadata: HashMap<String, HashMap<String, String>>,
+
+    /// Engine-internal effective metadata table (issue #1368): every row a
+    /// lookup can reach — file rows with their 1-based source row numbers,
+    /// then inline-only rows — plus the columns any source declared. Built
+    /// once at load (`parse` / `from_file`); the `[workflow.metadata_schema]`
+    /// validator and the canonical digest read it. Never serialized — user
+    /// TOML cannot set it.
+    #[serde(skip)]
+    pub(crate) metadata_table: Option<super::metadata::MetadataTable>,
+
+    /// Canonical digest (`sha256:<hex>`) of the executed metadata contract
+    /// plus effective rows (issue #1368), computed at load by
+    /// [`super::metadata::digest_for`]. `None` when the workflow declares
+    /// neither a metadata table nor a `[workflow.metadata_schema]`.
+    ///
+    /// Deliberately NOT serialized back into the `.oxoflow` document: the
+    /// formatter's output must stay a re-parseable workflow, and a derived
+    /// top-level key would require a whitelist entry users could then
+    /// hand-write. The digest is recorded where it is evidence — the run
+    /// checkpoint's provenance (`CheckpointState::metadata_digest`) — and
+    /// exposed in the `validate --json` / `dry-run --json` documents.
+    #[serde(skip)]
+    pub metadata_digest: Option<String>,
 
     /// Named value lists for arbitrary parameter wildcards (`[[values]]`).
     ///
