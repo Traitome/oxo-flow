@@ -11,8 +11,8 @@ use std::sync::Arc;
 
 use oxo_flow_core::audit_chain::{
     AuditChainExport, AuditChainVerification, FINDING_HASH_MISMATCH, FINDING_LOG_MISMATCH,
-    FINDING_MISSING_LOG_ROW, FINDING_SEQ_MISMATCH, FINDING_UNCHAINED_LOG_ROW, PHASE_PENDING,
-    PHASE_SUCCESS, verify_export,
+    FINDING_MISSING_LOG_ROW, FINDING_SEQ_MISMATCH, FINDING_UNCHAINED_LOG_ROW, GENESIS_HASH,
+    PHASE_FAILURE, PHASE_PENDING, PHASE_SUCCESS, verify_export,
 };
 use oxo_flow_web::infra::db::StorageBackend;
 use oxo_flow_web::infra::db::sqlite::SqliteBackend;
@@ -47,6 +47,82 @@ fn codes(verification: &AuditChainVerification) -> Vec<&str> {
         .iter()
         .map(|finding| finding.code.as_str())
         .collect()
+}
+
+/// The GLOBAL chain invariant: one gapless sequence starting at 1, every event
+/// linked to the immediately preceding event (not merely to a sibling of the
+/// same audit id), and a head that equals the last event.
+///
+/// This is the assertion that makes the concurrency tests meaningful —
+/// per-audit adjacency is NOT part of the chain contract, because concurrent
+/// writers may interleave events from other audit ids between a pending and
+/// its terminal.
+fn assert_global_chain_integrity(export: &AuditChainExport) {
+    assert!(!export.events.is_empty(), "the chain must have events");
+    assert_eq!(
+        export.events[0].prev_hash, GENESIS_HASH,
+        "the first event must link to genesis"
+    );
+    for pair in export.events.windows(2) {
+        assert_eq!(
+            pair[1].seq,
+            pair[0].seq + 1,
+            "seq {} -> {} has a gap or duplicate",
+            pair[0].seq,
+            pair[1].seq
+        );
+        assert_eq!(
+            pair[1].prev_hash, pair[0].hash,
+            "event {} does not link to the immediately preceding event {}",
+            pair[1].seq, pair[0].seq
+        );
+    }
+    let last = export.events.last().expect("non-empty chain");
+    assert_eq!(
+        export.head.seq, last.seq,
+        "head seq must match the last event"
+    );
+    assert_eq!(
+        export.head.hash, last.hash,
+        "head hash must match the last event"
+    );
+}
+
+/// One audit id written by a begin+finalize pair: exactly one pending and one
+/// terminal event, in that order. Events of other audit ids may sit between
+/// them; adjacency is deliberately NOT required.
+fn assert_audit_pair(export: &AuditChainExport, audit_id: &str, terminal_phase: &str) {
+    let events: Vec<_> = export
+        .events
+        .iter()
+        .filter(|event| event.audit_id == audit_id)
+        .collect();
+    assert_eq!(
+        events.len(),
+        2,
+        "expected one pending + one terminal for '{audit_id}', got {events:?}"
+    );
+    let pending = events
+        .iter()
+        .find(|event| event.phase == PHASE_PENDING)
+        .unwrap_or_else(|| panic!("no pending event for '{audit_id}': {events:?}"));
+    let terminal = events
+        .iter()
+        .find(|event| event.phase == terminal_phase)
+        .unwrap_or_else(|| panic!("no '{terminal_phase}' event for '{audit_id}': {events:?}"));
+    assert!(
+        pending.seq < terminal.seq,
+        "pending (seq {}) must precede terminal (seq {}) for '{audit_id}'",
+        pending.seq,
+        terminal.seq
+    );
+    assert_eq!(terminal.result, terminal_phase);
+    assert!(
+        events
+            .iter()
+            .all(|event| event.phase != PHASE_FAILURE || terminal_phase == PHASE_FAILURE),
+        "unexpected failure event for '{audit_id}': {events:?}"
+    );
 }
 
 async fn append_pair(backend: &dyn StorageBackend, id: &str, actor: &str) {
@@ -154,10 +230,15 @@ async fn concurrent_appends_form_one_gapless_chain() {
 
     let export = snapshot_export(backend.as_ref()).await;
     assert_eq!(export.events.len(), 32, "16 intents + 16 terminals");
+    // Global chain contract: 1..=32, each event linked to the immediately
+    // preceding event, head equals the last event. Per-audit adjacency is not
+    // required: concurrent writers may interleave other audit ids between a
+    // pending and its terminal.
+    assert_global_chain_integrity(&export);
     let seqs: Vec<u64> = export.events.iter().map(|event| event.seq).collect();
     assert_eq!(seqs, (1..=32).collect::<Vec<u64>>(), "exactly one chain");
-    for pair in export.events.windows(2) {
-        assert_eq!(pair[1].prev_hash, pair[0].hash, "links are contiguous");
+    for index in 0..16 {
+        assert_audit_pair(&export, &format!("concurrent-{index}"), PHASE_SUCCESS);
     }
     let verification = verify_export(&export);
     assert!(verification.ok, "{:?}", verification.findings);
@@ -364,6 +445,10 @@ async fn postgres_chain_semantics_match_sqlite() {
     backend.init().await.expect("schema bootstrap");
 
     let actor = format!("pg-chain-actor-{}", Uuid::new_v4().simple());
+    // Every audit id carries this run's nonce, so a rerun against the same
+    // shared database cannot accumulate a second pending+terminal pair for a
+    // previously used id (the chain is append-only and never cleared).
+    let run = Uuid::new_v4().simple().to_string();
     let base = backend.audit_chain_snapshot().await.expect("baseline");
 
     // Concurrent appends serialize on the head row (FOR UPDATE).
@@ -371,8 +456,9 @@ async fn postgres_chain_semantics_match_sqlite() {
     for index in 0..8 {
         let backend = backend.clone();
         let actor = actor.clone();
+        let run = run.clone();
         tasks.push(tokio::spawn(async move {
-            let id = format!("pg-concurrent-{index}");
+            let id = format!("pg-concurrent-{run}-{index}");
             backend
                 .begin_audit_intent(&id, &actor, "POST /api/x", "/api/x", None)
                 .await
@@ -409,24 +495,21 @@ async fn postgres_chain_semantics_match_sqlite() {
         "8 pairs (16) + 2 idempotent events must advance the head"
     );
 
+    // The chain contract is GLOBAL: each event links to the immediately
+    // preceding event, even though these eight writers race and their events
+    // interleave. Per-audit adjacency is not required and is not asserted.
+    assert_global_chain_integrity(&export);
+
     for index in 0..8 {
-        let audit_id = format!("pg-concurrent-{index}");
-        let events: Vec<_> = export
-            .events
-            .iter()
-            .filter(|event| event.audit_id == audit_id)
-            .collect();
-        assert_eq!(events.len(), 2, "pending + terminal for {audit_id}");
-        assert_eq!(events[0].phase, PHASE_PENDING);
-        assert_eq!(events[1].phase, PHASE_SUCCESS);
-        assert_eq!(events[1].prev_hash, events[0].hash);
+        assert_audit_pair(
+            &export,
+            &format!("pg-concurrent-{run}-{index}"),
+            PHASE_SUCCESS,
+        );
     }
-    let idem: Vec<_> = export
-        .events
-        .iter()
-        .filter(|event| event.audit_id == id)
-        .collect();
-    assert_eq!(idem.len(), 2, "the conflicting finalize appended nothing");
+    // The conflicting finalize appended nothing: still exactly one pending and
+    // one success terminal.
+    assert_audit_pair(&export, &id, PHASE_SUCCESS);
 
     let verification = verify_export(&export);
     assert!(verification.ok, "{:?}", verification.findings);
