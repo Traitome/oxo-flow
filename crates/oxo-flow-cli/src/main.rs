@@ -1241,7 +1241,7 @@ pub enum ClusterAction {
         #[arg(
             short = 'b',
             long,
-            help = "Cluster backend: slurm, pbs, sge, lsf, kubernetes (k8s), aws-batch, or gcp-batch (defaults to $OXO_FLOW_CLUSTER_BACKEND, then slurm)"
+            help = "Cluster backend: slurm, pbs, sge, lsf, kubernetes (k8s), aws-batch, or tencent-batch (Tencent Cloud BatchCompute) (defaults to $OXO_FLOW_CLUSTER_BACKEND, then slurm)"
         )]
         backend: Option<String>,
         #[arg(short = 'q', long, help = "Cluster queue or partition name")]
@@ -1293,7 +1293,7 @@ pub enum ClusterAction {
         #[arg(
             short = 'b',
             long,
-            help = "Cluster backend: slurm, pbs, sge, lsf, kubernetes (k8s), aws-batch, or gcp-batch (defaults to $OXO_FLOW_CLUSTER_BACKEND, then slurm)"
+            help = "Cluster backend: slurm, pbs, sge, lsf, kubernetes (k8s), aws-batch, or tencent-batch (Tencent Cloud BatchCompute) (defaults to $OXO_FLOW_CLUSTER_BACKEND, then slurm)"
         )]
         backend: Option<String>,
         #[arg(
@@ -1309,6 +1309,12 @@ pub enum ClusterAction {
         run_dir: Option<PathBuf>,
         #[arg(
             long,
+            value_name = "QUEUE",
+            help = "Job queue for the aws-batch raw listing (list-jobs requires exactly one selector)"
+        )]
+        queue: Option<String>,
+        #[arg(
+            long,
             help = "List the scheduler's raw job view instead of the current run directory"
         )]
         all: bool,
@@ -1318,7 +1324,7 @@ pub enum ClusterAction {
         #[arg(
             short = 'b',
             long,
-            help = "Cluster backend: slurm, pbs, sge, lsf, kubernetes (k8s), aws-batch, or gcp-batch (defaults to $OXO_FLOW_CLUSTER_BACKEND, then slurm)"
+            help = "Cluster backend: slurm, pbs, sge, lsf, kubernetes (k8s), aws-batch, or tencent-batch (Tencent Cloud BatchCompute) (defaults to $OXO_FLOW_CLUSTER_BACKEND, then slurm)"
         )]
         backend: Option<String>,
         #[arg(value_name = "JOB_IDS", required = true, help = "One or more job IDs")]
@@ -1331,7 +1337,7 @@ pub enum ClusterAction {
         #[arg(
             short = 'b',
             long,
-            help = "Cluster backend: slurm, pbs, sge, lsf, kubernetes (k8s), aws-batch, or gcp-batch (defaults to $OXO_FLOW_CLUSTER_BACKEND, then slurm)"
+            help = "Cluster backend: slurm, pbs, sge, lsf, kubernetes (k8s), aws-batch, or tencent-batch (Tencent Cloud BatchCompute) (defaults to $OXO_FLOW_CLUSTER_BACKEND, then slurm)"
         )]
         backend: Option<String>,
         #[arg(value_name = "JOB_ID", help = "Cluster job ID or rule-instance name")]

@@ -53,7 +53,7 @@ reference_dir = "..."   # Optional: base directory for auto-derived reference pa
 [env_groups]        # Optional: named reusable environment specs
 [resource_groups]   # Optional: shared resource pools (API limits, DB connections)
 [wildcard_constraints] # Optional: regex patterns to constrain wildcard values
-[cluster]           # Optional: HPC cluster profile (SLURM, PBS, SGE, LSF, k8s, AWS/GCP Batch)
+[cluster]           # Optional: HPC cluster profile (SLURM, PBS, SGE, LSF, k8s, AWS/GCP/Tencent Batch)
 [[reference_db]]    # Optional: tracked reference database versions
 [citation]          # Optional: citation metadata (DOI, authors, etc.)
 [ai]                # Optional: AI companion settings (provider, model, skills activation — see the AI CLI reference)
@@ -1216,7 +1216,7 @@ oxo-flow tracks declared resources for scheduling but does not strictly enforce 
 **HPC clusters:**
 
 - Resources translated to scheduler directives (SLURM, PBS, SGE, LSF, k8s,
-  AWS/GCP Batch)
+  AWS/GCP/Tencent Batch)
 - Scheduler enforces limits - jobs requesting more than allocated will fail
 - No submit-host capacity warnings: the job runs on a scheduler node, so the
   submit host's RAM/thread count is not the relevant ceiling

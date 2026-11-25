@@ -19,6 +19,7 @@ pub mod cluster;
 pub mod driver;
 pub mod gcp_batch;
 pub mod k8s;
+pub mod tencent_batch;
 
 /// Sanitize a free-form name into a DNS-1123 / RFC-1035 compatible label.
 ///
@@ -735,6 +736,35 @@ fn build_rule(
 /// re-executed with `--ignored --exact` and runs
 /// [`tests::submit_host_ambient_probe_child`].
 #[cfg(test)]
+pub(crate) fn assert_tencent_env_id_probe() {
+    // The child carries TENCENTBATCH_ENV_ID (set_var is unsafe in edition
+    // 2024) and asserts the generated task references the named env with
+    // no inline ComputeEnv.
+    let exe = std::env::current_exe().expect("test binary path");
+    let output = std::process::Command::new(exe)
+        .args([
+            "--exact",
+            "backend::tencent_batch::tests::tencent_env_id_probe_child",
+            "--ignored",
+            "--test-threads=1",
+            "--nocapture",
+        ])
+        .env("TENCENTBATCH_ENV_ID", "env-i247hzxa")
+        .output()
+        .expect("failed to re-exec the test binary for the env-id probe");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "the tencent env-id probe failed\n--- child stdout ---\n{stdout}\n--- child stderr ---\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        stdout.contains("TENCENT_ENV_ID_PROBE_OK"),
+        "the env-id probe child did not run\n--- child stdout ---\n{stdout}"
+    );
+}
+
+#[cfg(test)]
 pub(crate) fn assert_cloud_body_ignores_submit_host_env(backend: &str) {
     let exe = std::env::current_exe().expect("test binary path");
     let output = std::process::Command::new(exe)
@@ -1404,6 +1434,7 @@ mod tests {
                 "kubernetes" => crate::cluster::ClusterBackend::Kubernetes,
                 "aws-batch" => crate::cluster::ClusterBackend::AwsBatch,
                 "gcp-batch" => crate::cluster::ClusterBackend::GcpBatch,
+                "tencent-batch" => crate::cluster::ClusterBackend::TencentBatch,
                 other => panic!("unknown probe backend {other}"),
             },
             queue: None,
@@ -1443,6 +1474,16 @@ mod tests {
                     &rule, "run/cmds", 3, &config,
                 )
                 .expect("gcp batch array spec"),
+            ),
+            "tencent-batch" => (
+                crate::backend::tencent_batch::generate_tencent_batch_job_spec(
+                    &rule, &shell_cmd, &config,
+                )
+                .expect("tencent batch spec"),
+                crate::backend::tencent_batch::generate_tencent_batch_array_spec(
+                    &rule, "run/cmds", 3, &config,
+                )
+                .expect("tencent batch array spec"),
             ),
             other => panic!("unknown probe backend {other}"),
         };
