@@ -3838,9 +3838,9 @@ run status or its exit code.
 ## `[engine]` — Runtime Disk-Pressure Guard
 
 Optional run-time engine policies: disk monitoring, scratch routing,
-hardware placement, protected-data drift detection, and ready-rule dispatch
-ordering. Without this section the engine never measures free space mid-run
-and behavior is unchanged.
+hardware placement, protected-data drift detection, ready-rule dispatch
+ordering, and workflow-lock enforcement. Without this section the engine
+never measures free space mid-run and behavior is unchanged.
 
 ```toml
 [engine]
@@ -3854,6 +3854,7 @@ min_free_disk = "50G"        # required to enable: abort/park floor
 # tier1_nvme_scratch = "/mnt/nvme/scratch"  # optional: local NVMe/SSD scratch tier
 # tier2_shared_scratch = "/lustre/scratch"  # optional: shared cluster FS scratch tier
 # dispatch_order = "sample"   # optional: per-sample ready-rule tie-break; default "rule"
+# locked = true               # optional: verify oxo-flow.lock before every run (see commands/lock)
 ```
 
 | Field | Type | Default | Description |
@@ -3869,6 +3870,29 @@ min_free_disk = "50G"        # required to enable: abort/park floor
 | `tier1_nvme_scratch` | String | — | Tier 1 scratch root: local NVMe/SSD (e.g. `/mnt/nvme/scratch`) — high IOPS, moderate capacity |
 | `tier2_shared_scratch` | String | — | Tier 2 scratch root: shared cluster filesystem (Lustre / GPFS / BeeGFS / NFS) — largest capacity, shared with other nodes |
 | `dispatch_order` | String | `"rule"` | Tie-break for ready-rule dispatch when effective priorities are equal (the declared `priority` plus the aging counter). `"rule"`: sort by instance name — the historical behaviour. `"sample"`: sort by the instance's fan-out binding (sample / group / pair / `[[values]]` value), then by the rule's declaration order in the workflow file. See [Dispatch order](#dispatch-order) |
+| `locked` | Boolean | `false` | Workflow-lock enforcement (issue #1399). `true` makes **every** run of this workflow verify `oxo-flow.lock` before any rule executes and fail closed on a missing, stale, or malformed lock (`LOCK-001`–`LOCK-007`). This is the persistent form and therefore also covers web-spawned and queued runs, which shell out to the CLI; `run --locked` is the explicit per-invocation form and wins. Unset/`false` reads no lock and behavior is unchanged. See [lock](../commands/lock.md) |
+
+### Workflow lock
+
+`locked = true` is the workflow-committed half of the reproducibility
+lock: the run refuses to start when the workflow bytes, metadata contract,
+`[config]` snapshot, include graph, or any rule's environment identity
+differs from `oxo-flow.lock`. Generate the lock **after** adding the key —
+the key itself is part of the workflow bytes the lock pins:
+
+```bash
+oxo-flow lock my_pipeline.oxoflow          # writes oxo-flow.lock beside it
+git add my_pipeline.oxoflow oxo-flow.lock
+```
+
+The lock is evidence of declared inputs, not bitwise reproducibility: it
+records what the local runtime could resolve **offline** (it never pulls
+images or solves packages), and an unresolvable digest is recorded as the
+explicit `unresolved` sentinel. `unresolved` never compares equal — not
+even to itself — so a lock carrying one fails `lock --check` with
+`LOCK-006` until it resolves. `system` environments record `unavailable`,
+which compares equal only to `unavailable`. See [lock](../commands/lock.md)
+for the document format, drift codes, and exit codes.
 
 ### Dispatch order
 

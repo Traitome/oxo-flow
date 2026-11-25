@@ -170,6 +170,14 @@ worth being explicit about the limits:
   `environment.yaml` / `pixi.toml` spec files, not solved environments. A solve
   run months later, or against different channels, can pick different package
   versions. Use `--with-lockfiles` to pin the resolution.
+- **The workflow lock is not bundled.** `oxo-flow lock` writes
+  `oxo-flow.lock` beside the workflow for source-tree runs and CI gates; the
+  bundle's own `manifest.json` pins the bundled files instead. A workflow with
+  `[engine] locked = true` therefore fails closed when run from a bundle
+  extraction (the lock file is not there), unless it is regenerated inside
+  the extraction. Either keep lock enforcement for source-tree runs or
+  regenerate the lock as part of the bundle's execution recipe — see
+  [`lock`](lock.md).
 - **Lockfiles still are not binaries.** Even an exact package set can behave
   differently across glibc versions, CPU features, or filesystem layouts. Tools
   built against a newer glibc will not run on an older host.

@@ -243,6 +243,7 @@ const RESOURCE_BUDGET_KEYS: &[&str] = &["max_jobs", "max_memory", "max_threads"]
 /// drift baselines; issue #1089 dispatch tie-break).
 const ENGINE_KEYS: &[&str] = &[
     "dispatch_order",
+    "locked",
     "min_free_disk",
     "numa_aware",
     "protected_data_trees",

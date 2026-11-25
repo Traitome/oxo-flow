@@ -26,33 +26,61 @@ pub(crate) fn run_short_flags() -> &'static std::collections::BTreeSet<String> {
     FLAGS.get_or_init(|| run_subcommand_flags().1)
 }
 
+/// Stack ceiling for the clap introspection passes below.
+///
+/// clap's derive-generated command builder for the full subcommand set is
+/// stack-heavy in debug builds: once the 40th subcommand landed (issue
+/// #1399) it exceeded the 2 MiB default test-thread stack, aborting any
+/// in-process test that classified a run flag. Building the tree on a
+/// dedicated large-stack thread keeps the production classifiers and the
+/// tests independent of the caller's stack size.
+const CLI_INTROSPECTION_STACK_BYTES: usize = 16 * 1024 * 1024;
+
+/// Build the full clap command tree on a large-stack thread and hand it to
+/// `inspect` (see [`CLI_INTROSPECTION_STACK_BYTES`]).
+fn with_built_cli<T: Send + 'static>(
+    inspect: impl FnOnce(&mut clap::Command) -> T + Send + 'static,
+) -> T {
+    std::thread::Builder::new()
+        .name("oxo-flow-cli-introspection".to_string())
+        .stack_size(CLI_INTROSPECTION_STACK_BYTES)
+        .spawn(move || {
+            use clap::CommandFactory;
+            let mut cmd = <crate::Cli as CommandFactory>::command();
+            cmd.build();
+            inspect(&mut cmd)
+        })
+        .expect("CLI introspection thread spawns")
+        .join()
+        .expect("CLI introspection thread does not panic")
+}
+
 /// One clap introspection pass backing both flag sets. `build()` first so
 /// clap's implicit `--help`/`--version` flags are part of the result.
 fn run_subcommand_flags() -> (
     std::collections::BTreeSet<String>,
     std::collections::BTreeSet<String>,
 ) {
-    use clap::CommandFactory;
-    let mut cmd = <crate::Cli as CommandFactory>::command();
-    cmd.build();
-    let run = cmd
-        .find_subcommand("run")
-        .expect("the Cli enum must keep a `run` subcommand");
-    let mut longs: std::collections::BTreeSet<String> = run
-        .get_arguments()
-        .filter_map(|arg| arg.get_long())
-        .map(String::from)
-        .collect();
-    // clap adds --version/-V only to the top-level command; subcommands
-    // inherit it at parse time, so keep both classifiable here.
-    longs.insert("version".to_string());
-    let mut shorts = run
-        .get_arguments()
-        .filter_map(|arg| arg.get_short())
-        .map(String::from)
-        .collect::<std::collections::BTreeSet<String>>();
-    shorts.insert("V".to_string());
-    (longs, shorts)
+    with_built_cli(|cmd| {
+        let run = cmd
+            .find_subcommand("run")
+            .expect("the Cli enum must keep a `run` subcommand");
+        let mut longs: std::collections::BTreeSet<String> = run
+            .get_arguments()
+            .filter_map(|arg| arg.get_long())
+            .map(String::from)
+            .collect();
+        // clap adds --version/-V only to the top-level command; subcommands
+        // inherit it at parse time, so keep both classifiable here.
+        longs.insert("version".to_string());
+        let mut shorts = run
+            .get_arguments()
+            .filter_map(|arg| arg.get_short())
+            .map(String::from)
+            .collect::<std::collections::BTreeSet<String>>();
+        shorts.insert("V".to_string());
+        (longs, shorts)
+    })
 }
 
 /// Run flags that `dry-run` also accepts as real command flags — derived
@@ -65,22 +93,21 @@ pub(crate) fn dry_run_shared_flags() -> &'static std::collections::BTreeSet<Stri
     static FLAGS: std::sync::OnceLock<std::collections::BTreeSet<String>> =
         std::sync::OnceLock::new();
     FLAGS.get_or_init(|| {
-        use clap::CommandFactory;
-        let mut cmd = <crate::Cli as CommandFactory>::command();
-        cmd.build();
-        let longs_of = |name: &str| -> std::collections::BTreeSet<String> {
-            cmd.find_subcommand(name)
-                .map(|sub| {
-                    sub.get_arguments()
-                        .filter_map(|arg| arg.get_long())
-                        .map(String::from)
-                        .collect()
-                })
-                .unwrap_or_default()
-        };
-        let run = longs_of("run");
-        let dry = longs_of("dry-run");
-        run.intersection(&dry).cloned().collect()
+        with_built_cli(|cmd| {
+            let longs_of = |name: &str| -> std::collections::BTreeSet<String> {
+                cmd.find_subcommand(name)
+                    .map(|sub| {
+                        sub.get_arguments()
+                            .filter_map(|arg| arg.get_long())
+                            .map(String::from)
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            };
+            let run = longs_of("run");
+            let dry = longs_of("dry-run");
+            run.intersection(&dry).cloned().collect()
+        })
     })
 }
 

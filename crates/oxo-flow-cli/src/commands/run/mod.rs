@@ -27,6 +27,7 @@ mod env_knobs;
 mod failure;
 pub(crate) mod findings;
 mod hooks;
+mod lock_gate;
 mod narrate;
 mod overrides;
 mod preflight;
@@ -47,6 +48,7 @@ pub(crate) use env_knobs::*;
 pub(crate) use failure::*;
 pub(crate) use findings::*;
 pub(crate) use hooks::*;
+pub(crate) use lock_gate::*;
 pub(crate) use narrate::*;
 pub(crate) use overrides::*;
 pub(crate) use preflight::*;
@@ -191,6 +193,10 @@ pub struct RunRequest {
     /// `None` = no reviewed patch. Mutually exclusive with `ai_recover`
     /// (enforced at the top of `run_command_inner`).
     pub apply_patch: Option<PathBuf>,
+    /// Issue #1399 (`--locked`): verify `oxo-flow.lock` before any rule
+    /// executes and fail closed on drift. The workflow's
+    /// `[engine] locked = true` key is the persistent form; this flag wins.
+    pub locked: bool,
 }
 
 pub async fn run_command(request: RunRequest) -> Result<()> {
@@ -236,6 +242,7 @@ async fn run_command_inner(
         from_rule,
         strict_envs,
         apply_patch,
+        locked,
     }: RunRequest,
     status: &crate::run_status::RunStatusHandle,
 ) -> Result<()> {
@@ -479,6 +486,20 @@ async fn run_command_inner(
         );
         jobs = max_jobs;
     }
+
+    // ── Workflow lock gate (issue #1399) ────────────────────────────────
+    // `--locked` / `[engine] locked = true`: verify the lock BEFORE any rule
+    // executes and before the run creates outputs. Without either switch the
+    // lock is never read (legacy behavior, byte-identical). The verified
+    // digest is recorded below and folded into the resolved-workflow
+    // identity only when a lock is in effect.
+    let lock_digest_in_effect = match enforce_workflow_lock(&workflow, &config, locked) {
+        Ok(digest) => digest,
+        Err(error) => {
+            json_summary.emit("failed", &RunCounts::default(), vec![]);
+            return Err(error);
+        }
+    };
 
     // ── Undefined `{config.*}` gate (issue #142 H1) ───────────────────────
     // Runs AFTER expansion so engine-generated rules are covered too, and
@@ -862,6 +883,10 @@ async fn run_command_inner(
             &config,
             Some(&workflow_abs),
         ));
+        // Record the verified workflow-lock digest (issue #1399). `None`
+        // when no lock is in effect — the field stays absent from the
+        // serialized checkpoint, so legacy bytes are unchanged.
+        ck.set_lock_digest(lock_digest_in_effect.clone());
     }
     // Same absolutized run workdir, reused by the config-change replay below
     // (issue #282): runtime file functions in `when` resolve their relative
@@ -936,11 +961,13 @@ async fn run_command_inner(
     // later checkpoint writes) persists the fingerprint.
     if let Some(raw_hash) = &workflow_content_hash {
         let mut ck = checkpoint.lock().await;
-        let resolved = oxo_flow_core::executor::checkpoint::compute_workflow_resolved_hash(
-            raw_hash,
-            &ck.config_snapshot,
-            config.metadata_digest.as_deref(),
-        );
+        let resolved =
+            oxo_flow_core::executor::checkpoint::compute_workflow_resolved_hash_with_lock(
+                raw_hash,
+                &ck.config_snapshot,
+                config.metadata_digest.as_deref(),
+                lock_digest_in_effect.as_deref(),
+            );
         ck.set_workflow_resolved_hash(resolved);
         if let Err(e) = ck.save_to_file(&checkpoint_path) {
             tracing::warn!(

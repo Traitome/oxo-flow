@@ -75,6 +75,14 @@ ends with a **Done when** condition — do not proceed without it.
   steps).
 - Optional AI assistance: `[ai] enabled = true` in the workflow activates
   AI validate/lint/debug/recover.
+- Reproducibility lock (recommended before delivery): `oxo-flow lock
+  <workflow.oxoflow>` writes `oxo-flow.lock` pinning the workflow/config
+  hashes, include graph, per-rule environment identities, and declared
+  software. Commit it; gate CI with `oxo-flow lock --check`, and run with
+  `run --locked` (or `[engine] locked = true`) to fail closed on drift.
+  The lock is evidence of declared inputs, not bitwise reproducibility —
+  generate it where the pinned images are available locally, since an
+  unresolvable digest records `unresolved` and never matches.
 - Done when: all gates pass; engine-QC role sign-off.
 
 ### 3. Submit & Execute
@@ -202,6 +210,7 @@ Progressive disclosure — open only what the current stage needs.
 |---|---|
 | Start | `tutorials/quickstart`, `tutorials/first-workflow`, `how-to/create-workflow` |
 | Execute | `how-to/run-on-cluster`, `commands/run`, `commands/cluster`, `commands/resume`, `commands/status` |
+| Reproducibility lock | `commands/lock`, `commands/provenance`, `reference/environment-system` |
 | QC | `commands/validate`, `commands/dry-run`, `commands/lint`, `commands/debug`, `commands/graph`, `how-to/troubleshooting` |
 | Delivery | `how-to/generate-reports`, `commands/report`, `commands/provenance`, `commands/export`, `reference/versioning`, `reference/reporting-system` |
 | Reference | `reference/architecture`, `gallery/`, `tutorials/custom-scripts`, `tutorials/environment-management` |

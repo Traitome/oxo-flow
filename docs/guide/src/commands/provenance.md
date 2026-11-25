@@ -64,6 +64,15 @@ the exact loaded table bytes, which the checkpoint does not store — the
 digest is a recorded identity, like `workflow_resolved_hash`, not a
 re-verified claim.
 
+A run executed under an enforced workflow lock (issue #1399) also records
+the verified lock's `lock_digest` in its checkpoint and folds it into
+`workflow_resolved_hash`; verify reports it as `• workflow lock digest: …`
+and as the `lock_digest` key in the `--json` document. The key is **absent**
+(never `null`) for runs without a lock, so pre-lock verify documents keep
+their exact byte shape. The digest proves the lock document's fields were
+the ones hashed together — not that a trusted party authored them; see
+[`lock`](lock.md).
+
 This is essential for reproducible, auditable analysis.
 
 ## Options
@@ -238,6 +247,7 @@ carries nothing else):
     "workflow_content_hash": "sha256:e3b0c442...",
     "workflow_resolved_hash": "sha256:9f86d081...",
     "metadata_digest": "sha256:6b1d3c7f...",
+    "lock_digest": "sha256:0d5a7e21...",
     "workflow_content_check": {"status": "matched", "recorded": "sha256:e3b0c442...", "actual": "sha256:e3b0c442..."}
   }
 }
@@ -361,8 +371,10 @@ oxo-flow provenance attest-verify run.attestation.json --key attest.key --json
 ### What the document binds
 
 - `workflow`: path, git HEAD SHA, dirty marker, raw content digest, the
-  override-aware resolved fingerprint (#1350), and the canonical metadata
-  digest of the typed cohort table when one was consumed (#1368)
+  override-aware resolved fingerprint (#1350), the canonical metadata
+  digest of the typed cohort table when one was consumed (#1368), and —
+  additively, only when the run was lock-enforced — the verified workflow
+  `lock_digest` (#1399)
 - `includes`: recorded include checkout SHAs (repo@ref → HEAD)
 - `config`: the resolved config snapshot; sensitive values are already
   SHA-256 digests in the checkpoint, never plaintext

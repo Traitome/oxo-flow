@@ -148,6 +148,19 @@ impl WorkflowConfig {
         self.config.keys().cloned().collect()
     }
 
+    /// Names of `[config]` keys declared `sensitive = true` (issue #99).
+    /// The single source for every snapshot builder and masking pass
+    /// (issue #1399 reuse: the workflow lock must digest exactly the values
+    /// the checkpoint snapshot digests).
+    #[must_use]
+    pub fn sensitive_config_keys(&self) -> std::collections::HashSet<String> {
+        self.config_meta
+            .iter()
+            .filter(|(_, def)| def.sensitive)
+            .map(|(key, _)| key.clone())
+            .collect()
+    }
+
     /// Apply parsed `KEY=VALUE` config overrides onto this config, mirroring
     /// the CLI's `apply_cli_overrides` injection (issue #62): a declared key
     /// spelled with hyphens canonicalizes onto its declared spelling

@@ -141,6 +141,28 @@ fn check_workflow_content(checkpoint: &serde_json::Value) -> Option<WorkflowCont
     }
 }
 
+/// Add the workflow-lock digest to a `provenance verify --json` document
+/// only when the checkpoint recorded one (issue #1399). A legacy checkpoint
+/// has no `lock_digest` field, so its document keeps exactly the keys it had
+/// before — the key is absent, never `null`.
+fn with_lock_digest(
+    mut output: serde_json::Value,
+    checkpoint: &serde_json::Value,
+) -> serde_json::Value {
+    if let Some(digest) = checkpoint
+        .get("lock_digest")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        && let Some(verify) = output.get_mut("verify").and_then(|v| v.as_object_mut())
+    {
+        verify.insert(
+            "lock_digest".to_string(),
+            serde_json::Value::String(digest.to_string()),
+        );
+    }
+    output
+}
+
 /// Pure classification of recorded checksums against disk (unit-testable).
 ///
 /// `cleaned` entries are outputs the engine deleted by design at the end
@@ -653,6 +675,17 @@ pub fn provenance_verify_command(checkpoint_path: PathBuf, json: bool) -> Result
     {
         eprintln!("  {} metadata digest: {}", "•".dimmed(), digest);
     }
+    // Workflow lock in effect for this run (issue #1399): the digest of the
+    // `oxo-flow.lock` document verified before execution. Absent for every
+    // run without an enforced lock — reporting only, verification is
+    // unaffected.
+    if let Some(digest) = checkpoint
+        .get("lock_digest")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+    {
+        eprintln!("  {} workflow lock digest: {}", "•".dimmed(), digest);
+    }
     match workflow_git_dirty {
         Some(true) => eprintln!(
             "  {} workflow git tree: {}",
@@ -795,6 +828,7 @@ pub fn provenance_verify_command(checkpoint_path: PathBuf, json: bool) -> Result
                         "note": "No stored checksums found. Run workflow with --provenance to enable tracking.",
                     },
                 });
+                let output = with_lock_digest(output, &checkpoint);
                 println!("{}", serde_json::to_string_pretty(&output)?);
             }
             // Uniform exit semantics (issue #1350): a workflow whose bytes
@@ -833,6 +867,7 @@ pub fn provenance_verify_command(checkpoint_path: PathBuf, json: bool) -> Result
                     "note": "No completed rules or checksums found in the checkpoint.",
                 },
             });
+            let output = with_lock_digest(output, &checkpoint);
             println!("{}", serde_json::to_string_pretty(&output)?);
         }
         if workflow_content_check
@@ -925,6 +960,7 @@ pub fn provenance_verify_command(checkpoint_path: PathBuf, json: bool) -> Result
                 "workflow_git_dirty": checkpoint.get("workflow_git_dirty").cloned(),
             },
         });
+        let output = with_lock_digest(output, &checkpoint);
         println!("{}", serde_json::to_string_pretty(&output)?);
     }
 

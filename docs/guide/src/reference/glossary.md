@@ -308,6 +308,30 @@ A record of how each output was produced: which inputs, which tool, which versio
 
 ---
 
+### Workflow lock
+
+A canonical `oxo-flow.lock` document (format `oxo-flow.lock/v1`) written by
+`oxo-flow lock` that pins the workflow content/resolved hashes, the
+metadata-contract digest, the `[config]` snapshot, the include graph, and
+each rule's environment identity plus declared software. `oxo-flow lock
+--check` verifies it in CI; `run --locked` or `[engine] locked = true`
+fails a run closed on drift before any rule executes. A lock is evidence of
+declared inputs, not bitwise reproducibility — it never pulls images or
+solves packages. See [`lock`](../commands/lock.md).
+
+---
+
+### Lock digest
+
+`sha256:<hex>` over a workflow-lock document excluding its own
+`lock_digest` field. It detects hand edits and corruption (a mismatch is
+`LOCK-007`), and a lock-enforced run records it in the checkpoint, folds it
+into `workflow_resolved_hash`, and reports it from `provenance verify` /
+`provenance attest`. It is **not** a signature and not an external
+notarization: it proves internal consistency, not authorship.
+
+---
+
 ### Benchmark
 
 Timing and resource usage data for each rule (wall time, memory, CPU).

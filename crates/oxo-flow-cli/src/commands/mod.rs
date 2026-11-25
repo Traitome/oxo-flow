@@ -422,6 +422,7 @@ pub mod info;
 pub mod infra;
 pub mod json_error;
 pub mod knowledge;
+pub mod lock;
 pub mod output;
 pub mod project;
 pub mod provenance;

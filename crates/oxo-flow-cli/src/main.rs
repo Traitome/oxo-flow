@@ -276,6 +276,14 @@ pub enum Commands {
         /// exclusive with `--ai-recover` (fail closed).
         #[arg(long = "apply-patch", value_name = "FILE")]
         apply_patch: Option<PathBuf>,
+        /// Enforce `oxo-flow.lock` (issue #1399): verify the lock before any
+        /// rule executes and fail closed on a missing, stale, or malformed
+        /// lock. The workflow's `[engine] locked = true` key is the
+        /// persistent form (it also covers web-spawned/queued runs); this
+        /// flag is the explicit per-invocation form and wins. Without
+        /// either, no lock is read and behavior is unchanged.
+        #[arg(long)]
+        locked: bool,
     },
     /// Resume an interrupted workflow from a checkpoint.
     Resume {
@@ -1106,6 +1114,38 @@ pub enum Commands {
         )]
         keep_going: bool,
     },
+    /// Generate or verify a workflow-level lockfile (reproducibility evidence).
+    Lock {
+        #[arg(
+            value_name = "WORKFLOW",
+            help = "Path to the .oxoflow workflow file (default: auto-discover in the current directory)"
+        )]
+        workflow: Option<PathBuf>,
+        #[arg(
+            short = 'o',
+            long,
+            value_name = "PATH",
+            help = "Lock file path (default: oxo-flow.lock beside the workflow)"
+        )]
+        output: Option<PathBuf>,
+        #[arg(
+            long,
+            help = "Verify the lock instead of writing it; never mutates the file. Exit 0 clean, 2 drift/missing/invalid lock, 4 workflow parse/usage error"
+        )]
+        check: bool,
+        #[arg(
+            long,
+            value_name = "NAME",
+            help = "Pin the config a run --profile NAME would see (same merge semantics)"
+        )]
+        profile: Option<String>,
+        #[arg(
+            long = "arg",
+            value_name = "KEY=VALUE",
+            help = "Pin a config override the run will use (same semantics as `run --arg`); repeatable"
+        )]
+        args: Vec<String>,
+    },
     /// Publish a workflow with its environment files into a bundle.
     Publish {
         #[arg(value_name = "WORKFLOW", help = "Path to the .oxoflow workflow file")]
@@ -1540,6 +1580,9 @@ fn json_supported(command: &Commands) -> bool {
         // edges, parallel_groups, critical_path, metrics) shared with the
         // web API; the diagram formats are unaffected.
         Commands::Graph { .. } => true,
+        // `lock --json` emits one machine-readable write/check report
+        // (issue #1399).
+        Commands::Lock { .. } => true,
         // `env list` / `env check` emit documents (issue #1336); `env create`
         // and `env gc` still run tools and keep their human output.
         Commands::Env { action } => {
@@ -1790,6 +1833,7 @@ async fn main() -> Result<()> {
             from_rule,
             strict_envs,
             apply_patch,
+            locked,
         } => {
             // ── Background runs (issue #158) ─────────────────────────────
             // The foreground process never executes the workflow: it spawns
@@ -1959,6 +2003,7 @@ async fn main() -> Result<()> {
                 allow_protected_drift,
                 strict_envs,
                 apply_patch,
+                locked,
             })
             .await?
         }
@@ -2557,6 +2602,10 @@ async fn main() -> Result<()> {
                         strict_envs: false,
                         // test applies no reviewed patch
                         apply_patch: None,
+                        // `test` has no --locked flag; a workflow's
+                        // [engine] locked key still enforces through the run
+                        // path.
+                        locked: false,
                     })
                     .await
                 );
@@ -2590,6 +2639,20 @@ async fn main() -> Result<()> {
             emit_test_json(cli.json, &workflow, "passed", &steps, &reports)?;
             eprintln!("\n{} All checks passed.", "✓".green().bold());
         }
+        Commands::Lock {
+            workflow,
+            output,
+            check,
+            profile,
+            args,
+        } => crate::commands::lock::lock_command(crate::commands::lock::LockRequest {
+            workflow,
+            output,
+            check,
+            profile,
+            config_args: args,
+            json: cli.json,
+        })?,
         Commands::Publish {
             workflow,
             output,
@@ -2608,6 +2671,24 @@ mod cluster_json_tests {
     use super::{Cli, json_supported};
     use clap::Parser;
 
+    /// Parse a CLI in a thread with a generous stack.
+    ///
+    /// Deriving the clap command tree for the full subcommand set needs more
+    /// than the test harness's default 2 MiB thread stack on macOS debug
+    /// builds — adding the 40th subcommand (issue #1399) tipped a previously
+    /// marginal tree over the edge and aborted this test. A 16 MiB thread
+    /// keeps the assertion about the real parser without weakening it.
+    fn parse_cli(args: &[&str]) -> Cli {
+        let owned: Vec<String> = args.iter().map(|arg| (*arg).to_string()).collect();
+        std::thread::Builder::new()
+            .stack_size(16 * 1024 * 1024)
+            .spawn(move || Cli::try_parse_from(owned))
+            .expect("test thread spawns")
+            .join()
+            .expect("test thread does not panic")
+            .expect("args parse")
+    }
+
     #[test]
     fn cluster_monitoring_subcommands_accept_global_json() {
         // Issue #1085 C5: `cluster status|cancel|logs --json` used to be
@@ -2617,7 +2698,7 @@ mod cluster_json_tests {
             vec!["oxo-flow", "cluster", "cancel", "1", "--json"],
             vec!["oxo-flow", "cluster", "logs", "1", "--json"],
         ] {
-            let cli = Cli::try_parse_from(args.clone()).unwrap();
+            let cli = parse_cli(&args);
             assert!(cli.json, "{args:?}");
             assert!(json_supported(&cli.command), "{args:?}");
         }
@@ -2627,8 +2708,7 @@ mod cluster_json_tests {
     fn cluster_submit_still_rejects_json() {
         // `submit` generates scripts; it has no JSON document to emit, and
         // silently ignoring the flag would violate the gate's contract.
-        let cli =
-            Cli::try_parse_from(["oxo-flow", "cluster", "submit", "wf.oxoflow", "--json"]).unwrap();
+        let cli = parse_cli(&["oxo-flow", "cluster", "submit", "wf.oxoflow", "--json"]);
         assert!(!json_supported(&cli.command));
     }
 }

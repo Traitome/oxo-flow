@@ -1291,7 +1291,7 @@
     }
 
     /* ==========================================================================
-       8. INTERACTIVE 39 CLI SUBCOMMANDS & 9 WEB DOMAINS EXPLORER
+       8. INTERACTIVE 40 CLI SUBCOMMANDS & 9 WEB DOMAINS EXPLORER
        ========================================================================== */
     .filter-bar {
       display: flex;
@@ -2408,7 +2408,7 @@ $ <span class="tok-sec">oxo-flow cluster status</span> --backend slurm</div>
             </div>
             <div class="telemetry-card">
               <div class="telemetry-num">39<span> cmds</span></div>
-              <div class="telemetry-label"><span class="lang-en">Complete CLI lifecycle + strict stdout/stderr separation</span><span class="lang-zh">覆盖完整生命周期的 39 个 CLI 子命令</span></div>
+              <div class="telemetry-label"><span class="lang-en">Complete CLI lifecycle + strict stdout/stderr separation</span><span class="lang-zh">覆盖完整生命周期的 40 个 CLI 子命令</span></div>
             </div>
             <div class="telemetry-card">
               <div class="telemetry-num">100+<span class="unit">APIs</span></div>
@@ -2805,7 +2805,7 @@ $ oxo-flow run pipeline.oxoflow -t vcf/cohort.filtered.vcf.gz -j 16</div>
     </div>
   </section>
 
-  <!-- ─── SECTION 3: 39 CLI SUBCOMMANDS & 9 WEB API DOMAINS EXPLORER ─────── -->
+  <!-- ─── SECTION 3: 40 CLI SUBCOMMANDS & 9 WEB API DOMAINS EXPLORER ─────── -->
   <section class="rail-section reveal" id="cli-api">
     <div class="container">
       <div class="rail-layout">
@@ -2817,14 +2817,14 @@ $ oxo-flow run pipeline.oxoflow -t vcf/cohort.filtered.vcf.gz -j 16</div>
         </div>
 
         <div>
-          <div class="eyebrow copper">03 · COMPLETE LIFECYCLE TOOLING — 39 CLI SUBCOMMANDS &amp; 9 WEB DOMAINS</div>
+          <div class="eyebrow copper">03 · COMPLETE LIFECYCLE TOOLING — 40 CLI SUBCOMMANDS &amp; 9 WEB DOMAINS</div>
           <h2 class="section-title">
             <span class="lang-en">Every command &amp; endpoint, <span class="highlight-copper">documented and linked</span>.</span>
-            <span class="lang-zh">39 个 CLI 子命令与 9 大 Web API 领域，<span class="highlight-copper">一键直达权威文档</span>。</span>
+            <span class="lang-zh">40 个 CLI 子命令与 9 大 Web API 领域，<span class="highlight-copper">一键直达权威文档</span>。</span>
           </h2>
           <p class="section-lead">
             <span class="lang-en">
-              Filter all 39 subcommands of the <code>oxo-flow</code> binary below — click any card to open its full command reference with flags, JSON schemas, and examples.
+              Filter all 40 subcommands of the <code>oxo-flow</code> binary below — click any card to open its full command reference with flags, JSON schemas, and examples.
             </span>
             <span class="lang-zh">
               按分类筛选全部 39 个 <code>oxo-flow</code> CLI 子命令 —— 点击任意卡片即可跳转至对应的详细命令参考手册。
@@ -2833,16 +2833,16 @@ $ oxo-flow run pipeline.oxoflow -t vcf/cohort.filtered.vcf.gz -j 16</div>
 
           <!-- Category Filter Buttons -->
           <div class="filter-bar" id="cliFilterBar">
-            <button type="button" class="filter-btn active" data-cat="all">All Subcommands (39)</button>
+            <button type="button" class="filter-btn active" data-cat="all">All Subcommands (40)</button>
             <button type="button" class="filter-btn" data-cat="exec">Execution (5)</button>
             <button type="button" class="filter-btn" data-cat="dev">Authoring &amp; QA (8)</button>
-            <button type="button" class="filter-btn" data-cat="inspect">Inspection &amp; Provenance (12)</button>
+            <button type="button" class="filter-btn" data-cat="inspect">Inspection &amp; Provenance (13)</button>
             <button type="button" class="filter-btn" data-cat="env">Environment &amp; Data (4)</button>
             <button type="button" class="filter-btn" data-cat="deploy">Cluster, Web &amp; Registry (4)</button>
             <button type="button" class="filter-btn" data-cat="ai">AI &amp; System (4)</button>
           </div>
 
-          <!-- All 39 CLI Subcommands Grid -->
+          <!-- All 40 CLI Subcommands Grid -->
           <div class="cli-grid reveal" id="cliGrid">
             <a class="cli-card" data-cat="exec" href="latest/commands/run/"><div class="cli-card-top"><span class="cli-cmd-name">run</span><span class="cli-cat-badge">exec</span></div><div class="cli-desc">Execute DAG workflows in parallel with resource scheduling, disk guard &amp; --provenance.</div></a>
             <a class="cli-card" data-cat="exec" href="latest/commands/resume/"><div class="cli-card-top"><span class="cli-cmd-name">resume</span><span class="cli-cat-badge">exec</span></div><div class="cli-desc">Resume interrupted workflows from checkpoint.json skipping completed rules.</div></a>
@@ -2863,6 +2863,7 @@ $ oxo-flow run pipeline.oxoflow -t vcf/cohort.filtered.vcf.gz -j 16</div>
             <a class="cli-card" data-cat="inspect" href="latest/commands/graph/"><div class="cli-card-top"><span class="cli-cmd-name">graph</span><span class="cli-cat-badge">inspect</span></div><div class="cli-desc">Export DAG as Graphviz DOT, tree, Mermaid, or Seqera nf-metro transit map.</div></a>
             <a class="cli-card" data-cat="inspect" href="latest/commands/report/"><div class="cli-card-top"><span class="cli-cmd-name">report</span><span class="cli-cat-badge">inspect</span></div><div class="cli-desc">Generate HTML, JSON, Markdown, or PDF reports + domain QC &amp; --r-data TSV.</div></a>
             <a class="cli-card" data-cat="inspect" href="latest/commands/provenance/"><div class="cli-card-top"><span class="cli-cmd-name">provenance</span><span class="cli-cat-badge">inspect</span></div><div class="cli-desc">Export and cryptographically verify sha256 output checksums in checkpoint.json.</div></a>
+            <a class="cli-card" data-cat="inspect" href="latest/commands/lock/"><div class="cli-card-top"><span class="cli-cmd-name">lock</span><span class="cli-cat-badge">inspect</span></div><div class="cli-desc">Write or verify oxo-flow.lock: pin workflow, config, includes and environment identities; gate with lock --check or run --locked.</div></a>
             <a class="cli-card" data-cat="inspect" href="latest/commands/audit/"><div class="cli-card-top"><span class="cli-cmd-name">audit</span><span class="cli-cat-badge">inspect</span></div><div class="cli-desc">Verify a hash-chained web audit export offline (0 valid, 2 tampered, 4 malformed).</div></a>
             <a class="cli-card" data-cat="inspect" href="latest/commands/verify-data/"><div class="cli-card-top"><span class="cli-cmd-name">verify-data</span><span class="cli-cat-badge">inspect</span></div><div class="cli-desc">Verify a raw data tree against a vendor md5sum sidecar before runs.</div></a>
             <a class="cli-card" data-cat="inspect" href="latest/commands/status/"><div class="cli-card-top"><span class="cli-cmd-name">status</span><span class="cli-cat-badge">inspect</span></div><div class="cli-desc">Inspect per-rule checkpoint completion state and output freshness.</div></a>
@@ -3629,7 +3630,7 @@ $ oxo-flow run pipeline.oxoflow -t vcf/cohort.filtered.vcf.gz -j 16</div>
         });
       });
 
-      // 6. CLI 39 Subcommands Category Filter
+      // 6. CLI 40 Subcommands Category Filter
       const filterBtns = document.querySelectorAll("#cliFilterBar .filter-btn");
       const cliCards = document.querySelectorAll("#cliGrid .cli-card");
       filterBtns.forEach(function (btn) {

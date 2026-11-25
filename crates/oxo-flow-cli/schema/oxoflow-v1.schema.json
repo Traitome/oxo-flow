@@ -510,7 +510,7 @@
     },
     "engine": {
       "type": "object",
-      "description": "Runtime engine policies: disk-pressure monitoring thresholds, the global scratch directory, protected-tree drift baselines, and ready-rule dispatch ordering. Sizes use T/G/M/K suffixes; a bare number means MiB.",
+      "description": "Runtime engine policies: disk-pressure monitoring thresholds, the global scratch directory, protected-tree drift baselines, ready-rule dispatch ordering, and workflow-lock enforcement. Sizes use T/G/M/K suffixes; a bare number means MiB.",
       "properties": {
         "dispatch_order": {
           "type": "string",
@@ -520,6 +520,11 @@
           ],
           "default": "rule",
           "description": "Tie-break for ready-rule dispatch when effective priorities are equal (priority stays the primary key). \"rule\" (default): alphabetical instance name — the historical phase-ordered behaviour. \"sample\": the instance's fan-out binding (sample/group/pair) first, then the rule's declaration order in the workflow file, so all ready stages of one sample are dispatched before the next sample's."
+        },
+        "locked": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enforce oxo-flow.lock (issue #1399): every run verifies the workflow lock before executing and fails closed on a missing, stale, or malformed lock (LOCK-001..LOCK-007). This is the persistent form and covers web-spawned and queued runs; run --locked is the per-invocation form and wins. Unset/false reads no lock — behavior is unchanged."
         },
         "min_free_disk": {
           "type": "string",

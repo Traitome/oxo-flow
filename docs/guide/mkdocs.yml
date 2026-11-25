@@ -192,6 +192,7 @@ nav:
       - knowledge: commands/knowledge.md
       - license: commands/license.md
       - lint: commands/lint.md
+      - lock: commands/lock.md
       - provenance: commands/provenance.md
       - publish: commands/publish.md
       - pull: commands/pull.md

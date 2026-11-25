@@ -555,7 +555,7 @@ impl WorkflowConfig {
         // threaded unchanged through the recursion so a nested include's
         // local `path` is containment-checked against the workflow root, not
         // the including module's own directory (issue #1285 review P2-a).
-        self.resolve_includes_with_depth(base_dir, base_dir, 0)
+        self.resolve_includes_with_depth(base_dir, base_dir, 0, None)
     }
 
     fn resolve_includes_with_depth(
@@ -563,6 +563,7 @@ impl WorkflowConfig {
         base_dir: &Path,
         root_dir: &Path,
         depth: usize,
+        module_origin: Option<&str>,
     ) -> Result<()> {
         if depth >= MAX_INCLUDE_DEPTH {
             return Err(OxoFlowError::Config {
@@ -574,7 +575,7 @@ impl WorkflowConfig {
         }
         let includes = std::mem::take(&mut self.includes);
         for inc in &includes {
-            let (content, inc_base_dir, next_root) = if let Some(repo) = &inc.repo {
+            let (content, inc_base_dir, next_root, next_origin) = if let Some(repo) = &inc.repo {
                 // Pinned git include (issue #112): clone into the module
                 // cache (keyed repo@ref), then resolve `path` inside the
                 // checkout. ensure_pinned clones on a cache miss (healing
@@ -649,12 +650,13 @@ impl WorkflowConfig {
                 // run/resume provenance can prove the module content.
                 // Best-effort — an unreadable HEAD records `None` and never
                 // fails the run (same policy as workflow_git_sha).
-                if let Some(sha) = crate::git::pinned_head(&cache_dir) {
+                let pinned_sha = crate::git::pinned_head(&cache_dir);
+                if let Some(sha) = &pinned_sha {
                     self.include_provenance.push(IncludeProvenance {
                         repo: repo.clone(),
                         git_ref: git_ref.to_string(),
                         path: inc.path.clone(),
-                        resolved_sha: sha,
+                        resolved_sha: sha.clone(),
                     });
                 } else {
                     tracing::warn!(
@@ -663,6 +665,20 @@ impl WorkflowConfig {
                         inc.path
                     );
                 }
+                // Include-graph record for the workflow lock (issue #1399):
+                // the repository-relative path plus the pinned HEAD SHA and
+                // the module file's content digest. The graph is only as
+                // strong as its weakest record, so a failed digest is
+                // recorded as the explicit unresolved sentinel — never
+                // silently dropped.
+                self.include_sources.push(ResolvedIncludeSource {
+                    path: inc.path.clone(),
+                    repo: Some(repo.clone()),
+                    git_ref: Some(git_ref.to_string()),
+                    resolved_sha: pinned_sha,
+                    origin: None,
+                    content_sha256: include_content_digest(&inc_path),
+                });
                 let next_base = inc_path.parent().unwrap_or(&cache_dir).to_path_buf();
                 // Containment root for this module's OWN nested local
                 // includes is the pinned checkout (`cache_dir`), not the host
@@ -670,7 +686,13 @@ impl WorkflowConfig {
                 // so containment-checks against the host root would falsely
                 // refuse a legitimate sibling `path` inside the checkout
                 // (issue #1285 review P2).
-                (text, next_base, cache_dir.clone())
+                //
+                // `repo@ref` is the module's lock origin (issue #1399): its
+                // nested local includes are recorded relative to this
+                // checkout and prefixed with it, so two modules' identically
+                // named internal files stay distinguishable.
+                let origin = format!("{repo}@{git_ref}");
+                (text, next_base, cache_dir.clone(), Some(origin))
             } else if inc.path.starts_with("http://") || inc.path.starts_with("https://") {
                 return Err(OxoFlowError::Parse {
                     path: PathBuf::from(&inc.path),
@@ -720,8 +742,25 @@ impl WorkflowConfig {
                     path: inc_path.clone(),
                     message: format!("failed to read include '{}': {}", inc.path, e),
                 })?;
+                // Include-graph record for the workflow lock (issue #1399):
+                // the workflow-root-relative path plus the file's content
+                // digest. A module-nested local include keeps its owning
+                // `repo@ref` origin and its path relative to that checkout.
+                self.include_sources.push(ResolvedIncludeSource {
+                    path: include_lock_path(&inc_path, root_dir),
+                    repo: None,
+                    git_ref: None,
+                    resolved_sha: None,
+                    origin: module_origin.map(str::to_string),
+                    content_sha256: include_content_digest(&inc_path),
+                });
                 let next_base = inc_path.parent().unwrap_or(base_dir).to_path_buf();
-                (text, next_base, root_dir.to_path_buf())
+                (
+                    text,
+                    next_base,
+                    root_dir.to_path_buf(),
+                    module_origin.map(str::to_string),
+                )
             };
 
             let inc_error = |message: String| OxoFlowError::Parse {
@@ -747,7 +786,12 @@ impl WorkflowConfig {
             // `next_root` is the per-branch containment root: the host
             // workflow root for a local include, the pinned checkout for a
             // repo include (issue #1285 review P2-a/P2).
-            inc_config.resolve_includes_with_depth(&inc_base_dir, &next_root, depth + 1)?;
+            inc_config.resolve_includes_with_depth(
+                &inc_base_dir,
+                &next_root,
+                depth + 1,
+                next_origin.as_deref(),
+            )?;
             // Nested contracts merge first (their provenance indices shift
             // by the host's current contract count).
             let offset = self.include_contracts.len();
@@ -758,6 +802,10 @@ impl WorkflowConfig {
             // with the consumed inc_config.
             self.include_provenance
                 .extend(std::mem::take(&mut inc_config.include_provenance));
+            // Nested include-graph records (issue #1399) merge the same way —
+            // a dropped nested source would let the lock miss a module.
+            self.include_sources
+                .extend(std::mem::take(&mut inc_config.include_sources));
             for (rule, idx) in std::mem::take(&mut inc_config.module_of) {
                 self.module_of.insert(rule, idx + offset);
             }
@@ -1530,4 +1578,34 @@ impl WorkflowConfig {
             |g| format!("samples = [{}]", g.samples.join(", ")),
         )
     }
+}
+
+/// Workflow-root-relative, `/`-separated form of a resolved include path
+/// (issue #1399). Both sides are canonicalized when possible so
+/// `./rules/x.oxoflow` and `rules/../rules/x.oxoflow` name the same include
+/// regardless of the invocation cwd; the lock then stays identical across
+/// hosts and working directories. A path that cannot be canonicalized keeps
+/// its authored spelling.
+fn include_lock_path(path: &Path, root_dir: &Path) -> String {
+    let canon_path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let canon_root = std::fs::canonicalize(root_dir).unwrap_or_else(|_| root_dir.to_path_buf());
+    let relative = canon_path
+        .strip_prefix(&canon_root)
+        .map(Path::to_path_buf)
+        .unwrap_or(canon_path);
+    relative
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// Content digest of an included file, or the explicit `unresolved`
+/// sentinel (issue #1399). The file was just read successfully, so a digest
+/// failure is a race or an I/O error; recording the sentinel keeps the
+/// include present in the lock graph (never silently dropped) while making
+/// verification treat it as unknown rather than as a match.
+fn include_content_digest(path: &Path) -> String {
+    crate::executor::checkpoint::compute_file_checksum(path)
+        .unwrap_or_else(|_| crate::env_lock::ENV_LOCK_UNRESOLVED.to_string())
 }

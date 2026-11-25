@@ -313,6 +313,10 @@ async fn resume_command_inner(
         // resume carries no reviewed repair file: `--apply-patch` is a `run`
         // flag (issue #1302), not a `resume` one.
         apply_patch: None,
+        // `resume` has no --locked flag; a workflow's [engine] locked key
+        // still enforces the lock through the run path (issue #1399), so a
+        // locked workflow cannot resume across drift.
+        locked: false,
     })
     .await;
 

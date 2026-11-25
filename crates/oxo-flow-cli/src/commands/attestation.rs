@@ -101,6 +101,10 @@ pub fn build_attestation(checkpoint_path: &Path) -> Result<Value> {
         "metadata_digest",
         object.get("metadata_digest"),
     );
+    // Issue #1399: bind the verified workflow-lock digest when the run was
+    // lock-enforced. Additive — a run without a lock emits no key, so the
+    // v1 document's bytes are unchanged for every existing checkpoint.
+    insert_optional(&mut workflow, "lock_digest", object.get("lock_digest"));
 
     let mut doc = Map::new();
     doc.insert(

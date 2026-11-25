@@ -968,6 +968,26 @@ fn build_config_snapshot(
         .collect()
 }
 
+/// The canonical config snapshot for a resolved workflow (issue #1399),
+/// built by the SAME function `detect_config_changes_with_replay` persists:
+/// engine-injected keys excluded, sensitive values stored as SHA-256
+/// digests, `BTreeMap`-ordered. The workflow lock and the run-time lock
+/// verification both derive their config identity here, so lock generation
+/// and checkpoint recording can never drift apart.
+///
+/// Call it on the final config state (post-defaults, post-override,
+/// post-profile, post-wildcard-expansion) — the state a run records.
+#[must_use]
+pub fn canonical_config_snapshot(
+    config: &crate::config::WorkflowConfig,
+) -> BTreeMap<String, String> {
+    build_config_snapshot(
+        &config.config,
+        &config.sensitive_config_keys(),
+        Some(config),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
