@@ -515,3 +515,69 @@ fn lock_digest_reaches_provenance_and_attestation() {
         "a legacy attestation must not grow the key: {attestation}"
     );
 }
+
+// 14. `lock --arg` pins the config context a `run --arg` will see, and a run
+// that changes config under the lock is LOCK-003 (the documented way to run
+// an overridden invocation under enforcement).
+#[test]
+fn lock_arg_pins_the_run_config_context() {
+    let dir = tempfile::tempdir().unwrap();
+    let workflow_text = r#"
+[workflow]
+name = "lock-arg"
+version = "1.0"
+
+[config]
+threshold = 10
+
+[[rules]]
+name = "touch"
+shell = "echo ran > ran.txt; test {config.threshold} -eq 20"
+"#;
+    let workflow = write(dir.path(), "wf.oxoflow", workflow_text);
+
+    // A lock generated for the DEFAULT config refuses the overridden run.
+    assert_eq!(run_in(dir.path(), &["lock", "wf.oxoflow"]).0, 0);
+    let (code, _stdout, stderr) = run_in(
+        dir.path(),
+        &[
+            "run",
+            workflow.to_str().unwrap(),
+            "--workdir",
+            dir.path().to_str().unwrap(),
+            "--arg",
+            "threshold=20",
+            "--locked",
+            "-j",
+            "1",
+        ],
+    );
+    assert_ne!(code, 0, "config drift under --locked must refuse: {stderr}");
+    assert!(stderr.contains("LOCK-003"), "{stderr}");
+    assert!(!dir.path().join("ran.txt").exists());
+
+    // A lock generated WITH the override pins that context and the run
+    // succeeds with it.
+    let (code, _stdout, stderr) =
+        run_in(dir.path(), &["lock", "--arg", "threshold=20", "wf.oxoflow"]);
+    assert_eq!(code, 0, "{stderr}");
+    let (code, _stdout, stderr) = run_in(
+        dir.path(),
+        &[
+            "run",
+            workflow.to_str().unwrap(),
+            "--workdir",
+            dir.path().to_str().unwrap(),
+            "--arg",
+            "threshold=20",
+            "--locked",
+            "-j",
+            "1",
+        ],
+    );
+    assert_eq!(
+        code, 0,
+        "a lock generated with the same --arg must verify: {stderr}"
+    );
+    assert!(dir.path().join("ran.txt").exists());
+}

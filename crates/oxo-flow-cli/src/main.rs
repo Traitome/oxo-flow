@@ -1746,7 +1746,7 @@ async fn main() -> Result<()> {
              status, wait, batch, resume, info, knowledge, diagnostics, \
              schema, license, ai, provenance verify, provenance diff, \
              provenance attest, provenance attest-verify, \
-             audit verify, verify-data, graph, runs gc, import, diff (the workflow text \
+             audit verify, verify-data, graph, runs gc, import, lock, diff (the workflow text \
              diff), env list/check, cluster status/cancel/logs)."
         );
     }
