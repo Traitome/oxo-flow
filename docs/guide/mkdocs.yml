@@ -68,7 +68,7 @@ extra_css:
 # Visit statistics (busuanzi) rendered in the footer copyright slot. The
 # loader script re-injects the counter on Material's instant-navigation
 # events so each page view is counted (see javascripts/busuanzi-stats.js).
-copyright: 'Site visits: <span id="busuanzi_value_site_pv"></span>'
+copyright: 'Built at <a href="https://github.com/WangLabCSU">WangLabCSU</a> · Site visits: <span id="busuanzi_value_site_pv"></span>'
 extra_javascript:
   - javascripts/busuanzi-stats.js
 
@@ -112,6 +112,9 @@ extra:
     - icon: fontawesome/brands/github
       link: https://github.com/Traitome/oxo-flow
       name: oxo-flow on GitHub
+    - icon: fontawesome/brands/github
+      link: https://github.com/WangLabCSU
+      name: WangLabCSU on GitHub
     - icon: fontawesome/solid/people-group
       link: https://oxo-flow-community.github.io/
       name: oxo-flow-community catalog
