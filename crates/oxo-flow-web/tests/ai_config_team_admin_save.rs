@@ -209,10 +209,6 @@ async fn team_admin_blank_key_save_never_leaves_a_keyless_shared_tier() {
         .unwrap();
 
     // ── Provider switch + blank key: never reuse the old vendor's key ────
-    sqlx::query("DELETE FROM ai_provider_config")
-        .execute(oxo_flow_web::infra::db::sqlite::pool())
-        .await
-        .unwrap();
     seed_row(
         None,
         "openai",

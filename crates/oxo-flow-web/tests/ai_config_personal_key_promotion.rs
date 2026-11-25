@@ -54,6 +54,23 @@ async fn seed_default_row(provider: &str, api_key: &str, model: &str) {
     .unwrap();
 }
 
+async fn seed_server_row(provider: &str, api_key: &str, model: &str) {
+    sqlx::query(
+        "INSERT INTO ai_provider_config (id, user_id, provider, api_key, api_url, model, \
+         search_enabled, monitor_enabled, auto_retry_enabled, max_correction_rounds, \
+         created_at, updated_at) \
+         VALUES (?, NULL, ?, ?, 'https://shared.example/v1', ?, 1, 1, 0, 3, \
+                 '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+    )
+    .bind(uuid::Uuid::new_v4().to_string())
+    .bind(provider)
+    .bind(api_key)
+    .bind(model)
+    .execute(oxo_flow_web::infra::db::sqlite::pool())
+    .await
+    .unwrap();
+}
+
 async fn clear_rows() {
     sqlx::query("DELETE FROM ai_provider_config")
         .execute(oxo_flow_web::infra::db::sqlite::pool())
@@ -161,6 +178,53 @@ async fn personal_blank_key_promotes_a_matching_stored_key_and_never_leaves_a_ke
     assert!(
         restored.is_configured,
         "promoted key restores as configured"
+    );
+
+    // A personal provider switch with an existing server key must not reuse
+    // it (M1); switching to a keyless provider clears the old server key.
+    clear_rows().await;
+    seed_server_row("openai", "sk-openai-server", "gpt-4o").await;
+    seed_default_row("openai", "sk-openai-personal", "gpt-4o").await;
+    let (status, saved) = put_server(
+        &app,
+        json!({
+            "provider": "claude",
+            "api_url": "https://anthropic.example/v1",
+            "model": "claude-model",
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{saved}");
+    assert_eq!(saved["code"], "AI_KEY_REQUIRED", "{saved}");
+    let server_row: (String, String) =
+        sqlx::query_as("SELECT provider, api_key FROM ai_provider_config WHERE user_id IS NULL")
+            .fetch_one(oxo_flow_web::infra::db::sqlite::pool())
+            .await
+            .unwrap();
+    assert_eq!(
+        server_row,
+        ("openai".to_string(), "sk-openai-server".to_string()),
+        "a blank-key provider switch must not reuse/rewrite the old server key"
+    );
+    let (status, saved) = put_server(
+        &app,
+        json!({
+            "provider": "ollama",
+            "api_url": "http://ollama.example:11434",
+            "model": "llama3",
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    let server_row: (String, String) =
+        sqlx::query_as("SELECT provider, api_key FROM ai_provider_config WHERE user_id IS NULL")
+            .fetch_one(oxo_flow_web::infra::db::sqlite::pool())
+            .await
+            .unwrap();
+    assert_eq!(
+        server_row,
+        ("ollama".to_string(), String::new()),
+        "switching to a keyless provider with a blank key clears the old key"
     );
 
     // A DIFFERENT provider's stored key is not promoted: the operator must
