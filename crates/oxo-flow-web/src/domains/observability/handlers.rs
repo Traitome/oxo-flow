@@ -313,7 +313,7 @@ pub async fn export_audit_chain(headers: axum::http::HeaderMap) -> ApiResult<ser
     path = "/api/audit/chain/verify",
     tag = "observability",
     responses(
-        (status = 200, description = "Verification result; tampering is a 200 finding with ok=false", body = serde_json::Value),
+        (status = 200, description = "Verification result; tampering is a 200 finding with ok=false (a structurally broken chain, e.g. a missing head row, is 500 DB_ERROR)", body = serde_json::Value),
         (status = 403, description = "Forbidden", body = ApiError),
         (status = 500, description = "Error", body = ApiError),
         (status = 503, description = "Storage backend unavailable", body = ApiError),
@@ -324,7 +324,10 @@ pub async fn export_audit_chain(headers: axum::http::HeaderMap) -> ApiResult<ser
 /// Admin-only. Returns `{ok, events, head, findings}`. Tampering is a **200**
 /// finding with `ok:false` (a deletion, reorder, insertion, mutation, bad
 /// genesis, duplicate phase, or truncated chain), never an HTTP error — the
-/// audit surface must report evidence, not fail closed on the evidence.
+/// audit surface must report evidence, not fail closed on the evidence. The
+/// one documented exception is a structurally broken chain (e.g. a missing
+/// `audit_chain_head` row): the snapshot cannot be read, so the endpoint
+/// answers fail-closed `500 DB_ERROR` instead.
 ///
 /// The check is local integrity only: an actor who can rewrite every event
 /// and the head consistently passes. Comparing against a previously exported

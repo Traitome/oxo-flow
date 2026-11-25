@@ -31,6 +31,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use std::collections::BTreeMap;
 
 /// Version tag of the exported audit-chain document.
 pub const AUDIT_CHAIN_FORMAT: &str = "oxo-flow.audit-chain/v1";
@@ -447,121 +448,139 @@ impl AuditChainVerification {
 #[must_use]
 pub fn verify_export(export: &AuditChainExport) -> AuditChainVerification {
     let mut findings = Vec::new();
+    verify_chain_integrity(&export.events, &mut findings);
+    verify_genesis_and_head(&export.events, &export.head, &mut findings);
+    verify_log_agreement(&export.events, &export.audit_logs, &mut findings);
+    AuditChainVerification {
+        ok: findings.is_empty(),
+        events: export.events.len(),
+        head: export.head.clone(),
+        findings,
+    }
+}
 
+/// Pass 1: the 1-based position sequence, every `prev_hash` link, the known
+/// phase set, one `(audit_id, phase)` per chain, and the recomputed hash.
+fn verify_chain_integrity(events: &[AuditChainEvent], findings: &mut Vec<AuditChainFinding>) {
     let mut expected_prev = GENESIS_HASH.to_string();
-    let mut seen_phases: std::collections::BTreeMap<(String, String), u64> =
-        std::collections::BTreeMap::new();
-    let mut terminal_phases: std::collections::BTreeMap<&str, Vec<&str>> =
-        std::collections::BTreeMap::new();
-
-    for (index, event) in export.events.iter().enumerate() {
-        let expected_seq = (index as u64) + 1;
-        if event.seq != expected_seq {
-            findings.push(AuditChainFinding::new(
-                FINDING_SEQ_MISMATCH,
-                Some(event.seq),
-                format!(
-                    "event at position {expected_seq} carries seq {} (gap, duplicate, or reorder)",
-                    event.seq
-                ),
-            ));
-        }
-        if event.prev_hash != expected_prev {
-            findings.push(AuditChainFinding::new(
-                FINDING_PREV_HASH_MISMATCH,
-                Some(event.seq),
-                format!(
-                    "prev_hash {} does not match the predecessor hash {}",
-                    event.prev_hash, expected_prev
-                ),
-            ));
-        }
-        if !matches!(
-            event.phase.as_str(),
-            PHASE_PENDING | PHASE_SUCCESS | PHASE_FAILURE
-        ) {
-            findings.push(AuditChainFinding::new(
-                FINDING_INVALID_PHASE,
-                Some(event.seq),
-                format!("unknown phase '{}'", event.phase),
-            ));
-        }
-        if seen_phases
-            .insert((event.audit_id.clone(), event.phase.clone()), event.seq)
-            .is_some()
-        {
-            findings.push(AuditChainFinding::new(
-                FINDING_DUPLICATE_PHASE,
-                Some(event.seq),
-                format!(
-                    "audit id '{}' carries more than one '{}' event",
-                    event.audit_id, event.phase
-                ),
-            ));
-        }
-        let computed = compute_event_hash(event);
-        if computed != event.hash {
-            findings.push(AuditChainFinding::new(
-                FINDING_HASH_MISMATCH,
-                Some(event.seq),
-                format!(
-                    "stored hash {} does not match the recomputed hash {computed}",
-                    event.hash
-                ),
-            ));
-        }
-        if event.phase != PHASE_PENDING {
-            terminal_phases
-                .entry(event.audit_id.as_str())
-                .or_default()
-                .push(event.phase.as_str());
-        }
-
+    let mut seen_phases: BTreeMap<(String, String), u64> = BTreeMap::new();
+    let mut terminal_phases: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for (index, event) in events.iter().enumerate() {
+        verify_event_integrity(
+            event,
+            (index as u64) + 1,
+            &expected_prev,
+            &mut seen_phases,
+            &mut terminal_phases,
+            findings,
+        );
         expected_prev = event.hash.clone();
     }
+    report_conflicting_terminals(terminal_phases, findings);
+}
 
-    // Genesis and head.
-    let expected_head = export
-        .events
-        .last()
-        .map_or_else(AuditChainHead::genesis, |last| AuditChainHead {
-            seq: last.seq,
-            hash: last.hash.clone(),
-        });
-    if export.events.is_empty() {
-        if export.head != AuditChainHead::genesis() {
-            findings.push(AuditChainFinding::new(
-                FINDING_GENESIS_MISMATCH,
-                None,
-                format!(
-                    "an empty chain must carry the genesis head, got seq {} hash {}",
-                    export.head.seq, export.head.hash
-                ),
-            ));
-        }
-    } else if export.events[0].prev_hash != GENESIS_HASH {
+/// One event's position, link, phase, uniqueness and hash checks.
+fn verify_event_integrity<'a>(
+    event: &'a AuditChainEvent,
+    expected_seq: u64,
+    expected_prev: &str,
+    seen_phases: &mut BTreeMap<(String, String), u64>,
+    terminal_phases: &mut BTreeMap<&'a str, Vec<&'a str>>,
+    findings: &mut Vec<AuditChainFinding>,
+) {
+    verify_event_fields(event, expected_seq, expected_prev, findings);
+    note_event_phase(event, seen_phases, terminal_phases, findings);
+    verify_event_hash(event, findings);
+}
+
+/// Position, predecessor link, and known-phase checks for one event.
+fn verify_event_fields(
+    event: &AuditChainEvent,
+    expected_seq: u64,
+    expected_prev: &str,
+    findings: &mut Vec<AuditChainFinding>,
+) {
+    if event.seq != expected_seq {
         findings.push(AuditChainFinding::new(
-            FINDING_GENESIS_MISMATCH,
-            Some(export.events[0].seq),
+            FINDING_SEQ_MISMATCH,
+            Some(event.seq),
             format!(
-                "the first event does not link to genesis (prev_hash {})",
-                export.events[0].prev_hash
+                "event at position {expected_seq} carries seq {} (gap, duplicate, or reorder)",
+                event.seq
             ),
         ));
     }
-    if export.head != expected_head && !export.events.is_empty() {
+    if event.prev_hash != expected_prev {
         findings.push(AuditChainFinding::new(
-            FINDING_HEAD_MISMATCH,
-            Some(export.head.seq),
+            FINDING_PREV_HASH_MISMATCH,
+            Some(event.seq),
             format!(
-                "head (seq {}, hash {}) does not match the last event (seq {}, hash {}) — \
-                 truncated or replaced chain",
-                export.head.seq, export.head.hash, expected_head.seq, expected_head.hash
+                "prev_hash {} does not match the predecessor hash {}",
+                event.prev_hash, expected_prev
             ),
         ));
     }
+    if !matches!(
+        event.phase.as_str(),
+        PHASE_PENDING | PHASE_SUCCESS | PHASE_FAILURE
+    ) {
+        findings.push(AuditChainFinding::new(
+            FINDING_INVALID_PHASE,
+            Some(event.seq),
+            format!("unknown phase '{}'", event.phase),
+        ));
+    }
+}
 
-    // Conflicting terminal outcomes for one audit id.
+/// The `(audit_id, phase)` uniqueness finding and the terminal-phase
+/// collection consumed by [`report_conflicting_terminals`].
+fn note_event_phase<'a>(
+    event: &'a AuditChainEvent,
+    seen_phases: &mut BTreeMap<(String, String), u64>,
+    terminal_phases: &mut BTreeMap<&'a str, Vec<&'a str>>,
+    findings: &mut Vec<AuditChainFinding>,
+) {
+    if seen_phases
+        .insert((event.audit_id.clone(), event.phase.clone()), event.seq)
+        .is_some()
+    {
+        findings.push(AuditChainFinding::new(
+            FINDING_DUPLICATE_PHASE,
+            Some(event.seq),
+            format!(
+                "audit id '{}' carries more than one '{}' event",
+                event.audit_id, event.phase
+            ),
+        ));
+    }
+    if event.phase != PHASE_PENDING {
+        terminal_phases
+            .entry(event.audit_id.as_str())
+            .or_default()
+            .push(event.phase.as_str());
+    }
+}
+
+/// Recompute the hash and compare it with the stored value.
+fn verify_event_hash(event: &AuditChainEvent, findings: &mut Vec<AuditChainFinding>) {
+    let computed = compute_event_hash(event);
+    if computed != event.hash {
+        findings.push(AuditChainFinding::new(
+            FINDING_HASH_MISMATCH,
+            Some(event.seq),
+            format!(
+                "stored hash {} does not match the recomputed hash {computed}",
+                event.hash
+            ),
+        ));
+    }
+}
+
+/// More than one terminal phase for one audit id is a conflicting outcome.
+fn report_conflicting_terminals(
+    terminal_phases: BTreeMap<&str, Vec<&str>>,
+    findings: &mut Vec<AuditChainFinding>,
+) {
     for (audit_id, phases) in terminal_phases {
         if phases.len() > 1 {
             findings.push(AuditChainFinding::new(
@@ -574,11 +593,75 @@ pub fn verify_export(export: &AuditChainExport) -> AuditChainVerification {
             ));
         }
     }
+}
 
-    // audit_logs snapshot vs chain records.
-    let mut logs_by_id: std::collections::BTreeMap<&str, &AuditChainLogRecord> =
-        std::collections::BTreeMap::new();
-    for log in &export.audit_logs {
+/// Pass 2: the empty-chain genesis head, the first event's genesis link, and
+/// the head/last-event agreement (truncation/replacement).
+fn verify_genesis_and_head(
+    events: &[AuditChainEvent],
+    head: &AuditChainHead,
+    findings: &mut Vec<AuditChainFinding>,
+) {
+    let expected_head = events
+        .last()
+        .map_or_else(AuditChainHead::genesis, |last| AuditChainHead {
+            seq: last.seq,
+            hash: last.hash.clone(),
+        });
+    if events.is_empty() {
+        if head != &AuditChainHead::genesis() {
+            findings.push(AuditChainFinding::new(
+                FINDING_GENESIS_MISMATCH,
+                None,
+                format!(
+                    "an empty chain must carry the genesis head, got seq {} hash {}",
+                    head.seq, head.hash
+                ),
+            ));
+        }
+    } else if events[0].prev_hash != GENESIS_HASH {
+        findings.push(AuditChainFinding::new(
+            FINDING_GENESIS_MISMATCH,
+            Some(events[0].seq),
+            format!(
+                "the first event does not link to genesis (prev_hash {})",
+                events[0].prev_hash
+            ),
+        ));
+    }
+    if head != &expected_head && !events.is_empty() {
+        findings.push(AuditChainFinding::new(
+            FINDING_HEAD_MISMATCH,
+            Some(head.seq),
+            format!(
+                "head (seq {}, hash {}) does not match the last event (seq {}, hash {}) — \
+                 truncated or replaced chain",
+                head.seq, head.hash, expected_head.seq, expected_head.hash
+            ),
+        ));
+    }
+}
+
+/// Pass 3: the `audit_logs` snapshot must agree with each audit id's final
+/// chain record, and no post-chain-start row may be missing from the chain.
+fn verify_log_agreement(
+    events: &[AuditChainEvent],
+    logs: &[AuditChainLogRecord],
+    findings: &mut Vec<AuditChainFinding>,
+) {
+    let logs_by_id = index_audit_logs(logs, findings);
+    let last_event_by_id = last_event_per_audit(events);
+    verify_log_rows(&last_event_by_id, &logs_by_id, findings);
+    verify_unchained_rows(events, logs, &last_event_by_id, findings);
+}
+
+/// Index the snapshot by audit id, reporting a duplicated id.
+fn index_audit_logs<'a>(
+    logs: &'a [AuditChainLogRecord],
+    findings: &mut Vec<AuditChainFinding>,
+) -> BTreeMap<&'a str, &'a AuditChainLogRecord> {
+    let mut logs_by_id = BTreeMap::new();
+    for log in logs {
         if logs_by_id.insert(log.id.as_str(), log).is_some() {
             findings.push(AuditChainFinding::new(
                 FINDING_DUPLICATE_LOG_ID,
@@ -587,14 +670,26 @@ pub fn verify_export(export: &AuditChainExport) -> AuditChainVerification {
             ));
         }
     }
+    logs_by_id
+}
 
-    // The final record for each audit id is the one the log row must match.
-    let mut last_event_by_id: std::collections::BTreeMap<&str, &AuditChainEvent> =
-        std::collections::BTreeMap::new();
-    for event in &export.events {
+/// The final chain record for each audit id — the one the log row must match.
+fn last_event_per_audit(events: &[AuditChainEvent]) -> BTreeMap<&str, &AuditChainEvent> {
+    let mut last_event_by_id = BTreeMap::new();
+    for event in events {
         last_event_by_id.insert(event.audit_id.as_str(), event);
     }
-    for (audit_id, event) in &last_event_by_id {
+    last_event_by_id
+}
+
+/// Deletion and mutation detection: every chained id has a row, and the row
+/// still equals its final chain record.
+fn verify_log_rows(
+    last_event_by_id: &BTreeMap<&str, &AuditChainEvent>,
+    logs_by_id: &BTreeMap<&str, &AuditChainLogRecord>,
+    findings: &mut Vec<AuditChainFinding>,
+) {
+    for (audit_id, event) in last_event_by_id {
         match logs_by_id.get(audit_id) {
             None => findings.push(AuditChainFinding::new(
                 FINDING_MISSING_LOG_ROW,
@@ -614,32 +709,33 @@ pub fn verify_export(export: &AuditChainExport) -> AuditChainVerification {
             Some(_) => {}
         }
     }
+}
 
-    // Rows written after the chain started must have a chain event. Rows older
-    // than the first event predate the chain (the migration did not backfill
-    // history) and are accepted.
-    if let Some(first) = export.events.first() {
-        for log in &export.audit_logs {
-            if !last_event_by_id.contains_key(log.id.as_str())
-                && log.timestamp.as_str() >= first.timestamp.as_str()
-            {
-                findings.push(AuditChainFinding::new(
-                    FINDING_UNCHAINED_LOG_ROW,
-                    None,
-                    format!(
-                        "audit_logs row '{}' ({}) has no chain event",
-                        log.id, log.timestamp
-                    ),
-                ));
-            }
+/// Rows written after the chain started must have a chain event. Rows older
+/// than the first event predate the chain (the migration did not backfill
+/// history) and are accepted.
+fn verify_unchained_rows(
+    events: &[AuditChainEvent],
+    logs: &[AuditChainLogRecord],
+    last_event_by_id: &BTreeMap<&str, &AuditChainEvent>,
+    findings: &mut Vec<AuditChainFinding>,
+) {
+    let Some(first) = events.first() else {
+        return;
+    };
+    for log in logs {
+        if !last_event_by_id.contains_key(log.id.as_str())
+            && log.timestamp.as_str() >= first.timestamp.as_str()
+        {
+            findings.push(AuditChainFinding::new(
+                FINDING_UNCHAINED_LOG_ROW,
+                None,
+                format!(
+                    "audit_logs row '{}' ({}) has no chain event",
+                    log.id, log.timestamp
+                ),
+            ));
         }
-    }
-
-    AuditChainVerification {
-        ok: findings.is_empty(),
-        events: export.events.len(),
-        head: export.head.clone(),
-        findings,
     }
 }
 

@@ -330,6 +330,29 @@ fn conflicting_terminal_outcomes_are_detected() {
 }
 
 #[test]
+fn an_unknown_phase_is_detected() {
+    let mut export = sample_export(1);
+    // Turn the terminal success into an unknown phase and rehash/relink so the
+    // phase branch is the only finding.
+    export.events[1].phase = "denied".to_string();
+    export.events[1].hash = compute_event_hash(&export.events[1]);
+    export.head.hash = export.events[1].hash.clone();
+    let verification = verify_export(&export);
+    assert!(!verification.ok);
+    assert_eq!(finding_codes(&verification), vec![FINDING_INVALID_PHASE]);
+}
+
+#[test]
+fn a_duplicate_log_id_is_detected() {
+    let mut export = sample_export(1);
+    let duplicate = export.audit_logs[0].clone();
+    export.audit_logs.push(duplicate);
+    let verification = verify_export(&export);
+    assert!(!verification.ok);
+    assert_eq!(finding_codes(&verification), vec![FINDING_DUPLICATE_LOG_ID]);
+}
+
+#[test]
 fn export_bytes_are_deterministic_and_sorted() {
     let export = sample_export(1);
     let first = export.to_canonical_bytes();

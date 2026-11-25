@@ -127,6 +127,9 @@ chain is stored in the same database as `audit_logs`:
   older chain with newer rows) — is reported as `MISSING_LOG_ROW`,
   `UNCHAINED_LOG_ROW`, or `HEAD_MISMATCH`. That is the feature working, not
   corruption of the verifier; restore both tables (and the head row) together.
+  A restore that drops the `audit_chain_head` row is structural, not a
+  finding: both endpoints answer `500 DB_ERROR` until the head is restored,
+  and every audited write fails closed.
 - `pg_dump`/`sqlite3 .backup` of the whole database is consistent; copying
   only the log table is not.
 - Export (`GET /api/audit/chain/export`) and archive the document off-host
@@ -134,7 +137,11 @@ chain is stored in the same database as `audit_logs`:
   detect a wholesale, self-consistent rewrite of the live chain.
 - Deleting a user cascades their `audit_logs` rows but not the immutable
   chain, so verification flags `MISSING_LOG_ROW` for them; correlate with the
-  account-deletion audit record.
+  account-deletion audit record. On PostgreSQL, a concurrent user deletion
+  during an export can land between the snapshot's plain `SELECT`s and
+  surface a **transient** `MISSING_LOG_ROW` for an untampered chain (each
+  READ COMMITTED statement takes a fresh snapshot); re-run the export after
+  the deletion commits.
 - **Rolling upgrades**: an older server binary sharing the database writes
   audit rows without chain events. Those rows surface as
   `UNCHAINED_LOG_ROW` (they are newer than the first chain event). Stop old

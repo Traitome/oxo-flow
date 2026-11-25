@@ -395,6 +395,29 @@ async fn deleting_a_chain_event_is_a_finding() {
 }
 
 #[tokio::test]
+async fn a_deleted_head_row_is_a_fail_closed_storage_error() {
+    let fresh = fresh_backend().await;
+    let backend = &fresh.backend;
+    append_pair(backend, "head-1", "head-actor").await;
+
+    sqlx::query("DELETE FROM audit_chain_head WHERE id = 1")
+        .execute(backend.inner_pool())
+        .await
+        .unwrap();
+
+    // A structurally broken chain (missing head row) is deliberately NOT a
+    // 200 finding: the snapshot cannot represent it, the web endpoints map the
+    // error to 500 DB_ERROR, and every chain write also fails closed.
+    assert!(backend.audit_chain_snapshot().await.is_err());
+    assert!(
+        backend
+            .begin_audit_intent("head-2", "head-actor", "POST /api/x", "/api/x", None)
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
 async fn inserting_an_unchained_audit_row_is_a_finding() {
     let fresh = fresh_backend().await;
     let backend = &fresh.backend;

@@ -137,6 +137,12 @@ comes from comparing a live database against an export you already hold
 rewrite cannot retroactively change the copy. No external notarization, legal
 compliance, or confidentiality is claimed.
 
+The verifier can only check documents that carry a head. A server-side
+missing or deleted `audit_chain_head` row is a structural failure, not an
+offline finding: the web verify endpoint answers fail-closed `500 DB_ERROR`
+(and audited writes also fail), while an export document without a `head`
+field is malformed input (`AUDIT_EXPORT_INVALID`, exit 4).
+
 Audit rows are deleted when their user account is deleted (`ON DELETE
 CASCADE`), while chain events are immutable. Verification then reports
 `MISSING_LOG_ROW` for those rows — an intentional, reviewable signal that the

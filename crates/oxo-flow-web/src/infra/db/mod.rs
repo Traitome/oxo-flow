@@ -494,11 +494,20 @@ pub trait StorageBackend: Send + Sync {
     /// `audit_logs` table (issue #1372).
     ///
     /// Read in ONE transaction so the head, the events and the current log
-    /// rows describe one moment — an export/verification must never splice a
-    /// head from one instant with events from another. SQLite's read
-    /// transaction gives a stable WAL snapshot without blocking writers;
-    /// PostgreSQL takes `FOR SHARE` on the head row, which makes appenders
-    /// (they take `FOR UPDATE`) wait for the snapshot to finish.
+    /// rows describe one moment with respect to chain appends — an export
+    /// must never splice a head from one instant with events from another.
+    /// SQLite's read transaction gives a stable WAL snapshot without blocking
+    /// writers; PostgreSQL takes `FOR SHARE` on the head row, which makes
+    /// appenders (they take `FOR UPDATE`) wait for the snapshot to finish.
+    ///
+    /// PostgreSQL READ COMMITTED still snapshots each plain `SELECT`
+    /// separately, so a concurrent `users` → `audit_logs` cascade delete can
+    /// commit between the event and log reads; that window can surface a
+    /// transient `MISSING_LOG_ROW` for an untampered chain. The snapshot is
+    /// therefore consistent for chain appends, not fully serialized against
+    /// log-row cascade deletes. A missing/deleted head row is an error (the
+    /// handlers map it to `500 DB_ERROR`): a structurally broken chain is
+    /// fail-closed, not a 200 finding.
     async fn audit_chain_snapshot(&self) -> Result<models::AuditChainSnapshot, String>;
     async fn get_run_metrics(&self) -> Result<(i64, u64), String>;
 

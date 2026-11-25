@@ -214,7 +214,10 @@ one-row head) **in the same transaction**. Each event links to its
 predecessor; the head names the chain's end (genesis = seq 0, 64 hex zeros).
 Appends serialize on the backend (SQLite `BEGIN IMMEDIATE`, PostgreSQL
 `FOR UPDATE` on the head), so the sequence cannot gap or duplicate under
-concurrent writers or multiple server instances.
+concurrent writers. This is true by construction (the lock is the
+serialization point); the measured PostgreSQL evidence is single-host,
+single-instance PostgreSQL 16.15, and multi-instance deployment remains
+unmeasured.
 
 Two admin-only endpoints expose it:
 
@@ -249,6 +252,11 @@ with `AUDIT_EXPORT_INVALID`). See the
   not covered (the upgrade does not backfill), and deleting a user
   cascade-deletes their audit rows while their chain events persist — the
   verifier reports `MISSING_LOG_ROW` so the shrinkage is visible.
+- **Structural corruption is fail-closed, not a finding**: a missing or
+  deleted `audit_chain_head` row makes the snapshot unrepresentable, so both
+  endpoints answer `500 DB_ERROR` (and every audited write also fails) rather
+  than a 200 `ok:false`; an export without a head is malformed input (exit 4)
+  to the offline verifier.
 - **Availability**: the export is admin-only and unbounded in size (it grows
   with the audit trail); treat a very large export as an administrative
   operation, not a per-request health check.

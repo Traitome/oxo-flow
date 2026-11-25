@@ -225,8 +225,10 @@ a one-row `audit_chain_head` cursor (`seq`, `hash`); an empty chain carries
 `seq = 0` and the genesis hash of 64 hexadecimal zeros. Appends are
 serialized — SQLite inside `BEGIN IMMEDIATE`, PostgreSQL behind a
 `SELECT … FOR UPDATE` on the head row — so the sequence is gapless and
-monotonic even under concurrent writers (and, on PostgreSQL, multiple server
-instances sharing one database). The
+monotonic under concurrent writers. This is true by construction (the lock is
+the serialization point); the measured PostgreSQL evidence is single-host,
+single-instance PostgreSQL 16.15, and multi-instance deployment remains
+unmeasured. The
 `(audit_id, phase)` unique index makes a retried finalize idempotent; the
 first terminal outcome wins and a conflicting later outcome appends nothing.
 
@@ -286,8 +288,16 @@ GET /api/audit/chain/verify
 ```
 
 **Admin-only.** Reads the stored chain and audit rows in one snapshot
-transaction and returns `{ok, events, head, findings}`. Tampering is a
-**200** answer with `ok: false`, never an HTTP error:
+transaction — consistent with respect to chain appends; on PostgreSQL READ
+COMMITTED a concurrent account-deletion cascade can land between the plain
+`SELECT`s and surface a transient `MISSING_LOG_ROW` for an untampered chain
+(see the architecture note) — and returns `{ok, events, head, findings}`.
+Tampering is a **200** answer with `ok: false`, never an HTTP error, with one
+documented exception: a structurally broken chain such as a missing/deleted
+`audit_chain_head` row cannot be represented, so both endpoints answer
+`500 DB_ERROR` (fail-closed; every audited write also fails).
+
+Example tampering response:
 
 ```json
 {
@@ -304,7 +314,9 @@ Finding codes: `SEQ_MISMATCH`, `PREV_HASH_MISMATCH`, `HASH_MISMATCH`,
 `DUPLICATE_PHASE`, `INVALID_PHASE`, `CONFLICTING_TERMINAL`,
 `HEAD_MISMATCH`, `GENESIS_MISMATCH`, `MISSING_LOG_ROW`, `LOG_MISMATCH`,
 `UNCHAINED_LOG_ROW`, `DUPLICATE_LOG_ID`. Both endpoints answer
-`503 {code: "DB_ERROR"}` when no storage backend is initialized.
+`503 {code: "DB_ERROR"}` when no storage backend is initialized. The offline
+verifier cannot express a missing head: an export without a `head` field is
+malformed input (`AUDIT_EXPORT_INVALID`, exit 4).
 
 The same export verifies **offline** with
 `oxo-flow audit verify <export.json>` (exit 0 valid, 2 invalid/tampered,

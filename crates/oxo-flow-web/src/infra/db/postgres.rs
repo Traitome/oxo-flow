@@ -2256,7 +2256,11 @@ impl StorageBackend for PostgresBackend {
     async fn audit_chain_snapshot(&self) -> Result<models::AuditChainSnapshot, String> {
         // One transaction with a shared lock on the head row: appenders take
         // the same row FOR UPDATE, so they wait while this snapshot is read
-        // and the exported head can never lead or lag its events.
+        // and the exported head cannot lead or lag chain appends. Plain
+        // SELECTs in READ COMMITTED take a fresh snapshot each, so a
+        // concurrent users -> audit_logs cascade delete can still commit
+        // between the event and log reads; that window can surface a
+        // transient MISSING_LOG_ROW and is documented.
         let mut tx = self.pool.begin().await.map_err(|e| e.to_string())?;
         let head_row: models::AuditChainHeadRow =
             sqlx::query_as("SELECT seq, hash FROM audit_chain_head WHERE id = 1 FOR SHARE")

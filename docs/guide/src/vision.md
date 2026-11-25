@@ -80,7 +80,7 @@ Methodological claims are nothing without measurement infrastructure:
 
 ## 5. Verification snapshot (2026-11-25)
 
-The quantitative claims on this page were checked against `main@55dddf3c` on 2026-11-17; the cluster `--provenance` behavior was re-verified after #1096 (`main@3406208f`); the CLI/OpenAPI counts were re-checked against `main@131d6f0e` on 2026-11-25 (the `audit` subcommand and its two endpoints, #1372):
+The quantitative claims on this page were checked against `main@55dddf3c` on 2026-11-17; the cluster `--provenance` behavior was re-verified after #1096 (`main@3406208f`); the CLI/OpenAPI counts were re-checked on 2026-11-25 on the reviewed branch `feat/1372-audit-chain` at `6416732b` — `main@d0618816` plus #1372, which is not yet on main — the branch that contains the `audit` subcommand and its two endpoints:
 
 - 39 CLI subcommands; 96 OpenAPI paths / 111 operations served by `GET /api/openapi.json` (default build, non-HPC mode).
 - 31 built-in diagnostic patterns; biological type contracts firing on a deliberately mismatched workflow (`TYPE-001`–`TYPE-003` observed live, `TYPE-004`–`TYPE-010` covered by unit tests; `TYPE-008`/`TYPE-009`/`TYPE-010` are advisory unverifiable-edge codes).
