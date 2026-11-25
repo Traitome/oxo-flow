@@ -630,6 +630,211 @@ pub struct ClusterProfile {
     #[serde(default)]
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub extra_args: Vec<String>,
+    /// Shared-filesystem declaration for Kubernetes (and future
+    /// volume-capable backends): the run workdir and the run command
+    /// directories live ON this volume, which pods mount at `mount_root`.
+    /// Absent = the historical single-node `hostPath` behavior (the
+    /// workdir's submit-host path mounted directly).
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub volume: Option<ClusterVolume>,
+}
+
+/// A shared volume a Kubernetes pod mounts so multi-node clusters can see
+/// the run workdir (`[cluster.volume]`). `hostpath` keeps the direct
+/// submit-host mount (single-node mode); `nfs`/`pvc` name a genuinely
+/// shared filesystem. In every case the workdir is made available in-pod at
+/// `mount_root` (default `/oxoflow`) — the command's folded
+/// `cd '<submit-host-workdir>'` is rewritten accordingly at render time.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct ClusterVolume {
+    /// `nfs` (needs `server` + `path`), `pvc` (needs `claim_name`), or
+    /// `hostpath` (needs `path`; single-node semantics unchanged).
+    pub kind: String,
+    /// NFS server hostname or IP (`kind = "nfs"`).
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub server: Option<String>,
+    /// NFS export path (`kind = "nfs"`).
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// Bound PersistentVolumeClaim name (`kind = "pvc"`).
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub claim_name: Option<String>,
+    /// Absolute host path (`kind = "hostpath"`).
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host_path: Option<String>,
+    /// The absolute submit-host path the volume's ROOT corresponds to. For
+    /// `nfs` this defaults to `path` (the export); for `hostpath` to
+    /// `host_path`; for `pvc` it is REQUIRED (a claim has no inherent host
+    /// path). The run workdir must live under this directory — the in-pod
+    /// workdir path is `mount_root/<workdir relative to volume_root>`.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub volume_root: Option<String>,
+    /// In-pod mount point for the shared volume (default `/oxoflow`); the
+    /// run workdir appears AT this path.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mount_root: Option<String>,
+}
+
+impl ClusterVolume {
+    /// The in-pod path the run workdir appears at.
+    pub fn mount_root(&self) -> &str {
+        self.mount_root.as_deref().unwrap_or("/oxoflow")
+    }
+
+    /// The volume-root's submit-host path: explicit `volume_root`, else the
+    /// NFS export / hostPath, else `None` (a `pvc` without one — rejected
+    /// by [`Self::validate`]).
+    pub fn volume_root(&self) -> Option<&str> {
+        self.volume_root
+            .as_deref()
+            .or(self.path.as_deref())
+            .or(self.host_path.as_deref())
+    }
+
+    /// Map a submit-host path (the run workdir, or a command directory
+    /// under it) onto the in-pod mount: `mount_root/<relative>`. Paths
+    /// outside the volume root return `None` — the caller turns that into
+    /// a named error rather than a silent wrong mount.
+    pub fn in_pod_path(&self, host_path: &str) -> Option<String> {
+        let root = self.volume_root()?;
+        let root = root.trim_end_matches('/');
+        let rel = host_path.strip_prefix(root)?.trim_start_matches('/');
+        let mount = self.mount_root().trim_end_matches('/');
+        Some(if rel.is_empty() {
+            mount.to_string()
+        } else {
+            format!("{mount}/{rel}")
+        })
+    }
+
+    /// Validate the kind/field combination, naming every missing field.
+    pub fn validate(&self) -> std::result::Result<(), String> {
+        match self.kind.as_str() {
+            "nfs" => {
+                let mut missing = Vec::new();
+                if self.server.is_none() {
+                    missing.push("server");
+                }
+                if self.path.is_none() {
+                    missing.push("path");
+                }
+                if missing.is_empty() {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "[cluster.volume] kind = \"nfs\" requires {}",
+                        missing.join(" and ")
+                    ))
+                }
+            }
+            "pvc" => {
+                if self.claim_name.is_none() {
+                    return Err("[cluster.volume] kind = \"pvc\" requires claim_name".to_string());
+                }
+                self.volume_root.is_some().then_some(()).ok_or_else(|| {
+                    "[cluster.volume] kind = \"pvc\" requires volume_root — the submit-host                      directory the claim is mounted at (a PVC has no inherent host path)"
+                        .to_string()
+                })
+            }
+            "hostpath" => self.host_path.is_some().then_some(()).ok_or_else(|| {
+                "[cluster.volume] kind = \"hostpath\" requires host_path".to_string()
+            }),
+            other => Err(format!(
+                "[cluster.volume] unknown kind '{other}' — expected nfs, pvc, or hostpath"
+            )),
+        }
+    }
+}
+
+#[cfg(test)]
+mod volume_tests {
+    use super::ClusterVolume;
+
+    #[test]
+    fn cluster_volume_validates_kind_field_combinations() {
+        // Incomplete combinations name every missing field.
+        let err = ClusterVolume {
+            kind: "nfs".into(),
+            ..Default::default()
+        }
+        .validate()
+        .unwrap_err();
+        assert!(err.contains("server") && err.contains("path"), "{err}");
+        let err = ClusterVolume {
+            kind: "pvc".into(),
+            ..Default::default()
+        }
+        .validate()
+        .unwrap_err();
+        assert!(err.contains("claim_name"), "{err}");
+        let err = ClusterVolume {
+            kind: "hostpath".into(),
+            ..Default::default()
+        }
+        .validate()
+        .unwrap_err();
+        assert!(err.contains("host_path"), "{err}");
+        let err = ClusterVolume {
+            kind: "ceph".into(),
+            ..Default::default()
+        }
+        .validate()
+        .unwrap_err();
+        assert!(err.contains("unknown kind"), "{err}");
+        // Complete combinations pass.
+        assert!(
+            ClusterVolume {
+                kind: "nfs".into(),
+                server: Some("10.0.0.9".into()),
+                path: Some("/exports/oxoflow".into()),
+                ..Default::default()
+            }
+            .validate()
+            .is_ok()
+        );
+        // mount_root default; volume_root fallback chain and the relative mapping.
+        let pvc = ClusterVolume {
+            kind: "pvc".into(),
+            claim_name: Some("w".into()),
+            volume_root: Some("/srv/work".into()),
+            ..Default::default()
+        };
+        assert_eq!(pvc.mount_root(), "/oxoflow");
+        assert_eq!(
+            pvc.in_pod_path("/srv/work/runs/r1").as_deref(),
+            Some("/oxoflow/runs/r1")
+        );
+        assert_eq!(pvc.in_pod_path("/srv/work").as_deref(), Some("/oxoflow"));
+        assert_eq!(pvc.in_pod_path("/elsewhere/x"), None);
+        // nfs without explicit volume_root falls back to the export path.
+        let nfs = ClusterVolume {
+            kind: "nfs".into(),
+            server: Some("s".into()),
+            path: Some("/exports/oxoflow".into()),
+            ..Default::default()
+        };
+        assert_eq!(nfs.volume_root(), Some("/exports/oxoflow"));
+        assert_eq!(
+            nfs.in_pod_path("/exports/oxoflow/wf").as_deref(),
+            Some("/oxoflow/wf")
+        );
+        // A pvc without volume_root fails validation naming the field.
+        let err = ClusterVolume {
+            kind: "pvc".into(),
+            claim_name: Some("w".into()),
+            ..Default::default()
+        }
+        .validate()
+        .unwrap_err();
+        assert!(err.contains("volume_root"), "{err}");
+    }
 }
 
 impl ClusterProfile {
@@ -659,7 +864,8 @@ impl ClusterProfile {
             walltime,
             max_submitted,
             max_array_size,
-            poll_interval
+            poll_interval,
+            volume
         );
         // Arrays replace wholesale in override mode, matching how
         // `deep_merge_value` treats arrays elsewhere in the profile merge.

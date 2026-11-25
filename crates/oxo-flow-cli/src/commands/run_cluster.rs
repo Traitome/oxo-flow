@@ -165,6 +165,16 @@ fn job_config(cluster: &ClusterProfile) -> Result<(ClusterBackend, ClusterJobCon
              kubernetes (k8s), aws-batch, or gcp-batch"
         )
     })?;
+    let volume = cluster.volume.clone();
+    if let Some(volume) = &volume {
+        volume.validate().map_err(|e| anyhow::anyhow!("{e}"))?;
+        if backend != ClusterBackend::Kubernetes {
+            anyhow::bail!(
+                "[cluster.volume] is only rendered by the kubernetes backend — \
+                 backend '{backend_name}' would silently ignore it"
+            );
+        }
+    }
     Ok((
         backend,
         ClusterJobConfig {
@@ -174,6 +184,7 @@ fn job_config(cluster: &ClusterProfile) -> Result<(ClusterBackend, ClusterJobCon
             walltime: cluster.walltime.clone(),
             extra_args: cluster.extra_args.clone(),
             name_scope: None,
+            volume,
         },
     ))
 }

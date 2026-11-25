@@ -987,6 +987,14 @@ impl super::ExecutorBackend for ClusterExecutor {
         ))
     }
 
+    fn map_workdir_to_pod(&self, workdir: &std::path::Path) -> Option<String> {
+        let volume = self.cluster.volume.as_ref()?;
+        if self.backend != ClusterBackend::Kubernetes {
+            return None;
+        }
+        volume.in_pod_path(&workdir.to_string_lossy())
+    }
+
     /// The script-based schedulers copy the script into scheduler-visible
     /// storage; their routed sensitive values travel through the private
     /// env file the driver writes beside the script (issue #1120 / RB-12).
@@ -1900,6 +1908,7 @@ mod tests {
             walltime: None,
             extra_args: vec![],
             name_scope: None,
+            volume: None,
         }
     }
 

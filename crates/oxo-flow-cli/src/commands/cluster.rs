@@ -835,6 +835,7 @@ pub async fn cluster_command(action: ClusterAction, json: bool) -> Result<()> {
                 // into the same directory stays idempotent while a different
                 // directory never collides (issue #1158).
                 name_scope: Some(output.to_string_lossy().into_owned()),
+                volume: None,
             };
 
             // A dry run writes the very scripts a real submit would: an HPC
@@ -1382,6 +1383,7 @@ pub async fn cluster_command(action: ClusterAction, json: bool) -> Result<()> {
                         walltime: None,
                         extra_args: Vec::new(),
                         name_scope: None,
+                        volume: None,
                     },
                 );
                 for id in &unknown {
@@ -1532,6 +1534,7 @@ pub async fn cluster_command(action: ClusterAction, json: bool) -> Result<()> {
                     walltime: None,
                     extra_args: Vec::new(),
                     name_scope: None,
+                    volume: None,
                 },
             );
             let accounting = executor.logs(&resolved_id).await.ok();

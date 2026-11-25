@@ -181,7 +181,19 @@ const CLUSTER_KEYS: &[&str] = &[
     "max_submitted",
     "partition",
     "poll_interval",
+    "volume",
     "walltime",
+];
+
+/// Keys of the `[cluster.volume]` table (shared-filesystem declaration for
+/// the Kubernetes backend).
+const VOLUME_KEYS: &[&str] = &[
+    "claim_name",
+    "host_path",
+    "kind",
+    "mount_root",
+    "path",
+    "server",
 ];
 
 /// Keys of the declarative inline-table form of a `[config]` entry
@@ -468,6 +480,7 @@ fn nested_table(key: &str) -> Option<&'static [&'static str]> {
         "ai" => Some(AI_KEYS),
         "citation" => Some(CITATION_KEYS),
         "cluster" => Some(CLUSTER_KEYS),
+        "volume" => Some(VOLUME_KEYS),
         "combine" => Some(COMBINE_KEYS),
         "defaults" => Some(DEFAULTS_KEYS),
         "engine" => Some(ENGINE_KEYS),
@@ -1296,6 +1309,7 @@ mod tests {
             (DEFAULTS_KEYS, "/properties/defaults"),
             (REPORT_KEYS, "/properties/report"),
             (CLUSTER_KEYS, "/properties/cluster"),
+            (VOLUME_KEYS, "/properties/cluster/properties/volume"),
             (CITATION_KEYS, "/properties/citation"),
             (INCLUDE_KEYS, "/properties/include/items"),
             (ENGINE_KEYS, "/properties/engine"),

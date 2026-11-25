@@ -657,10 +657,28 @@ impl BackendDriver {
                                 .map(|path| format!("{} && ", source_sensitive_env_file(path)));
                             for (i, (_, c_sr)) in chunk.iter().enumerate() {
                                 let cmd_path = job_dir.join(format!("cmd.{}.sh", i + 1));
-                                let contents = match env_prefix {
+                                let mut contents = match env_prefix {
                                     Some(ref prefix) => format!("{prefix}{}", c_sr.shell_cmd),
                                     None => c_sr.shell_cmd.clone(),
                                 };
+                                // [cluster.volume] (issue #1387): the
+                                // per-index command files fold
+                                // `cd '<submit-host workdir>'`; on a
+                                // shared-volume backend the files must cd
+                                // onto the in-pod mount instead — the
+                                // manifest generator rewrites only its own
+                                // rendered dispatch line, never this text.
+                                if let Some(pod_dir) =
+                                    self.backend.map_workdir_to_pod(&c_sr.workdir)
+                                {
+                                    let host_dir = c_sr.workdir.to_string_lossy();
+                                    contents = contents
+                                        .replace(&format!("{host_dir}/"), &format!("{pod_dir}/"))
+                                        .replace(
+                                            &format!("cd '{host_dir}'"),
+                                            &format!("cd '{pod_dir}'"),
+                                        );
+                                }
                                 cancel_on_error!(
                                     write_private(&cmd_path, contents.as_bytes()).map_err(|e| {
                                         OxoFlowError::Config {
@@ -1896,6 +1914,7 @@ mod tests {
             walltime: None,
             extra_args: vec![],
             name_scope: None,
+            volume: None,
         }
     }
 
@@ -3959,6 +3978,7 @@ shell = "echo asm > out/{assembler}.txt"
                     walltime: None,
                     extra_args: Vec::new(),
                     name_scope: None,
+                    volume: None,
                 },
             )
             .with_scheduler_dir(bin.path().to_path_buf()),
