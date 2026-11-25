@@ -2831,9 +2831,10 @@ the metadata table, `null` for table-level findings and for inline
 | `META-012` | error¹ | A column is not declared and `allow_extra_columns = false`. |
 
 ¹ Reported as a **warning** when the workflow declares no
-`[workflow.metadata_schema]` (free-form tables never fail). `META-004`–
-`META-007` and `META-012` can only be emitted with a schema, because they
-depend on a declared column or declaration policy.
+`[workflow.metadata_schema]` (free-form tables never fail). `META-001`,
+`META-002`, `META-004`–`META-007`, and `META-012` can only be emitted with a
+schema, because they depend on a declared required/typed column or on the
+extra-column policy.
 
 `coverage = "off"` emits nothing for `META-009`–`META-011`; `"warn"` (the
 default) reports warnings and continues; `"error"` fails validation and

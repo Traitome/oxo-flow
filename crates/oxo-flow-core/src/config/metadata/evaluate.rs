@@ -59,12 +59,14 @@ fn drop_required_hint(name: &str, site: RequiredSite) -> String {
         RequiredSite::RequiredColumns => {
             "drop it from [workflow.metadata_schema] required_columns".to_string()
         }
-        RequiredSite::ColumnFlag => format!(
-            "drop required = true from the '{name}' entry under              [[workflow.metadata_schema.columns]]"
-        ),
-        RequiredSite::Both => format!(
-            "drop it from [workflow.metadata_schema] required_columns and from required = true              on the '{name}' column entry"
-        ),
+        RequiredSite::ColumnFlag => {
+            let site = "[workflow.metadata_schema.columns]";
+            format!("drop required = true from the '{name}' entry under {site}")
+        }
+        RequiredSite::Both => {
+            let site = "[workflow.metadata_schema] required_columns";
+            format!("drop it from {site} and from required = true on the '{name}' column entry")
+        }
     }
 }
 

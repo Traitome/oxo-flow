@@ -675,6 +675,15 @@ fn suggestions_name_the_actual_required_declaration_site() {
     assert!(hint_for("batch").contains("required_columns"));
     assert!(!hint_for("batch").contains("required = true"));
     assert!(hint_for("qc").contains("required = true"));
+    // Review N2: no runs of literal spaces from string-continuation
+    // formatting in any suggestion.
+    for column in ["batch", "qc"] {
+        assert!(
+            !hint_for(column).contains("  "),
+            "suggestion for '{column}' has a space run: {:?}",
+            hint_for(column)
+        );
+    }
 }
 
 #[test]

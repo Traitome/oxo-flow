@@ -95,12 +95,12 @@
         },
         "metadata_schema": {
           "type": "object",
-          "description": "Validated cohort/metadata contract for the metadata_file table (issue #1368): id column, required/typed/unique/enumerated/regex-checked columns, extra-column policy, and sample/pair domain coverage. Findings are META-001..META-012; the canonical digest of the contract plus rows is recorded in checkpoint provenance.",
+          "description": "Validated cohort/metadata contract for the metadata_file table (issue #1368): id column, required/typed/unique/enumerated/regex-checked columns, extra-column policy, and sample/pair domain coverage. Declaring this table opts the workflow into STRICT metadata validation: non-coverage findings are errors (without it, free-form tables only report warnings, and the schema-dependent codes cannot fire). Findings are META-001..META-012; the canonical digest of the contract plus rows is recorded in checkpoint provenance.",
           "properties": {
             "id_column": {
               "type": "string",
               "default": "sample",
-              "description": "Header name (TSV/CSV) / object key (JSON) holding the row id. The id is always required and must be unique; the default is 'sample' (the first TSV/CSV column is the id when no column is literally named 'sample')."
+              "description": "Header name (TSV/CSV) / object key (JSON) holding the row id. The id is always required and must be unique; the default is 'sample'. When this schema is declared the named column is strict — the header/key must exist, or the load fails naming the column; the historical first-column-is-the-id fallback applies only when NO [workflow.metadata_schema] is declared."
             },
             "required_columns": {
               "type": "array",
