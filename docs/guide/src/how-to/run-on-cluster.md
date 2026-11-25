@@ -30,8 +30,9 @@ There are two ways to reach a scheduler, and they suit different jobs:
 | **SGE** | Supported | Real-scheduler matrix, SoGE 8.1.9 (2026-09-22/23 campaign; not re-run per commit) | `#$` |
 | **LSF** | Supported | Experimental — no live campaign; directives/status semantics cross-checked against IBM's bsub reference | `#BSUB` |
 | **Kubernetes** | Supported (spec generation + shared-filesystem execution) | Prototype — live single-node k3s campaign (submit/status/artifacts/logs/SIGINT-cancel) for `system`-environment rules; Job manifests mount the run workdir AND the array command directory via `hostPath`, set `imagePullPolicy: IfNotPresent`, and rewrite the container image through `OXO_REGISTRY_MIRRORS` (namespace/registry-qualified names). Docker-environment rules run via the opt-in `OXO_FLOW_K8S_DOCKER_SOCKET=1` channel (mounts the node daemon socket — trusted single-operator clusters only). Multi-node clusters: declare a shared filesystem with `[cluster.volume]` (`nfs`/`pvc`, see [Cluster submission](../commands/cluster.md#shared-volume-clustervolume-kubernetes)) and pods mount it at `mount_root` instead of any submit-host path. Residual: image-based environment rendering (the durable docker-env fix, #1388) — see [`kubernetes-live-campaign-2026-11-24.md`](../../superpowers/audits/kubernetes-live-campaign-2026-11-24.md) | `k8s Job` |
-| **AWS Batch** | Supported (spec generation) | Prototype — CLI wrapper (`aws`), mock/wire tests only; live campaign pending (CL-05 / #1158) | `aws-batch` |
-| **GCP Batch** | Supported (spec generation) | Prototype — CLI wrapper (`gcloud`), mock/wire tests only; live campaign pending (CL-05 / #1158) | `gcp-batch` |
+| **AWS Batch** | Supported (spec generation) | Prototype — CLI wrapper (`aws`), mock/wire tests only; live campaign pending (#1390). Submit/list/cancel shapes verified against the AWS CLI reference (2026-11-25 audit) | `aws-batch` |
+| **GCP Batch** | Supported (spec generation) | Prototype — CLI wrapper (`gcloud`), mock/wire tests only; live campaign pending (#1390; endpoint unreachable from the qualification host). Submit/describe/delete shapes verified against the gcloud reference (2026-11-25 audit) | `gcp-batch` |
+| **Tencent Batch** | Supported (spec generation) | Prototype — CLI wrapper (`tccli batch`, API 2017-03-12); parameter surface verified against tccli's own API definitions; live smoke pending (issue #1389) | `tencent-batch` |
 
 **Per-element outcomes.** Array elements settle on their own scheduler record whenever the backend exposes one: SLURM `squeue` element ids, Kubernetes Indexed Job completion indexes (`status.completedIndexes` / `status.failedIndexes`), AWS Batch child job ids (`{parent}:{arrayIndex}`), and GCP Batch task indexes (`gcloud batch tasks list`). One element failing never turns its successful siblings into failures, and a missing accounting record leaves the exit code unknown rather than reporting `0`. PBS/LSF/SGE are polled by the array base id in this adapter; their per-instance records name that aggregate provenance in `skip_reason` and carry no base-level exit code or resource numbers, so an array-level verdict is never presented as an independently observed element outcome.
 
@@ -605,7 +606,7 @@ Every cluster action resolves its backend the same way: the `--backend` /
 SLURM site you never type `-b`; on a PBS site set the environment variable
 once (`export OXO_FLOW_CLUSTER_BACKEND=pbs`). An explicit-but-typoed value
 is still rejected outright (`unknown cluster backend '…' — expected slurm,
-pbs, sge, lsf, kubernetes (k8s), aws-batch, or gcp-batch`) — the default
+pbs, sge, lsf, kubernetes (k8s), aws-batch, or tencent-batch (Tencent Cloud BatchCompute)`) — the default
 never swallows a bad name.
 
 ---

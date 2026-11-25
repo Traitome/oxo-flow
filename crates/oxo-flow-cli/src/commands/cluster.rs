@@ -26,7 +26,7 @@ fn parse_backend(name: &str) -> Result<ClusterBackend> {
     ClusterBackend::from_str(name).map_err(|_| {
         anyhow::anyhow!(
             "unknown cluster backend '{name}' — expected slurm, pbs, sge, lsf, kubernetes (k8s), \
-             aws-batch, or gcp-batch"
+             aws-batch, or tencent-batch (Tencent Cloud BatchCompute)"
         )
     })
 }
@@ -101,13 +101,15 @@ fn query_status(
 /// Same execution seam as [`query_status`].
 fn query_my_jobs(
     backend: &ClusterBackend,
+    queue: Option<&str>,
     run: impl Fn(&str, &[String]) -> Result<String>,
 ) -> Result<Vec<(String, BackendJobStatus)>> {
     // Every backend currently yields exactly one listing invocation, so
     // this is a plain single call — the first answer is the answer.
-    let Some((program, args)) = oxo_flow_core::backend::cluster::my_jobs_invocations(backend)
-        .into_iter()
-        .next()
+    let Some((program, args)) =
+        oxo_flow_core::backend::cluster::my_jobs_invocations(backend, queue)
+            .into_iter()
+            .next()
     else {
         return Ok(Vec::new());
     };
@@ -167,6 +169,9 @@ fn generate_submit_helper(backend: &ClusterBackend) -> String {
         }
         ClusterBackend::GcpBatch => {
             "  out=$(gcloud batch jobs submit \"$@\" --query 'name' --format='value(name)') || return $?\n  id=\"$out\"\n"
+        }
+        ClusterBackend::TencentBatch => {
+            "  out=$(tccli batch SubmitJob --cli-input-json file://\"$@\" --output json) || return $?\n  id=$(printf '%s' \"$out\" | grep -oE '\"JobId\": ?\"[^\"]+\"' | grep -oE 'job-[a-z0-9]+')\n"
         }
     };
 
@@ -292,7 +297,8 @@ fn generate_submit_wrapper(
                 }
                 ClusterBackend::Kubernetes
                 | ClusterBackend::AwsBatch
-                | ClusterBackend::GcpBatch => {
+                | ClusterBackend::GcpBatch
+                | ClusterBackend::TencentBatch => {
                     script.push_str(&format!(
                         "JOB_IDS[{}]=\"$(oxo_submit {})\"\n",
                         rule_name,
@@ -1146,6 +1152,7 @@ pub async fn cluster_command(action: ClusterAction, json: bool) -> Result<()> {
             backend,
             job_ids,
             run_dir,
+            queue,
             all,
         } => {
             let cluster_backend = resolve_backend(backend.as_deref())?;
@@ -1265,7 +1272,7 @@ pub async fn cluster_command(action: ClusterAction, json: bool) -> Result<()> {
                 // off-thread so this async command body never parks a
                 // tokio worker.
                 let listing = tokio::task::spawn_blocking(move || {
-                    query_my_jobs(&cluster_backend, |program, args| {
+                    query_my_jobs(&cluster_backend, queue.as_deref(), |program, args| {
                         let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
                         let output =
                             match std::process::Command::new(program).args(&arg_refs).output() {
@@ -1716,6 +1723,7 @@ mod tests {
                 backend: Some("slrm".to_string()),
                 job_ids: vec!["1".to_string()],
                 run_dir: None,
+                queue: None,
                 all: false,
             },
             ClusterAction::Cancel {
@@ -1737,7 +1745,7 @@ mod tests {
             );
             assert!(
                 msg.contains(
-                    "expected slurm, pbs, sge, lsf, kubernetes (k8s), aws-batch, or gcp-batch"
+                    "expected slurm, pbs, sge, lsf, kubernetes (k8s), aws-batch, or tencent-batch (Tencent Cloud BatchCompute)"
                 ),
                 "must list the accepted values: {msg}"
             );
@@ -1825,7 +1833,7 @@ mod tests {
     fn query_my_jobs_parses_the_listing() {
         // The seam question: exactly the user-listing invocation, and the
         // returned rows are parsed (id, status) — header lines skipped.
-        let listing = query_my_jobs(&ClusterBackend::Slurm, |program, args| {
+        let listing = query_my_jobs(&ClusterBackend::Slurm, None, |program, args| {
             assert_eq!(program, "squeue");
             assert_eq!(args[0], "-u");
             assert_eq!(args[2], "--noheader");
@@ -1843,7 +1851,7 @@ mod tests {
 
     #[test]
     fn query_my_jobs_surfaces_scheduler_failures() {
-        let err = query_my_jobs(&ClusterBackend::Slurm, |_, _| {
+        let err = query_my_jobs(&ClusterBackend::Slurm, None, |_, _| {
             Err(anyhow::anyhow!("squeue: slurm_load_jobs error"))
         })
         .unwrap_err();

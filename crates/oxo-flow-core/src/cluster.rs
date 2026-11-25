@@ -27,6 +27,7 @@ pub enum ClusterBackend {
     Kubernetes,
     /// AWS Batch managed compute.
     AwsBatch,
+    TencentBatch,
     /// Google Cloud Batch.
     GcpBatch,
 }
@@ -40,6 +41,7 @@ impl fmt::Display for ClusterBackend {
             Self::Lsf => write!(f, "lsf"),
             Self::Kubernetes => write!(f, "kubernetes"),
             Self::AwsBatch => write!(f, "aws-batch"),
+            Self::TencentBatch => write!(f, "tencent-batch"),
             Self::GcpBatch => write!(f, "gcp-batch"),
         }
     }
@@ -56,6 +58,7 @@ impl FromStr for ClusterBackend {
             "lsf" => Ok(Self::Lsf),
             "kubernetes" | "k8s" => Ok(Self::Kubernetes),
             "aws-batch" | "awsbatch" => Ok(Self::AwsBatch),
+            "tencent-batch" | "tencentbatch" => Ok(Self::TencentBatch),
             "gcp-batch" | "gcpbatch" => Ok(Self::GcpBatch),
             other => Err(format!("unknown cluster backend: {other}")),
         }
@@ -135,6 +138,13 @@ pub fn generate_submit_script_with_secrets(
         }
         ClusterBackend::AwsBatch => {
             crate::backend::aws_batch::generate_aws_batch_job_spec(rule, shell_cmd, cluster_config)
+        }
+        ClusterBackend::TencentBatch => {
+            crate::backend::tencent_batch::generate_tencent_batch_job_spec(
+                rule,
+                shell_cmd,
+                cluster_config,
+            )
         }
         ClusterBackend::GcpBatch => {
             crate::backend::gcp_batch::generate_gcp_batch_job_spec_with_secrets(
@@ -232,6 +242,11 @@ pub fn generate_array_submit_script_with_secrets(
                 config,
             );
         }
+        ClusterBackend::TencentBatch => {
+            return crate::backend::tencent_batch::generate_tencent_batch_array_spec(
+                rule, cmd_dir, count, config,
+            );
+        }
         _ => {}
     }
     let base = generate_submit_script(backend, rule, "", config)?;
@@ -317,6 +332,7 @@ pub fn submit_command(backend: &ClusterBackend) -> &'static str {
         ClusterBackend::Kubernetes => "kubectl",
         ClusterBackend::AwsBatch => "aws",
         ClusterBackend::GcpBatch => "gcloud",
+        ClusterBackend::TencentBatch => "tccli",
     }
 }
 
@@ -333,6 +349,9 @@ pub fn submit_invocation_hint(backend: &ClusterBackend, dir: &str) -> String {
         ClusterBackend::Kubernetes => format!("kubectl create -f {dir}/*.sh"),
         ClusterBackend::AwsBatch => format!(
             "for f in {dir}/*.sh; do aws batch submit-job --cli-input-json \"file://$f\"; done"
+        ),
+        ClusterBackend::TencentBatch => format!(
+            "for f in {dir}/*.sh; do tccli batch SubmitJob --cli-input-json \"file://$f\" --output json; done"
         ),
         // The manual form mirrors the executor's minted id: sanitized
         // basename clamped to the 41-char name budget inside GCP's
