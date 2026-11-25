@@ -9,6 +9,42 @@ use crate::commands::print_banner;
 
 use oxo_flow_core::plural;
 
+/// Print one human line per metadata-contract finding (issue #1368). The
+/// same findings feed the `--json` `metadata` array, so neither surface
+/// duplicates the other.
+pub(crate) fn print_metadata_findings(findings: &[oxo_flow_core::config::MetadataFinding]) {
+    for finding in findings {
+        let label = match finding.severity {
+            oxo_flow_core::config::MetadataSeverity::Error => "error".red().bold(),
+            oxo_flow_core::config::MetadataSeverity::Warning => "warning".yellow().bold(),
+        };
+        eprintln!("  {} [{}]: {}", label, finding.code, finding.message);
+        if let Some(ref suggestion) = finding.suggestion {
+            eprintln!("    hint: {}", suggestion);
+        }
+    }
+}
+
+/// Serialize metadata-contract findings for the `metadata` JSON array.
+pub(crate) fn metadata_findings_json(
+    findings: &[oxo_flow_core::config::MetadataFinding],
+) -> Vec<serde_json::Value> {
+    findings
+        .iter()
+        .map(|finding| {
+            serde_json::to_value(finding).unwrap_or_else(|e| {
+                // The struct is plain data; a serialization failure is a
+                // bug, but the JSON surface must never lose the finding.
+                serde_json::json!({
+                    "code": finding.code,
+                    "severity": finding.severity.to_string(),
+                    "message": format!("{} (serialization error: {e})", finding.message),
+                })
+            })
+        })
+        .collect()
+}
+
 /// Build the JSON object for a diagnostic, applying the SAME field policy as
 /// the serde `Diagnostic` — `coercion_rule` is emitted ONLY when `Some`, so a
 /// rule-less workflow's `--json` output stays byte-stable against the
@@ -61,17 +97,27 @@ pub async fn validate_command(
     let config_res = WorkflowConfig::from_file(&workflow);
     match config_res {
         Ok(cfg) => {
+            // Metadata contract (issue #1368): evaluated on the loaded config
+            // for the real surface. `--as-include` skips it — a fragment does
+            // not own the parent workflow's cohort table.
+            let metadata_report = if as_include {
+                oxo_flow_core::config::MetadataReport::default()
+            } else {
+                cfg.metadata_contract_report()
+            };
             if cfg.rules.is_empty() {
                 if json {
                     let output = serde_json::json!({
                         "command": "validate",
                         "workflow": workflow.display().to_string(),
-                        "valid": true,
+                        "valid": !metadata_report.has_errors(),
                         "rules": 0,
                         "dependencies": 0,
                         "errors": [],
                         "warnings": [],
                         "missing_inputs": [],
+                        "metadata": metadata_findings_json(&metadata_report.findings),
+                        "metadata_digest": &cfg.metadata_digest,
                     });
                     println!("{}", serde_json::to_string_pretty(&output)?);
                 } else {
@@ -79,6 +125,25 @@ pub async fn validate_command(
                     eprintln!(
                         "  {} Workflow has no rules. Add [[rules]] sections to define pipeline steps.",
                         "⚠ Warning:".yellow().bold()
+                    );
+                    print_metadata_findings(&metadata_report.findings);
+                    if metadata_report.has_errors() {
+                        eprintln!(
+                            "{} {} — {}",
+                            "✗".red().bold(),
+                            workflow.display(),
+                            plural(
+                                metadata_report.error_count,
+                                "metadata contract error",
+                                "metadata contract errors"
+                            )
+                        );
+                    }
+                }
+                if metadata_report.has_errors() {
+                    anyhow::bail!(
+                        "metadata contract failed: {}",
+                        plural(metadata_report.error_count, "error", "errors")
                     );
                 }
                 return Ok(());
@@ -165,6 +230,16 @@ pub async fn validate_command(
                 }
             }
 
+            // Metadata contract findings (issue #1368): error findings join
+            // the error count and fail validation; warnings are reported but
+            // keep exit 0. Human output prints exactly one line per finding,
+            // and the JSON surface carries the same list in `metadata` — the
+            // two never duplicate each other.
+            if !json {
+                print_metadata_findings(&metadata_report.findings);
+            }
+            error_count += metadata_report.error_count;
+
             // Check for missing input files (skip for --as-include).
             // Relative paths resolve against the workflow file's directory —
             // the same base the executor uses at run time (issue #68).
@@ -225,6 +300,8 @@ pub async fn validate_command(
                                 "errors": [{"code": "DAG", "message": e.to_string()}],
                                 "warnings": warnings_json,
                                 "missing_inputs": [],
+                                "metadata": metadata_findings_json(&metadata_report.findings),
+                                "metadata_digest": &cfg.metadata_digest,
                             });
                             println!("{}", serde_json::to_string_pretty(&output)?);
                         } else {
@@ -258,6 +335,8 @@ pub async fn validate_command(
                     "errors": errors_json,
                     "warnings": warnings_json,
                     "missing_inputs": missing_inputs,
+                    "metadata": metadata_findings_json(&metadata_report.findings),
+                    "metadata_digest": &cfg.metadata_digest,
                 });
                 println!("{}", serde_json::to_string_pretty(&output)?);
             } else {
@@ -329,6 +408,8 @@ pub async fn validate_command(
                     "errors": [{"code": "PARSE", "message": e.to_string()}],
                     "warnings": [],
                     "missing_inputs": [],
+                    "metadata": [],
+                    "metadata_digest": serde_json::Value::Null,
                 });
                 println!("{}", serde_json::to_string_pretty(&output)?);
             } else {

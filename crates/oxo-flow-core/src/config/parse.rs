@@ -26,6 +26,10 @@ impl WorkflowConfig {
         known_keys::check(&raw)?;
         let mut config = Self::deserialize(toml::Value::Table(raw))?;
         config.extract_declarative_config()?;
+        // Inline `[metadata]` rows only on the string path (no file load):
+        // build the effective table + canonical digest from them, so the
+        // validator and provenance see the same contract `from_file` sees.
+        config.refresh_metadata_contract();
         // User-declared groups must not collide with the engine's
         // auto-discovery group (issue #895). This string path runs no
         // discovery, so any hit here is a user declaration. from_file is
@@ -211,16 +215,56 @@ impl WorkflowConfig {
 
         // Load the per-sample metadata table from external file if
         // specified (issue #227 item 2): the `{meta.<column>}` lookup
-        // vocabulary, keyed by sample id.
+        // vocabulary, keyed by sample id. The id column comes from the
+        // optional [workflow.metadata_schema] (issue #1368), defaulting to
+        // the historical `sample` id; inline `[metadata]` rows keep their
+        // values unless the file defines the same id (the file wins).
+        let inline_metadata = config.metadata.clone();
         if let Some(ref metadata_file) = config.workflow.metadata_file {
             let meta_path = parent.join(metadata_file);
-            let rows = SampleMetadata::load_from_file(&meta_path)?;
-            let count = rows.len();
-            for row in rows {
-                config.metadata.insert(row.sample, row.values);
+            let schema_declared = config.workflow.metadata_schema.is_some();
+            let id_column = config
+                .workflow
+                .metadata_schema
+                .as_ref()
+                .map(|schema| schema.id_column.clone())
+                .unwrap_or_else(|| crate::config::DEFAULT_ID_COLUMN.to_string());
+            // A declared schema makes the id column STRICT: an explicit
+            // `id_column = "sample"` must not silently fall back to the
+            // first column (issue #1368 review m1). Schema-less tables keep
+            // the historical first-column compatibility path.
+            let mut table = if schema_declared {
+                SampleMetadata::load_table_from_file_strict(&meta_path, &id_column)?
+            } else {
+                SampleMetadata::load_table_from_file(&meta_path, &id_column)?
+            };
+            let count = table.rows.len();
+            for row in &table.rows {
+                config.metadata.insert(
+                    row.id.clone(),
+                    row.values
+                        .iter()
+                        .map(|(column, value)| (column.clone(), value.clone()))
+                        .collect(),
+                );
             }
+            table.extend_with_inline(&inline_metadata);
             tracing::info!("Loaded {} metadata rows from {}", count, metadata_file);
+            config.metadata_table = Some(table);
+        } else if config.workflow.metadata_schema.is_some() {
+            // A declared contract is meaningful even with no rows (META-001
+            // for its required columns); an inline-only table still needs a
+            // row-number-free representation.
+            let id_column = config
+                .workflow
+                .metadata_schema
+                .as_ref()
+                .map(|schema| schema.id_column.clone())
+                .unwrap_or_else(|| crate::config::DEFAULT_ID_COLUMN.to_string());
+            config.metadata_table = Some(MetadataTable::from_inline(&id_column, &inline_metadata));
         }
+        // Canonical digest of the contract + effective rows (issue #1368).
+        config.refresh_metadata_contract();
 
         // Auto-discover samples from filesystem pattern
         if let Some(ref sample_pattern) = config.workflow.sample_pattern {

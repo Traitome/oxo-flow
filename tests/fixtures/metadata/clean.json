@@ -1,0 +1,4 @@
+[
+  {"sample": "S1", "batch": "b1", "age": 30, "value": 1.5, "qc": true},
+  {"sample": "S2", "batch": "b2", "age": 40, "value": 2.5, "qc": false}
+]

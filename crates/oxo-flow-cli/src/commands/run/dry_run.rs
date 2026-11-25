@@ -122,6 +122,13 @@ async fn dry_run_command_inner(
         WorkflowConfig::from_file_with_discovery_fallback(&workflow, discovery_fallback)
             .with_context(|| format!("failed to parse {}", workflow.display()))?;
 
+    // Metadata contract (issue #1368): evaluated on the AS-AUTHORED config,
+    // before --samples filtering — a filtered cohort must not turn every
+    // other metadata row into an out-of-domain finding. Error findings make
+    // the preview exit non-zero after the document is printed; warnings are
+    // reported and the preview proceeds.
+    let metadata_report = config.metadata_contract_report();
+
     // ── CLI config overrides (the shared phase, overrides.rs) ─────
     // Applied in run's exact order: overrides first, then
     // the --samples subset filter — so the preview config is structurally
@@ -214,6 +221,11 @@ async fn dry_run_command_inner(
         }
         result?;
         println!();
+    }
+
+    if !metadata_report.findings.is_empty() {
+        eprintln!("\n{}", "Metadata contract:".bold().yellow());
+        crate::commands::quality::print_metadata_findings(&metadata_report.findings);
     }
 
     if !scientific.is_empty() {
@@ -919,6 +931,10 @@ async fn dry_run_command_inner(
                 "new_trees": dry_protected_baselined,
                 "warnings": dry_protected_warnings,
             },
+            // Issue #1368: the same stable, row-level findings validate
+            // reports, plus the canonical digest of the authored contract.
+            "metadata": crate::commands::quality::metadata_findings_json(&metadata_report.findings),
+            "metadata_digest": &config.metadata_digest,
         });
         println!("{}", serde_json::to_string_pretty(&output)?);
         *json_written = true;
@@ -926,6 +942,17 @@ async fn dry_run_command_inner(
 
     // Bail AFTER the JSON document so callers still get machine-readable
     // output on this failure path (same contract as `validate --json`).
+    if metadata_report.has_errors() {
+        let hint = if config.workflow.metadata_schema.is_some() {
+            "fix the metadata table or relax [workflow.metadata_schema]"
+        } else {
+            "fix the metadata table"
+        };
+        anyhow::bail!(
+            "metadata contract failed: {} — {hint}",
+            oxo_flow_core::plural(metadata_report.error_count, "error", "errors")
+        );
+    }
     if !env_manifest_issues.is_empty() {
         anyhow::bail!(
             "{} declared by pending rules do not exist — \

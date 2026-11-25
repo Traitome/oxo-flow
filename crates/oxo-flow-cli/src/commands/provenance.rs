@@ -587,6 +587,18 @@ pub fn provenance_verify_command(checkpoint_path: PathBuf, json: bool) -> Result
     if let Some(hash) = workflow_content_hash {
         eprintln!("  {} workflow content hash: {}", "•".dimmed(), hash);
     }
+    // Canonical metadata-contract digest recorded at run start (issue
+    // #1368): which typed metadata table the results were produced from.
+    // Reporting only — like `workflow_resolved_hash`, re-deriving it needs
+    // the exact workflow + table bytes as loaded, so verify does not
+    // recompute it.
+    if let Some(digest) = checkpoint
+        .get("metadata_digest")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+    {
+        eprintln!("  {} metadata digest: {}", "•".dimmed(), digest);
+    }
     match workflow_git_dirty {
         Some(true) => eprintln!(
             "  {} workflow git tree: {}",
@@ -722,6 +734,7 @@ pub fn provenance_verify_command(checkpoint_path: PathBuf, json: bool) -> Result
                         "workflow_git_sha": checkpoint.get("workflow_git_sha").cloned(),
                         "workflow_content_hash": checkpoint.get("workflow_content_hash").cloned(),
                         "workflow_resolved_hash": checkpoint.get("workflow_resolved_hash").cloned(),
+                        "metadata_digest": checkpoint.get("metadata_digest").cloned(),
                         "workflow_content_check": workflow_content_check,
                         "workflow_git_dirty": checkpoint.get("workflow_git_dirty").cloned(),
                         "note": "No stored checksums found. Run workflow with --provenance to enable tracking.",
@@ -758,6 +771,7 @@ pub fn provenance_verify_command(checkpoint_path: PathBuf, json: bool) -> Result
                     "workflow_git_sha": checkpoint.get("workflow_git_sha").cloned(),
                     "workflow_content_hash": checkpoint.get("workflow_content_hash").cloned(),
                     "workflow_resolved_hash": checkpoint.get("workflow_resolved_hash").cloned(),
+                    "metadata_digest": checkpoint.get("metadata_digest").cloned(),
                     "workflow_content_check": workflow_content_check,
                     "workflow_git_dirty": checkpoint.get("workflow_git_dirty").cloned(),
                     "note": "No completed rules or checksums found in the checkpoint.",
@@ -849,6 +863,7 @@ pub fn provenance_verify_command(checkpoint_path: PathBuf, json: bool) -> Result
                 "workflow_git_sha": checkpoint.get("workflow_git_sha").cloned(),
                 "workflow_content_hash": checkpoint.get("workflow_content_hash").cloned(),
                 "workflow_resolved_hash": checkpoint.get("workflow_resolved_hash").cloned(),
+                "metadata_digest": checkpoint.get("metadata_digest").cloned(),
                 "workflow_content_check": workflow_content_check,
                 "workflow_git_dirty": checkpoint.get("workflow_git_dirty").cloned(),
             },

@@ -1,0 +1,17 @@
+[workflow]
+name = "pair-conflict"
+
+# Declaring the contract opts into strict pair/table validation; without it
+# the same conflict is reported as a warning (free-form behavior).
+[workflow.metadata_schema]
+coverage = "off"
+
+[[pairs]]
+pair_id = "P1"
+experiment = "T1"
+control = "T1"
+
+[[rules]]
+name = "step"
+output = ["out.txt"]
+shell = "touch out.txt"

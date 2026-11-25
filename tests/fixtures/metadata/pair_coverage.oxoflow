@@ -1,0 +1,25 @@
+[workflow]
+name = "pair-coverage"
+metadata_file = "pair_coverage.tsv"
+
+[workflow.metadata_schema]
+coverage = "warn"
+
+[[workflow.metadata_schema.columns]]
+name = "batch"
+regex = "^b\\d+$"
+
+[[pairs]]
+pair_id = "P1"
+experiment = "T1"
+control = "N1"
+
+[[pairs]]
+pair_id = "P2"
+experiment = "T2"
+control = "N2"
+
+[[rules]]
+name = "step"
+output = ["out.txt"]
+shell = "touch out.txt"

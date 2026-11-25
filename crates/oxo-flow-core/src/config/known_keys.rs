@@ -83,6 +83,7 @@ const TOP_LEVEL_SUGGESTIONS: &[&str] = &[
     "workflow.genome_build",
     "workflow.interpreter_map",
     "workflow.metadata_file",
+    "workflow.metadata_schema",
     "workflow.min_version",
     "workflow.name",
     "workflow.on_complete",
@@ -104,6 +105,7 @@ const WORKFLOW_KEYS: &[&str] = &[
     "genome_build",
     "interpreter_map",
     "metadata_file",
+    "metadata_schema",
     "min_version",
     "name",
     "on_complete",
@@ -115,6 +117,18 @@ const WORKFLOW_KEYS: &[&str] = &[
     "sample_pattern",
     "version",
 ];
+
+/// Keys of the `[workflow.metadata_schema]` contract table (issue #1368).
+const METADATA_SCHEMA_KEYS: &[&str] = &[
+    "allow_extra_columns",
+    "columns",
+    "coverage",
+    "id_column",
+    "required_columns",
+];
+
+/// Keys of one `[[workflow.metadata_schema.columns]]` entry.
+const METADATA_COLUMN_KEYS: &[&str] = &["enum", "name", "regex", "required", "type", "unique"];
 
 /// Keys of the `[defaults]` table.
 const DEFAULTS_KEYS: &[&str] = &[
@@ -486,6 +500,7 @@ fn nested_table(key: &str) -> Option<&'static [&'static str]> {
         "engine" => Some(ENGINE_KEYS),
         "environment" => Some(ENVIRONMENT_KEYS),
         "gpu_spec" => Some(GPU_SPEC_KEYS),
+        "metadata_schema" => Some(METADATA_SCHEMA_KEYS),
         "plugins" => Some(PLUGINS_KEYS),
         "report" => Some(REPORT_KEYS),
         "resource_budget" => Some(RESOURCE_BUDGET_KEYS),
@@ -504,6 +519,7 @@ fn nested_table(key: &str) -> Option<&'static [&'static str]> {
 /// A known key whose value is an array of tables with their own whitelist.
 fn array_of_tables(key: &str) -> Option<&'static [&'static str]> {
     match key {
+        "columns" => Some(METADATA_COLUMN_KEYS),
         "expand_inputs" => Some(EXPAND_INPUT_KEYS),
         "include" => Some(INCLUDE_KEYS),
         "input_groups" => Some(INPUT_GROUP_KEYS),
@@ -1232,6 +1248,10 @@ mod tests {
             metadata_file = "samples.tsv"
             sample_pattern = "raw/{sample}.fastq.gz"
             profile_mode = "override"
+            metadata_schema = { id_column = "sample", required_columns = ["batch"],
+                                allow_extra_columns = false, coverage = "error",
+                                columns = [{ name = "batch", type = "integer", unique = true,
+                                             regex = "^b\\d+$", enum = ["b1"] }] }
         "#;
         let meta: crate::config::WorkflowMeta =
             toml::from_str(toml).expect("probe metadata deserializes");
@@ -1321,6 +1341,11 @@ mod tests {
             (TRANSFORM_KEYS, "/$defs/transformConfig"),
             (RESOURCE_HINT_KEYS, "/$defs/resourceHint"),
             (BIOTYPE_KEYS, "/$defs/bioTypeSpec"),
+            (
+                METADATA_SCHEMA_KEYS,
+                "/properties/workflow/properties/metadata_schema",
+            ),
+            (METADATA_COLUMN_KEYS, "/$defs/metadataColumn"),
         ] {
             let pointer = if pointer.is_empty() {
                 "/properties"

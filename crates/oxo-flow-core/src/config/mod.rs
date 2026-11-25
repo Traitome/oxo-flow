@@ -3,6 +3,7 @@
 
 mod expand;
 mod known_keys;
+mod metadata;
 mod model;
 mod overrides;
 mod parse;
@@ -16,6 +17,11 @@ mod transform_semantics_tests;
 pub(crate) use expand::SplitNResolution;
 pub(crate) use known_keys::TOP_LEVEL_KEYS;
 pub use known_keys::edit_distance;
+pub use metadata::{
+    DEFAULT_ID_COLUMN, MetadataColumn, MetadataColumnType, MetadataCoverage, MetadataFinding,
+    MetadataReport, MetadataRow, MetadataSchema, MetadataSeverity, MetadataTable, compute_digest,
+    digest_for, evaluate as evaluate_metadata_contract,
+};
 pub use model::*;
 pub(crate) use model::{
     expand_command_text_fields, expand_rule_patterns, expand_rule_shell, value_instance_suffix,
@@ -276,6 +282,15 @@ impl WorkflowConfig {
         self.validate_values_tables()?;
 
         self.validate_sample_group_metadata()?;
+
+        // [workflow.metadata_schema] declaration (issue #1368): a contract
+        // that cannot be honored (empty id column, duplicate column names,
+        // uncompilable regex, empty enum) fails at load. DATA findings
+        // (META-001 … META-012) are produced by
+        // `metadata::evaluate` on the loaded table.
+        if let Some(schema) = &self.workflow.metadata_schema {
+            schema.validate()?;
+        }
 
         // [engine] disk-pressure thresholds (issue #843): fail at plan time
         // on a typo'd size or an inverted threshold pair instead of

@@ -65,7 +65,9 @@ oxo-flow validate pipeline.oxoflow
   "dependencies": 4,
   "errors": [],
   "warnings": [],
-  "missing_inputs": ["refs/genome.fa"]
+  "missing_inputs": ["refs/genome.fa"],
+  "metadata": [],
+  "metadata_digest": "sha256:4f2c…"
 }
 ```
 
@@ -154,6 +156,41 @@ collapse to a single line — the double-print the issue reporter saw —
 while each fan-out instance still logs its own line, because the message
 names the expanded instance (`step1_lane_L1`) rather than the template
 rule.
+
+### Metadata contract findings (`META-*`)
+
+When the workflow declares `[workflow.metadata_schema]` (or has a
+`metadata_file` table that violates a built-in rule such as duplicate ids),
+`validate` evaluates the contract and reports stable, row-level `META-*`
+findings — see the [metadata contract reference](../reference/workflow-format.md#metadata-contract-workflowmetadata_schema)
+for the full code table and field semantics. Without a declared schema the
+table is free-form: the built-in duplicate-id and pair-conflict findings
+are **warnings**, so a pre-upgrade workflow keeps validating green; the
+schema-driven checks do not run. Findings live in a dedicated `metadata`
+array in `--json` output (they are NOT duplicated in the `errors` /
+`warnings` arrays); the human surface prints exactly one line per finding:
+
+```
+  error [META-002]: required column 'batch' has no value for id 'S2'
+    hint: fill in 'batch' for this row, or drop it from [workflow.metadata_schema] required_columns
+✗ cohort.oxoflow — 1 validation error
+```
+
+Each finding carries `code`, `severity` (`error` / `warning`), `row`
+(1-based data row, `null` for table-level findings and inline `[metadata]`
+rows), `column`, `id`, `message`, and `suggestion`; the array is sorted by
+`(code, row, column, id)` so it is byte-stable across runs. Error findings
+set `"valid": false` and exit `1`; warnings are reported and keep exit `0`.
+The declaration is the strictness switch: with no
+`[workflow.metadata_schema]` every non-coverage finding is a warning; with
+one, it is an error. `coverage` additionally decides whether domain gaps
+(`META-009` … `META-011`) are off, warnings (the default), or errors. The
+document also carries `metadata_digest` — the canonical digest of the
+contract plus effective rows (recorded by `run` in the checkpoint
+provenance; `null` when the workflow declares no `metadata_file`, no
+schema, and has no inline rows).
+`--as-include` skips the contract (a fragment does not own the parent's
+cohort table).
 
 ### Aggregation race (SCI-AGG-RACE surfaced in validate)
 

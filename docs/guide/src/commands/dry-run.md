@@ -265,6 +265,17 @@ Status values: `run-never-completed`, `run-input-changed`,
 `run-config-changed`, `run-outputs-missing`, `run-cascaded`,
 `run-cascaded-upstream`, `run-forced`, `skip`, `skip-fresh`,
 `skip-when-condition`.
+The metadata contract (issue #1368) appears under the top-level keys
+`"metadata"` (the same stable, sorted findings array `validate --json`
+reports — see the [metadata contract reference](../reference/workflow-format.md#metadata-contract-workflowmetadata_schema))
+and `"metadata_digest"` (the canonical `sha256:<hex>` digest of the
+contract plus effective rows, or `null`). Error findings make the preview
+exit non-zero **after** the JSON document is printed; warnings keep exit
+0. Declaring `[workflow.metadata_schema]` is the strictness switch — a
+schema-less metadata table only produces warnings. The section is
+evaluated on the as-authored workflow, before `--samples` filtering.
+
+
 
 `--json` also emits the **execution-plan surface** at the top level
 (`schema_version: 1`) — the structured mirror of the human stderr plan,
