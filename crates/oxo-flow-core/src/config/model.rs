@@ -575,6 +575,55 @@ pub struct IncludeProvenance {
     pub resolved_sha: String,
 }
 
+/// One resolved include source (issue #1399): the include's canonical
+/// identity plus a content digest, recorded at include-resolution time so
+/// the workflow lock can pin the whole include graph.
+///
+/// A local include's `path` is workflow-root-relative with `/` separators
+/// (never absolute, never host-specific); a repo include keeps the
+/// repository-relative `path` plus its `repo`/`ref`/resolved HEAD SHA.
+/// Collected during parse; never serialized from TOML.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedIncludeSource {
+    /// Workflow-root-relative path (`/`-separated) for a local include;
+    /// repository-relative path for a repo include.
+    pub path: String,
+    /// Set for a git-module include.
+    pub repo: Option<String>,
+    /// The include's declared `ref` (repo includes only).
+    pub git_ref: Option<String>,
+    /// The checkout's HEAD SHA at resolution time (repo includes only).
+    pub resolved_sha: Option<String>,
+    /// Set for a local include that is itself nested inside a git module:
+    /// the owning module's `repo@ref`, so two modules' identically named
+    /// internal files never collide in the lock's include map.
+    pub origin: Option<String>,
+    /// Content digest (`sha256:<hex>`) of the included file, or the
+    /// explicit `unresolved` sentinel when it could not be read back.
+    pub content_sha256: String,
+}
+
+impl ResolvedIncludeSource {
+    /// Stable key naming this include in a lock document: the relative path
+    /// for a local include, `repo@ref:path` for a git module, and
+    /// `repo@ref::path` for a module-nested local include.
+    #[must_use]
+    pub fn lock_key(&self) -> String {
+        if let Some(repo) = &self.repo {
+            return format!(
+                "{}@{}:{}",
+                repo,
+                self.git_ref.as_deref().unwrap_or(""),
+                self.path
+            );
+        }
+        match &self.origin {
+            Some(origin) => format!("{origin}::{}", self.path),
+            None => self.path.clone(),
+        }
+    }
+}
+
 /// Citation information for workflow reproducibility and publication.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct CitationInfo {
@@ -1237,6 +1286,16 @@ pub struct EngineConfig {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dispatch_order: Option<DispatchOrder>,
+
+    /// Workflow-lock enforcement (issue #1399). `true` makes every run of
+    /// this workflow verify `oxo-flow.lock` before executing and fail closed
+    /// on a missing, stale, or malformed lock — the form that also covers
+    /// web-spawned and queued runs, which shell out to the CLI. The CLI
+    /// `run --locked` flag is the explicit per-invocation form and wins over
+    /// this key. Unset/`false` = no lock is read and behavior is unchanged.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub locked: Option<bool>,
 }
 
 impl EngineConfig {
@@ -2596,6 +2655,14 @@ pub struct WorkflowConfig {
     /// serialized from TOML — user TOML cannot set it.
     #[serde(skip)]
     pub include_provenance: Vec<IncludeProvenance>,
+    /// Every resolved include source with its content digest (issue #1399):
+    /// local includes keyed by workflow-root-relative path, git modules by
+    /// `repo@ref` plus the resolved HEAD SHA. The workflow lock pins this
+    /// whole graph so an edited, added, or removed module is detectable
+    /// offline. Collected during include resolution; never serialized from
+    /// TOML.
+    #[serde(skip)]
+    pub include_sources: Vec<ResolvedIncludeSource>,
 
     /// Engine-internal: the sample names each expanded rule came from.
     ///

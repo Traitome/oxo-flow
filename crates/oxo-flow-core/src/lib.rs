@@ -78,6 +78,7 @@ pub mod transpile;
 pub mod types;
 pub mod webhook;
 pub mod wildcard;
+pub mod workflow_lock;
 
 // Re-export key types at the crate root for convenience.
 pub use config::WorkflowConfig;

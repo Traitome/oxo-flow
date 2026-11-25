@@ -72,6 +72,7 @@ keys matching nothing declared keep the literal spelling.
 | `--background` / `--detach` | — | — | Detach the run into a background process and exit 0 immediately (see [Background runs (--background)](#background-runs-background)); `--detach` is an alias |
 | `--allow-protected-drift` | — | — | Proceed despite protected-tree drift: when `[engine]` `protected_data_trees` baselines no longer match the tree on disk, `run` refuses to execute; this flag is the explicit operator override to run anyway (see [Protected data trees](#protected-data-trees-protected_data_trees)) |
 | `--strict-envs` | — | — | Hard-fail on environment setup errors instead of using the graceful pixi stale-lock fallback (see [Stale pixi.lock fallback](#stale-pixilock-fallback)) — for GxP-style deployments that must never run on a re-solved environment |
+| `--locked` | — | — | Enforce the workflow lock (issue #1399): verify `oxo-flow.lock` before any rule executes and fail closed on a missing, stale, or malformed lock. The workflow's `[engine] locked = true` key is the persistent form (it also covers web-spawned/queued runs); this flag wins. Without either, no lock is read (see [Workflow lock](#workflow-lock---locked)) |
 | `--verbose` | `-v` | — | Enable debug-level logging |
 | `--quiet` | — | — | Suppress informational output — progress rendering, DAG listings, and per-rule completion lines are omitted; errors, warnings, and machine-readable output (`--json`) are unaffected |
 | `--no-color` | — | — | Disable colored output (also honors the `NO_COLOR` environment variable) |
@@ -1812,6 +1813,60 @@ the same plan; invalidating the checkpoint rule revokes its samples until it
 re-runs. A missing or unparsable manifest fails the checkpoint rule. See
 [Workflow Format](../reference/workflow-format.md#checkpoint-re-entry) for
 the config surface.
+
+## Workflow lock (`--locked`)
+
+`--locked` (or `[engine] locked = true`) verifies the workflow's
+`oxo-flow.lock` **before any rule executes and before the run creates
+outputs**, and fails closed when the lock is missing (`LOCK-001`), changed
+(`LOCK-002`–`LOCK-005`), unresolved (`LOCK-006`), or malformed
+(`LOCK-007`). The workflow's `[engine] locked = true` key is the persistent
+form; `--locked` is the explicit per-invocation form and wins. Any workflow
+rewrite after the gate (the in-process type-admission repair, or the
+verified-repair rerun) re-verifies the lock, so patched bytes never execute
+under a lock that does not pin them.
+
+Enforcement always reads `oxo-flow.lock` beside the workflow; there is no
+lock-path override. Runs that execute a **staged copy** of the workflow
+therefore need the lock staged with it: `POST /api/runs` callers upload it
+as an `include_files` entry keyed `oxo-flow.lock`, and remote cluster runs
+ship the same run workdir. Without it the web/queued/cluster run fails
+closed with `LOCK-001` (never a bypass).
+
+```bash
+oxo-flow lock my_pipeline.oxoflow        # generate once, commit the result
+oxo-flow run --locked my_pipeline.oxoflow
+```
+
+What is verified:
+
+- the workflow file's content digest, resolved hash, and metadata-contract
+  digest;
+- the canonical `[config]` snapshot (`--arg` overrides and `--profile`
+  merges happen before verification, so a run that changes config under a
+  lock is drift — regenerate the lock with the same `--arg`/`--profile`
+  flags if that context is intended);
+- the include graph (local content digests, pinned module SHAs);
+- each selected rule's environment identity and declared software.
+
+Partial execution is not drift: `--samples`, `--target`, `--module`, and
+`when` pruning run a subset of the pinned workflow. Unknown is never a
+match: an `unresolved` environment identity fails even against an identical
+`unresolved` value (`LOCK-006`); `system` environments record `unavailable`,
+which matches only `unavailable`.
+
+A verified run records `lock_digest` in its checkpoint and folds it into
+`workflow_resolved_hash`. Without `--locked`/`[engine] locked`, no lock is
+read and the run — including its checkpoint, provenance, and attestation
+bytes — is unchanged.
+
+Limits: a repair loop rewrites the workflow, so an enforced lock refuses the
+verification rerun (`LOCK-002`, `REPAIR_RERUN_FAILED`) in **both** the
+`--locked` and `[engine]` forms; review the fix and regenerate the lock
+before re-running under enforcement. `publish` bundles do not include
+`oxo-flow.lock`, so a bundle of a lock-enforced workflow fails closed
+unless the lock is regenerated in the extracted bundle. See
+[`lock`](lock.md).
 
 ## AI error recovery (`--ai-recover`)
 

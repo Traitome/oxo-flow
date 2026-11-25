@@ -771,6 +771,15 @@ pub struct CheckpointState {
     #[serde(default)]
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub skipped_attempts: BTreeMap<String, String>,
+    /// Digest of the workflow lock this run verified before executing
+    /// (issue #1399): the `lock_digest` of the `oxo-flow.lock` document.
+    /// `None` for every run without an enforced lock — legacy checkpoints
+    /// load unchanged and a legacy run's serialized bytes are identical.
+    /// The digest is internal-consistency evidence, not a signature: it
+    /// proves the lock document's fields were the ones hashed together, not
+    /// that a trusted party produced them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lock_digest: Option<String>,
 }
 
 /// Canonical on-the-wire form: template → combos → key-sorted
@@ -913,6 +922,7 @@ impl CheckpointState {
             cluster_images: BTreeMap::new(),
             resource_usage: BTreeMap::new(),
             skipped_attempts: BTreeMap::new(),
+            lock_digest: None,
         }
     }
 
@@ -1143,6 +1153,13 @@ impl CheckpointState {
     /// map: it is recomputed once at run start from the resolved workflow.
     pub fn set_env_lock_identity(&mut self, identity: BTreeMap<String, String>) {
         self.env_lock_identity = identity;
+    }
+
+    /// Record the workflow-lock digest this run verified (issue #1399).
+    /// `None` (the default) leaves the field absent from the serialized
+    /// checkpoint, keeping every legacy run's bytes unchanged.
+    pub fn set_lock_digest(&mut self, digest: Option<String>) {
+        self.lock_digest = digest;
     }
 
     /// Record the per-rule container images a cluster run rendered (issue
@@ -1627,6 +1644,29 @@ pub fn compute_workflow_resolved_hash(
     config_snapshot: &BTreeMap<String, String>,
     metadata_digest: Option<&str>,
 ) -> String {
+    compute_workflow_resolved_hash_with_lock(
+        workflow_content_hash,
+        config_snapshot,
+        metadata_digest,
+        None,
+    )
+}
+
+/// [`compute_workflow_resolved_hash`] with the verified workflow-lock digest
+/// folded into the identity (issue #1399).
+///
+/// The lock digest is included **only when a lock is in effect** — a run
+/// under `--locked` / `[engine] locked = true` that verified the lock. The
+/// field is omitted otherwise, so every legacy run's `workflow_resolved_hash`
+/// is byte-identical to earlier releases and the lock's own stored
+/// `workflow.resolved_hash` (computed WITHOUT the digest, since it cannot
+/// contain itself) remains the value verification compares.
+pub fn compute_workflow_resolved_hash_with_lock(
+    workflow_content_hash: &str,
+    config_snapshot: &BTreeMap<String, String>,
+    metadata_digest: Option<&str>,
+    lock_digest: Option<&str>,
+) -> String {
     #[derive(serde::Serialize)]
     struct ResolvedWorkflowIdentity<'a> {
         format: &'static str,
@@ -1634,12 +1674,15 @@ pub fn compute_workflow_resolved_hash(
         config_snapshot: &'a BTreeMap<String, String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         metadata_digest: Option<&'a str>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        lock_digest: Option<&'a str>,
     }
     let identity = ResolvedWorkflowIdentity {
         format: "oxo-flow.resolved-workflow/v1",
         workflow_content_hash,
         config_snapshot,
         metadata_digest,
+        lock_digest,
     };
     let canonical = serde_json::to_vec(&identity)
         .expect("serializing the resolved-workflow identity cannot fail");

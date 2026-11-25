@@ -215,6 +215,38 @@ or rename it, build the suffixed env, or drop `--skip-env-setup`.
 
 ---
 
+## Environment identity and the workflow lock
+
+Every run records a per-rule **environment identity** in its checkpoint
+(`env_lock_identity`), computed entirely offline by the same resolver the
+workflow lock uses:
+
+- **container** (`docker`/`singularity`): the resolved image digest
+  (`repo@sha256:…`) when the local runtime can report one; otherwise the
+  explicit sentinel `unresolved` — a digest is never fabricated and nothing
+  is pulled.
+- **env backends** (`pixi`/`conda`/`mamba`/`venv`): a key-ordered SHA-256
+  **lock hash** over the resolved environment spec files (the manifest, an
+  env YAML, and the sibling `pixi.lock` when present). The file set is
+  sorted, so the hash is stable across hosts.
+- **`system`** (or a rule with no lockable environment content): the
+  explicit sentinel `unavailable`. A constant hash over an empty
+  fingerprint would falsely read as evidence of equality.
+
+`oxo-flow lock` stores that map in `oxo-flow.lock` alongside the declared
+software each rule names (image tag, env-file paths and content digests,
+module list). `lock --check` and `run --locked` compare the current
+identity against the pinned one:
+
+- `unresolved` never compares equal — including to itself (`LOCK-006`).
+  Generate locks where the images you intend to pin are available locally.
+- `unavailable` compares equal only to `unavailable`.
+- A changed spec file, module list, or image digest is `LOCK-004`.
+
+See [`lock`](../commands/lock.md) for the document format and drift codes,
+and [run — Workflow lock](../commands/run.md#workflow-lock---locked) for
+enforcement.
+
 ## Resolver Order
 
 A rule resolves at most **one** backend, checked in this order:

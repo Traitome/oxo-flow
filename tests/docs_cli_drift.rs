@@ -150,20 +150,48 @@ fn digits_before_chinese_subcommand(prefix: &str) -> Option<String> {
     if tail.to_ascii_lowercase().ends_with("cli") {
         tail = trim_count_separators(&tail[..tail.len() - "cli".len()]);
     }
-    let tail = trim_count_separators(tail.strip_suffix('个')?);
-    trailing_digits(tail)
+    // Markup or a product name may sit between `个` and `CLI 子命令`
+    // (`全部 40 个 <code>oxo-flow</code> CLI 子命令`); the count still sits
+    // immediately before `个`, so take the digits before the LAST `个`.
+    let measure_word = tail.rfind('个')?;
+    trailing_digits(trim_count_separators(&tail[..measure_word]))
 }
 
 fn line_number(text: &str, pos: usize) -> usize {
     text[..pos].matches('\n').count() + 1
 }
 
-/// Every `<N> subcommands` / `<N> CLI subcommands` / `<N> 个 (CLI) 子命令`
-/// mention in `text`, as `(line, digits)`.
+/// Replace HTML tag spans with spaces of the SAME byte length, so offsets in
+/// the result are valid in the original text. The landing page wraps words in
+/// `<code>`/`<span>` markup, which used to hide count mentions from the
+/// prose scanner (issue #1399 review M1).
+fn flatten_html_tags(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = bytes.to_vec();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'<'
+            && let Some(offset) = text[index..].find('>')
+        {
+            for byte in &mut out[index..=index + offset] {
+                *byte = b' ';
+            }
+            index += offset + 1;
+            continue;
+        }
+        index += 1;
+    }
+    String::from_utf8(out).expect("ASCII tag flattening preserves UTF-8")
+}
+
+/// Every `<N> subcommands` / `<N> CLI subcommands` / `<N> CLI commands` /
+/// `<N> cmds` / `<N> 个 (CLI) 子命令` mention in `text`, as `(line, digits)`.
+/// HTML tags are flattened first so markup cannot hide a stale count.
 fn prose_subcommand_counts(text: &str) -> Vec<(usize, String)> {
+    let flattened = flatten_html_tags(text);
     // ASCII lowercasing preserves byte offsets, so positions found in the
     // lowercase copy are valid in `text`.
-    let lower = text.to_ascii_lowercase();
+    let lower = flattened.to_ascii_lowercase();
     let mut mentions = Vec::new();
     for (needle, parse) in [
         (
@@ -171,6 +199,8 @@ fn prose_subcommand_counts(text: &str) -> Vec<(usize, String)> {
             digits_before_english_subcommand as fn(&str) -> Option<String>,
         ),
         ("子命令", digits_before_chinese_subcommand),
+        ("cli commands", digits_before_english_subcommand),
+        ("cmds", digits_before_english_subcommand),
     ] {
         let mut search_from = 0;
         while let Some(offset) = lower[search_from..].find(needle) {
@@ -282,6 +312,33 @@ fn landing_page_command_cards_match_the_clap_definition() {
 /// docs/index.html must equal the clap-derived count, and each file must
 /// keep at least one mention so a prose rewrite cannot silently disable the
 /// check.
+/// The extended scanner must SEE the phrasings it is meant to guard, or the
+/// markup-flattening/alternate-needle extension could silently go vacuous
+/// (issue #1399 review M1).
+#[test]
+fn prose_scanner_sees_markup_and_alternate_phrases() {
+    for (text, expected) in [
+        ("<code>39</code> CLI commands", "39"),
+        ("39<span> cmds</span>", "39"),
+        ("全部 39 个 <code>oxo-flow</code> CLI 子命令", "39"),
+        ("Filter all 39 subcommands", "39"),
+    ] {
+        let mentions = prose_subcommand_counts(text);
+        assert_eq!(
+            mentions
+                .iter()
+                .map(|(_, digits)| digits.as_str())
+                .collect::<Vec<_>>(),
+            vec![expected],
+            "{text:?}"
+        );
+    }
+    assert!(
+        prose_subcommand_counts("Enable across ALL CLI commands").is_empty(),
+        "a phrase with no count must not produce a mention"
+    );
+}
+
 #[test]
 fn prose_subcommand_counts_in_readme_and_landing_page_match_the_clap_definition() {
     let (cli, _aliases) = clap_subcommands();

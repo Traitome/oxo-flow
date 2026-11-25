@@ -123,13 +123,21 @@ pub fn config_placeholder_map(
 pub fn snapshot_value(value: &toml::Value, sensitive: bool) -> String {
     let canonical = config_value_string(value);
     if sensitive {
-        format!(
-            "sha256:{}",
-            hex::encode(Sha256::digest(canonical.as_bytes()))
-        )
+        digest_config_value(&canonical)
     } else {
         canonical
     }
+}
+
+/// SHA-256 `sha256:<hex>` of a config value's canonical string — the digest
+/// form sensitive snapshot values carry. Shared by the checkpoint snapshot
+/// and the workflow lock's credential-shaped keys (issue #1399).
+#[must_use]
+pub fn digest_config_value(canonical: &str) -> String {
+    format!(
+        "sha256:{}",
+        hex::encode(Sha256::digest(canonical.as_bytes()))
+    )
 }
 
 /// Maps each config key to the rules that reference it, split by channel.
@@ -966,6 +974,26 @@ fn build_config_snapshot(
             )
         })
         .collect()
+}
+
+/// The canonical config snapshot for a resolved workflow (issue #1399),
+/// built by the SAME function `detect_config_changes_with_replay` persists:
+/// engine-injected keys excluded, sensitive values stored as SHA-256
+/// digests, `BTreeMap`-ordered. The workflow lock and the run-time lock
+/// verification both derive their config identity here, so lock generation
+/// and checkpoint recording can never drift apart.
+///
+/// Call it on the final config state (post-defaults, post-override,
+/// post-profile, post-wildcard-expansion) — the state a run records.
+#[must_use]
+pub fn canonical_config_snapshot(
+    config: &crate::config::WorkflowConfig,
+) -> BTreeMap<String, String> {
+    build_config_snapshot(
+        &config.config,
+        &config.sensitive_config_keys(),
+        Some(config),
+    )
 }
 
 #[cfg(test)]

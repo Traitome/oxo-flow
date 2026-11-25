@@ -82,7 +82,7 @@ Methodological claims are nothing without measurement infrastructure:
 
 The quantitative claims on this page were re-checked against `main@99bb8b56` on 2026-11-26, after the audit-chain merge `dedc1121` (which added the `audit` subcommand and its two endpoints) plus the metadata-contract and Kubernetes-image-render merges; the cluster `--provenance` behavior was re-verified after #1096 (`main@3406208f`); the mechanism-level claims were first checked against `main@55dddf3c` on 2026-11-17. The numeric claims that have a machine-readable source are enforced by `make claims-check` against [`docs/claims.json`](https://github.com/Traitome/oxo-flow/blob/main/docs/claims.json), so this snapshot cannot drift silently:
 
-- 39 CLI subcommands; 96 OpenAPI paths / 111 operations served by `GET /api/openapi.json` (default build, non-HPC mode).
+- 40 CLI subcommands; 96 OpenAPI paths / 111 operations served by `GET /api/openapi.json` (default build, non-HPC mode).
 - 31 built-in diagnostic patterns; biological type contracts firing on a deliberately mismatched workflow (`TYPE-001`–`TYPE-003` observed live, `TYPE-004`–`TYPE-010` covered by unit tests; `TYPE-008`/`TYPE-009`/`TYPE-010` are advisory unverifiable-edge codes).
 - 33 prebuilt cluster and re-entry integration tests passing on a Linux host.
 - Live `[engine] dispatch_order` (local execution), run-aware `cluster status --json` / `cluster logs`, interrupted-rule re-queue, `provenance verify`, and the strict-placeholder gate exercised on a mock-Slurm Linux host.

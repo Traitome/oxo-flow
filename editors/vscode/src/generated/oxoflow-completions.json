@@ -1,7 +1,7 @@
 {
   "version": 1,
   "source": "docs/schema/oxoflow-v1.schema.json",
-  "schemaSha256": "a984fe35c7945f21b03e308bc2359e193512499db158d5f4ff33a4c93725d076",
+  "schemaSha256": "d0cc7bbf8b2709c5fa833539854a2ed8c36e29dc35386e2c2dfca643513c9030",
   "contexts": {
     "root": {
       "keys": [
@@ -32,7 +32,7 @@
         },
         {
           "key": "engine",
-          "description": "Runtime engine policies: disk-pressure monitoring thresholds, the global scratch directory, protected-tree drift baselines, and ready-rule dispatch ordering. Sizes use T/G/M/K suffixes; a bare number means MiB.",
+          "description": "Runtime engine policies: disk-pressure monitoring thresholds, the global scratch directory, protected-tree drift baselines, ready-rule dispatch ordering, and workflow-lock enforcement. Sizes use T/G/M/K suffixes; a bare number means MiB.",
           "type": "object"
         },
         {
@@ -301,6 +301,11 @@
             "rule",
             "sample"
           ]
+        },
+        {
+          "key": "locked",
+          "description": "Enforce oxo-flow.lock (issue #1399): every run verifies the workflow lock before executing and fails closed on a missing, stale, or malformed lock (LOCK-001..LOCK-007). This is the persistent form and covers web-spawned and queued runs; run --locked is the per-invocation form and wins. Unset/false reads no lock — behavior is unchanged.",
+          "type": "boolean"
         },
         {
           "key": "min_free_disk",
