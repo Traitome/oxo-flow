@@ -167,6 +167,23 @@ fn tencent_job_status(state: &str) -> BackendJobStatus {
     }
 }
 
+/// GCP Batch `JobStatus.State` → engine verdict. One table for the
+/// executor's poller and the shared `cluster status` line parser — the two
+/// used to be hand-copied and had already drifted (`SCHEDULED` and
+/// `CANCELLATION_IN_PROGRESS` read Unknown in `cluster status`).
+fn gcp_job_status(state: &str) -> BackendJobStatus {
+    match state.trim().to_uppercase().as_str() {
+        "QUEUED" | "SCHEDULED" => BackendJobStatus::Pending,
+        // CANCELLATION_IN_PROGRESS keeps polling; CANCELLED below is the
+        // terminal verdict.
+        "RUNNING" | "CANCELLATION_IN_PROGRESS" => BackendJobStatus::Running,
+        "SUCCEEDED" => BackendJobStatus::Completed,
+        "FAILED" | "DELETION_IN_PROGRESS" => BackendJobStatus::Failed,
+        "CANCELLED" => BackendJobStatus::Cancelled,
+        _ => BackendJobStatus::Unknown,
+    }
+}
+
 /// Parse a `tccli batch DescribeJobs --output json` reply (body or
 /// `Response`-wrapped) into `job id -> state`. Malformed output yields an
 /// empty map — missing status data is never a verdict.
@@ -304,15 +321,26 @@ pub fn parse_status_line(
                     (id, fields.next()?)
                 }
             };
-            let status = match state.trim().to_uppercase().as_str() {
-                "PENDING" | "SUBMITTED" | "RUNNABLE" | "QUEUED" => BackendJobStatus::Pending,
-                "RUNNING" | "STARTING" => BackendJobStatus::Running,
-                "COMPLETE" | "COMPLETED" | "SUCCEEDED" | "SUCCEED" => BackendJobStatus::Completed,
-                "FAILED" | "DELETION_IN_PROGRESS" | "FAILED_INTERRUPTED" => {
-                    BackendJobStatus::Failed
+            let state = state.trim();
+            let status = if matches!(backend, ClusterBackend::GcpBatch) {
+                // GCP has its own first-class state enum (SCHEDULED,
+                // CANCELLATION_IN_PROGRESS, CANCELLED) — read it through the
+                // poller's table so `cluster status` and settlement cannot
+                // disagree.
+                gcp_job_status(state)
+            } else {
+                match state.to_uppercase().as_str() {
+                    "PENDING" | "SUBMITTED" | "RUNNABLE" | "QUEUED" => BackendJobStatus::Pending,
+                    "RUNNING" | "STARTING" => BackendJobStatus::Running,
+                    "COMPLETE" | "COMPLETED" | "SUCCEEDED" | "SUCCEED" => {
+                        BackendJobStatus::Completed
+                    }
+                    "FAILED" | "DELETION_IN_PROGRESS" | "FAILED_INTERRUPTED" => {
+                        BackendJobStatus::Failed
+                    }
+                    "CANCELLED" => BackendJobStatus::Cancelled,
+                    _ => BackendJobStatus::Unknown,
                 }
-                "CANCELLED" => BackendJobStatus::Cancelled,
-                _ => BackendJobStatus::Unknown,
             };
             let mut id = id.trim();
             // gcloud's --format=value(name,…) prints the FULLY QUALIFIED
@@ -399,6 +427,15 @@ pub const AWS_DESCRIBE_JOBS_MAX_IDS: usize = 100;
 /// state (ListJobs has no "all statuses" selector).
 const AWS_LIVE_JOB_STATUSES: [&str; 5] =
     ["SUBMITTED", "PENDING", "RUNNABLE", "STARTING", "RUNNING"];
+
+/// JMESPath rendering one `jobId|STATE` row per job for the shared line
+/// parser. The separator is a single-quoted raw string: a bare `|` is
+/// JMESPath's pipe operator, so `join(|,…)` is rejected as a syntax error
+/// before any API call.
+const AWS_DESCRIBE_JOBS_QUERY: &str = "jobs[].join('|',[jobId,status])";
+
+/// The same `id|STATE` row shape over `list-jobs`' `jobSummaryList`.
+const AWS_LIST_JOBS_QUERY: &str = "jobSummaryList[].join('|',[jobId,status])";
 
 /// Tencent `DescribeJobs` accepts at most 100 ids per call (`Limit` max is
 /// 100); longer lists are split the same way AWS's are.
@@ -497,7 +534,7 @@ pub fn status_invocations(
                     // error before any API call.
                     args.extend([
                         "--query".to_string(),
-                        "jobs[].join('|',[jobId,status])".to_string(),
+                        AWS_DESCRIBE_JOBS_QUERY.to_string(),
                         "--output".to_string(),
                         "text".to_string(),
                     ]);
@@ -628,7 +665,7 @@ pub fn my_jobs_invocations(
                             "--query".to_string(),
                             // Quoted separator: a bare `|` is JMESPath's
                             // pipe operator, not a string.
-                            "jobSummaryList[].join('|',[jobId,status])".to_string(),
+                            AWS_LIST_JOBS_QUERY.to_string(),
                             "--output".to_string(),
                             "text".to_string(),
                         ],
@@ -1742,7 +1779,7 @@ impl super::ExecutorBackend for ClusterExecutor {
                     args.push("--query".into());
                     // Single-quoted raw string: a bare `|` is the JMESPath
                     // pipe operator and makes the whole expression invalid.
-                    args.push(r"jobs[].join('|',[jobId,status])".into());
+                    args.push(AWS_DESCRIBE_JOBS_QUERY.to_string());
                     args.push("--output".into());
                     args.push("text".into());
                     let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
@@ -1803,22 +1840,11 @@ impl super::ExecutorBackend for ClusterExecutor {
                         // Empty or unrecognized output is missing status
                         // data: UNKNOWN, never a live state (which would
                         // poll forever) and never success (ledger RB-06).
-                        let st = match text.as_str() {
-                            "SUCCEEDED" => BackendJobStatus::Completed,
-                            // job.proto's State enum has a real CANCELLED
-                            // member — a cancelled job is reported as such,
-                            // not rewritten as a generic failure. A deleted
-                            // (DELETION_IN_PROGRESS) job never progresses
-                            // again either; it settles Failed because its
-                            // outcome is not a cancellation the user asked
-                            // for.
-                            "FAILED" | "DELETION_IN_PROGRESS" => BackendJobStatus::Failed,
-                            "CANCELLED" => BackendJobStatus::Cancelled,
-                            "CANCELLATION_IN_PROGRESS" => BackendJobStatus::Running,
-                            "RUNNING" => BackendJobStatus::Running,
-                            "QUEUED" | "SCHEDULED" => BackendJobStatus::Pending,
-                            _ => BackendJobStatus::Unknown,
-                        };
+                        // One state table shared with `cluster status`
+                        // (`gcp_job_status`): CANCELLED settles as
+                        // Cancelled, a deleted job settles failed, and
+                        // CANCELLATION_IN_PROGRESS keeps polling.
+                        let st = gcp_job_status(&text);
                         statuses.insert(id.clone(), st);
                         continue;
                     };
@@ -2724,7 +2750,7 @@ mod tests {
                     "101".to_string(),
                     "202".to_string(),
                     "--query".to_string(),
-                    "jobs[].join('|',[jobId,status])".to_string(),
+                    AWS_DESCRIBE_JOBS_QUERY.to_string(),
                     "--output".to_string(),
                     "text".to_string(),
                 ]
@@ -3223,6 +3249,26 @@ mod tests {
             .lines()
             .map(str::to_string)
             .collect();
+        // The poller must ask for the quoted-raw-string row query on every
+        // describe call — the old `join(|,…)` was a JMESPath syntax error.
+        let query_positions: Vec<usize> = argv
+            .iter()
+            .enumerate()
+            .filter(|(_, a)| *a == "--query")
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(
+            query_positions.len(),
+            2,
+            "one --query per describe call: {argv:?}"
+        );
+        for pos in query_positions {
+            assert_eq!(
+                argv[pos + 1],
+                AWS_DESCRIBE_JOBS_QUERY,
+                "the poll query must be the quoted row query: {argv:?}"
+            );
+        }
         let groups = aws_jobs_groups(&argv);
         assert_eq!(
             groups.len(),
@@ -3694,6 +3740,64 @@ mod tests {
         assert!(logs.contains("world"), "data-URI stderr decodes: {logs}");
     }
 
+    /// Every tccli call the executor issues is region-scoped from the
+    /// placement zone: the submit and both log calls (DescribeJob,
+    /// DescribeTaskLogs), not just the poller.
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn tencent_submit_and_logs_carry_the_zone_region() {
+        let runs = tempfile::tempdir().unwrap();
+        let bin = tempfile::tempdir().unwrap();
+        let args_log = runs.path().join("args");
+        write_scheduler_shim(
+            bin.path(),
+            "tccli",
+            &format!(
+                "printf 'CALL\\n' >> {log}\n\
+                 printf '%s\\n' \"$@\" >> {log}\n\
+                 if [ \"$2\" = SubmitJob ]; then echo '{{\"JobId\":\"job-abc123\"}}'\n\
+                 elif [ \"$2\" = DescribeJob ]; then echo '{{\"TaskSet\":[{{\"TaskName\":\"task-a\"}}]}}'\n\
+                 else echo '{{\"TaskInstanceLogSet\":[]}}'\n fi\n\
+                 exit 0",
+                log = args_log.display()
+            ),
+        );
+        let mut config = cluster_config();
+        config.backend = ClusterBackend::TencentBatch;
+        config.queue = Some("ap-shanghai-5".into());
+        let exec = ClusterExecutor::new(ClusterBackend::TencentBatch, config)
+            .with_scheduler_dir(bin.path().to_path_buf());
+        let job_dir = runs.path().join("jobs/align");
+        std::fs::create_dir_all(&job_dir).unwrap();
+        let spec = job_dir.join("job.sh");
+        std::fs::write(&spec, "{}").unwrap();
+        assert_eq!(exec.submit(&spec).await.unwrap(), "job-abc123");
+        exec.logs("job-abc123").await.unwrap();
+
+        let log = std::fs::read_to_string(&args_log).unwrap();
+        let calls: Vec<Vec<&str>> = log
+            .split("CALL\n")
+            .filter(|call| !call.trim().is_empty())
+            .map(|call| call.lines().collect())
+            .collect();
+        assert_eq!(
+            calls.len(),
+            3,
+            "submit + DescribeJob + DescribeTaskLogs: {log}"
+        );
+        for (call, action) in calls
+            .iter()
+            .zip(["SubmitJob", "DescribeJob", "DescribeTaskLogs"])
+        {
+            assert_eq!(call[1], action, "{call:?}");
+            let at = call
+                .iter()
+                .position(|arg| *arg == "--region")
+                .unwrap_or_else(|| panic!("{action} carries no --region: {call:?}"));
+            assert_eq!(call[at + 1], "ap-shanghai", "{action}: {call:?}");
+        }
+    }
+
     /// `list-jobs` without `--job-status` returns only RUNNING jobs, so the
     /// raw live view asks for every non-terminal state — on the same
     /// default queue submit would use when the profile has none.
@@ -3711,6 +3815,14 @@ mod tests {
             );
             let at = args.iter().position(|a| a == "--job-status").unwrap();
             statuses.push(args[at + 1].clone());
+            // The listing's JMESPath must be the same quoted-raw-string
+            // row query as the poller (a bare `|` is a syntax error).
+            let query_at = args.iter().position(|a| a == "--query").unwrap();
+            assert_eq!(
+                args[query_at + 1],
+                AWS_LIST_JOBS_QUERY,
+                "the listing query must render quoted {AWS_LIST_JOBS_QUERY:?}: {args:?}"
+            );
         }
         assert_eq!(
             statuses,
@@ -3722,6 +3834,47 @@ mod tests {
             explicit[0].1.contains(&"biotech".to_string()),
             "{:?}",
             explicit[0]
+        );
+    }
+
+    /// The shared AWS row-query constants must keep the single-quoted
+    /// JMESPath separator; a bare `|` is the pipe operator, so the CLI
+    /// rejects the whole `--query` before any API call.
+    #[test]
+    fn aws_row_queries_use_a_quoted_jmespath_separator() {
+        assert_eq!(AWS_DESCRIBE_JOBS_QUERY, "jobs[].join('|',[jobId,status])");
+        assert_eq!(
+            AWS_LIST_JOBS_QUERY,
+            "jobSummaryList[].join('|',[jobId,status])"
+        );
+    }
+
+    /// `gcloud batch jobs list` cannot resolve a bare project/location
+    /// without `--location` (or a configured gcloud default); the profile's
+    /// queue supplies it.
+    #[test]
+    fn gcp_raw_listing_passes_the_location_from_the_queue() {
+        assert_eq!(
+            my_jobs_invocations(&ClusterBackend::GcpBatch, Some("us-central1")),
+            vec![(
+                "gcloud",
+                vec![
+                    "batch".to_string(),
+                    "jobs".to_string(),
+                    "list".to_string(),
+                    "--location=us-central1".to_string(),
+                    "--format=value(name,status.state)".to_string(),
+                ]
+            )]
+        );
+        // No queue: no location flag (gcloud's configured default, if any,
+        // is then the only source).
+        let without = my_jobs_invocations(&ClusterBackend::GcpBatch, None);
+        assert_eq!(without.len(), 1);
+        assert!(
+            !without[0].1.iter().any(|arg| arg.starts_with("--location")),
+            "{:?}",
+            without[0]
         );
     }
 
@@ -4416,6 +4569,39 @@ ru_wallclock 82\nru_maxrss    262144\ncpu          164\n";
             parse_status_line(&ClusterBackend::GcpBatch, "oxoflow-x-1\tSUCCEEDED").unwrap();
         assert_eq!(id, "oxoflow-x-1");
         assert_eq!(st, BackendJobStatus::Completed);
+    }
+
+    /// The CLI status view reads GCP through the same table as the poller:
+    /// SCHEDULED is pending, CANCELLATION_IN_PROGRESS keeps running, and
+    /// CANCELLED is terminal. These two states used to read Unknown in
+    /// `cluster status` while settlement knew better.
+    #[test]
+    fn gcp_cli_status_view_matches_the_poller_state_table() {
+        let cases = [
+            ("QUEUED", BackendJobStatus::Pending),
+            ("SCHEDULED", BackendJobStatus::Pending),
+            ("RUNNING", BackendJobStatus::Running),
+            ("CANCELLATION_IN_PROGRESS", BackendJobStatus::Running),
+            ("SUCCEEDED", BackendJobStatus::Completed),
+            ("FAILED", BackendJobStatus::Failed),
+            ("DELETION_IN_PROGRESS", BackendJobStatus::Failed),
+            ("CANCELLED", BackendJobStatus::Cancelled),
+            ("STATE_UNSPECIFIED", BackendJobStatus::Unknown),
+        ];
+        for (state, expected) in cases {
+            let line = format!("projects/p/locations/l/jobs/oxoflow-x\t{state}");
+            let (id, status) = parse_status_line(&ClusterBackend::GcpBatch, &line).unwrap();
+            assert_eq!(id, "oxoflow-x");
+            assert_eq!(status, expected, "parse_status_line {state}");
+            // And the request-anchored `cluster status` view (the path that
+            // actually prints the row) agrees.
+            assert_eq!(
+                status_report(&ClusterBackend::GcpBatch, &["oxoflow-x".to_string()], &line),
+                vec![("oxoflow-x".to_string(), expected)],
+                "status_report {state}"
+            );
+            assert_eq!(gcp_job_status(state), expected, "shared table {state}");
+        }
     }
 
     #[test]

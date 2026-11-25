@@ -101,13 +101,42 @@ shared by submit/poll/status/logs; GCP `CancelJob`; zone-derived
 `--region`; AWS `join('|',...)` and multi-status listing; name budgets
 (prefix counted); GCP `--location` threading and chunk-id source; raw and
 data-URI log decoding; element-handle filtering; one backend-name hint
-constant (`gcp-batch` was missing from every error message).
+constant (`gcp-batch` was missing from every error message). GCP
+`JobStatus.State` is one `gcp_job_status` table shared by the poller and
+the `cluster status` line parser, and the AWS row queries are two
+constants (`AWS_DESCRIBE_JOBS_QUERY`, `AWS_LIST_JOBS_QUERY`) used by all
+three call sites.
 
 Deterministic tests (vendor-shaped JSON/text fixtures or shell shims, no
-network): Tencent envelope/state/chunking/status/logs/poll; GCP submit
-argv, chunk id, full state mapping, UNEXECUTED, location; AWS caps,
-defaults, live listing, JMESPath argv; cancel grammar; submit hints; CLI
+network): Tencent envelope/state/chunking/status/logs/poll and
+submit/log-call `--region` argv; GCP submit argv, chunk id, the full
+`status.state` table through both the poller and `status_report`/CLI
+view, UNEXECUTED, and raw-listing `--location`; AWS caps, defaults (the
+listing must reuse the submit queue), live listing, and the exact
+JMESPath argv at all three call sites; cancel grammar; submit hints; CLI
 submit-helper grammar and multi-invocation merge.
+
+## Review follow-up (2026-11-26)
+
+Independent review of PR #1406 (0 Critical/0 Important, 5 Minor) raised
+test/claim gaps; all five are closed in the follow-up commit:
+
+1. GCP job-state mapping is now one `gcp_job_status` table used by the
+   poller AND the CLI status parser (`SCHEDULED` → pending,
+   `CANCELLATION_IN_PROGRESS` → running, `CANCELLED` → cancelled), pinned
+   by `gcp_cli_status_view_matches_the_poller_state_table`.
+2. AWS `join('|',...)` is one constant per query, used at status, poll and
+   listing; the poll and listing tests assert the exact `--query` argv, and
+   `aws_row_queries_use_a_quoted_jmespath_separator` pins the constants'
+   literal text so a broken separator cannot hide behind the constant.
+3. GCP raw listing `--location` is pinned by
+   `gcp_raw_listing_passes_the_location_from_the_queue`.
+4. Tencent `--region` is pinned on the executor submit and both log calls
+   by `tencent_submit_and_logs_carry_the_zone_region` (poll/status/cancel
+   were already covered).
+5. The AWS defaults test now also asserts the raw listing queries
+   `AWS_DEFAULT_JOB_QUEUE`, so it fails if the listing stops sharing the
+   submit default.
 
 ## Residual / blocked
 
@@ -125,6 +154,11 @@ submit-helper grammar and multi-invocation merge.
 - AWS/GCP `logs()` return job metadata (`DescribeJobs` / `jobs describe`);
   neither backend has an engine-wired log API.
 - AWS raw listing is queue-wide (ListJobs has no per-user filter).
+- **Tencent live-evidence reconciliation:** PR #1394's body additionally
+  described live poll/log/cancel/run activity, while this audit records
+  those paths as mock-verified because no committed artifact reproduces
+  them. The conservative wording is intentional; if that evidence is real
+  it should be recorded here so the repository does not tell two stories.
 
 No credentials, secrets, or vendor source files are included in this
 document or the repository.

@@ -289,6 +289,26 @@ mod tests {
                 .unwrap();
         assert_eq!(val["jobQueue"], AWS_DEFAULT_JOB_QUEUE);
         assert_eq!(val["jobDefinition"], AWS_DEFAULT_JOB_DEFINITION);
+        // The raw listing must query the SAME default queue: the old
+        // empty-invocation behaviour and a second hard-coded literal both
+        // fail here.
+        let invocations =
+            crate::backend::cluster::my_jobs_invocations(&ClusterBackend::AwsBatch, None);
+        assert!(
+            !invocations.is_empty(),
+            "the raw listing must be answerable"
+        );
+        for (_, args) in &invocations {
+            let at = args
+                .iter()
+                .position(|arg| arg == "--job-queue")
+                .unwrap_or_else(|| panic!("no --job-queue in {args:?}"));
+            assert_eq!(
+                args[at + 1],
+                AWS_DEFAULT_JOB_QUEUE,
+                "the listing must reuse the submit default queue: {args:?}"
+            );
+        }
     }
 
     #[test]
