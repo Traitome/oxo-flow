@@ -407,6 +407,7 @@ pub mod ai_session;
 pub mod ai_status;
 pub mod ai_template;
 pub mod attestation;
+pub mod audit;
 pub mod batch;
 pub mod bundle;
 pub mod bundle_signing;

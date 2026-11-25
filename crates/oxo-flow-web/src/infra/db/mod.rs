@@ -137,6 +137,37 @@ pub async fn oauth_test_backend() -> std::sync::Arc<dyn StorageBackend> {
     .execute(&pool)
     .await
     .expect("audit_logs schema");
+    // The audit chain (issue #1372) is written in the same transaction as
+    // every audit row; the shared fixture must carry it or the OAuth callback's
+    // REQUIRED sign-in row would fail closed.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS audit_chain (seq INTEGER PRIMARY KEY, audit_id TEXT NOT NULL, \
+         phase TEXT NOT NULL, user_id TEXT NOT NULL, action TEXT NOT NULL, target TEXT NOT NULL, \
+         result TEXT NOT NULL, metadata TEXT, timestamp TEXT NOT NULL, prev_hash TEXT NOT NULL, \
+         hash TEXT NOT NULL)",
+    )
+    .execute(&pool)
+    .await
+    .expect("audit_chain schema");
+    sqlx::query(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_audit_chain_audit_phase \
+         ON audit_chain(audit_id, phase)",
+    )
+    .execute(&pool)
+    .await
+    .expect("audit_chain unique index");
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS audit_chain_head (id INTEGER PRIMARY KEY CHECK (id = 1), \
+         seq INTEGER NOT NULL, hash TEXT NOT NULL)",
+    )
+    .execute(&pool)
+    .await
+    .expect("audit_chain_head schema");
+    sqlx::query("INSERT OR IGNORE INTO audit_chain_head (id, seq, hash) VALUES (1, 0, ?)")
+        .bind(oxo_flow_core::audit_chain::GENESIS_HASH)
+        .execute(&pool)
+        .await
+        .expect("audit_chain_head genesis");
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS sessions (token TEXT PRIMARY KEY, user_id TEXT NOT NULL, \
          created_at TEXT NOT NULL, expires_at TEXT NOT NULL)",
@@ -459,6 +490,25 @@ pub trait StorageBackend: Send + Sync {
         offset: u32,
     ) -> Result<(Vec<models::AuditLogRow>, i64), String>;
     async fn list_recent_audit_logs(&self, limit: u32) -> Result<Vec<models::AuditLogRow>, String>;
+    /// Consistent snapshot of the append-only audit chain plus the full
+    /// `audit_logs` table (issue #1372).
+    ///
+    /// Read in ONE transaction so the head, the events and the current log
+    /// rows describe one moment with respect to chain appends — an export
+    /// must never splice a head from one instant with events from another.
+    /// SQLite's read transaction gives a stable WAL snapshot without blocking
+    /// writers; PostgreSQL takes `FOR SHARE` on the head row, which makes
+    /// appenders (they take `FOR UPDATE`) wait for the snapshot to finish.
+    ///
+    /// PostgreSQL READ COMMITTED still snapshots each plain `SELECT`
+    /// separately, so a concurrent `users` → `audit_logs` cascade delete can
+    /// commit between the event and log reads; that window can surface a
+    /// transient `MISSING_LOG_ROW` for an untampered chain. The snapshot is
+    /// therefore consistent for chain appends, not fully serialized against
+    /// log-row cascade deletes. A missing/deleted head row is an error (the
+    /// handlers map it to `500 DB_ERROR`): a structurally broken chain is
+    /// fail-closed, not a 200 finding.
+    async fn audit_chain_snapshot(&self) -> Result<models::AuditChainSnapshot, String>;
     async fn get_run_metrics(&self) -> Result<(i64, u64), String>;
 
     async fn get_webhook_config(&self) -> Result<Option<models::WebhookConfigRow>, String>;

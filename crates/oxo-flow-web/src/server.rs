@@ -722,6 +722,14 @@ fn build_router_with_limiter(
         // applies (the path is not on the public whitelist).
         .route("/api/events/ticket", post(crate::sse::events_ticket))
         .route("/api/audit", get(observability::handlers::get_audit_logs))
+        .route(
+            "/api/audit/chain/export",
+            get(observability::handlers::export_audit_chain),
+        )
+        .route(
+            "/api/audit/chain/verify",
+            get(observability::handlers::verify_audit_chain),
+        )
         .route("/api/quota", get(observability::handlers::quota_status))
         .route(
             "/api/quota",

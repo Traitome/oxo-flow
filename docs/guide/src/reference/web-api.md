@@ -215,6 +215,122 @@ state before retrying. Failed login attempts stay REQUIRED rows written by
 the middleware. The license-upload metadata row stays best-effort: the
 middleware already writes the REQUIRED row for `POST /api/license/upload`.
 
+#### Audit chain export & verification (issue #1372)
+
+Every audit write (the write-ahead `pending` intent, the terminal finalize,
+and the legacy post-handler row) also appends an immutable event to an
+append-only, SHA-256 hash chain in the **same transaction** as the
+`audit_logs` write. The chain lives in `audit_chain` (one row per event) plus
+a one-row `audit_chain_head` cursor (`seq`, `hash`); an empty chain carries
+`seq = 0` and the genesis hash of 64 hexadecimal zeros. Appends are
+serialized — SQLite inside `BEGIN IMMEDIATE`, PostgreSQL behind a
+`SELECT … FOR UPDATE` on the head row — so the sequence is gapless and
+monotonic under concurrent writers. This is true by construction (the lock is
+the serialization point); the measured PostgreSQL evidence is single-host,
+single-instance PostgreSQL 16.15, and multi-instance deployment remains
+unmeasured. The
+`(audit_id, phase)` unique index makes a retried finalize idempotent; the
+first terminal outcome wins and a conflicting later outcome appends nothing.
+
+The mutable `audit_logs` row remains the listing/UI surface. The chain is
+immutable and carries the full canonical record of each event, so deleting or
+mutating a log row after the fact is a finding rather than silent loss.
+
+```
+GET /api/audit/chain/export
+```
+
+**Admin-only** (personal mode keeps the localhost trust model). Returns the
+canonical, deterministic `oxo-flow.audit-chain/v1` document:
+
+```json
+{
+  "version": "oxo-flow.audit-chain/v1",
+  "head": { "seq": 128, "hash": "…" },
+  "events": [
+    {
+      "seq": 1,
+      "audit_id": "5b7d0c81-…",
+      "phase": "pending",
+      "user_id": "user",
+      "action": "POST /api/runs",
+      "target": "/api/runs",
+      "result": "pending",
+      "metadata": null,
+      "timestamp": "2026-11-25T10:00:00.000000Z",
+      "prev_hash": "0000…0000",
+      "hash": "…"
+    }
+  ],
+  "audit_logs": [
+    {
+      "id": "5b7d0c81-…",
+      "user_id": "user",
+      "action": "POST /api/runs",
+      "target": "/api/runs",
+      "result": "success",
+      "metadata": { "status": 200 },
+      "timestamp": "2026-11-25T10:00:00.000000Z"
+    }
+  ]
+}
+```
+
+`events` are ordered by `seq`; `audit_logs` is the full snapshot ordered by
+id. Object keys are serialized sorted and metadata is canonical JSON, so two
+exports of one database state are byte-identical. For a given event,
+`hash = sha256(canonical_event)` where the canonical event is the sorted-key
+JSON object of its fields plus the format tag (metadata normalized, `hash`
+excluded); `prev_hash` is the predecessor's `hash`.
+
+```
+GET /api/audit/chain/verify
+```
+
+**Admin-only.** Reads the stored chain and audit rows in one snapshot
+transaction — consistent with respect to chain appends; on PostgreSQL READ
+COMMITTED a concurrent account-deletion cascade can land between the plain
+`SELECT`s and surface a transient `MISSING_LOG_ROW` for an untampered chain
+(see the architecture note) — and returns `{ok, events, head, findings}`.
+Tampering is a **200** answer with `ok: false`, never an HTTP error, with one
+documented exception: a structurally broken chain such as a missing/deleted
+`audit_chain_head` row cannot be represented, so both endpoints answer
+`500 DB_ERROR` (fail-closed; every audited write also fails).
+
+Example tampering response:
+
+```json
+{
+  "ok": false,
+  "events": 128,
+  "head": { "seq": 128, "hash": "…" },
+  "findings": [
+    { "code": "MISSING_LOG_ROW", "seq": 96, "message": "audit_logs row '…' is missing (deleted after chaining)" }
+  ]
+}
+```
+
+Finding codes: `SEQ_MISMATCH`, `PREV_HASH_MISMATCH`, `HASH_MISMATCH`,
+`DUPLICATE_PHASE`, `INVALID_PHASE`, `CONFLICTING_TERMINAL`,
+`HEAD_MISMATCH`, `GENESIS_MISMATCH`, `MISSING_LOG_ROW`, `LOG_MISMATCH`,
+`UNCHAINED_LOG_ROW`, `DUPLICATE_LOG_ID`. Both endpoints answer
+`503 {code: "DB_ERROR"}` when no storage backend is initialized. The offline
+verifier cannot express a missing head: an export without a `head` field is
+malformed input (`AUDIT_EXPORT_INVALID`, exit 4).
+
+The same export verifies **offline** with
+`oxo-flow audit verify <export.json>` (exit 0 valid, 2 invalid/tampered,
+4 malformed with the named error `AUDIT_EXPORT_INVALID`) — see the
+[`audit` command reference](../commands/audit.md).
+
+The chain is local integrity, not a signature: an actor who can rewrite every
+event and the head consistently passes both verifiers. Holding a previously
+exported document is what makes a later wholesale rewrite visible. No
+external notarization, legal compliance, or confidentiality is claimed.
+Audit rows cascade-delete with their user account while chain events persist,
+so such a deletion surfaces as `MISSING_LOG_ROW` (review it against the
+account-deletion record).
+
 ### Server-Sent Events
 ```
 GET /api/events

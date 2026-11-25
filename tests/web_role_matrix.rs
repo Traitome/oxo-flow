@@ -33,7 +33,14 @@ async fn web_role_matrix_full_flow() {
     let base = server.base.clone();
 
     // ── 1. Unauthenticated walkthrough ──────────────────────────────────
-    for path in ["/api/system", "/api/runs", "/api/users", "/api/audit"] {
+    for path in [
+        "/api/system",
+        "/api/runs",
+        "/api/users",
+        "/api/audit",
+        "/api/audit/chain/export",
+        "/api/audit/chain/verify",
+    ] {
         let (status, body) = api_get(&base, path, None).await;
         assert_eq!(status, 401, "{path} must require auth: {body}");
         assert_eq!(
@@ -87,6 +94,13 @@ async fn web_role_matrix_full_flow() {
     assert!(names.contains(&"alice"), "user list must contain alice");
     let (status, _) = api_get(&base, "/api/audit", Some(&admin_token)).await;
     assert_eq!(status, 200, "admin must read the audit trail");
+    // Issue #1372: the chain export/verify surface is admin-only too.
+    let (status, chain) = api_get(&base, "/api/audit/chain/verify", Some(&admin_token)).await;
+    assert_eq!(status, 200, "admin must verify the audit chain: {chain}");
+    assert_eq!(
+        chain["ok"], true,
+        "fresh test server chain verifies: {chain}"
+    );
 
     // ── 3. Regular-user login + RBAC ────────────────────────────────────
     let (status, login) = api_post(
@@ -103,6 +117,10 @@ async fn web_role_matrix_full_flow() {
     assert_eq!(status, 403, "user must not list users");
     let (status, _) = api_get(&base, "/api/audit", Some(&alice)).await;
     assert_eq!(status, 403, "user must not read the audit trail");
+    let (status, _) = api_get(&base, "/api/audit/chain/export", Some(&alice)).await;
+    assert_eq!(status, 403, "user must not export the audit chain");
+    let (status, _) = api_get(&base, "/api/audit/chain/verify", Some(&alice)).await;
+    assert_eq!(status, 403, "user must not verify the audit chain");
     let (status, _) = api_get(&base, "/api/system", Some(&alice)).await;
     assert_eq!(status, 200, "system info is auth-only per docs");
 
