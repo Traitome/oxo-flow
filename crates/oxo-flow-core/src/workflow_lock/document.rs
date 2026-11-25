@@ -174,7 +174,8 @@ impl WorkflowLock {
     }
 
     /// Parse and validate a lock document's envelope: valid JSON and a
-    /// supported format tag. Field-level drift is [`verify_lock`]'s job.
+    /// supported format tag. Field-level drift is
+    /// [`crate::workflow_lock::verify_lock`]'s job.
     pub fn parse(text: &str) -> Result<Self, LockParseError> {
         let lock: Self =
             serde_json::from_str(text).map_err(|e| LockParseError::Malformed(e.to_string()))?;
