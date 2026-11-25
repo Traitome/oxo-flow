@@ -4696,7 +4696,7 @@
 <tr>
 <td><strong>Kubernetes</strong></td>
 <td>Supported (spec generation + shared-filesystem execution)</td>
-<td>Prototype — live single-node k3s campaign (submit/status/artifacts/logs/SIGINT-cancel) for <code>system</code>-environment rules; Job manifests mount the run workdir via <code>hostPath</code> and set <code>imagePullPolicy: IfNotPresent</code>. Residual: docker/singularity-env rules, array command-dir mounts, multi-node shared volumes, registry-restricted nodes — see <a href="../../superpowers/audits/kubernetes-live-campaign-2026-11-24.md"><code>kubernetes-live-campaign-2026-11-24.md</code></a></td>
+<td>Prototype — live single-node k3s campaign (submit/status/artifacts/logs/SIGINT-cancel) for <code>system</code>-environment rules; Job manifests mount the run workdir AND the array command directory via <code>hostPath</code>, set <code>imagePullPolicy: IfNotPresent</code>, and rewrite the container image through <code>OXO_REGISTRY_MIRRORS</code> (namespace/registry-qualified names). Docker-environment rules run via the opt-in <code>OXO_FLOW_K8S_DOCKER_SOCKET=1</code> channel (mounts the node daemon socket — trusted single-operator clusters only). Residual: multi-node shared volumes, image-based environment rendering (the durable docker-env fix) — see <a href="../../superpowers/audits/kubernetes-live-campaign-2026-11-24.md"><code>kubernetes-live-campaign-2026-11-24.md</code></a></td>
 <td><code>k8s Job</code></td>
 </tr>
 <tr>

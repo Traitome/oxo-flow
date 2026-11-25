@@ -4289,8 +4289,13 @@ workflow file</strong>:</p>
   full path, so map <code>docker.io=mirror.example.com</code> to rewrite such
   specs — a <code>localhost=…</code> key never matches anything.</li>
 <li>Applies to the singularity/apptainer backend (pull target and <code>exec</code>
-  URI) and to registry-qualified docker specs. The Docker backend's bare
-  names still resolve through the daemon's own <code>registry-mirrors</code>.</li>
+  URI), to registry-qualified docker specs, and to the <strong>Kubernetes
+  backend's job manifests</strong> (the container <code>image</code> field is rewritten at
+  render time, so pods on registry-restricted nodes pull from the mirror;
+  bare library names such as <code>ubuntu:22.04</code> pass through — configure the
+  container runtime's own <code>registry-mirrors</code> for those). The Docker
+  backend's bare names still resolve through the daemon's own
+  <code>registry-mirrors</code>.</li>
 <li>The derived local SIF name and the environment cache key keep the
   <strong>original</strong> spec, so an image keeps one identity whether a box goes
   through a mirror or not.</li>
