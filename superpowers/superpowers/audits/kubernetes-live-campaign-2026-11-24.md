@@ -97,6 +97,33 @@ Follow-up live drill on the same k3s node (branch `feat/k8s-array-mounts`):
   image-based environment rendering (issue #1388) removes; until then the
   channel is qualified for pod-level wrapper execution only.
 
+## 2026-11-25 addendum #2 — `[cluster.volume]` NFS drill (branch feat/cluster-volume, issue #1387)
+
+Single-host NFS drill for the multi-node volume declaration: the run workdir
+lives INSIDE a kernel-NFS export (`/srv/oxoflow` on the k3s node itself), and
+the profile declares `[cluster.volume] kind="nfs" server=127.0.0.1
+path=/srv/oxoflow mount_root=/oxoflow`:
+
+- The array + gather workflow (2 chunks + 2 merges) ran **4 succeeded**;
+  the Indexed Job carries ONE `oxoflow-shared` NFS volume mounted at
+  `/oxoflow` (no submit-host `hostPath` anywhere), the dispatch line and the
+  per-index command files both cd to `/oxoflow/k8s-vol-live/...`, and the
+  outputs landed back on the submit host through the NFS path.
+  `provenance verify` matched 4/4.
+- The FIRST draft of the renderer mapped the workdir directly onto
+  `mount_root` and the pods died on the folded `cd` (`/oxoflow/...` was one
+  directory short of the real in-pod workdir `/oxoflow/k8s-vol-live`):
+  the volume mounts by its ROOT, so the mapping is
+  `mount_root/<workdir relative to volume_root>`. The shipped fix derives
+  the relative path and fails with both paths named when the workdir is not
+  under the volume root — plus a `map_workdir_to_pod` channel so the
+  driver-written per-index command files get the same rewrite as the
+  rendered dispatch line.
+- This proves the volume RENDERING and the shared-filesystem data path
+  end-to-end, on one host. True multi-node (independent kernels, real
+  network NFS, cross-node scheduling) remains the #1387 qualification step
+  (Tencent TKE / second CVM) — this drill is honest single-host evidence.
+
 ## Reproduction sketch
 
 ```bash

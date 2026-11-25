@@ -609,6 +609,18 @@
             "lsf"
           ]
         },
+        "volume": {
+          "type": "object",
+          "description": "Shared filesystem the run workdir lives on; pods mount it at mount_root (default /oxoflow). kind: nfs (server+path) | pvc (claim_name) | hostpath (host_path, single-node)",
+          "properties": {
+            "kind": { "type": "string", "enum": ["nfs", "pvc", "hostpath"] },
+            "server": { "type": "string" },
+            "path": { "type": "string" },
+            "claim_name": { "type": "string" },
+            "host_path": { "type": "string" },
+            "mount_root": { "type": "string" }
+          }
+        },
         "partition": {
           "type": "string"
         },
