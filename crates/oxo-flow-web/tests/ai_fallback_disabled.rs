@@ -26,6 +26,7 @@ fn clear_inherited_ai_env() {
     for key in [
         "ANTHROPIC_AUTH_TOKEN",
         "ANTHROPIC_API_KEY",
+        "CLAUDE_API_KEY",
         "ANTHROPIC_BASE_URL",
         "ANTHROPIC_MODEL",
         "OPENAI_API_KEY",
@@ -88,8 +89,12 @@ async fn disabled_fallback_attempts_only_the_first_provider() {
         "the structured failure must name the provider: {message}"
     );
     assert!(
-        message.contains("fallback-test"),
-        "the structured failure must keep the provider cause: {message}"
+        message.contains("authentication failed"),
+        "the structured failure must keep the sanitized cause: {message}"
+    );
+    assert!(
+        !message.contains("fallback-test"),
+        "raw upstream error text must not leak into the message: {message}"
     );
 
     assert_eq!(

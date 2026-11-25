@@ -104,6 +104,75 @@ impl AiError {
     pub fn is_timeout(&self) -> bool {
         matches!(self, Self::Timeout { .. })
     }
+
+    /// Whether the provider was called and may have billed before failing.
+    ///
+    /// A max-round exhaustion means every configured round ran; an empty or
+    /// invalid response and a tool error prove the provider answered at
+    /// least once. Transport/auth/rate-limit/HTTP failures are not counted —
+    /// they carry no completion evidence, so the fallback chain may still
+    /// try the next credential without doubling a generation that already
+    /// produced output. Used by the web translate spend guard.
+    pub fn may_have_billed(&self) -> bool {
+        matches!(
+            self,
+            Self::MaxRoundsExceeded { .. }
+                | Self::EmptyResponse
+                | Self::InvalidResponse { .. }
+                | Self::ToolError { .. }
+                | Self::ToolNotFound { .. }
+        )
+    }
+
+    /// A credential- and endpoint-free summary for user-visible attribution.
+    ///
+    /// [`Display`](std::fmt::Display) can embed the request URL (reqwest's
+    /// `error sending request for url (...)`) or upstream response text.
+    /// Web surfaces that return failure reasons to callers must use this
+    /// summary instead: it keeps the actionable category (auth, timeout,
+    /// max rounds, rate limit, overflow) and drops hosts, paths, bodies,
+    /// and credentials.
+    pub fn attribution_reason(&self) -> String {
+        match self {
+            Self::NotConfigured => "AI provider not configured".into(),
+            Self::DisabledByEnv => "AI disabled by environment".into(),
+            Self::Provider { message, .. } => {
+                let status = message
+                    .strip_prefix("HTTP ")
+                    .and_then(|rest| {
+                        rest.split(|c: char| c == ':' || c.is_ascii_whitespace())
+                            .next()
+                    })
+                    .filter(|code| !code.is_empty() && code.chars().all(|c| c.is_ascii_digit()));
+                match status {
+                    Some(code) => format!("provider error (HTTP {code})"),
+                    None => "provider error".into(),
+                }
+            }
+            Self::Timeout { .. } => "request timed out".into(),
+            Self::RetryExhausted { attempts, .. } => {
+                format!("request failed after {attempts} attempts")
+            }
+            Self::EmptyResponse => "empty AI response".into(),
+            Self::ToolError { tool, .. } => format!("tool '{tool}' failed"),
+            Self::ToolNotFound { tool } => format!("tool '{tool}' not found"),
+            Self::MaxRoundsExceeded { max } => format!("Agent exceeded max rounds ({max})"),
+            Self::SessionError { .. } => "session archive write failed".into(),
+            Self::Config { .. } => "AI configuration error".into(),
+            Self::Transport { .. } => "MCP transport error".into(),
+            Self::Protocol { .. } => "MCP protocol error".into(),
+            Self::SessionExpired => "MCP session expired".into(),
+            Self::Network { .. } => "network error (provider endpoint unreachable)".into(),
+            Self::InvalidResponse { .. } => "invalid AI response".into(),
+            Self::RateLimited { retry_after, .. } => match retry_after {
+                Some(secs) => format!("rate limited (retry after {secs}s)"),
+                None => "rate limited".into(),
+            },
+            Self::Auth { .. } => "authentication failed".into(),
+            Self::ContextOverflow { .. } => "context window exceeded".into(),
+            Self::OutputLimit { .. } => "output limit exceeded".into(),
+        }
+    }
 }
 
 impl From<serde_json::Error> for AiError {
@@ -111,5 +180,91 @@ impl From<serde_json::Error> for AiError {
         AiError::InvalidResponse {
             message: format!("JSON parse/serialization error: {e}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn attribution_reason_drops_endpoint_urls_and_upstream_bodies() {
+        // The live matrix saw the provider endpoint echoed by reqwest's
+        // Display; the user-visible reason must never carry it.
+        let network = AiError::Network {
+            message: "error sending request for url \
+                      (http://127.0.0.1:9/v1/chat/completions)"
+                .into(),
+        };
+        let reason = network.attribution_reason();
+        assert!(!reason.contains("http"), "{reason}");
+        assert!(!reason.contains("127.0.0.1"), "{reason}");
+        assert!(reason.contains("network"), "{reason}");
+
+        let provider = AiError::Provider {
+            provider: "openai".into(),
+            message: "HTTP 502: bad gateway at https://internal.example/v1".into(),
+        };
+        assert_eq!(provider.attribution_reason(), "provider error (HTTP 502)");
+
+        let timeout = AiError::Timeout {
+            provider: "openai".into(),
+            message: "timed out for http://10.0.0.1:8080/v1".into(),
+        };
+        let reason = timeout.attribution_reason();
+        assert!(!reason.contains("10.0.0.1"), "{reason}");
+        assert!(reason.contains("timed out"), "{reason}");
+    }
+
+    #[test]
+    fn may_have_billed_covers_the_max_round_incident_class() {
+        // The live incident burned 10 OpenAI rounds before falling back; the
+        // guard must stop the chain for this class even though the error
+        // carries no completion tokens (it never reached a final answer).
+        assert!(AiError::MaxRoundsExceeded { max: 10 }.may_have_billed());
+        assert!(AiError::EmptyResponse.may_have_billed());
+        assert!(
+            AiError::InvalidResponse {
+                message: "bad json".into()
+            }
+            .may_have_billed()
+        );
+        assert!(
+            AiError::ToolError {
+                tool: "lookup_tool".into(),
+                message: "bad args".into()
+            }
+            .may_have_billed()
+        );
+
+        // No completion evidence: the chain may still try the next
+        // credential.
+        assert!(
+            !AiError::Network {
+                message: "x".into()
+            }
+            .may_have_billed()
+        );
+        assert!(
+            !AiError::Auth {
+                provider: "x".into(),
+                message: "401".into()
+            }
+            .may_have_billed()
+        );
+        assert!(
+            !AiError::Timeout {
+                provider: "x".into(),
+                message: "x".into()
+            }
+            .may_have_billed()
+        );
+        assert!(
+            !AiError::RateLimited {
+                provider: "x".into(),
+                retry_after: None
+            }
+            .may_have_billed()
+        );
     }
 }

@@ -299,8 +299,10 @@ backend produced the pipeline and why earlier attempts failed (a cache hit
 returns the original attribution). Every fallback logs a warning naming the
 from/to provider, model, and the prior failure. When the chain is exhausted
 the structured `400 AI_TRANSLATE_ERROR` names the last provider/model and
-the orchestrator cause (for example `Agent exceeded max rounds (10)`); the
-`504 AI_TIMEOUT` `detail` names the last attempted provider.
+the orchestrator cause (for example `Agent exceeded max rounds (10)`). A
+provider-side timeout's `504 AI_TIMEOUT` `detail` names the last attempted
+provider; expiry of the whole-route budget returns the generic 504 detail
+(the chain future is dropped before the last attempt is known).
 
 Set `OXO_FLOW_AI_FALLBACK=disabled` to limit the chain to the first usable
 provider (the acting user's, else the runtime). This is the spend-boundary

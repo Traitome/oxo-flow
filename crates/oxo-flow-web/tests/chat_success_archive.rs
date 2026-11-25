@@ -36,6 +36,7 @@ fn clear_inherited_ai_env() {
     for key in [
         "ANTHROPIC_AUTH_TOKEN",
         "ANTHROPIC_API_KEY",
+        "CLAUDE_API_KEY",
         "ANTHROPIC_BASE_URL",
         "ANTHROPIC_MODEL",
         "OPENAI_API_KEY",

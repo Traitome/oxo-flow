@@ -224,8 +224,58 @@ pub struct Modification {
 /// shared HPC homes or read-only project trees.
 pub const SESSION_DIR_ENV: &str = "OXO_FLOW_AI_SESSION_DIR";
 
+// Test-only, thread-local archive redirect (see
+// `redirect_session_archive_to`). Process-global env mutation is unsafe
+// while parallel tests read it, so in-process tests that drive the real
+// orchestrator redirect only their own thread.
+#[cfg(any(test, feature = "test-scripted"))]
+thread_local! {
+    static TEST_SESSION_DIR: std::cell::RefCell<Option<PathBuf>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Guard returned by [`redirect_session_archive_to`]; restores the previous
+/// redirect when dropped.
+#[cfg(any(test, feature = "test-scripted"))]
+pub struct SessionDirRedirect {
+    previous: Option<PathBuf>,
+}
+
+#[cfg(any(test, feature = "test-scripted"))]
+impl Drop for SessionDirRedirect {
+    fn drop(&mut self) {
+        TEST_SESSION_DIR.with(|slot| *slot.borrow_mut() = self.previous.take());
+    }
+}
+
+/// Redirect AI session archive writes on the CURRENT thread to `dir` until
+/// the returned guard is dropped.
+///
+/// In-process tests that drive the real orchestrator (which archives both
+/// failures and successes) must never write into the operator's
+/// `$HOME/.oxo-flow/ai_sessions` — at the archive cap, a test that writes
+/// also prunes operator records. [`SESSION_DIR_ENV`] is process-global and
+/// unsafe to mutate while other tests read it; this thread-local seam keeps
+/// parallel tests isolated. The redirect wins over the env var for the
+/// current thread and is available only in test builds / the
+/// `test-scripted` feature, mirroring the scripted provider.
+#[cfg(any(test, feature = "test-scripted"))]
+pub fn redirect_session_archive_to(dir: impl Into<PathBuf>) -> SessionDirRedirect {
+    let previous = TEST_SESSION_DIR.with(|slot| slot.replace(Some(dir.into())));
+    SessionDirRedirect { previous }
+}
+
+#[cfg(any(test, feature = "test-scripted"))]
+fn redirected_session_dir() -> Option<PathBuf> {
+    TEST_SESSION_DIR.with(|slot| slot.borrow().clone())
+}
+
 /// Directory for session JSON files (public for status/listing commands).
 pub fn sessions_dir() -> PathBuf {
+    #[cfg(any(test, feature = "test-scripted"))]
+    if let Some(dir) = redirected_session_dir() {
+        return dir;
+    }
     if let Some(dir) = std::env::var_os(SESSION_DIR_ENV).filter(|value| !value.is_empty()) {
         return PathBuf::from(dir);
     }
@@ -260,6 +310,12 @@ fn resolve_oxo_flow_dir() -> PathBuf {
 /// `save_session_to` on a temp dir; integration tests set
 /// [`SESSION_DIR_ENV`].
 pub fn save_session(session: &AiSession) -> Result<PathBuf, AiError> {
+    #[cfg(any(test, feature = "test-scripted"))]
+    if redirected_session_dir().is_some() {
+        // An explicit per-test redirect is a real write target, even in the
+        // crate's own cfg(test) build where saves are otherwise a no-op.
+        return save_session_to(&sessions_dir(), session);
+    }
     let dir = sessions_dir();
     if cfg!(test) && std::env::var_os(SESSION_DIR_ENV).is_none() {
         return Ok(dir.join(format!("{}.json", session.id)));
@@ -573,6 +629,35 @@ mod tests {
             !path.exists(),
             "unit tests must not write into the operator's archive: {}",
             path.display()
+        );
+    }
+
+    #[test]
+    fn thread_local_archive_redirect_is_scoped_and_restores() {
+        // In-process tests (web unit tests) drive the real orchestrator,
+        // whose archives must land in a temp dir even though oxo-flow-ai is
+        // compiled as a normal dependency there. The thread-local redirect
+        // must win over HOME/env and restore the previous state on drop.
+        let temp = tempfile::tempdir().unwrap();
+        let before = sessions_dir();
+
+        {
+            let _guard = redirect_session_archive_to(temp.path());
+            assert_eq!(sessions_dir(), temp.path());
+            let session = AiSession::new("test", "test", "noop", "none");
+            let path = save_session(&session).unwrap();
+            assert!(
+                path.starts_with(temp.path()),
+                "redirected save must stay inside the temp dir: {}",
+                path.display()
+            );
+            assert!(path.exists());
+        }
+
+        assert_eq!(
+            sessions_dir(),
+            before,
+            "the guard must restore the prior dir"
         );
     }
 

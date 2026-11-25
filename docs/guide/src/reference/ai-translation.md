@@ -55,8 +55,10 @@ actually produced the pipeline, `fallback_used` says whether an earlier
 provider failed, and `attempts[]` (`{provider, model, success, reason}`)
 records each attempt in order with its failure reason. Every fallback logs a
 warning; an exhausted chain returns a structured error naming the last
-provider/model and the cause (including `Agent exceeded max rounds (N)`). No API
-key or endpoint URL appears in any of these fields.
+provider/model and the cause (including `Agent exceeded max rounds (N)`).
+Failure reasons are sanitized categories (`network error`,
+`authentication failed`, `provider error (HTTP 502)`, …) — no API key,
+endpoint URL, host, path, or upstream body appears in these fields.
 
 ### POST /api/ai/explain
 

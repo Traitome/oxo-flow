@@ -1481,10 +1481,16 @@ pipeline, `fallback_used` is true only when an earlier provider failed, and
 original generation's attribution. Every fallback logs a WARN naming the
 from/to provider, model, and prior failure. When every attempt fails, the
 `400 AI_TRANSLATE_ERROR` message names the last provider/model and the
-orchestrator cause (for example `Agent exceeded max rounds (10)`); the
-`504 AI_TIMEOUT` `detail` names the last attempted provider.
+orchestrator cause (for example `Agent exceeded max rounds (10)`). A
+provider-side timeout's `504 AI_TIMEOUT` `detail` names the last attempted
+provider; expiry of the whole-route budget returns the generic 504 detail
+(the chain future is dropped before the last attempt is known).
 No API key or endpoint URL is ever included in these fields, attempts, logs,
-or errors.
+or errors. Transport/HTTP failures are reduced to a sanitized category
+(`network error`, `authentication failed`, `provider error (HTTP 502)`,
+`request timed out`, `Agent exceeded max rounds (N)`, …) before they enter
+`attempts[].reason`, the 400 message, or WARN logs — reqwest's
+URL-carrying `Display` text never reaches a caller.
 
 Set `OXO_FLOW_AI_FALLBACK=disabled` to limit the chain to the first usable
 provider (the acting user's, else the runtime) — an explicit provider pin

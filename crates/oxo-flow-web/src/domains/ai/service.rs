@@ -272,11 +272,13 @@ fn provider_attempt(
 /// attribution entry for every attempt and logging a WARN when the chain
 /// falls back from one provider to the next.
 ///
-/// The pre-existing spend guard is kept: a provider that responded and
-/// billed tokens but produced unusable output stops the chain (a second
-/// full generation on one request would double the cost); only attempts
-/// that provably produced nothing (transport/auth errors, zero completions)
-/// fall through.
+/// The spend guard stops the chain when an attempt provably billed:
+/// an `Ok` outcome that consumed completion tokens, or an error class that
+/// proves the provider answered (max-round exhaustion, empty/invalid
+/// response, tool error). Transport, auth, rate-limit, HTTP-status, and
+/// timeout errors carry no completion evidence and still fall through —
+/// they are the resilience cases the chain exists for. `OXO_FLOW_AI_FALLBACK=disabled`
+/// is the hard spend boundary for the rest.
 async fn generate_with_candidates(
     agent: &dyn oxo_flow_ai::agent::Agent,
     intent: &str,
@@ -350,10 +352,25 @@ async fn generate_with_candidates(
                 }
             }
             Err(e) => {
+                // Never echo `Display`: reqwest embeds the request URL in
+                // transport errors, and upstream bodies can too. The
+                // attribution reason is the sanitized category (auth,
+                // timeout, HTTP status, network, ...), and the WARN uses it
+                // as well so the documented no-endpoint promise holds for
+                // logs, responses, and errors.
+                let reason = e.attribution_reason();
+                let billed = e.may_have_billed();
                 last_failure_timed_out = e.is_timeout();
-                last_failure = e.to_string();
-                attempts.push(provider_attempt(candidate, false, Some(e.to_string())));
-                tracing::warn!("translate provider {} failed: {e}", candidate.name());
+                last_failure = reason.clone();
+                attempts.push(provider_attempt(candidate, false, Some(reason)));
+                tracing::warn!(
+                    provider = candidate.name(),
+                    reason = %last_failure,
+                    "translate provider failed"
+                );
+                if billed {
+                    break;
+                }
             }
         }
     }
@@ -894,10 +911,10 @@ mod tests {
     }
 
     #[test]
-    fn failure_message_names_provider_model_and_the_max_round_cause() {
-        // The live incident returned a provider-agnostic "AI generation
-        // failed" after a max-round exhaustion; operators could not tell
-        // which provider/model burned the tokens.
+    fn failure_message_names_provider_model_and_the_last_cause() {
+        // `last_failure` is always the LAST attempt's reason (see the Err
+        // and Ok arms), so the test must model that state — not a mix of an
+        // earlier max-round reason with a later auth failure.
         let failure = GenerationFailure {
             attempts: vec![
                 ProviderAttempt {
@@ -910,10 +927,10 @@ mod tests {
                     provider: "claude".into(),
                     model: Some("deepseek-flash[1m]".into()),
                     success: false,
-                    reason: Some("HTTP 401".into()),
+                    reason: Some("authentication failed".into()),
                 },
             ],
-            last_failure: "Agent exceeded max rounds (10)".into(),
+            last_failure: "authentication failed".into(),
             timed_out: false,
         };
 
@@ -923,8 +940,8 @@ mod tests {
             "the last attempted provider/model must be named: {message}"
         );
         assert!(
-            message.contains("exceeded max rounds (10)"),
-            "the max-round cause must survive: {message}"
+            message.contains("authentication failed"),
+            "the last cause must survive: {message}"
         );
         assert!(
             message.contains("2 provider attempts"),
@@ -937,6 +954,30 @@ mod tests {
         assert_eq!(
             failure.last_provider(),
             (Some("claude".into()), Some("deepseek-flash[1m]".into()))
+        );
+    }
+
+    #[test]
+    fn max_round_failure_message_keeps_the_cause() {
+        let failure = GenerationFailure {
+            attempts: vec![ProviderAttempt {
+                provider: "openai".into(),
+                model: Some("qwen3.8-flash-next-nothink".into()),
+                success: false,
+                reason: Some("Agent exceeded max rounds (10)".into()),
+            }],
+            last_failure: "Agent exceeded max rounds (10)".into(),
+            timed_out: false,
+        };
+
+        let message = failure.message(None);
+        assert!(
+            message.contains("openai (qwen3.8-flash-next-nothink)"),
+            "the provider/model must be named: {message}"
+        );
+        assert!(
+            message.contains("Agent exceeded max rounds (10)"),
+            "the max-round cause must survive: {message}"
         );
     }
 
@@ -992,6 +1033,12 @@ mod tests {
         let agent =
             oxo_flow_ai::agent::pipeline_gen::PipelineGenAgent::new("QC pipeline for RNA-seq");
 
+        // The real orchestrator archives its runs; redirect this thread to a
+        // temp dir so the test can never write into (or prune) the
+        // operator's ~/.oxo-flow/ai_sessions.
+        let archive_dir = tempfile::tempdir().expect("archive tempdir");
+        let _archive_guard = oxo_flow_ai::session::redirect_session_archive_to(archive_dir.path());
+
         // Capture the operator-facing fallback signal: the WARN must name
         // the failed attempt's reason, not just the new provider.
         let captured = CapturedWarnLog::default();
@@ -1012,23 +1059,103 @@ mod tests {
             "a fallback must be logged at WARN: {warnings:?}"
         );
         assert!(
-            warnings.contains("script exhausted"),
-            "the fallback warning must carry the failure reason: {warnings:?}"
+            warnings.contains("reason=provider error"),
+            "the fallback warning must carry the sanitized failure reason: {warnings:?}"
+        );
+        assert!(
+            !warnings.contains("http://") && !warnings.contains("https://"),
+            "fallback logs must never carry an endpoint URL: {warnings:?}"
         );
         assert_eq!(generated.provider.name(), "scripted");
         assert_eq!(generated.attempts.len(), 2, "both attempts recorded");
         assert!(!generated.attempts[0].success);
+        assert_eq!(
+            generated.attempts[0].reason.as_deref(),
+            Some("provider error"),
+            "the attempt reason must be the sanitized category"
+        );
         assert!(
-            generated.attempts[0]
+            !generated.attempts[0]
                 .reason
                 .as_deref()
                 .unwrap_or_default()
-                .contains("script exhausted"),
-            "the first attempt's failure reason must be recorded: {:?}",
-            generated.attempts[0].reason
+                .contains("http"),
+            "attempt reasons must never carry an endpoint URL"
         );
         assert!(generated.attempts[1].success);
         assert!(generated.attempts[1].reason.is_none());
+
+        // Hermeticity: the success archive landed in the temp dir, never in
+        // the operator's real archive.
+        let archived = std::fs::read_dir(archive_dir.path())
+            .expect("archive tempdir")
+            .count();
+        assert!(
+            archived >= 1,
+            "the real orchestrator archive must land in the redirected temp dir"
+        );
+    }
+
+    #[tokio::test]
+    async fn max_round_exhaustion_stops_the_fallback_chain() {
+        // The live incident burned 10 OpenAI rounds and then silently spent
+        // Claude tokens. MaxRoundsExceeded proves the provider was called
+        // (and billed), so the spend guard must stop the chain even though
+        // the error carries no completion-token count.
+        use oxo_flow_ai::scripted::{ScriptedBackend, ScriptedTurn};
+        use oxo_flow_ai::types::ToolCall;
+
+        const VALID_TOML: &str = "[workflow]\nname = \"scripted-pipeline\"\nversion = \"1.0.0\"\n\n[[rules]]\nname = \"fastqc\"\ninput = [\"{sample}.fastq.gz\"]\noutput = [\"qc/{sample}_fastqc.html\"]\nshell = \"fastqc {input} -o qc/\"\n";
+
+        // Ten tool-only rounds exhaust the shared default budget; the model
+        // never emits a final workflow.
+        let first = ScriptedBackend::new(
+            (0..10)
+                .map(|_| ScriptedTurn {
+                    tool_calls: Some(vec![ToolCall {
+                        id: "call-1".into(),
+                        name: "lookup_tool".into(),
+                        arguments: "{}".into(),
+                    }]),
+                    ..Default::default()
+                })
+                .collect(),
+        );
+        let second = ScriptedBackend::new(vec![ScriptedTurn::content(VALID_TOML)]);
+        let agent = oxo_flow_ai::agent::pipeline_gen::PipelineGenAgent::new("spend guard");
+
+        let archive_dir = tempfile::tempdir().expect("archive tempdir");
+        let _archive_guard = oxo_flow_ai::session::redirect_session_archive_to(archive_dir.path());
+
+        let failure = match generate_with_candidates(
+            &agent,
+            "spend guard",
+            &[
+                AiProvider::Scripted(first.clone()),
+                AiProvider::Scripted(second.clone()),
+            ],
+        )
+        .await
+        {
+            Ok(_) => panic!("max-round exhaustion must stop the fallback chain"),
+            Err(failure) => failure,
+        };
+
+        assert_eq!(failure.attempts.len(), 1, "only the first provider ran");
+        assert!(
+            failure.attempts[0]
+                .reason
+                .as_deref()
+                .unwrap_or_default()
+                .contains("max rounds"),
+            "the max-round cause must be recorded: {:?}",
+            failure.attempts[0].reason
+        );
+        assert_eq!(
+            second.observed_calls().await.len(),
+            0,
+            "the second provider must not be paid after a billed attempt"
+        );
     }
 
     // ── Section extraction tests ──

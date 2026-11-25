@@ -346,6 +346,7 @@ pub async fn translate_sse(
     post,
     path = "/api/ai/explain",
     tag = "ai",
+    request_body = ExplainRequest,
     responses(
         (status = 200, description = "Success", body = ExplainResponse),
         (status = 400, description = "Error", body = ApiError),
@@ -440,6 +441,7 @@ fn blocking_dir_walk<T>(op: impl FnOnce() -> T) -> T {
     post,
     path = "/api/ai/interpret",
     tag = "ai",
+    request_body = InterpretRequest,
     responses(
         (status = 200, description = "Success", body = InterpretResponse),
         (status = 400, description = "Error", body = ApiError),
@@ -512,6 +514,7 @@ pub async fn interpret(
     post,
     path = "/api/ai/optimize",
     tag = "ai",
+    request_body = OptimizeRequest,
     responses(
         (status = 200, description = "Success", body = OptimizeResponse),
         (status = 400, description = "Error", body = ApiError),
@@ -598,6 +601,7 @@ pub async fn get_ai_config(
     post,
     path = "/api/ai/config",
     tag = "ai",
+    request_body = AiConfigRequest,
     responses(
         (status = 200, description = "Success", body = AiConfigResponse),
         (status = 403, description = "Error", body = ApiError),
@@ -681,6 +685,7 @@ async fn probe_ai_provider(provider: &crate::ai_provider::AiProvider) -> AiTestR
     post,
     path = "/api/ai/test",
     tag = "ai",
+    request_body = AiConfigRequest,
     responses(
         (status = 200, description = "Success", body = AiTestResponse),
         (status = 400, description = "Error", body = ApiError),

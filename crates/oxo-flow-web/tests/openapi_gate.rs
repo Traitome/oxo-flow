@@ -388,6 +388,11 @@ fn ai_routes_document_their_request_bodies() {
     for (path, expected_schema) in [
         ("/api/ai/translate", "TranslateRequest"),
         ("/api/ai/translate/stream", "TranslateRequest"),
+        ("/api/ai/explain", "ExplainRequest"),
+        ("/api/ai/interpret", "InterpretRequest"),
+        ("/api/ai/optimize", "OptimizeRequest"),
+        ("/api/ai/config", "AiConfigRequest"),
+        ("/api/ai/test", "AiConfigRequest"),
         ("/api/chat/send", "ChatRequest"),
         ("/api/chat/send/json", "ChatRequest"),
     ] {
