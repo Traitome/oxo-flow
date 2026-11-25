@@ -4702,14 +4702,20 @@
 <tr>
 <td><strong>AWS Batch</strong></td>
 <td>Supported (spec generation)</td>
-<td>Prototype — CLI wrapper (<code>aws</code>), mock/wire tests only; live campaign pending (CL-05 / #1158)</td>
+<td>Prototype — CLI wrapper (<code>aws</code>), mock/wire tests only; live campaign pending (#1390). Submit/list/cancel shapes verified against the AWS CLI reference (2026-11-25 audit)</td>
 <td><code>aws-batch</code></td>
 </tr>
 <tr>
 <td><strong>GCP Batch</strong></td>
 <td>Supported (spec generation)</td>
-<td>Prototype — CLI wrapper (<code>gcloud</code>), mock/wire tests only; live campaign pending (CL-05 / #1158)</td>
+<td>Prototype — CLI wrapper (<code>gcloud</code>), mock/wire tests only; live campaign pending (#1390; endpoint unreachable from the qualification host). Submit/describe/delete shapes verified against the gcloud reference (2026-11-25 audit)</td>
 <td><code>gcp-batch</code></td>
+</tr>
+<tr>
+<td><strong>Tencent Batch</strong></td>
+<td>Supported (spec generation)</td>
+<td>Prototype — CLI wrapper (<code>tccli batch</code>, API 2017-03-12); parameter surface verified against tccli's own API definitions; live smoke pending (issue #1389)</td>
+<td><code>tencent-batch</code></td>
 </tr>
 </tbody>
 </table>
@@ -5301,7 +5307,7 @@ settling finished jobs from the scheduler's accounting store:</p>
 SLURM site you never type <code>-b</code>; on a PBS site set the environment variable
 once (<code>export OXO_FLOW_CLUSTER_BACKEND=pbs</code>). An explicit-but-typoed value
 is still rejected outright (<code>unknown cluster backend '…' — expected slurm,
-pbs, sge, lsf, kubernetes (k8s), aws-batch, or gcp-batch</code>) — the default
+pbs, sge, lsf, kubernetes (k8s), aws-batch, or tencent-batch (Tencent Cloud BatchCompute)</code>) — the default
 never swallows a bad name.</p>
 <hr />
 <h2 id="driver-defaults-and-the-cluster-profile-block">Driver Defaults and the <code>[cluster]</code> Profile Block<a class="headerlink" href="#driver-defaults-and-the-cluster-profile-block" title="Permanent link">#</a></h2>

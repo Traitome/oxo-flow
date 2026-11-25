@@ -7136,7 +7136,7 @@
 </span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a><span class="k">[env_groups]</span><span class="w">        </span><span class="c1"># Optional: named reusable environment specs</span>
 </span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a><span class="k">[resource_groups]</span><span class="w">   </span><span class="c1"># Optional: shared resource pools (API limits, DB connections)</span>
 </span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a><span class="k">[wildcard_constraints]</span><span class="w"> </span><span class="c1"># Optional: regex patterns to constrain wildcard values</span>
-</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a><span class="k">[cluster]</span><span class="w">           </span><span class="c1"># Optional: HPC cluster profile (SLURM, PBS, SGE, LSF, k8s, AWS/GCP Batch)</span>
+</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a><span class="k">[cluster]</span><span class="w">           </span><span class="c1"># Optional: HPC cluster profile (SLURM, PBS, SGE, LSF, k8s, AWS/GCP/Tencent Batch)</span>
 </span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a><span class="k">[[reference_db]]</span><span class="w">    </span><span class="c1"># Optional: tracked reference database versions</span>
 </span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a><span class="k">[citation]</span><span class="w">          </span><span class="c1"># Optional: citation metadata (DOI, authors, etc.)</span>
 </span><span id="__span-0-21"><a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a><span class="k">[ai]</span><span class="w">                </span><span class="c1"># Optional: AI companion settings (provider, model, skills activation — see the AI CLI reference)</span>
@@ -8859,7 +8859,7 @@ proceeds; the warning exists so long jobs don't fail mid-pipeline).</p>
 <p><strong>HPC clusters:</strong></p>
 <ul>
 <li>Resources translated to scheduler directives (SLURM, PBS, SGE, LSF, k8s,
-  AWS/GCP Batch)</li>
+  AWS/GCP/Tencent Batch)</li>
 <li>Scheduler enforces limits - jobs requesting more than allocated will fail</li>
 <li>No submit-host capacity warnings: the job runs on a scheduler node, so the
   submit host's RAM/thread count is not the relevant ceiling</li>
