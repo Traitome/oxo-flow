@@ -1815,6 +1815,8 @@
       
         
       
+        
+      
     
     
     
@@ -2486,6 +2488,34 @@
     
   
     lint
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands/lock/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    lock
   
 
     
@@ -4571,6 +4601,17 @@
   
     <nav class="md-nav" aria-label="[engine] — Runtime Disk-Pressure Guard">
       <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#workflow-lock" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Workflow lock
+      
+    </span>
+  </a>
+  
+</li>
         
           <li class="md-nav__item">
   <a href="#dispatch-order" class="md-nav__link">
@@ -7016,6 +7057,17 @@
   
     <nav class="md-nav" aria-label="[engine] — Runtime Disk-Pressure Guard">
       <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#workflow-lock" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Workflow lock
+      
+    </span>
+  </a>
+  
+</li>
         
           <li class="md-nav__item">
   <a href="#dispatch-order" class="md-nav__link">
@@ -12024,9 +12076,9 @@ an unreachable or erroring endpoint logs a warning and never changes the
 run status or its exit code.</p>
 <h2 id="engine-runtime-disk-pressure-guard"><code>[engine]</code> — Runtime Disk-Pressure Guard<a class="headerlink" href="#engine-runtime-disk-pressure-guard" title="Permanent link">#</a></h2>
 <p>Optional run-time engine policies: disk monitoring, scratch routing,
-hardware placement, protected-data drift detection, and ready-rule dispatch
-ordering. Without this section the engine never measures free space mid-run
-and behavior is unchanged.</p>
+hardware placement, protected-data drift detection, ready-rule dispatch
+ordering, and workflow-lock enforcement. Without this section the engine
+never measures free space mid-run and behavior is unchanged.</p>
 <div class="language-toml highlight"><pre><span></span><code><span id="__span-116-1"><a id="__codelineno-116-1" name="__codelineno-116-1" href="#__codelineno-116-1"></a><span class="k">[engine]</span>
 </span><span id="__span-116-2"><a id="__codelineno-116-2" name="__codelineno-116-2" href="#__codelineno-116-2"></a><span class="n">min_free_disk</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"50G"</span><span class="w">        </span><span class="c1"># required to enable: abort/park floor</span>
 </span><span id="__span-116-3"><a id="__codelineno-116-3" name="__codelineno-116-3" href="#__codelineno-116-3"></a><span class="c1"># reclaim_free_disk = "100G" # optional: reclaim trigger; defaults to min_free_disk</span>
@@ -12038,6 +12090,7 @@ and behavior is unchanged.</p>
 </span><span id="__span-116-9"><a id="__codelineno-116-9" name="__codelineno-116-9" href="#__codelineno-116-9"></a><span class="c1"># tier1_nvme_scratch = "/mnt/nvme/scratch"  # optional: local NVMe/SSD scratch tier</span>
 </span><span id="__span-116-10"><a id="__codelineno-116-10" name="__codelineno-116-10" href="#__codelineno-116-10"></a><span class="c1"># tier2_shared_scratch = "/lustre/scratch"  # optional: shared cluster FS scratch tier</span>
 </span><span id="__span-116-11"><a id="__codelineno-116-11" name="__codelineno-116-11" href="#__codelineno-116-11"></a><span class="c1"># dispatch_order = "sample"   # optional: per-sample ready-rule tie-break; default "rule"</span>
+</span><span id="__span-116-12"><a id="__codelineno-116-12" name="__codelineno-116-12" href="#__codelineno-116-12"></a><span class="c1"># locked = true               # optional: verify oxo-flow.lock before every run (see commands/lock)</span>
 </span></code></pre></div>
 <table>
 <thead>
@@ -12115,8 +12168,31 @@ and behavior is unchanged.</p>
 <td><code>"rule"</code></td>
 <td>Tie-break for ready-rule dispatch when effective priorities are equal (the declared <code>priority</code> plus the aging counter). <code>"rule"</code>: sort by instance name — the historical behaviour. <code>"sample"</code>: sort by the instance's fan-out binding (sample / group / pair / <code>[[values]]</code> value), then by the rule's declaration order in the workflow file. See <a href="#dispatch-order">Dispatch order</a></td>
 </tr>
+<tr>
+<td><code>locked</code></td>
+<td>Boolean</td>
+<td><code>false</code></td>
+<td>Workflow-lock enforcement (issue #1399). <code>true</code> makes <strong>every</strong> run of this workflow verify <code>oxo-flow.lock</code> before any rule executes and fail closed on a missing, stale, or malformed lock (<code>LOCK-001</code>–<code>LOCK-007</code>). This is the persistent form; <code>run --locked</code> is the explicit per-invocation form and wins. Unset/<code>false</code> reads no lock and behavior is unchanged. Enforcement reads <code>oxo-flow.lock</code> beside the workflow, so web/queued/remote-cluster runs that execute a staged copy must stage the lock beside it (web: an <code>include_files</code> entry keyed <code>oxo-flow.lock</code>), else they fail closed <code>LOCK-001</code>. See <a href="../../commands/lock/">lock</a></td>
+</tr>
 </tbody>
 </table>
+<h3 id="workflow-lock">Workflow lock<a class="headerlink" href="#workflow-lock" title="Permanent link">#</a></h3>
+<p><code>locked = true</code> is the workflow-committed half of the reproducibility
+lock: the run refuses to start when the workflow bytes, metadata contract,
+<code>[config]</code> snapshot, include graph, or any rule's environment identity
+differs from <code>oxo-flow.lock</code>. Generate the lock <strong>after</strong> adding the key —
+the key itself is part of the workflow bytes the lock pins:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-117-1"><a id="__codelineno-117-1" name="__codelineno-117-1" href="#__codelineno-117-1"></a>oxo-flow<span class="w"> </span>lock<span class="w"> </span>my_pipeline.oxoflow<span class="w">          </span><span class="c1"># writes oxo-flow.lock beside it</span>
+</span><span id="__span-117-2"><a id="__codelineno-117-2" name="__codelineno-117-2" href="#__codelineno-117-2"></a>git<span class="w"> </span>add<span class="w"> </span>my_pipeline.oxoflow<span class="w"> </span>oxo-flow.lock
+</span></code></pre></div>
+<p>The lock is evidence of declared inputs, not bitwise reproducibility: it
+records what the local runtime could resolve <strong>offline</strong> (it never pulls
+images or solves packages), and an unresolvable digest is recorded as the
+explicit <code>unresolved</code> sentinel. <code>unresolved</code> never compares equal — not
+even to itself — so a lock carrying one fails <code>lock --check</code> with
+<code>LOCK-006</code> until it resolves. <code>system</code> environments record <code>unavailable</code>,
+which compares equal only to <code>unavailable</code>. See <a href="../../commands/lock/">lock</a>
+for the document format, drift codes, and exit codes.</p>
 <h3 id="dispatch-order">Dispatch order<a class="headerlink" href="#dispatch-order" title="Permanent link">#</a></h3>
 <p><code>dispatch_order</code> decides only the <em>tie-break</em> between ready rules whose
 effective priority is equal — <code>priority</code> remains the primary key in both
@@ -12136,8 +12212,8 @@ global phase per rule. Priority aging still applies: a ready-but-unsubmitted
 producer that has waited a round accrues +1 and can run before a
 newly-ready consumer from another sample, so per-sample drain is
 best-effort, not guaranteed.</p>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-117-1"><a id="__codelineno-117-1" name="__codelineno-117-1" href="#__codelineno-117-1"></a><span class="k">[engine]</span>
-</span><span id="__span-117-2"><a id="__codelineno-117-2" name="__codelineno-117-2" href="#__codelineno-117-2"></a><span class="n">dispatch_order</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"sample"</span>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-118-1"><a id="__codelineno-118-1" name="__codelineno-118-1" href="#__codelineno-118-1"></a><span class="k">[engine]</span>
+</span><span id="__span-118-2"><a id="__codelineno-118-2" name="__codelineno-118-2" href="#__codelineno-118-2"></a><span class="n">dispatch_order</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"sample"</span>
 </span></code></pre></div>
 <p>A worked diamond example (<code>align ∥ qc → merge</code>) is in
 <a href="../../how-to/run-on-cluster/#scheduling-fairness">Run on a cluster: Scheduling Fairness</a>.
@@ -12315,12 +12391,12 @@ workdir where fixed-filename outputs collide across concurrent instances.
 Remove the directive or run those rules on the local path).</p>
 <hr />
 <h2 id="resource_groups-shared-resource-pools"><code>[resource_groups]</code> — Shared Resource Pools<a class="headerlink" href="#resource_groups-shared-resource-pools" title="Permanent link">#</a></h2>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-118-1"><a id="__codelineno-118-1" name="__codelineno-118-1" href="#__codelineno-118-1"></a><span class="k">[resource_groups.db_conn]</span>
-</span><span id="__span-118-2"><a id="__codelineno-118-2" name="__codelineno-118-2" href="#__codelineno-118-2"></a><span class="n">max</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">4</span>
-</span><span id="__span-118-3"><a id="__codelineno-118-3" name="__codelineno-118-3" href="#__codelineno-118-3"></a><span class="n">wait</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"queue"</span>
-</span><span id="__span-118-4"><a id="__codelineno-118-4" name="__codelineno-118-4" href="#__codelineno-118-4"></a>
-</span><span id="__span-118-5"><a id="__codelineno-118-5" name="__codelineno-118-5" href="#__codelineno-118-5"></a><span class="k">[resource_groups.api]</span>
-</span><span id="__span-118-6"><a id="__codelineno-118-6" name="__codelineno-118-6" href="#__codelineno-118-6"></a><span class="n">max</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-119-1"><a id="__codelineno-119-1" name="__codelineno-119-1" href="#__codelineno-119-1"></a><span class="k">[resource_groups.db_conn]</span>
+</span><span id="__span-119-2"><a id="__codelineno-119-2" name="__codelineno-119-2" href="#__codelineno-119-2"></a><span class="n">max</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">4</span>
+</span><span id="__span-119-3"><a id="__codelineno-119-3" name="__codelineno-119-3" href="#__codelineno-119-3"></a><span class="n">wait</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"queue"</span>
+</span><span id="__span-119-4"><a id="__codelineno-119-4" name="__codelineno-119-4" href="#__codelineno-119-4"></a>
+</span><span id="__span-119-5"><a id="__codelineno-119-5" name="__codelineno-119-5" href="#__codelineno-119-5"></a><span class="k">[resource_groups.api]</span>
+</span><span id="__span-119-6"><a id="__codelineno-119-6" name="__codelineno-119-6" href="#__codelineno-119-6"></a><span class="n">max</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span>
 </span></code></pre></div>
 <p>Named capacity pools shared across rules. A rule consumes a pool via
 <code>[rules.resources]</code> <code>groups</code> (see
@@ -12372,12 +12448,12 @@ rate-limited external resources (APIs, database connections).</p>
 </ul>
 <hr />
 <h2 id="reference_db-tracked-reference-database-versions"><code>[[reference_db]]</code> — Tracked Reference Database Versions<a class="headerlink" href="#reference_db-tracked-reference-database-versions" title="Permanent link">#</a></h2>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-119-1"><a id="__codelineno-119-1" name="__codelineno-119-1" href="#__codelineno-119-1"></a><span class="k">[[reference_db]]</span>
-</span><span id="__span-119-2"><a id="__codelineno-119-2" name="__codelineno-119-2" href="#__codelineno-119-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"GRCh38"</span>
-</span><span id="__span-119-3"><a id="__codelineno-119-3" name="__codelineno-119-3" href="#__codelineno-119-3"></a><span class="n">version</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"p14"</span>
-</span><span id="__span-119-4"><a id="__codelineno-119-4" name="__codelineno-119-4" href="#__codelineno-119-4"></a><span class="n">source</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"https://ftp.ncbi.nlm.nih.gov/genomes/all/GCA/000/001/405/GCA_000001405.15_GRCh38/GCA_000001405.15_GRCh38_genomic.fna.gz"</span>
-</span><span id="__span-119-5"><a id="__codelineno-119-5" name="__codelineno-119-5" href="#__codelineno-119-5"></a><span class="n">checksum</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"sha256:abc123"</span>
-</span><span id="__span-119-6"><a id="__codelineno-119-6" name="__codelineno-119-6" href="#__codelineno-119-6"></a><span class="n">accessed_date</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"2026-01-15"</span>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-120-1"><a id="__codelineno-120-1" name="__codelineno-120-1" href="#__codelineno-120-1"></a><span class="k">[[reference_db]]</span>
+</span><span id="__span-120-2"><a id="__codelineno-120-2" name="__codelineno-120-2" href="#__codelineno-120-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"GRCh38"</span>
+</span><span id="__span-120-3"><a id="__codelineno-120-3" name="__codelineno-120-3" href="#__codelineno-120-3"></a><span class="n">version</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"p14"</span>
+</span><span id="__span-120-4"><a id="__codelineno-120-4" name="__codelineno-120-4" href="#__codelineno-120-4"></a><span class="n">source</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"https://ftp.ncbi.nlm.nih.gov/genomes/all/GCA/000/001/405/GCA_000001405.15_GRCh38/GCA_000001405.15_GRCh38_genomic.fna.gz"</span>
+</span><span id="__span-120-5"><a id="__codelineno-120-5" name="__codelineno-120-5" href="#__codelineno-120-5"></a><span class="n">checksum</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"sha256:abc123"</span>
+</span><span id="__span-120-6"><a id="__codelineno-120-6" name="__codelineno-120-6" href="#__codelineno-120-6"></a><span class="n">accessed_date</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"2026-01-15"</span>
 </span></code></pre></div>
 <p>Declares the exact versions of external reference databases a workflow
 depends on. Entries are recorded in the run's software-versions report
@@ -12438,11 +12514,11 @@ reference</a>.</p>
 accepted — declare the other fields when the provenance matters.</p>
 <hr />
 <h2 id="citation-citation-metadata"><code>[citation]</code> — Citation Metadata<a class="headerlink" href="#citation-citation-metadata" title="Permanent link">#</a></h2>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-120-1"><a id="__codelineno-120-1" name="__codelineno-120-1" href="#__codelineno-120-1"></a><span class="k">[citation]</span>
-</span><span id="__span-120-2"><a id="__codelineno-120-2" name="__codelineno-120-2" href="#__codelineno-120-2"></a><span class="n">doi</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"10.1234/test"</span>
-</span><span id="__span-120-3"><a id="__codelineno-120-3" name="__codelineno-120-3" href="#__codelineno-120-3"></a><span class="n">url</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"https://github.com/example/test"</span>
-</span><span id="__span-120-4"><a id="__codelineno-120-4" name="__codelineno-120-4" href="#__codelineno-120-4"></a><span class="n">authors</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"Alice"</span><span class="p">,</span><span class="w"> </span><span class="s2">"Bob"</span><span class="p">]</span>
-</span><span id="__span-120-5"><a id="__codelineno-120-5" name="__codelineno-120-5" href="#__codelineno-120-5"></a><span class="n">title</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"My Workflow Paper"</span>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-121-1"><a id="__codelineno-121-1" name="__codelineno-121-1" href="#__codelineno-121-1"></a><span class="k">[citation]</span>
+</span><span id="__span-121-2"><a id="__codelineno-121-2" name="__codelineno-121-2" href="#__codelineno-121-2"></a><span class="n">doi</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"10.1234/test"</span>
+</span><span id="__span-121-3"><a id="__codelineno-121-3" name="__codelineno-121-3" href="#__codelineno-121-3"></a><span class="n">url</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"https://github.com/example/test"</span>
+</span><span id="__span-121-4"><a id="__codelineno-121-4" name="__codelineno-121-4" href="#__codelineno-121-4"></a><span class="n">authors</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"Alice"</span><span class="p">,</span><span class="w"> </span><span class="s2">"Bob"</span><span class="p">]</span>
+</span><span id="__span-121-5"><a id="__codelineno-121-5" name="__codelineno-121-5" href="#__codelineno-121-5"></a><span class="n">title</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"My Workflow Paper"</span>
 </span></code></pre></div>
 <p>Optional provenance metadata describing how the workflow itself should be
 cited. All fields are optional; entries round-trip through formatting and
@@ -12484,13 +12560,13 @@ validation but are not consumed by run execution.</p>
 </tbody>
 </table>
 <h2 id="ai-ai-companion-settings"><code>[ai]</code> — AI Companion Settings<a class="headerlink" href="#ai-ai-companion-settings" title="Permanent link">#</a></h2>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-121-1"><a id="__codelineno-121-1" name="__codelineno-121-1" href="#__codelineno-121-1"></a><span class="k">[ai]</span>
-</span><span id="__span-121-2"><a id="__codelineno-121-2" name="__codelineno-121-2" href="#__codelineno-121-2"></a><span class="n">enabled</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span><span class="w">              </span><span class="c1"># one-line activation: all AI commands auto-detect</span>
-</span><span id="__span-121-3"><a id="__codelineno-121-3" name="__codelineno-121-3" href="#__codelineno-121-3"></a><span class="n">auto_fix</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"ask"</span><span class="w">            </span><span class="c1"># recovery write mode: "ask" (default) | "always" | "never"</span>
-</span><span id="__span-121-4"><a id="__codelineno-121-4" name="__codelineno-121-4" href="#__codelineno-121-4"></a><span class="n">provider</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"deepseek"</span><span class="w">       </span><span class="c1"># applied to the CLI runtime (see the AI CLI reference)</span>
-</span><span id="__span-121-5"><a id="__codelineno-121-5" name="__codelineno-121-5" href="#__codelineno-121-5"></a><span class="n">model</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"deepseek-v4-flash"</span>
-</span><span id="__span-121-6"><a id="__codelineno-121-6" name="__codelineno-121-6" href="#__codelineno-121-6"></a><span class="n">max_retries</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">5</span>
-</span><span id="__span-121-7"><a id="__codelineno-121-7" name="__codelineno-121-7" href="#__codelineno-121-7"></a><span class="n">team_profile</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"compact"</span><span class="w">    </span><span class="c1"># template --ai generation profile: "compact" | "full"</span>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-122-1"><a id="__codelineno-122-1" name="__codelineno-122-1" href="#__codelineno-122-1"></a><span class="k">[ai]</span>
+</span><span id="__span-122-2"><a id="__codelineno-122-2" name="__codelineno-122-2" href="#__codelineno-122-2"></a><span class="n">enabled</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span><span class="w">              </span><span class="c1"># one-line activation: all AI commands auto-detect</span>
+</span><span id="__span-122-3"><a id="__codelineno-122-3" name="__codelineno-122-3" href="#__codelineno-122-3"></a><span class="n">auto_fix</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"ask"</span><span class="w">            </span><span class="c1"># recovery write mode: "ask" (default) | "always" | "never"</span>
+</span><span id="__span-122-4"><a id="__codelineno-122-4" name="__codelineno-122-4" href="#__codelineno-122-4"></a><span class="n">provider</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"deepseek"</span><span class="w">       </span><span class="c1"># applied to the CLI runtime (see the AI CLI reference)</span>
+</span><span id="__span-122-5"><a id="__codelineno-122-5" name="__codelineno-122-5" href="#__codelineno-122-5"></a><span class="n">model</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"deepseek-v4-flash"</span>
+</span><span id="__span-122-6"><a id="__codelineno-122-6" name="__codelineno-122-6" href="#__codelineno-122-6"></a><span class="n">max_retries</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">5</span>
+</span><span id="__span-122-7"><a id="__codelineno-122-7" name="__codelineno-122-7" href="#__codelineno-122-7"></a><span class="n">team_profile</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"compact"</span><span class="w">    </span><span class="c1"># template --ai generation profile: "compact" | "full"</span>
 </span></code></pre></div>
 <p>Optional AI companion configuration. With <code>enabled = true</code>, AI surfaces
 activate without CLI flags — including the error-recovery loop that <code>run</code>

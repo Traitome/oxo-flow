@@ -1817,6 +1817,8 @@
       
         
       
+        
+      
     
     
     
@@ -2488,6 +2490,34 @@
     
   
     lint
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../lock/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    lock
   
 
     
@@ -4452,6 +4482,14 @@ worth being explicit about the limits:</p>
   <code>environment.yaml</code> / <code>pixi.toml</code> spec files, not solved environments. A solve
   run months later, or against different channels, can pick different package
   versions. Use <code>--with-lockfiles</code> to pin the resolution.</li>
+<li><strong>The workflow lock is not bundled.</strong> <code>oxo-flow lock</code> writes
+  <code>oxo-flow.lock</code> beside the workflow for source-tree runs and CI gates; the
+  bundle's own <code>manifest.json</code> pins the bundled files instead. A workflow with
+  <code>[engine] locked = true</code> therefore fails closed when run from a bundle
+  extraction (the lock file is not there), unless it is regenerated inside
+  the extraction. Either keep lock enforcement for source-tree runs or
+  regenerate the lock as part of the bundle's execution recipe — see
+  <a href="../lock/"><code>lock</code></a>.</li>
 <li><strong>Lockfiles still are not binaries.</strong> Even an exact package set can behave
   differently across glibc versions, CPU features, or filesystem layouts. Tools
   built against a newer glibc will not run on an older host.</li>

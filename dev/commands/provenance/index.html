@@ -13,7 +13,7 @@
         <link rel="canonical" href="https://traitome.github.io/oxo-flow/dev/commands/provenance/">
       
       
-        <link rel="prev" href="../lint/">
+        <link rel="prev" href="../lock/">
       
       
         <link rel="next" href="../publish/">
@@ -1817,6 +1817,8 @@
       
         
       
+        
+      
     
     
     
@@ -2488,6 +2490,34 @@
     
   
     lint
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../lock/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    lock
   
 
     
@@ -4680,6 +4710,14 @@ workflows) but does <strong>not</strong> re-hash the metadata file: re-deriving 
 the exact loaded table bytes, which the checkpoint does not store — the
 digest is a recorded identity, like <code>workflow_resolved_hash</code>, not a
 re-verified claim.</p>
+<p>A run executed under an enforced workflow lock (issue #1399) also records
+the verified lock's <code>lock_digest</code> in its checkpoint and folds it into
+<code>workflow_resolved_hash</code>; verify reports it as <code>• workflow lock digest: …</code>
+and as the <code>lock_digest</code> key in the <code>--json</code> document. The key is <strong>absent</strong>
+(never <code>null</code>) for runs without a lock, so pre-lock verify documents keep
+their exact byte shape. The digest proves the lock document's fields were
+the ones hashed together — not that a trusted party authored them; see
+<a href="../lock/"><code>lock</code></a>.</p>
 <p>This is essential for reproducible, auditable analysis.</p>
 <h2 id="options">Options<a class="headerlink" href="#options" title="Permanent link">#</a></h2>
 <table>
@@ -4854,9 +4892,10 @@ carries nothing else):</p>
 </span><span id="__span-4-29"><a id="__codelineno-4-29" name="__codelineno-4-29" href="#__codelineno-4-29"></a>    "workflow_content_hash": "sha256:e3b0c442...",
 </span><span id="__span-4-30"><a id="__codelineno-4-30" name="__codelineno-4-30" href="#__codelineno-4-30"></a>    "workflow_resolved_hash": "sha256:9f86d081...",
 </span><span id="__span-4-31"><a id="__codelineno-4-31" name="__codelineno-4-31" href="#__codelineno-4-31"></a>    "metadata_digest": "sha256:6b1d3c7f...",
-</span><span id="__span-4-32"><a id="__codelineno-4-32" name="__codelineno-4-32" href="#__codelineno-4-32"></a>    "workflow_content_check": {"status": "matched", "recorded": "sha256:e3b0c442...", "actual": "sha256:e3b0c442..."}
-</span><span id="__span-4-33"><a id="__codelineno-4-33" name="__codelineno-4-33" href="#__codelineno-4-33"></a>  }
-</span><span id="__span-4-34"><a id="__codelineno-4-34" name="__codelineno-4-34" href="#__codelineno-4-34"></a>}
+</span><span id="__span-4-32"><a id="__codelineno-4-32" name="__codelineno-4-32" href="#__codelineno-4-32"></a>    "lock_digest": "sha256:0d5a7e21...",
+</span><span id="__span-4-33"><a id="__codelineno-4-33" name="__codelineno-4-33" href="#__codelineno-4-33"></a>    "workflow_content_check": {"status": "matched", "recorded": "sha256:e3b0c442...", "actual": "sha256:e3b0c442..."}
+</span><span id="__span-4-34"><a id="__codelineno-4-34" name="__codelineno-4-34" href="#__codelineno-4-34"></a>  }
+</span><span id="__span-4-35"><a id="__codelineno-4-35" name="__codelineno-4-35" href="#__codelineno-4-35"></a>}
 </span></code></pre></div>
 <p><code>entries</code> is byte-stable: stored files first in sorted path order, then
 cleaned files in sorted path order. <code>workflow_content_check</code> is <code>null</code>
@@ -4953,8 +4992,10 @@ optionally, signed.</p>
 <h3 id="what-the-document-binds">What the document binds<a class="headerlink" href="#what-the-document-binds" title="Permanent link">#</a></h3>
 <ul>
 <li><code>workflow</code>: path, git HEAD SHA, dirty marker, raw content digest, the
-  override-aware resolved fingerprint (#1350), and the canonical metadata
-  digest of the typed cohort table when one was consumed (#1368)</li>
+  override-aware resolved fingerprint (#1350), the canonical metadata
+  digest of the typed cohort table when one was consumed (#1368), and —
+  additively, only when the run was lock-enforced — the verified workflow
+  <code>lock_digest</code> (#1399)</li>
 <li><code>includes</code>: recorded include checkout SHAs (repo@ref → HEAD)</li>
 <li><code>config</code>: the resolved config snapshot; sensitive values are already
   SHA-256 digests in the checkpoint, never plaintext</li>
@@ -5054,7 +5095,7 @@ outcome_status}</code> on stdout; the human report stays on stderr.</p>
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../lint/" class="md-footer__link md-footer__link--prev" aria-label="Previous: lint">
+          <a href="../lock/" class="md-footer__link md-footer__link--prev" aria-label="Previous: lock">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
@@ -5064,7 +5105,7 @@ outcome_status}</code> on stdout; the human report stays on stderr.</p>
                 Previous
               </span>
               <div class="md-ellipsis">
-                lint
+                lock
               </div>
             </div>
           </a>

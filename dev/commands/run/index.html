@@ -1817,6 +1817,8 @@
       
         
       
+        
+      
     
     
     
@@ -2488,6 +2490,34 @@
     
   
     lint
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../lock/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    lock
   
 
     
@@ -5368,6 +5398,12 @@ keys matching nothing declared keep the literal spelling.</p>
 <td>Hard-fail on environment setup errors instead of using the graceful pixi stale-lock fallback (see <a href="#stale-pixilock-fallback">Stale pixi.lock fallback</a>) — for GxP-style deployments that must never run on a re-solved environment</td>
 </tr>
 <tr>
+<td><code>--locked</code></td>
+<td>—</td>
+<td>—</td>
+<td>Enforce the workflow lock (issue #1399): verify <code>oxo-flow.lock</code> before any rule executes and fail closed on a missing, stale, or malformed lock. The workflow's <code>[engine] locked = true</code> key is the persistent form (it also covers web-spawned/queued runs); this flag wins. Without either, no lock is read (see <a href="#workflow-lock---locked">Workflow lock</a>)</td>
+</tr>
+<tr>
 <td><code>--verbose</code></td>
 <td><code>-v</code></td>
 <td>—</td>
@@ -6932,6 +6968,52 @@ the same plan; invalidating the checkpoint rule revokes its samples until it
 re-runs. A missing or unparsable manifest fails the checkpoint rule. See
 <a href="../../reference/workflow-format/#checkpoint-re-entry">Workflow Format</a> for
 the config surface.</p>
+<h2 id="workflow-lock-locked">Workflow lock (<code>--locked</code>)<a class="headerlink" href="#workflow-lock-locked" title="Permanent link">#</a></h2>
+<p><code>--locked</code> (or <code>[engine] locked = true</code>) verifies the workflow's
+<code>oxo-flow.lock</code> <strong>before any rule executes and before the run creates
+outputs</strong>, and fails closed when the lock is missing (<code>LOCK-001</code>), changed
+(<code>LOCK-002</code>–<code>LOCK-005</code>), unresolved (<code>LOCK-006</code>), or malformed
+(<code>LOCK-007</code>). The workflow's <code>[engine] locked = true</code> key is the persistent
+form; <code>--locked</code> is the explicit per-invocation form and wins. Any workflow
+rewrite after the gate (the in-process type-admission repair, or the
+verified-repair rerun) re-verifies the lock, so patched bytes never execute
+under a lock that does not pin them.</p>
+<p>Enforcement always reads <code>oxo-flow.lock</code> beside the workflow; there is no
+lock-path override. Runs that execute a <strong>staged copy</strong> of the workflow
+therefore need the lock staged with it: <code>POST /api/runs</code> callers upload it
+as an <code>include_files</code> entry keyed <code>oxo-flow.lock</code>, and remote cluster runs
+ship the same run workdir. Without it the web/queued/cluster run fails
+closed with <code>LOCK-001</code> (never a bypass).</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-47-1"><a id="__codelineno-47-1" name="__codelineno-47-1" href="#__codelineno-47-1"></a>oxo-flow<span class="w"> </span>lock<span class="w"> </span>my_pipeline.oxoflow<span class="w">        </span><span class="c1"># generate once, commit the result</span>
+</span><span id="__span-47-2"><a id="__codelineno-47-2" name="__codelineno-47-2" href="#__codelineno-47-2"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>--locked<span class="w"> </span>my_pipeline.oxoflow
+</span></code></pre></div>
+<p>What is verified:</p>
+<ul>
+<li>the workflow file's content digest, resolved hash, and metadata-contract
+  digest;</li>
+<li>the canonical <code>[config]</code> snapshot (<code>--arg</code> overrides and <code>--profile</code>
+  merges happen before verification, so a run that changes config under a
+  lock is drift — regenerate the lock with the same <code>--arg</code>/<code>--profile</code>
+  flags if that context is intended);</li>
+<li>the include graph (local content digests, pinned module SHAs);</li>
+<li>each selected rule's environment identity and declared software.</li>
+</ul>
+<p>Partial execution is not drift: <code>--samples</code>, <code>--target</code>, <code>--module</code>, and
+<code>when</code> pruning run a subset of the pinned workflow. Unknown is never a
+match: an <code>unresolved</code> environment identity fails even against an identical
+<code>unresolved</code> value (<code>LOCK-006</code>); <code>system</code> environments record <code>unavailable</code>,
+which matches only <code>unavailable</code>.</p>
+<p>A verified run records <code>lock_digest</code> in its checkpoint and folds it into
+<code>workflow_resolved_hash</code>. Without <code>--locked</code>/<code>[engine] locked</code>, no lock is
+read and the run — including its checkpoint, provenance, and attestation
+bytes — is unchanged.</p>
+<p>Limits: a repair loop rewrites the workflow, so an enforced lock refuses the
+verification rerun (<code>LOCK-002</code>, <code>REPAIR_RERUN_FAILED</code>) in <strong>both</strong> the
+<code>--locked</code> and <code>[engine]</code> forms; review the fix and regenerate the lock
+before re-running under enforcement. <code>publish</code> bundles do not include
+<code>oxo-flow.lock</code>, so a bundle of a lock-enforced workflow fails closed
+unless the lock is regenerated in the extracted bundle. See
+<a href="../lock/"><code>lock</code></a>.</p>
 <h2 id="ai-error-recovery-ai-recover">AI error recovery (<code>--ai-recover</code>)<a class="headerlink" href="#ai-error-recovery-ai-recover" title="Permanent link">#</a></h2>
 <p><code>--ai-recover</code> turns a rule failure into a bounded diagnose → apply →
 verify loop. The BioType type-admission abort is covered too (issue #1265):

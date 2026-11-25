@@ -1989,6 +1989,8 @@
       
         
       
+        
+      
     
     
     
@@ -2660,6 +2662,34 @@
     
   
     lint
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../commands/lock/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    lock
   
 
     
@@ -4425,7 +4455,7 @@
 <h2 id="5-verification-snapshot-2026-11-26">5. Verification snapshot (2026-11-26)<a class="headerlink" href="#5-verification-snapshot-2026-11-26" title="Permanent link">#</a></h2>
 <p>The quantitative claims on this page were re-checked against <code>main@99bb8b56</code> on 2026-11-26, after the audit-chain merge <code>dedc1121</code> (which added the <code>audit</code> subcommand and its two endpoints) plus the metadata-contract and Kubernetes-image-render merges; the cluster <code>--provenance</code> behavior was re-verified after #1096 (<code>main@3406208f</code>); the mechanism-level claims were first checked against <code>main@55dddf3c</code> on 2026-11-17. The numeric claims that have a machine-readable source are enforced by <code>make claims-check</code> against <a href="https://github.com/Traitome/oxo-flow/blob/main/docs/claims.json"><code>docs/claims.json</code></a>, so this snapshot cannot drift silently:</p>
 <ul>
-<li>39 CLI subcommands; 96 OpenAPI paths / 111 operations served by <code>GET /api/openapi.json</code> (default build, non-HPC mode).</li>
+<li>40 CLI subcommands; 96 OpenAPI paths / 111 operations served by <code>GET /api/openapi.json</code> (default build, non-HPC mode).</li>
 <li>31 built-in diagnostic patterns; biological type contracts firing on a deliberately mismatched workflow (<code>TYPE-001</code>–<code>TYPE-003</code> observed live, <code>TYPE-004</code>–<code>TYPE-010</code> covered by unit tests; <code>TYPE-008</code>/<code>TYPE-009</code>/<code>TYPE-010</code> are advisory unverifiable-edge codes).</li>
 <li>33 prebuilt cluster and re-entry integration tests passing on a Linux host.</li>
 <li>Live <code>[engine] dispatch_order</code> (local execution), run-aware <code>cluster status --json</code> / <code>cluster logs</code>, interrupted-rule re-queue, <code>provenance verify</code>, and the strict-placeholder gate exercised on a mock-Slurm Linux host.</li>

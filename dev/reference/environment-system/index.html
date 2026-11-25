@@ -1815,6 +1815,8 @@
       
         
       
+        
+      
     
     
     
@@ -2486,6 +2488,34 @@
     
   
     lint
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands/lock/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    lock
   
 
     
@@ -3551,6 +3581,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#environment-identity-and-the-workflow-lock" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Environment identity and the workflow lock
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#resolver-order" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4583,6 +4624,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#environment-identity-and-the-workflow-lock" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Environment identity and the workflow lock
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#resolver-order" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4931,6 +4983,36 @@ ships it, and falls back to <code>sh</code> when it does not.</p>
 <li><strong>Usage</strong>: This is the default backend for rules without an <code>environment</code> field</li>
 </ul>
 <hr />
+<h2 id="environment-identity-and-the-workflow-lock">Environment identity and the workflow lock<a class="headerlink" href="#environment-identity-and-the-workflow-lock" title="Permanent link">#</a></h2>
+<p>Every run records a per-rule <strong>environment identity</strong> in its checkpoint
+(<code>env_lock_identity</code>), computed entirely offline by the same resolver the
+workflow lock uses:</p>
+<ul>
+<li><strong>container</strong> (<code>docker</code>/<code>singularity</code>): the resolved image digest
+  (<code>repo@sha256:…</code>) when the local runtime can report one; otherwise the
+  explicit sentinel <code>unresolved</code> — a digest is never fabricated and nothing
+  is pulled.</li>
+<li><strong>env backends</strong> (<code>pixi</code>/<code>conda</code>/<code>mamba</code>/<code>venv</code>): a key-ordered SHA-256
+  <strong>lock hash</strong> over the resolved environment spec files (the manifest, an
+  env YAML, and the sibling <code>pixi.lock</code> when present). The file set is
+  sorted, so the hash is stable across hosts.</li>
+<li><strong><code>system</code></strong> (or a rule with no lockable environment content): the
+  explicit sentinel <code>unavailable</code>. A constant hash over an empty
+  fingerprint would falsely read as evidence of equality.</li>
+</ul>
+<p><code>oxo-flow lock</code> stores that map in <code>oxo-flow.lock</code> alongside the declared
+software each rule names (image tag, env-file paths and content digests,
+module list). <code>lock --check</code> and <code>run --locked</code> compare the current
+identity against the pinned one:</p>
+<ul>
+<li><code>unresolved</code> never compares equal — including to itself (<code>LOCK-006</code>).
+  Generate locks where the images you intend to pin are available locally.</li>
+<li><code>unavailable</code> compares equal only to <code>unavailable</code>.</li>
+<li>A changed spec file, module list, or image digest is <code>LOCK-004</code>.</li>
+</ul>
+<p>See <a href="../../commands/lock/"><code>lock</code></a> for the document format and drift codes,
+and <a href="../../commands/run/#workflow-lock---locked">run — Workflow lock</a> for
+enforcement.</p>
 <h2 id="resolver-order">Resolver Order<a class="headerlink" href="#resolver-order" title="Permanent link">#</a></h2>
 <p>A rule resolves at most <strong>one</strong> backend, checked in this order:</p>
 <p><code>mamba</code> → <code>conda</code> → <code>pixi</code> → <code>docker</code> → <code>singularity</code> → <code>venv</code> → <code>modules</code>.</p>

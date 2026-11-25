@@ -2000,6 +2000,8 @@
       
         
       
+        
+      
     
     
     
@@ -2671,6 +2673,34 @@
     
   
     lint
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../commands/lock/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    lock
   
 
     
@@ -4453,6 +4483,14 @@ ends with a <strong>Done when</strong> condition — do not proceed without it.<
   steps).</li>
 <li>Optional AI assistance: <code>[ai] enabled = true</code> in the workflow activates
   AI validate/lint/debug/recover.</li>
+<li>Reproducibility lock (recommended before delivery): <code>oxo-flow lock
+  &lt;workflow.oxoflow&gt;</code> writes <code>oxo-flow.lock</code> pinning the workflow/config
+  hashes, include graph, per-rule environment identities, and declared
+  software. Commit it; gate CI with <code>oxo-flow lock --check</code>, and run with
+  <code>run --locked</code> (or <code>[engine] locked = true</code>) to fail closed on drift.
+  The lock is evidence of declared inputs, not bitwise reproducibility —
+  generate it where the pinned images are available locally, since an
+  unresolvable digest records <code>unresolved</code> and never matches.</li>
 <li>Done when: all gates pass; engine-QC role sign-off.</li>
 </ul>
 <h3 id="3-submit-execute">3. Submit &amp; Execute<a class="headerlink" href="#3-submit-execute" title="Permanent link">#</a></h3>
@@ -4608,6 +4646,10 @@ their own work).</p>
 <tr>
 <td>Execute</td>
 <td><code>how-to/run-on-cluster</code>, <code>commands/run</code>, <code>commands/cluster</code>, <code>commands/resume</code>, <code>commands/status</code></td>
+</tr>
+<tr>
+<td>Reproducibility lock</td>
+<td><code>commands/lock</code>, <code>commands/provenance</code>, <code>reference/environment-system</code></td>
 </tr>
 <tr>
 <td>QC</td>

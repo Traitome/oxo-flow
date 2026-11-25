@@ -1815,6 +1815,8 @@
       
         
       
+        
+      
     
     
     
@@ -2486,6 +2488,34 @@
     
   
     lint
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands/lock/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    lock
   
 
     
@@ -4209,6 +4239,28 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#workflow-lock" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Workflow lock
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#lock-digest" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Lock digest
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#benchmark" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -5192,6 +5244,28 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#workflow-lock" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Workflow lock
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#lock-digest" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Lock digest
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#benchmark" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -5611,6 +5685,24 @@ needs the outputs again.</p>
 <hr />
 <h3 id="provenance">Provenance<a class="headerlink" href="#provenance" title="Permanent link">#</a></h3>
 <p>A record of how each output was produced: which inputs, which tool, which version, which parameters. Essential for reproducibility.</p>
+<hr />
+<h3 id="workflow-lock">Workflow lock<a class="headerlink" href="#workflow-lock" title="Permanent link">#</a></h3>
+<p>A canonical <code>oxo-flow.lock</code> document (format <code>oxo-flow.lock/v1</code>) written by
+<code>oxo-flow lock</code> that pins the workflow content/resolved hashes, the
+metadata-contract digest, the <code>[config]</code> snapshot, the include graph, and
+each rule's environment identity plus declared software. <code>oxo-flow lock
+--check</code> verifies it in CI; <code>run --locked</code> or <code>[engine] locked = true</code>
+fails a run closed on drift before any rule executes. A lock is evidence of
+declared inputs, not bitwise reproducibility — it never pulls images or
+solves packages. See <a href="../../commands/lock/"><code>lock</code></a>.</p>
+<hr />
+<h3 id="lock-digest">Lock digest<a class="headerlink" href="#lock-digest" title="Permanent link">#</a></h3>
+<p><code>sha256:&lt;hex&gt;</code> over a workflow-lock document excluding its own
+<code>lock_digest</code> field. It detects hand edits and corruption (a mismatch is
+<code>LOCK-007</code>), and a lock-enforced run records it in the checkpoint, folds it
+into <code>workflow_resolved_hash</code>, and reports it from <code>provenance verify</code> /
+<code>provenance attest</code>. It is <strong>not</strong> a signature and not an external
+notarization: it proves internal consistency, not authorship.</p>
 <hr />
 <h3 id="benchmark">Benchmark<a class="headerlink" href="#benchmark" title="Permanent link">#</a></h3>
 <p>Timing and resource usage data for each rule (wall time, memory, CPU).</p>
