@@ -273,6 +273,7 @@ fn backend_driver_executes_reentry_rounds() {
                 walltime: None,
                 extra_args: vec![],
                 name_scope: None,
+                volume: None,
             },
         )
         .with_scheduler_dir(fixtures)

@@ -539,6 +539,62 @@ submit`), naming the offending rule and hook field (issue #1340), instead of
 silently dropping the hook on the scheduler. Remove the hooks or run the
 workflow locally (`oxo-flow run`).
 
+### Shared volume (`[cluster.volume]`, Kubernetes)
+
+The default Kubernetes renderer mounts the run workdir (and array command
+directories) as `hostPath` volumes at their submit-host absolute paths —
+correct only on a **single-node / shared-filesystem** cluster. On a
+multi-node cluster the workdir must live on a filesystem every node sees;
+declare it once in the profile:
+
+```toml
+# profiles/k8s.toml
+[cluster]
+backend = "kubernetes"
+
+[cluster.volume]
+kind = "nfs"              # nfs | pvc | hostpath
+server = "10.0.0.9"       # nfs only: NFS server address
+path = "/exports/oxoflow" # nfs only: the export — this IS the volume root
+mount_root = "/oxoflow"   # optional, default /oxoflow — the in-pod mount
+                          # point of the volume root
+
+# pvc shape: kind = "pvc", claim_name = "oxoflow-work",
+#            volume_root = "/mnt/oxoflow"   # required: the submit-host
+#                                           # directory the claim is mounted
+#                                           # at (a PVC has no inherent path)
+# hostpath shape: kind = "hostpath", host_path = "/srv/oxoflow"
+#                 (volume_root defaults to host_path)
+```
+
+The **volume root** is the submit-host directory the volume's contents
+correspond to: the NFS export for `kind = "nfs"` (`path`), the claim's
+mount point for `kind = "pvc"` (the required `volume_root`), or `host_path`
+for `kind = "hostpath"`. `mount_root` is where the volume ROOT is mounted
+inside the pod, so a workdir nested inside the volume keeps its relative
+position: with `path = "/exports/oxoflow"`, `mount_root = "/oxoflow"` and a
+run workdir `/exports/oxoflow/lab/rna`, the pod sees the workdir at
+`/oxoflow/lab/rna`.
+
+What the renderer does with it:
+
+- Pods mount the volume at `mount_root` (default `/oxoflow`) — one
+  `oxoflow-shared` volume mount replaces every per-run `hostPath`.
+- The rendered command's folded `cd '<submit-host-workdir>'` guard and every
+  workdir-anchored absolute path (docker `-v` binds, redirections through
+  expanded paths) are rewritten onto the workdir's in-pod path
+  (`mount_root/<workdir relative to the volume root>`) at manifest-render
+  time. The checkpoint keeps the submit-host path — only the rendered
+  command is mapped.
+- Array dispatch paths map the same way: a command directory under the run
+  workdir renders as `mount_root/<relative-to-volume-root>/cmd.$N.sh`.
+- `run --profile` fails at admission when the kind/field combination is
+  incomplete (`nfs` without `server`/`path`, `pvc` without `claim_name` or
+  `volume_root`, `hostpath` without `host_path`), when the volume is
+  declared for a backend that would silently ignore it (non-Kubernetes), or
+  — at render time — when the run workdir is not under the volume root
+  (that failure names both paths instead of mounting something wrong).
+
 ### Job arrays
 
 Same-template instances that are ready together and agree on every

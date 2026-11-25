@@ -1,7 +1,7 @@
 {
   "version": 1,
   "source": "docs/schema/oxoflow-v1.schema.json",
-  "schemaSha256": "c9130eb49a97caff6b1482b2ee797938912aefecb4de57732ad13ab2d7e93f4a",
+  "schemaSha256": "70d3b1a6882980b38842f5024b362fcc8e136e287b31782b71cc683a52b30a54",
   "contexts": {
     "root": {
       "keys": [
@@ -396,6 +396,11 @@
         {
           "key": "poll_interval",
           "description": "Schema synced from config whitelist (see known_keys.rs)"
+        },
+        {
+          "key": "volume",
+          "description": "Shared filesystem the run workdir lives on; pods mount it at mount_root (default /oxoflow). kind: nfs (server+path) | pvc (claim_name) | hostpath (host_path, single-node)",
+          "type": "object"
         },
         {
           "key": "walltime",

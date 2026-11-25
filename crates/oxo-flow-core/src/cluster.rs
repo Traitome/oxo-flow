@@ -81,6 +81,12 @@ pub struct ClusterJobConfig {
     /// #1158 live campaign). Other backends ignore it.
     #[serde(default)]
     pub name_scope: Option<String>,
+    /// Shared-filesystem declaration (`[cluster.volume]`): the Kubernetes
+    /// renderer mounts it at `mount_root` and rewrites the command's folded
+    /// workdir path accordingly (multi-node clusters, issue #1387). Other
+    /// backends ignore it.
+    #[serde(default)]
+    pub volume: Option<crate::config::ClusterVolume>,
 }
 
 /// Generate a scheduler submit script for the given backend.
@@ -942,6 +948,7 @@ mod tests {
             walltime: None,
             extra_args: vec![],
             name_scope: None,
+            volume: None,
         };
         let script = generate_array_submit_script(
             &ClusterBackend::Slurm,
@@ -1248,6 +1255,7 @@ mod tests {
             walltime: Some("24:00:00".to_string()),
             extra_args: vec![],
             name_scope: None,
+            volume: None,
         }
     }
 
@@ -1330,6 +1338,7 @@ mod tests {
             walltime: Some("02:00:00".to_string()),
             extra_args: vec![],
             name_scope: None,
+            volume: None,
         };
         let script =
             generate_submit_script(&ClusterBackend::Pbs, &rule, "fastqc input.fq", &config)
@@ -1359,6 +1368,7 @@ mod tests {
             walltime: Some("12:00:00".to_string()),
             extra_args: vec![],
             name_scope: None,
+            volume: None,
         };
         let script =
             generate_submit_script(&ClusterBackend::Sge, &rule, "gatk HaplotypeCaller", &config)
@@ -1387,6 +1397,7 @@ mod tests {
             walltime: Some("01:00".to_string()),
             extra_args: vec![],
             name_scope: None,
+            volume: None,
         };
         let script = generate_submit_script(
             &ClusterBackend::Lsf,
@@ -1433,6 +1444,7 @@ mod tests {
             walltime: None,
             extra_args: vec![],
             name_scope: None,
+            volume: None,
         };
         let script =
             generate_submit_script(&ClusterBackend::Lsf, &rule, "echo hi", &config).unwrap();
@@ -1452,6 +1464,7 @@ mod tests {
             walltime: None,
             extra_args: vec![],
             name_scope: None,
+            volume: None,
         };
         let script =
             generate_submit_script(&ClusterBackend::Lsf, &rule, "gatk HaplotypeCaller", &config)
@@ -1473,6 +1486,7 @@ mod tests {
             walltime: None,
             extra_args: vec![],
             name_scope: None,
+            volume: None,
         };
         let script =
             generate_submit_script(&ClusterBackend::Lsf, &rule, "spades.py --isolate", &config)
@@ -1496,6 +1510,7 @@ mod tests {
             walltime: None,
             extra_args: vec![],
             name_scope: None,
+            volume: None,
         };
         let script =
             generate_submit_script(&ClusterBackend::Slurm, &rule, "spades.py", &config).unwrap();
@@ -1517,6 +1532,7 @@ mod tests {
             walltime: None,
             extra_args: vec![],
             name_scope: None,
+            volume: None,
         };
         let script =
             generate_submit_script(&ClusterBackend::Lsf, &rule, "gatk HaplotypeCaller", &config)
@@ -1574,6 +1590,7 @@ mod tests {
             walltime: None,
             extra_args: vec!["--gres=gpu:1".to_string(), "--exclusive".to_string()],
             name_scope: None,
+            volume: None,
         };
         let script =
             generate_submit_script(&ClusterBackend::Slurm, &rule, "echo done", &config).unwrap();
@@ -1686,6 +1703,7 @@ mod tests {
             walltime: None,
             extra_args: vec![],
             name_scope: None,
+            volume: None,
         };
         let script =
             generate_submit_script(&ClusterBackend::Pbs, &rule, "python train.py", &config)
@@ -1725,6 +1743,7 @@ mod tests {
             walltime: None,
             extra_args: vec![],
             name_scope: None,
+            volume: None,
         };
         let script =
             generate_submit_script(&ClusterBackend::Sge, &rule, "python train.py", &config)
@@ -1764,6 +1783,7 @@ mod tests {
             walltime: None,
             extra_args: vec![],
             name_scope: None,
+            volume: None,
         };
         let script =
             generate_submit_script(&ClusterBackend::Lsf, &rule, "python train.py", &config)
@@ -1814,6 +1834,7 @@ mod tests {
                 walltime: None,
                 extra_args: vec![],
                 name_scope: None,
+                volume: None,
             };
             let script = generate_submit_script(&backend, &rule, "echo hello", &config).unwrap();
             assert!(
@@ -1894,6 +1915,7 @@ mod tests {
             walltime: Some("24:00:00".to_string()),
             extra_args: vec![],
             name_scope: None,
+            volume: None,
         };
         let script =
             generate_submit_script(&ClusterBackend::Slurm, &rule, "sleep 100", &config).unwrap();
@@ -1934,6 +1956,7 @@ mod tests {
             walltime: Some("48:00:00".to_string()),
             extra_args: vec![],
             name_scope: None,
+            volume: None,
         };
         let script =
             generate_submit_script(&ClusterBackend::Pbs, &rule, "sleep 100", &config).unwrap();
@@ -1972,6 +1995,7 @@ mod tests {
             walltime: Some("12:00:00".to_string()),
             extra_args: vec![],
             name_scope: None,
+            volume: None,
         };
         let script =
             generate_submit_script(&ClusterBackend::Sge, &rule, "analysis.sh", &config).unwrap();
@@ -2017,6 +2041,7 @@ mod tests {
             walltime: None,
             extra_args: vec![],
             name_scope: None,
+            volume: None,
         };
         let script =
             generate_submit_script(&ClusterBackend::Pbs, &rule, "echo test", &config).unwrap();
@@ -2034,6 +2059,7 @@ mod tests {
             walltime: None,
             extra_args: vec![],
             name_scope: None,
+            volume: None,
         };
         let script =
             generate_submit_script(&ClusterBackend::Sge, &rule, "echo test", &config).unwrap();
@@ -2051,6 +2077,7 @@ mod tests {
             walltime: None,
             extra_args: vec![],
             name_scope: None,
+            volume: None,
         };
         let script =
             generate_submit_script(&ClusterBackend::Lsf, &rule, "echo test", &config).unwrap();
@@ -2125,6 +2152,7 @@ mod tests {
             walltime: None,
             extra_args: vec![],
             name_scope: None,
+            volume: None,
         };
         let script =
             generate_submit_script(&ClusterBackend::Slurm, &rule, "python train.py", &config)
@@ -2171,6 +2199,7 @@ mod tests {
             walltime: None,
             extra_args: vec![],
             name_scope: None,
+            volume: None,
         };
         let script =
             generate_submit_script(&ClusterBackend::Pbs, &rule, "python train.py", &config)
@@ -2219,6 +2248,7 @@ mod tests {
             walltime: None,
             extra_args: vec![],
             name_scope: None,
+            volume: None,
         };
         let script =
             generate_submit_script(&ClusterBackend::Sge, &rule, "python train.py", &config)

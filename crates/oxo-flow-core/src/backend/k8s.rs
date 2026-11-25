@@ -6,6 +6,7 @@
 
 use super::{BackendJobStatus, sanitize_cloud_name, scheduled_resources};
 use crate::cluster::ClusterJobConfig;
+use crate::config::ClusterVolume;
 use crate::environment::mirrored_spec;
 use crate::error::Result;
 use crate::executor::process::sensitive_env_refs;
@@ -225,6 +226,37 @@ fn container_resources(rule: &Rule) -> serde_json::Value {
     })
 }
 
+/// The pod `volumes` entry for the `[cluster.volume]` declaration: NFS, a
+/// bound PVC, or the single-node hostPath. Mounted at `mount_root`.
+fn shared_volume_entry(volume: &ClusterVolume, name: &str) -> serde_json::Value {
+    let source = match volume.kind.as_str() {
+        "nfs" => json!({ "nfs": { "server": volume.server, "path": volume.path } }),
+        "pvc" => json!({ "persistentVolumeClaim": { "claimName": volume.claim_name } }),
+        // Validated at profile admission; render a Directory hostPath.
+        _ => json!({ "hostPath": { "path": volume.host_path, "type": "Directory" } }),
+    };
+    let mut entry = json!({ "name": name });
+    entry
+        .as_object_mut()
+        .expect("object")
+        .extend(source.as_object().expect("object").clone());
+    entry
+}
+
+/// Rewrite the submit-host workdir paths in a rendered command to the
+/// in-pod mount root: the folded `cd '<workdir>'` prefix and every
+/// workdir-anchored absolute path (docker `-v` binds, output redirections
+/// use relative paths) must point INSIDE the mounted volume. Replacing the
+/// exact workdir string is deterministic — it is one distinct absolute path
+/// — and `mount_root`/…`/` substitution happens before the manifest renders
+/// (expand-before-derive: the checkpoint keeps the submit-host path; only
+/// the RENDERED command is mapped).
+fn rewrite_workdir_to_mount_root(shell_cmd: &str, workdir: &str, mount_root: &str) -> String {
+    shell_cmd
+        .replace(&format!("{workdir}/"), &format!("{mount_root}/"))
+        .replace(&format!("cd '{workdir}'"), &format!("cd '{mount_root}'"))
+}
+
 /// Generate a Kubernetes batch/v1 Job manifest for a single rule.
 pub fn generate_k8s_job_manifest(
     rule: &Rule,
@@ -271,14 +303,56 @@ pub fn generate_k8s_job_manifest(
     });
     attach_sensitive_env(&mut container, &sensitive_env_refs(shell_cmd));
     let workdir = workdir_from_shell_cmd(shell_cmd);
-    let mut directory_entries: Vec<(&'static str, String)> = Vec::new();
-    if let Some(workdir) = &workdir {
-        directory_entries.push(("oxoflow-workdir", workdir.clone()));
+    // [cluster.volume] mode: the workdir lives on a SHARED volume the pod
+    // mounts at mount_root — the rendered command is rewritten onto the
+    // mount and NO submit-host hostPath is emitted (multi-node clusters;
+    // issue #1387). Without the declaration the historical single-node
+    // hostPath mount applies.
+    let (volume, volume_workdir) = match (&cluster_config.volume, &workdir) {
+        (Some(volume), Some(workdir)) => match volume.in_pod_path(workdir) {
+            // Expand-before-derive: the volume is mounted by its ROOT, so
+            // the workdir appears at mount_root/<relative> — mapping the
+            // workdir directly onto mount_root (the first draft) pointed
+            // every path one directory short, and the pod died on `cd`.
+            Some(dir) => (Some(volume), dir),
+            None => {
+                return Err(crate::error::OxoFlowError::Config {
+                    message: format!(
+                        "[cluster.volume] the run workdir '{workdir}' is not under the \
+                         declared volume root — point volume_root (nfs: the export; pvc: \
+                         claim mount point) at the directory containing it"
+                    ),
+                });
+            }
+        },
+        _ => (None, String::new()),
+    };
+    let rendered_cmd = match (&volume, &workdir) {
+        (Some(_), Some(workdir)) => {
+            rewrite_workdir_to_mount_root(shell_cmd, workdir, &volume_workdir)
+        }
+        _ => shell_cmd.to_string(),
+    };
+    container["args"] = json!([rendered_cmd]);
+    let mut pod_volumes: Vec<Value> = Vec::new();
+    match &volume {
+        Some(volume) => {
+            container["volumeMounts"] = json!([
+                { "name": "oxoflow-shared", "mountPath": volume.mount_root() }
+            ]);
+            pod_volumes.push(shared_volume_entry(volume, "oxoflow-shared"));
+        }
+        None => {
+            let mut directory_entries: Vec<(&'static str, String)> = Vec::new();
+            if let Some(workdir) = &workdir {
+                directory_entries.push(("oxoflow-workdir", workdir.clone()));
+            }
+            attach_host_path_mounts(&mut container, &directory_entries);
+            pod_volumes = host_path_volumes(&directory_entries)
+                .map(|v| v.as_array().expect("array").clone())
+                .unwrap_or_default();
+        }
     }
-    attach_host_path_mounts(&mut container, &directory_entries);
-    let mut pod_volumes = host_path_volumes(&directory_entries)
-        .map(|v| v.as_array().expect("array").clone())
-        .unwrap_or_default();
     attach_docker_socket(&mut container, &mut pod_volumes);
 
     let mut pod_spec = json!({
@@ -354,31 +428,64 @@ pub fn generate_k8s_array_job_manifest(
             .unwrap_or("ubuntu:latest"),
     );
 
-    let dispatch_cmd =
-        format!("INDEX=$((JOB_COMPLETION_INDEX + 1)); sh \"{cmd_dir}/cmd.${{INDEX}}.sh\"");
-
     let mut container = json!({
         "name": sanitize_k8s_name(&rule.name),
         "image": container_image,
         "imagePullPolicy": "IfNotPresent",
         "command": ["/bin/bash", "-c"],
-        "args": [dispatch_cmd],
+        "args": [],
         "resources": container_resources(rule),
     });
     attach_sensitive_env(&mut container, sensitive_refs);
-    let mut directory_entries: Vec<(&'static str, String)> =
-        vec![("oxoflow-cmds", cmd_dir.to_string())];
-    if let Some(workdir) = workdir {
-        // The command files fold `cd '<workdir>' &&` themselves; without the
-        // mount the `cd` fails and every element dies before its first tool.
-        if workdir.starts_with('/') && workdir != cmd_dir {
-            directory_entries.push(("oxoflow-workdir", workdir.to_string()));
+    let mut pod_volumes: Vec<Value> = Vec::new();
+    // [cluster.volume] mode: both the command directory and the run workdir
+    // live on the shared volume; the dispatch path is rewritten onto the
+    // in-pod mount root and no submit-host hostPath is emitted (issue
+    // #1387, multi-node clusters).
+    let volume = _cluster_config.volume.as_ref();
+    let dispatch_dir = match (volume, workdir) {
+        (Some(volume), Some(_)) => {
+            // The command directory lives under the run workdir, which lives
+            // under the volume root; map it through the same relative-path
+            // derivation as the single-job `cd` rewrite.
+            volume
+                .in_pod_path(cmd_dir)
+                .ok_or_else(|| crate::error::OxoFlowError::Config {
+                    message: format!(
+                        "[cluster.volume] the command directory '{cmd_dir}' is not under the \
+                         declared volume root"
+                    ),
+                })?
+        }
+        _ => cmd_dir.to_string(),
+    };
+    let dispatch_cmd =
+        format!("INDEX=$((JOB_COMPLETION_INDEX + 1)); sh \"{dispatch_dir}/cmd.${{INDEX}}.sh\"");
+    container["args"] = json!([dispatch_cmd]);
+    match volume {
+        Some(volume) => {
+            container["volumeMounts"] = json!([
+                { "name": "oxoflow-shared", "mountPath": volume.mount_root() }
+            ]);
+            pod_volumes.push(shared_volume_entry(volume, "oxoflow-shared"));
+        }
+        None => {
+            let mut directory_entries: Vec<(&'static str, String)> =
+                vec![("oxoflow-cmds", cmd_dir.to_string())];
+            if let Some(workdir) = workdir {
+                // The command files fold `cd '<workdir>' &&` themselves;
+                // without the mount the `cd` fails and every element dies
+                // before its first tool.
+                if workdir.starts_with('/') && workdir != cmd_dir {
+                    directory_entries.push(("oxoflow-workdir", workdir.to_string()));
+                }
+            }
+            attach_host_path_mounts(&mut container, &directory_entries);
+            pod_volumes = host_path_volumes(&directory_entries)
+                .map(|v| v.as_array().expect("array").clone())
+                .unwrap_or_default();
         }
     }
-    attach_host_path_mounts(&mut container, &directory_entries);
-    let mut pod_volumes = host_path_volumes(&directory_entries)
-        .map(|v| v.as_array().expect("array").clone())
-        .unwrap_or_default();
     attach_docker_socket(&mut container, &mut pod_volumes);
 
     let mut pod_spec = json!({
@@ -528,6 +635,7 @@ mod tests {
             walltime: None,
             extra_args: Vec::new(),
             name_scope: None,
+            volume: None,
         }
     }
 
@@ -613,6 +721,7 @@ mod tests {
             walltime: None,
             extra_args: Vec::new(),
             name_scope: None,
+            volume: None,
         }
     }
 
@@ -903,6 +1012,111 @@ mod tests {
             other => panic!("unknown k8s env probe {other}"),
         }
         println!("K8S_ENV_PROBE_OK {probe}");
+    }
+
+    /// `[cluster.volume]` mode (issue #1387): the pod mounts the SHARED
+    /// volume at mount_root, the rendered command's folded `cd` and every
+    /// workdir-anchored path are rewritten onto the mount, and NO
+    /// submit-host hostPath is emitted. NFS shape.
+    #[test]
+    fn cluster_volume_nfs_replaces_hostpath_and_rewrites_the_command() {
+        let rule = Rule {
+            name: "wrap".into(),
+            ..Default::default()
+        };
+        let mut config = k8s_test_config();
+        config.volume = Some(crate::config::ClusterVolume {
+            kind: "nfs".into(),
+            server: Some("10.0.0.9".into()),
+            path: Some("/exports/oxoflow".into()),
+            volume_root: Some("/abs".into()),
+            ..Default::default()
+        });
+        let cmd = "cd '/abs/run' && docker run --rm -v '/abs/run/data':'/abs/run/data' 'img' sh -c 'true > out.txt'";
+        let val: Value =
+            serde_json::from_str(&generate_k8s_job_manifest(&rule, cmd, &config).unwrap()).unwrap();
+        let pod_spec = &val["spec"]["template"]["spec"];
+        let container = &pod_spec["containers"][0];
+        assert_eq!(
+            container["volumeMounts"][0],
+            json!({"name":"oxoflow-shared","mountPath":"/oxoflow"}),
+            "the shared volume must mount at the default mount_root"
+        );
+        assert_eq!(
+            pod_spec["volumes"][0]["nfs"],
+            json!({"server":"10.0.0.9","path":"/exports/oxoflow"}),
+            "NFS source must render with server + path"
+        );
+        assert!(
+            !serde_json::to_string(&pod_spec["volumes"])
+                .unwrap()
+                .contains("hostPath"),
+            "volume mode must not leak a submit-host hostPath: {pod_spec}"
+        );
+        let rendered = container["args"][0].as_str().unwrap();
+        assert!(
+            rendered.contains("cd '/oxoflow/run'"),
+            "folded cd must be rewritten to mount_root/<relative>: {rendered}"
+        );
+        assert!(
+            rendered.contains("-v '/oxoflow/run/data':'/oxoflow/run/data'"),
+            "workdir-anchored bind paths must follow the mount: {rendered}"
+        );
+        assert!(
+            !rendered.contains("/abs/run"),
+            "no submit-host path may survive: {rendered}"
+        );
+    }
+
+    /// PVC shape, custom mount_root, and the array dispatch path rewrite:
+    /// the command directory under the run workdir maps onto the mount so
+    /// indexed elements find their `cmd.$N.sh` inside the shared volume.
+    #[test]
+    fn cluster_volume_pvc_rewrites_array_dispatch_paths() {
+        let rule = Rule {
+            name: "scatter".into(),
+            ..Default::default()
+        };
+        let mut config = k8s_test_config();
+        config.volume = Some(crate::config::ClusterVolume {
+            kind: "pvc".into(),
+            claim_name: Some("oxoflow-work".into()),
+            volume_root: Some("/abs".into()),
+            mount_root: Some("/mnt/work".into()),
+            ..Default::default()
+        });
+        let val: Value = serde_json::from_str(
+            &generate_k8s_array_job_manifest(
+                &rule,
+                "/abs/run/.oxo-flow/runs/r1/jobs/scatter/chunk-1",
+                2,
+                &[],
+                Some("/abs/run"),
+                &config,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let pod_spec = &val["spec"]["template"]["spec"];
+        let container = &pod_spec["containers"][0];
+        assert!(
+            container["args"][0]
+                .as_str()
+                .unwrap()
+                .contains("sh \"/mnt/work/run/.oxo-flow/runs/r1/jobs/scatter/chunk-1/cmd."),
+            "the dispatch path must map onto the mount root: {}",
+            container["args"][0]
+        );
+        assert_eq!(
+            pod_spec["volumes"][0]["persistentVolumeClaim"],
+            json!({"claimName":"oxoflow-work"})
+        );
+        assert_eq!(container["volumeMounts"][0]["mountPath"], "/mnt/work");
+        assert!(
+            !serde_json::to_string(&pod_spec["volumes"])
+                .unwrap()
+                .contains("hostPath")
+        );
     }
 
     /// Regression (issue #1226): two chunks of the SAME template must not

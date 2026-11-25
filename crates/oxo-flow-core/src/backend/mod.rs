@@ -345,6 +345,16 @@ pub trait ExecutorBackend: Send + Sync {
     /// observes the job terminal. Cloud backends return `false` — their bodies
     /// carry an `OXO_FLOW_SENSITIVE_<n>` reference that resolves through the
     /// backend's own secret channel instead.
+    /// The in-pod path a submit-host directory maps to when the backend
+    /// renders jobs against a shared volume (`[cluster.volume]`,
+    /// issue #1387), or `None` when commands keep their submit-host paths.
+    /// The driver rewrites the per-index array command files' folded `cd`
+    /// through this (the manifest generator rewrites its own rendered
+    /// command; the files are driver-written text it never sees).
+    fn map_workdir_to_pod(&self, _workdir: &std::path::Path) -> Option<String> {
+        None
+    }
+
     fn uses_secret_env_file(&self) -> bool {
         false
     }
@@ -1401,6 +1411,7 @@ mod tests {
             walltime: None,
             extra_args: Vec::new(),
             name_scope: None,
+            volume: None,
         };
 
         let (single, array) = match backend_name.as_str() {

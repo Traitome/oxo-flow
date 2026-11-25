@@ -270,6 +270,7 @@ mod tests {
             walltime: None,
             extra_args: Vec::new(),
             name_scope: None,
+            volume: None,
         }
     }
 
