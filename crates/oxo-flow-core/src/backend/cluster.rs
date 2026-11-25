@@ -74,13 +74,12 @@ pub fn parse_job_id(backend: &ClusterBackend, stdout: &str, stderr: &str) -> Res
             Err(unparseable("GCP Batch", out, stderr.trim()))
         }
         ClusterBackend::TencentBatch => {
-            // tccli --output json wraps every reply in a Response envelope;
-            // SubmitJob's answer is {"Response":{"JobId":"job-…"}}. Key on
+            // SubmitJob's reply is {"JobId":"job-…","RequestId":…}. Key on
             // the id field instead of echoing the whole document (which
             // would corrupt array child handles `{id}:{n}`).
             match serde_json::from_str::<serde_json::Value>(out)
                 .ok()
-                .and_then(|v| v["Response"]["JobId"].as_str().map(str::to_string))
+                .and_then(|v| tccli_body(&v)["JobId"].as_str().map(str::to_string))
             {
                 Some(id) => Ok(id),
                 _ => Err(unparseable("Tencent Batch", out, stderr.trim())),
@@ -106,10 +105,87 @@ fn mint_gcp_job_id(dir: &str, millis: i64) -> String {
     format!("oxoflow-{}-{}", &name[..name.len().min(41)], millis)
 }
 
+/// Identity portion of a minted GCP Batch job id: the script's job
+/// directory, including the array chunk directory when there is one.
+///
+/// The driver writes `…/jobs/<template>/chunk-N/job.sh` for an array chunk
+/// and `…/jobs/<instance>/job.sh` for a single job. Using only the immediate
+/// parent named EVERY array chunk `chunk-1`/`chunk-2`, so two rules' arrays
+/// submitted within the same millisecond minted the same GCP job id (a
+/// duplicate-id error) and the ids named nothing recognizable. Walk up to
+/// two components, stopping at the run's `jobs/` container.
+fn gcp_job_name_source(script_path: &Path) -> String {
+    let mut parts: Vec<&str> = Vec::new();
+    let mut cursor = script_path.parent();
+    while parts.len() < 2 {
+        let Some(dir) = cursor else { break };
+        let Some(name) = dir.file_name().and_then(|n| n.to_str()) else {
+            break;
+        };
+        if name == "jobs" {
+            break;
+        }
+        parts.insert(0, name);
+        cursor = dir.parent();
+    }
+    if parts.is_empty() {
+        "job".to_string()
+    } else {
+        parts.join("-")
+    }
+}
+
 fn unparseable(what: &str, stdout: &str, stderr: &str) -> OxoFlowError {
     OxoFlowError::Config {
         message: format!("cannot parse {what} from '{stdout}' / '{stderr}'"),
     }
+}
+
+/// The response BODY of a tccli call.
+///
+/// `tccli --output json` prints the API response body itself
+/// (`{"JobId": …}`) — tccli's action caller unwraps the HTTP layer's
+/// `{"Response": …}` envelope before formatting (`tccli/action_caller.py`,
+/// `raw.get("Response", raw)`). The API reference and its examples show the
+/// envelope because that is the wire shape, so accept both: a recorded
+/// API-shaped fixture and a real CLI reply parse alike.
+fn tccli_body(doc: &serde_json::Value) -> &serde_json::Value {
+    doc.get("Response")
+        .filter(|value| value.is_object())
+        .unwrap_or(doc)
+}
+
+/// Tencent Batch `JobState` → engine verdict. One table for the executor's
+/// poller, the standalone `cluster status` reader, and their fixtures.
+fn tencent_job_status(state: &str) -> BackendJobStatus {
+    match state {
+        "SUCCEED" => BackendJobStatus::Completed,
+        "FAILED" | "FAILED_INTERRUPTED" => BackendJobStatus::Failed,
+        "RUNNING" | "STARTING" => BackendJobStatus::Running,
+        "SUBMITTED" | "PENDING" | "RUNNABLE" => BackendJobStatus::Pending,
+        _ => BackendJobStatus::Unknown,
+    }
+}
+
+/// Parse a `tccli batch DescribeJobs --output json` reply (body or
+/// `Response`-wrapped) into `job id -> state`. Malformed output yields an
+/// empty map — missing status data is never a verdict.
+fn parse_tencent_job_states(stdout: &str) -> HashMap<String, BackendJobStatus> {
+    let mut states = HashMap::new();
+    let Ok(doc) = serde_json::from_str::<serde_json::Value>(stdout) else {
+        return states;
+    };
+    let body = tccli_body(&doc);
+    for job in body["JobSet"].as_array().unwrap_or(&Vec::new()) {
+        let Some(id) = job["JobId"].as_str() else {
+            continue;
+        };
+        states.insert(
+            id.to_string(),
+            tencent_job_status(job["JobState"].as_str().unwrap_or_default()),
+        );
+    }
+    states
 }
 
 /// SGE state word → backend status. One table for all three read paths
@@ -281,6 +357,35 @@ fn gcp_element_index(element_id: &str) -> Option<(&str, u32)> {
     Some((base, index.parse().ok()?))
 }
 
+/// The vendor job id behind an engine-owned array-element handle.
+///
+/// GCP Batch and Tencent Batch element handles are `{base}:{index}` — the
+/// vendor APIs address the base job (per-task/per-instance views are
+/// separate calls this module does not make for cancel/logs). AWS Batch
+/// child ids are REAL job ids (`{parent}:{arrayIndex}`) and must stay
+/// verbatim.
+fn vendor_job_id<'a>(backend: &ClusterBackend, id: &'a str) -> &'a str {
+    match backend {
+        ClusterBackend::GcpBatch | ClusterBackend::TencentBatch => {
+            id.rsplit_once(':').map(|(base, _)| base).unwrap_or(id)
+        }
+        _ => id,
+    }
+}
+
+/// [`vendor_job_id`] over a request list, deduplicated in request order —
+/// cancelling `{job}:0` and `{job}:1` is one vendor call for `{job}`.
+fn vendor_job_targets<'a>(backend: &ClusterBackend, job_ids: &'a [String]) -> Vec<&'a str> {
+    let mut targets: Vec<&str> = Vec::new();
+    for id in job_ids {
+        let target = vendor_job_id(backend, id);
+        if !targets.contains(&target) {
+            targets.push(target);
+        }
+    }
+    targets
+}
+
 /// AWS Batch `DescribeJobs` accepts at most 100 job ids per call — a longer
 /// `--jobs` list is rejected outright as a validation error, not answered
 /// partially. The driver can legitimately exceed that cap: `max_submitted`
@@ -288,6 +393,16 @@ fn gcp_element_index(element_id: &str) -> Option<(&str, u32)> {
 /// a poll of 101+ in-flight elements must split the list and merge the
 /// per-call answers (review of #1222, ledger RB-06).
 pub const AWS_DESCRIBE_JOBS_MAX_IDS: usize = 100;
+
+/// Non-terminal AWS Batch job statuses. `list-jobs` without `--job-status`
+/// returns ONLY RUNNING jobs, so the raw live-queue view asks once per live
+/// state (ListJobs has no "all statuses" selector).
+const AWS_LIVE_JOB_STATUSES: [&str; 5] =
+    ["SUBMITTED", "PENDING", "RUNNABLE", "STARTING", "RUNNING"];
+
+/// Tencent `DescribeJobs` accepts at most 100 ids per call (`Limit` max is
+/// 100); longer lists are split the same way AWS's are.
+pub const TENCENT_DESCRIBE_JOBS_MAX_IDS: usize = 100;
 
 /// The scheduler invocations that report `job_ids`, in the form each
 /// scheduler actually accepts: `(program, arguments)`, one entry per call.
@@ -298,9 +413,15 @@ pub const AWS_DESCRIBE_JOBS_MAX_IDS: usize = 100;
 /// not). PBS and LSF take ids positionally, SGE wants one `-j` per job.
 /// SLURM is asked for the same `%i|%T` shape the poller reads, so both
 /// paths share one parser.
+///
+/// `queue` carries the backend's addressing selector where the CLI needs
+/// one: the GCP location for `gcloud batch jobs describe` (a bare job id is
+/// not resolvable without `--location` unless gcloud defaults carry one) and
+/// the Tencent placement zone, whose region scopes the tccli call.
 pub fn status_invocations(
     backend: &ClusterBackend,
     job_ids: &[String],
+    queue: Option<&str>,
 ) -> Vec<(&'static str, Vec<String>)> {
     match backend {
         ClusterBackend::Slurm => vec![(
@@ -370,10 +491,13 @@ pub fn status_invocations(
                     ];
                     args.extend(group.iter().cloned());
                     // The driver poller reads the same `id|STATE` rows —
-                    // one query shape, one parser.
+                    // one query shape, one parser. `|` must be a JMESPath
+                    // raw string (single-quoted): a bare `|` is the pipe
+                    // operator, and `join(|,…)` is rejected as a syntax
+                    // error before any API call.
                     args.extend([
                         "--query".to_string(),
-                        "jobs[].join(|,[jobId,status])".to_string(),
+                        "jobs[].join('|',[jobId,status])".to_string(),
                         "--output".to_string(),
                         "text".to_string(),
                     ]);
@@ -383,25 +507,59 @@ pub fn status_invocations(
         }
         ClusterBackend::GcpBatch => job_ids
             .iter()
+            // Array element handles (`{job}:{taskIndex}`) are engine-owned
+            // bookkeeping, not job resource names — describing one makes
+            // gcloud fail. The driver settles tasks through
+            // `gcloud batch tasks list`; this per-id CLI view cannot, so an
+            // element request stays unanswered (Unknown) instead of sending
+            // an invalid id.
+            .filter(|id| gcp_element_index(id).is_none())
             .map(|id| {
-                (
-                    "gcloud",
-                    vec![
-                        "batch".to_string(),
-                        "jobs".to_string(),
-                        "describe".to_string(),
-                        id.clone(),
-                        // `name<TAB>state` — the tab shape the shared
-                        // parser reads alongside the pipe form.
-                        "--format=value(name,status.state)".to_string(),
-                    ],
-                )
+                let mut args = vec![
+                    "batch".to_string(),
+                    "jobs".to_string(),
+                    "describe".to_string(),
+                    id.clone(),
+                ];
+                if let Some(location) = queue {
+                    args.push(format!("--location={location}"));
+                }
+                // `name<TAB>state` — the tab shape the shared
+                // parser reads alongside the pipe form.
+                args.push("--format=value(name,status.state)".to_string());
+                ("gcloud", args)
             })
             .collect(),
-        // DescribeJobs answers JSON; per-id status rides the dedicated
-        // poll arm in `ClusterExecutor::query_status` (the line-based
-        // shared parser cannot read tccli's envelope).
-        ClusterBackend::TencentBatch => vec![],
+        ClusterBackend::TencentBatch => {
+            // The API takes real job ids; a `{job}:{instance}` element handle
+            // would be rejected for the whole call. Query each base once and
+            // let `status_report` apply the base verdict to its elements
+            // (the same aggregate provenance the driver records).
+            let targets = vendor_job_targets(backend, job_ids);
+            targets
+                .chunks(TENCENT_DESCRIBE_JOBS_MAX_IDS)
+                .map(|group| {
+                    // `--JobIds` is a standard JSON list argument; tccli
+                    // prints the unwrapped response body as JSON (see
+                    // `tccli_body`).
+                    let mut args = vec![
+                        "batch".to_string(),
+                        "DescribeJobs".to_string(),
+                        "--JobIds".to_string(),
+                        serde_json::to_string(group).expect("job id list serializes"),
+                        "--Limit".to_string(),
+                        TENCENT_DESCRIBE_JOBS_MAX_IDS.to_string(),
+                        "--output".to_string(),
+                        "json".to_string(),
+                    ];
+                    if let Some(zone) = queue {
+                        args.push("--region".to_string());
+                        args.push(super::tencent_batch::region_from_zone(zone).to_string());
+                    }
+                    ("tccli", args)
+                })
+                .collect()
+        }
     }
 }
 
@@ -445,41 +603,67 @@ pub fn my_jobs_invocations(
             // list-jobs requires EXACTLY one of --job-queue,
             // --array-job-id, or --multi-node-job-id (client-side
             // validation — a bare call errors out). The queue is the same
-            // `queue` profile key submit uses; with none configured there
-            // is nothing to list against (submit would fail too), so the
-            // listing is empty rather than a fabricated table.
-            match queue {
-                Some(queue) => vec![(
-                    "aws",
-                    vec![
-                        "batch".to_string(),
-                        "list-jobs".to_string(),
-                        "--job-queue".to_string(),
-                        queue.to_string(),
-                        "--query".to_string(),
-                        "jobSummaryList[].join(|,[jobId,status])".to_string(),
-                        "--output".to_string(),
-                        "text".to_string(),
-                    ],
-                )],
-                None => vec![],
-            }
+            // `queue` profile key submit uses; when it is unset the submit
+            // payload falls back to the engine's default queue name, so the
+            // listing queries that same queue rather than fabricating an
+            // empty table for jobs it would have submitted.
+            //
+            // Without `--job-status` the API returns ONLY RUNNING jobs, so
+            // the live-queue view asks once per non-terminal status and the
+            // caller merges the answers. (ListJobs has no per-user filter;
+            // this is the queue's view, not strictly this account's.)
+            let queue = queue.unwrap_or(super::aws_batch::AWS_DEFAULT_JOB_QUEUE);
+            AWS_LIVE_JOB_STATUSES
+                .iter()
+                .map(|status| {
+                    (
+                        "aws",
+                        vec![
+                            "batch".to_string(),
+                            "list-jobs".to_string(),
+                            "--job-queue".to_string(),
+                            queue.to_string(),
+                            "--job-status".to_string(),
+                            (*status).to_string(),
+                            "--query".to_string(),
+                            // Quoted separator: a bare `|` is JMESPath's
+                            // pipe operator, not a string.
+                            "jobSummaryList[].join('|',[jobId,status])".to_string(),
+                            "--output".to_string(),
+                            "text".to_string(),
+                        ],
+                    )
+                })
+                .collect()
         }
-        ClusterBackend::GcpBatch => vec![(
-            "gcloud",
-            vec![
+        ClusterBackend::GcpBatch => {
+            let mut args = vec![
                 "batch".to_string(),
                 "jobs".to_string(),
                 "list".to_string(),
-                "--format=value(name,status.state)".to_string(),
-            ],
-        )],
-        // tccli's DescribeJobs answers JSON (no text table, no query flag)
-        // — the raw `cluster status` view stays unsupported for this
-        // backend until a JSON row formatter exists; run-aware status
-        // works through the dedicated poll arm.
+            ];
+            // `jobs list` needs a location (or a fully qualified parent)
+            // unless the site's gcloud defaults carry one.
+            if let Some(location) = queue {
+                args.push(format!("--location={location}"));
+            }
+            args.push("--format=value(name,status.state)".to_string());
+            vec![("gcloud", args)]
+        }
+        // tccli's DescribeJobs has no per-user or per-queue scope (only job
+        // ids or attribute filters), so a "what of MINE is in the queue"
+        // listing cannot be answered faithfully — `supports_my_jobs_listing`
+        // tells the CLI to say so instead of printing an empty table.
         ClusterBackend::TencentBatch => vec![],
     }
+}
+
+/// Whether [`my_jobs_invocations`] can answer the no-argument
+/// `cluster status` view for `backend`. Tencent Batch has no listing scoped
+/// to the invoking identity or a queue; an empty invocation list there means
+/// "unsupported", not "no jobs".
+pub fn supports_my_jobs_listing(backend: &ClusterBackend) -> bool {
+    !matches!(backend, ClusterBackend::TencentBatch)
 }
 
 /// Parse listing output — the scheduler's per-user table — into one
@@ -516,10 +700,15 @@ pub fn parse_job_listing(
 /// implementation share this mapping so the two can never drift (issue #1158 live campaign:
 /// the CLI used to pass the bare job id, which `kubectl` rejected as an
 /// unknown command). Scheduler-array-style backends cancel every id in one
-/// call; per-job APIs (AWS Batch, GCP Batch) get one invocation each.
+/// call; per-job APIs (AWS Batch, GCP Batch, Tencent Batch) get one
+/// invocation each. `queue` carries the addressing selector where the CLI
+/// requires one: the GCP location (`gcloud batch jobs cancel` cannot resolve
+/// a bare id without it) and the Tencent placement zone (whose region scopes
+/// the tccli call).
 pub fn cancel_invocations(
     backend: &ClusterBackend,
     job_ids: &[String],
+    queue: Option<&str>,
 ) -> Vec<(String, Vec<String>)> {
     match backend {
         ClusterBackend::Slurm => vec![("scancel".to_string(), job_ids.to_vec())],
@@ -552,35 +741,43 @@ pub fn cancel_invocations(
                 )
             })
             .collect(),
-        ClusterBackend::GcpBatch => job_ids
-            .iter()
+        ClusterBackend::GcpBatch => vendor_job_targets(backend, job_ids)
+            .into_iter()
             .map(|id| {
-                (
-                    "gcloud".to_string(),
-                    vec![
-                        "batch".to_string(),
-                        "jobs".to_string(),
-                        "delete".to_string(),
-                        id.clone(),
-                        "--quiet".to_string(),
-                    ],
-                )
+                // CancelJob, not DeleteJob: delete removes the job record,
+                // after which every describe answers NotFound and the
+                // driver can only blind-settle the element as FAILED.
+                // Cancel preserves the job, records CANCELLED, and stops
+                // its running tasks.
+                let mut args = vec![
+                    "batch".to_string(),
+                    "jobs".to_string(),
+                    "cancel".to_string(),
+                    id.to_string(),
+                ];
+                if let Some(location) = queue {
+                    args.push(format!("--location={location}"));
+                }
+                args.push("--quiet".to_string());
+                ("gcloud".to_string(), args)
             })
             .collect(),
-        ClusterBackend::TencentBatch => job_ids
-            .iter()
+        ClusterBackend::TencentBatch => vendor_job_targets(backend, job_ids)
+            .into_iter()
             .map(|id| {
-                (
-                    "tccli".to_string(),
-                    vec![
-                        "batch".to_string(),
-                        "TerminateJob".to_string(),
-                        "--JobId".to_string(),
-                        id.clone(),
-                        "--output".to_string(),
-                        "json".to_string(),
-                    ],
-                )
+                let mut args = vec![
+                    "batch".to_string(),
+                    "TerminateJob".to_string(),
+                    "--JobId".to_string(),
+                    id.to_string(),
+                    "--output".to_string(),
+                    "json".to_string(),
+                ];
+                if let Some(zone) = queue {
+                    args.push("--region".to_string());
+                    args.push(super::tencent_batch::region_from_zone(zone).to_string());
+                }
+                ("tccli".to_string(), args)
             })
             .collect(),
     }
@@ -613,6 +810,28 @@ pub fn status_report(
     job_ids: &[String],
     stdout: &str,
 ) -> Vec<(String, BackendJobStatus)> {
+    // Tencent answers one JSON document (body or `Response`-wrapped), not
+    // one row per line — parse it with the poller's reader. An element
+    // handle resolves to its base job's verdict: the API has no per-id row
+    // for `{job}:{instance}`, and the driver records the same aggregate
+    // provenance for Tencent arrays.
+    if matches!(backend, ClusterBackend::TencentBatch) {
+        let found = parse_tencent_job_states(stdout);
+        return job_ids
+            .iter()
+            .map(|id| {
+                let base = vendor_job_id(backend, id);
+                (
+                    id.clone(),
+                    found
+                        .get(id)
+                        .or_else(|| found.get(base))
+                        .copied()
+                        .unwrap_or(BackendJobStatus::Unknown),
+                )
+            })
+            .collect();
+    }
     let mut found: HashMap<String, BackendJobStatus> = HashMap::new();
     for line in stdout.lines().map(str::trim).filter(|l| !l.is_empty()) {
         if let Some((id, status)) = parse_status_line(backend, line)
@@ -944,13 +1163,33 @@ impl ClusterExecutor {
         Ok(out)
     }
 
-    /// `--location=…` for gcloud batch invocations (describe/delete/submit
-    /// all require it unless the site's gcloud defaults carry one). The
-    /// `--queue` cluster option carries the region/location for this
-    /// backend, mirroring how AWS Batch reads it as the job queue.
+    /// `--location=…` for gcloud batch invocations (submit/describe/cancel
+    /// and tasks list all require it unless the site's gcloud defaults
+    /// carry one). The `--queue` cluster option carries the
+    /// region/location for this backend, mirroring how AWS Batch reads it
+    /// as the job queue.
     fn gcloud_location_args(&self) -> Vec<String> {
         match self.cluster.queue.as_deref() {
             Some(loc) => vec![format!("--location={loc}")],
+            None => Vec::new(),
+        }
+    }
+
+    /// `--region …` for tccli batch invocations. The `queue` cluster option
+    /// carries the placement zone for this backend; tccli's configured
+    /// region is otherwise a separate setting, and a SubmitJob whose zone
+    /// belongs to another region is rejected
+    /// (`InvalidParameterValue.InvalidZoneMismatchRegion`). Deriving the
+    /// region from the zone keeps the two from disagreeing.
+    fn tccli_region_args(&self) -> Vec<String> {
+        if self.backend != ClusterBackend::TencentBatch {
+            return Vec::new();
+        }
+        match self.cluster.queue.as_deref() {
+            Some(zone) => vec![
+                "--region".to_string(),
+                super::tencent_batch::region_from_zone(zone).to_string(),
+            ],
             None => Vec::new(),
         }
     }
@@ -1117,34 +1356,36 @@ impl super::ExecutorBackend for ClusterExecutor {
                     "text".into(),
                 ],
             ),
-            ClusterBackend::TencentBatch => (
-                // tccli loads the payload from a JSON file and answers in
-                // its Response envelope; parse_job_id reads JobId from it.
-                "tccli",
-                vec![
-                    "batch".into(),
-                    "SubmitJob".into(),
-                    "--cli-input-json".into(),
+            ClusterBackend::TencentBatch => {
+                // tccli loads the payload from a JSON file (the `file://`
+                // prefix is mandatory for --cli-input-json) and prints the
+                // unwrapped response body; parse_job_id reads JobId from
+                // either shape.
+                let mut args = vec![
+                    "batch".to_string(),
+                    "SubmitJob".to_string(),
+                    "--cli-input-json".to_string(),
                     format!("file://{path_str}"),
-                    "--output".into(),
-                    "json".into(),
-                ],
-            ),
+                    "--output".to_string(),
+                    "json".to_string(),
+                ];
+                args.extend(self.tccli_region_args());
+                ("tccli", args)
+            }
             ClusterBackend::GcpBatch => {
                 // GCP Batch takes the job id positionally and the Job
                 // resource via --config. The manifest carries no id, so one
                 // is minted from the job directory (the sanitized rule
-                // name) plus the submission millisecond for uniqueness
-                // across concurrent runs. `--location` rides the --queue
-                // cluster option, mirroring how AWS Batch reads it as the
-                // job queue; a missing location fails fast with gcloud's
-                // own remediation message.
-                let dir = script_path
-                    .parent()
-                    .and_then(|p| p.file_name())
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("job");
-                let job_id = mint_gcp_job_id(dir, Utc::now().timestamp_millis());
+                // name, plus the chunk directory for an array) and the
+                // submission millisecond for uniqueness across concurrent
+                // runs. `--location` rides the --queue cluster option,
+                // mirroring how AWS Batch reads it as the job queue; a
+                // missing location fails fast with gcloud's own
+                // remediation message.
+                let job_id = mint_gcp_job_id(
+                    &gcp_job_name_source(script_path),
+                    Utc::now().timestamp_millis(),
+                );
                 let mut args = vec![
                     "batch".to_string(),
                     "jobs".to_string(),
@@ -1185,9 +1426,12 @@ impl super::ExecutorBackend for ClusterExecutor {
             ClusterBackend::TencentBatch => {
                 // DescribeJobs answers one JSON document per call (≤100
                 // ids): JobSet[] rows of {JobId, JobState}. Element handles
-                // (`{jobId}:{instanceIndex}`) ride the base job's state for
-                // now — per-instance settle via DescribeTask is the live
-                // campaign's next step (RB-06 residual for this backend).
+                // (`{jobId}:{instanceIndex}`) are engine-owned bookkeeping
+                // keys; Tencent's per-instance records live behind
+                // DescribeTask, which this adapter does not call, so every
+                // element settles on the base job's state and the driver
+                // records that aggregate provenance in `skip_reason`
+                // (RB-06 residual for this backend).
                 if job_ids.is_empty() {
                     return Ok(HashMap::new());
                 }
@@ -1199,53 +1443,50 @@ impl super::ExecutorBackend for ClusterExecutor {
                             .unwrap_or_else(|| id.clone())
                     })
                     .collect();
-                let ids_json =
-                    serde_json::to_string(&bases.iter().collect::<Vec<_>>()).expect("serialize");
-                let out = match self
-                    .run_cmd(
-                        "tccli",
-                        &[
-                            "batch",
-                            "DescribeJobs",
-                            "--JobIds",
-                            &ids_json,
-                            "--Limit",
-                            "100",
-                            "--output",
-                            "json",
-                        ],
-                    )
-                    .await
+                let mut base_states: HashMap<String, BackendJobStatus> = HashMap::new();
+                for group in bases
+                    .iter()
+                    .collect::<Vec<_>>()
+                    .chunks(TENCENT_DESCRIBE_JOBS_MAX_IDS)
                 {
-                    Ok(out) => out,
-                    Err(err) => {
-                        tracing::warn!("tccli DescribeJobs failed, treating ids as absent: {err}");
-                        return Ok(HashMap::new());
-                    }
-                };
-                let mut statuses = HashMap::new();
-                let doc: serde_json::Value = match serde_json::from_slice(&out.stdout) {
-                    Ok(doc) => doc,
-                    Err(err) => {
-                        tracing::warn!("tccli DescribeJobs returned invalid JSON: {err}");
-                        return Ok(HashMap::new());
-                    }
-                };
-                for job in doc["Response"]["JobSet"].as_array().unwrap_or(&Vec::new()) {
-                    let id = job["JobId"].as_str().unwrap_or_default().to_string();
-                    let st = match job["JobState"].as_str().unwrap_or_default() {
-                        "SUCCEED" => BackendJobStatus::Completed,
-                        "FAILED" | "FAILED_INTERRUPTED" => BackendJobStatus::Failed,
-                        "RUNNING" | "STARTING" => BackendJobStatus::Running,
-                        "SUBMITTED" | "PENDING" | "RUNNABLE" => BackendJobStatus::Pending,
-                        _ => BackendJobStatus::Unknown,
+                    let ids_json = serde_json::to_string(group).expect("serialize job ids");
+                    let mut args = vec![
+                        "batch".to_string(),
+                        "DescribeJobs".to_string(),
+                        "--JobIds".to_string(),
+                        ids_json,
+                        "--Limit".to_string(),
+                        TENCENT_DESCRIBE_JOBS_MAX_IDS.to_string(),
+                        "--output".to_string(),
+                        "json".to_string(),
+                    ];
+                    args.extend(self.tccli_region_args());
+                    let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+                    let out = match self.run_cmd("tccli", &arg_refs).await {
+                        Ok(out) => out,
+                        Err(err) => {
+                            // Same contract as the AWS/PBS/LSF listings: a
+                            // transient CLI failure is scheduler noise —
+                            // report nothing for THIS chunk and let the
+                            // accounting probe settle its ids; other chunks
+                            // still answer.
+                            tracing::warn!(
+                                "tccli DescribeJobs failed, treating ids as absent: {err}"
+                            );
+                            continue;
+                        }
                     };
-                    for id_v in job_ids.iter().filter(|id_v| {
-                        id_v.rsplit_once(':')
-                            .map(|(b, _)| b == id.as_str())
-                            .unwrap_or(id_v.as_str() == id)
-                    }) {
-                        statuses.insert(id_v.clone(), st);
+                    let parsed = parse_tencent_job_states(&String::from_utf8_lossy(&out.stdout));
+                    if parsed.is_empty() && !out.stdout.is_empty() {
+                        tracing::warn!("tccli DescribeJobs returned invalid JSON");
+                    }
+                    base_states.extend(parsed);
+                }
+                let mut statuses = HashMap::new();
+                for id in job_ids {
+                    let base = id.rsplit_once(':').map(|(b, _)| b).unwrap_or(id);
+                    if let Some(state) = base_states.get(base) {
+                        statuses.insert(id.clone(), *state);
                     }
                 }
                 Ok(statuses)
@@ -1481,7 +1722,7 @@ impl super::ExecutorBackend for ClusterExecutor {
             ClusterBackend::AwsBatch => {
                 // Batched describe per chunk (describe-jobs caps `--jobs` at
                 // [`AWS_DESCRIBE_JOBS_MAX_IDS`] ids per call); the
-                // join(|,…) query renders the same `id|STATE` rows the
+                // join('|',…) query renders the same `id|STATE` rows the
                 // shared parser reads, replacing the former per-job serial
                 // describe calls.
                 if job_ids.is_empty() {
@@ -1499,7 +1740,9 @@ impl super::ExecutorBackend for ClusterExecutor {
                         vec!["batch".into(), "describe-jobs".into(), "--jobs".into()];
                     args.extend(group.iter().cloned());
                     args.push("--query".into());
-                    args.push(r"jobs[].join(|,[jobId,status])".into());
+                    // Single-quoted raw string: a bare `|` is the JMESPath
+                    // pipe operator and makes the whole expression invalid.
+                    args.push(r"jobs[].join('|',[jobId,status])".into());
                     args.push("--output".into());
                     args.push("text".into());
                     let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
@@ -1538,10 +1781,15 @@ impl super::ExecutorBackend for ClusterExecutor {
                     std::collections::BTreeMap::new();
                 for id in job_ids {
                     let Some((base, index)) = gcp_element_index(id) else {
-                        let mut args = vec!["batch".to_string(), "jobs".to_string()];
+                        // Documented synopsis: `gcloud batch jobs describe
+                        // JOB [--location=LOCATION] [--format=…]`.
+                        let mut args = vec![
+                            "batch".to_string(),
+                            "jobs".to_string(),
+                            "describe".to_string(),
+                            id.clone(),
+                        ];
                         args.extend(self.gcloud_location_args());
-                        args.push("describe".to_string());
-                        args.push(id.clone());
                         args.push("--format=value(status.state)".to_string());
                         let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
                         let out = match self.run_cmd("gcloud", &arg_refs).await {
@@ -1557,13 +1805,15 @@ impl super::ExecutorBackend for ClusterExecutor {
                         // poll forever) and never success (ledger RB-06).
                         let st = match text.as_str() {
                             "SUCCEEDED" => BackendJobStatus::Completed,
-                            // A deleted (cancelled) job never progresses
-                            // again — settling it Failed immediately beats
-                            // polling Unknown until the blind-settlement
-                            // guard fires (job.proto states 7/8).
-                            "FAILED" | "DELETION_IN_PROGRESS" | "CANCELLED" => {
-                                BackendJobStatus::Failed
-                            }
+                            // job.proto's State enum has a real CANCELLED
+                            // member — a cancelled job is reported as such,
+                            // not rewritten as a generic failure. A deleted
+                            // (DELETION_IN_PROGRESS) job never progresses
+                            // again either; it settles Failed because its
+                            // outcome is not a cancellation the user asked
+                            // for.
+                            "FAILED" | "DELETION_IN_PROGRESS" => BackendJobStatus::Failed,
+                            "CANCELLED" => BackendJobStatus::Cancelled,
                             "CANCELLATION_IN_PROGRESS" => BackendJobStatus::Running,
                             "RUNNING" => BackendJobStatus::Running,
                             "QUEUED" | "SCHEDULED" => BackendJobStatus::Pending,
@@ -1575,10 +1825,15 @@ impl super::ExecutorBackend for ClusterExecutor {
                     by_base.entry(base).or_default().push((id, index));
                 }
                 for (base, elements) in by_base {
-                    let mut args = vec!["batch".to_string(), "tasks".to_string()];
+                    // Documented synopsis: `gcloud batch tasks list
+                    // --job=JOB [--location=LOCATION] [--format=…]`.
+                    let mut args = vec![
+                        "batch".to_string(),
+                        "tasks".to_string(),
+                        "list".to_string(),
+                        format!("--job={base}"),
+                    ];
                     args.extend(self.gcloud_location_args());
-                    args.push("list".to_string());
-                    args.push(format!("--job={base}"));
                     args.push("--format=value(name,status.state)".to_string());
                     let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
                     let out = match self.run_cmd("gcloud", &arg_refs).await {
@@ -1605,7 +1860,13 @@ impl super::ExecutorBackend for ClusterExecutor {
 
     async fn cancel(&self, job_id: &str) -> Result<()> {
         // One shared mapping with the standalone `cluster cancel` command.
-        let invocations = cancel_invocations(&self.backend, &[job_id.to_string()]);
+        // The queue carries the GCP location / Tencent zone the per-job CLI
+        // needs to resolve a bare id.
+        let invocations = cancel_invocations(
+            &self.backend,
+            &[job_id.to_string()],
+            self.cluster.queue.as_deref(),
+        );
         for (program, args) in invocations {
             let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
             self.run_cmd(&program, &arg_refs).await?;
@@ -1614,65 +1875,67 @@ impl super::ExecutorBackend for ClusterExecutor {
     }
 
     async fn logs(&self, job_id: &str) -> Result<String> {
+        // An engine-owned `{job}:{index}` element handle is not a vendor
+        // job id (GCP/Tencent); the base job's record is the only one these
+        // per-id log calls can address.
+        let job_id = vendor_job_id(&self.backend, job_id);
         if self.backend == ClusterBackend::TencentBatch {
             // Two calls: DescribeJob names the task (the engine renders one
-            // task per rule), DescribeTaskLogs answers base64 data URIs of
-            // the captured stdout/stderr — real log content, not job
-            // metadata.
-            let out = self
-                .run_cmd(
-                    "tccli",
-                    &[
-                        "batch",
-                        "DescribeJob",
-                        "--JobId",
-                        job_id,
-                        "--output",
-                        "json",
-                    ],
-                )
-                .await?;
+            // task per rule), DescribeTaskLogs answers base64-encoded
+            // stdout/stderr — real log content, not job metadata. Both
+            // replies are read through `tccli_body` (tccli prints the
+            // unwrapped body; the API reference shows the HTTP envelope).
+            let region = self.tccli_region_args();
+            let mut args = vec![
+                "batch".to_string(),
+                "DescribeJob".to_string(),
+                "--JobId".to_string(),
+                job_id.to_string(),
+                "--output".to_string(),
+                "json".to_string(),
+            ];
+            args.extend(region.clone());
+            let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+            let out = self.run_cmd("tccli", &arg_refs).await?;
             let doc: serde_json::Value =
                 serde_json::from_slice(&out.stdout).map_err(|e| OxoFlowError::Config {
                     message: format!("tccli DescribeJob returned invalid JSON: {e}"),
                 })?;
-            let task_name = doc["Response"]["TaskSet"][0]["TaskName"]
-                .as_str()
-                .ok_or_else(|| OxoFlowError::Config {
-                    message: format!("tccli DescribeJob carried no TaskSet for {job_id}"),
-                })?;
-            let out = self
-                .run_cmd(
-                    "tccli",
-                    &[
-                        "batch",
-                        "DescribeTaskLogs",
-                        "--JobId",
-                        job_id,
-                        "--TaskName",
-                        task_name,
-                        "--output",
-                        "json",
-                    ],
-                )
-                .await?;
+            let body = tccli_body(&doc);
+            let task_name =
+                body["TaskSet"][0]["TaskName"]
+                    .as_str()
+                    .ok_or_else(|| OxoFlowError::Config {
+                        message: format!("tccli DescribeJob carried no TaskSet for {job_id}"),
+                    })?;
+            let mut args = vec![
+                "batch".to_string(),
+                "DescribeTaskLogs".to_string(),
+                "--JobId".to_string(),
+                job_id.to_string(),
+                "--TaskName".to_string(),
+                task_name.to_string(),
+                "--output".to_string(),
+                "json".to_string(),
+            ];
+            args.extend(region);
+            let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+            let out = self.run_cmd("tccli", &arg_refs).await?;
             let doc: serde_json::Value =
                 serde_json::from_slice(&out.stdout).map_err(|e| OxoFlowError::Config {
                     message: format!("tccli DescribeTaskLogs returned invalid JSON: {e}"),
                 })?;
             let mut text = String::new();
-            for entry in doc["TaskInstanceLogSet"]
+            for entry in tccli_body(&doc)["TaskInstanceLogSet"]
                 .as_array()
-                .or_else(|| doc["Response"]["TaskInstanceLogSet"].as_array())
                 .unwrap_or(&Vec::new())
             {
                 let idx = entry["TaskInstanceIndex"].as_i64().unwrap_or_default();
                 for (label, field) in [("stdout", "StdoutLog"), ("stderr", "StderrLog")] {
-                    if let Some(uri) = entry[field].as_str()
-                        && let Some(b64) = uri.split("base64,").nth(1)
-                        && let Ok(bytes) = use_base64_decode(b64)
+                    if let Some(raw) = entry[field].as_str()
+                        && let Some(decoded) = decode_task_log(raw)
                     {
-                        text.push_str(&format!("--- instance {idx} {label} ---\n{bytes}\n"));
+                        text.push_str(&format!("--- instance {idx} {label} ---\n{decoded}\n"));
                     }
                 }
             }
@@ -1710,10 +1973,15 @@ impl super::ExecutorBackend for ClusterExecutor {
                 ],
             ),
             ClusterBackend::GcpBatch => {
-                let mut args = vec!["batch".to_string(), "jobs".to_string()];
+                // Documented synopsis: `gcloud batch jobs describe JOB
+                // [--location=LOCATION]`.
+                let mut args = vec![
+                    "batch".to_string(),
+                    "jobs".to_string(),
+                    "describe".to_string(),
+                    job_id.to_string(),
+                ];
                 args.extend(self.gcloud_location_args());
-                args.push("describe".to_string());
-                args.push(job_id.to_string());
                 ("gcloud", args)
             }
             ClusterBackend::TencentBatch => {
@@ -1757,9 +2025,11 @@ impl super::ExecutorBackend for ClusterExecutor {
         // Indexed Job reports completed/failed indexes; AWS Batch child
         // jobs and GCP Batch tasks are individually addressable. qstat /
         // bjobs report only the array base id in the invocations this
-        // adapter issues (issue #136 H4, live-verified for PBS/SGE), so
-        // those three keep base-level polling with explicit aggregate
-        // provenance (issue #1132 / ledger RB-06).
+        // adapter issues (issue #136 H4, live-verified for PBS/SGE), and
+        // Tencent Batch's per-instance records sit behind a separate
+        // DescribeTask call this adapter does not make — those keep
+        // base-level polling with explicit aggregate provenance
+        // (issue #1132 / ledger RB-06).
         matches!(
             self.backend,
             ClusterBackend::Slurm
@@ -1774,7 +2044,9 @@ impl super::ExecutorBackend for ClusterExecutor {
         // elements as `38[1]` … ; LSF echoes the bare array id and
         // addresses elements `44[2]` — the SLURM `{base}_{index}` form is
         // not a queryable id on either. AWS Batch child ids and GCP Batch
-        // task indexes are zero-based and both shaped `{base}:{index}`.
+        // and Tencent Batch instance indexes are zero-based and shaped
+        // `{base}:{index}`; the Tencent handle is engine bookkeeping (the
+        // tenant API addresses instances by JobId + TaskName + index).
         match self.backend {
             ClusterBackend::Pbs if base.contains("[]") => {
                 base.replacen("[]", &format!("[{index}]"), 1)
@@ -1969,7 +2241,19 @@ fn parse_accounting(backend: &ClusterBackend, text: &str) -> Option<TerminalReco
     }
 }
 
-/// Decode base64 (the DescribeTaskLogs data-URI payloads) without pulling
+/// Decode one `DescribeTaskLogs` payload.
+///
+/// The API reference documents a raw Base64 string ("标准输出日志
+/// （Base64编码…）"); its own CLI example returns a
+/// `data:text/plain;charset=utf-8;base64,…` URI. Accept both: strip an
+/// optional data-URI prefix, then decode. A payload that is not valid
+/// base64 is skipped rather than printed as mojibake.
+fn decode_task_log(raw: &str) -> Option<String> {
+    let payload = raw.split_once("base64,").map(|(_, p)| p).unwrap_or(raw);
+    use_base64_decode(payload).ok()
+}
+
+/// Decode base64 (the DescribeTaskLogs payloads) without pulling
 /// a new dependency — the `base64` crate is already in the tree.
 fn use_base64_decode(input: &str) -> std::result::Result<String, String> {
     use base64::Engine as _;
@@ -2389,7 +2673,7 @@ mod tests {
         // rejects — `-j` takes one comma-separated list.
         let ids = ["101".to_string(), "202".to_string()];
         assert_eq!(
-            status_invocations(&ClusterBackend::Slurm, &ids),
+            status_invocations(&ClusterBackend::Slurm, &ids, None),
             vec![(
                 "squeue",
                 vec![
@@ -2404,7 +2688,7 @@ mod tests {
         // -x includes history: without it a finished job (esp. array
         // elements) makes the whole by-id listing exit 35.
         assert_eq!(
-            status_invocations(&ClusterBackend::Pbs, &ids),
+            status_invocations(&ClusterBackend::Pbs, &ids, None),
             vec![(
                 "qstat",
                 vec!["-x".to_string(), "101".to_string(), "202".to_string()]
@@ -2413,7 +2697,7 @@ mod tests {
         // LSF polls with -a so DONE/EXIT rows stay visible; plain bjobs
         // answers only for PEND/RUN jobs and a finished job would vanish.
         assert_eq!(
-            status_invocations(&ClusterBackend::Lsf, &ids),
+            status_invocations(&ClusterBackend::Lsf, &ids, None),
             vec![(
                 "bjobs",
                 vec!["-a".to_string(), "101".to_string(), "202".to_string()]
@@ -2421,7 +2705,7 @@ mod tests {
         );
         // SGE answers one job per -j.
         assert_eq!(
-            status_invocations(&ClusterBackend::Sge, &ids),
+            status_invocations(&ClusterBackend::Sge, &ids, None),
             vec![
                 ("qstat", vec!["-j".to_string(), "101".to_string()]),
                 ("qstat", vec!["-j".to_string(), "202".to_string()]),
@@ -2430,7 +2714,7 @@ mod tests {
         // AWS Batch takes `--jobs` as a list: each id is its own argv
         // entry (a single space-joined argument is one invalid id).
         assert_eq!(
-            status_invocations(&ClusterBackend::AwsBatch, &ids),
+            status_invocations(&ClusterBackend::AwsBatch, &ids, None),
             vec![(
                 "aws",
                 vec![
@@ -2440,11 +2724,42 @@ mod tests {
                     "101".to_string(),
                     "202".to_string(),
                     "--query".to_string(),
-                    "jobs[].join(|,[jobId,status])".to_string(),
+                    "jobs[].join('|',[jobId,status])".to_string(),
                     "--output".to_string(),
                     "text".to_string(),
                 ]
             )]
+        );
+        // A GCP job id is resolvable only with its location (or a
+        // configured gcloud default) — the profile queue supplies it.
+        assert_eq!(
+            status_invocations(
+                &ClusterBackend::GcpBatch,
+                &["job-1".to_string()],
+                Some("us-central1")
+            ),
+            vec![(
+                "gcloud",
+                vec![
+                    "batch".to_string(),
+                    "jobs".to_string(),
+                    "describe".to_string(),
+                    "job-1".to_string(),
+                    "--location=us-central1".to_string(),
+                    "--format=value(name,status.state)".to_string(),
+                ]
+            )]
+        );
+        // An engine-owned `{job}:{task}` handle is not a job resource name;
+        // describing one would make gcloud fail, so it is not queried.
+        assert!(
+            status_invocations(
+                &ClusterBackend::GcpBatch,
+                &["job-1:0".to_string()],
+                Some("us-central1")
+            )
+            .is_empty(),
+            "element handles never reach gcloud as job ids"
         );
     }
 
@@ -2932,7 +3247,7 @@ mod tests {
         let ids: Vec<String> = (0..AWS_DESCRIBE_JOBS_MAX_IDS + 1)
             .map(|i| format!("elem:{i}"))
             .collect();
-        let invocations = status_invocations(&ClusterBackend::AwsBatch, &ids);
+        let invocations = status_invocations(&ClusterBackend::AwsBatch, &ids, None);
         assert_eq!(
             invocations.len(),
             2,
@@ -3006,23 +3321,32 @@ mod tests {
     /// Ledger RB-06: `gcloud batch jobs submit <id>` prints the submitted
     /// Job resource, not the id; `submit` must return the minted id it
     /// passed positionally, or every describe/cancel and per-element task
-    /// handle is keyed on YAML.
+    /// handle is keyed on YAML. The argv must also match gcloud's real
+    /// grammar: `<id>` positional, `--config <plain path>` (no `file://`),
+    /// `--location` from the profile queue.
     #[tokio::test]
     #[cfg(unix)]
     async fn gcp_batch_submit_returns_the_minted_job_id() {
         let runs = tempfile::tempdir().unwrap();
         let bin = tempfile::tempdir().unwrap();
+        let args_log = runs.path().join("args");
         write_scheduler_shim(
             bin.path(),
             "gcloud",
-            "printf 'name: projects/p/locations/l/jobs/whatever\\nstatus:\\n  state: QUEUED\\n'\n\
-             exit 0",
+            &format!(
+                "printf '%s\\n' \"$@\" >> {}\n\
+                 printf 'name: projects/p/locations/l/jobs/whatever\\nstatus:\\n  state: QUEUED\\n'\n\
+                 exit 0",
+                args_log.display()
+            ),
         );
         let job_dir = runs.path().join("jobs/trim");
         std::fs::create_dir_all(&job_dir).unwrap();
         let spec = job_dir.join("job.json");
         std::fs::write(&spec, "{}").unwrap();
-        let exec = ClusterExecutor::new(ClusterBackend::GcpBatch, cluster_config())
+        let mut config = cluster_config();
+        config.queue = Some("us-central1".into());
+        let exec = ClusterExecutor::new(ClusterBackend::GcpBatch, config)
             .with_scheduler_dir(bin.path().to_path_buf());
         let id = exec.submit(&spec).await.unwrap();
         assert!(id.starts_with("oxoflow-trim-"), "minted id expected: {id}");
@@ -3030,6 +3354,53 @@ mod tests {
             !id.contains('\n') && !id.contains("status:"),
             "the job resource must never become the job id: {id}"
         );
+        let argv: Vec<String> = std::fs::read_to_string(&args_log)
+            .unwrap()
+            .lines()
+            .map(str::to_string)
+            .collect();
+        assert_eq!(argv[..3], ["batch", "jobs", "submit"], "{argv:?}");
+        assert_eq!(
+            argv[3], id,
+            "the minted id is the positional JOB argument: {argv:?}"
+        );
+        let config_at = argv.iter().position(|a| a == "--config").unwrap();
+        assert_eq!(
+            argv[config_at + 1],
+            spec.to_string_lossy(),
+            "gcloud --config takes the plain manifest path: {argv:?}"
+        );
+        assert!(
+            !argv.iter().any(|a| a.starts_with("file://")),
+            "gcloud has no file:// scheme for --config: {argv:?}"
+        );
+        assert!(
+            argv.contains(&"--location=us-central1".to_string()),
+            "the profile queue names the GCP location: {argv:?}"
+        );
+    }
+
+    /// An array chunk's script lives at `jobs/<template>/chunk-N/job.sh`;
+    /// using only the immediate parent named every chunk `chunk-1` and
+    /// collided across rules. The minted id must carry the template too.
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn gcp_batch_array_chunk_ids_name_the_template() {
+        let runs = tempfile::tempdir().unwrap();
+        let bin = tempfile::tempdir().unwrap();
+        write_scheduler_shim(bin.path(), "gcloud", "exit 0");
+        let chunk_dir = runs.path().join("jobs/trim/chunk-1");
+        std::fs::create_dir_all(&chunk_dir).unwrap();
+        let spec = chunk_dir.join("job.sh");
+        std::fs::write(&spec, "{}").unwrap();
+        let exec = ClusterExecutor::new(ClusterBackend::GcpBatch, cluster_config())
+            .with_scheduler_dir(bin.path().to_path_buf());
+        let id = exec.submit(&spec).await.unwrap();
+        assert!(
+            id.starts_with("oxoflow-trim-chunk-1-"),
+            "the array chunk id must name the template: {id}"
+        );
+        assert!(id.len() <= 63, "GCP job ids cap at 63 chars: {id}");
     }
 
     /// Ledger RB-06: an empty / unrecognised `gcloud` state is Unknown,
@@ -3050,6 +3421,366 @@ mod tests {
             statuses.get("solo-job"),
             Some(&BackendJobStatus::Unknown),
             "an unrecognised state is missing data, not a live job: {statuses:?}"
+        );
+    }
+
+    /// job.proto's JobStatus.State enum is the vendor truth for every
+    /// terminal/live verdict; CANCELLED is a first-class state and must
+    /// settle as Cancelled (not rewritten as a generic failure), while a
+    /// deleted job can no longer progress and settles.
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn gcp_batch_job_states_map_to_engine_verdicts() {
+        let bin = tempfile::tempdir().unwrap();
+        write_scheduler_shim(bin.path(), "gcloud", "echo \"$GCP_STATE\"");
+        let cases = [
+            ("QUEUED", BackendJobStatus::Pending),
+            ("SCHEDULED", BackendJobStatus::Pending),
+            ("RUNNING", BackendJobStatus::Running),
+            ("CANCELLATION_IN_PROGRESS", BackendJobStatus::Running),
+            ("SUCCEEDED", BackendJobStatus::Completed),
+            ("FAILED", BackendJobStatus::Failed),
+            ("DELETION_IN_PROGRESS", BackendJobStatus::Failed),
+            ("CANCELLED", BackendJobStatus::Cancelled),
+            ("SOMETHING_NEW", BackendJobStatus::Unknown),
+        ];
+        for (state, expected) in cases {
+            let exec = ClusterExecutor::new(ClusterBackend::GcpBatch, cluster_config())
+                .with_scheduler_dir(bin.path().to_path_buf())
+                .with_env("GCP_STATE", state);
+            let statuses = exec.poll(&["solo-job".to_string()]).await.unwrap();
+            assert_eq!(
+                statuses.get("solo-job"),
+                Some(&expected),
+                "state {state} must map to {expected:?}: {statuses:?}"
+            );
+        }
+    }
+
+    /// tccli prints the API response BODY (`{"JobId": …}`): its action
+    /// caller unwraps the HTTP layer's `{"Response": …}` envelope before
+    /// formatting. Both shapes parse; the unwrapped body is what a real
+    /// CLI returns.
+    #[test]
+    fn tencent_replies_parse_with_or_without_the_api_envelope() {
+        let body = r#"{"JobId":"job-4yn0we13","RequestId":"r"}"#;
+        assert_eq!(
+            parse_job_id(&ClusterBackend::TencentBatch, body, "").unwrap(),
+            "job-4yn0we13"
+        );
+        let wrapped = r#"{"Response":{"JobId":"job-4yn0we13","RequestId":"r"}}"#;
+        assert_eq!(
+            parse_job_id(&ClusterBackend::TencentBatch, wrapped, "").unwrap(),
+            "job-4yn0we13"
+        );
+        assert!(
+            parse_job_id(&ClusterBackend::TencentBatch, "not json", "").is_err(),
+            "a non-reply must never become a job id"
+        );
+    }
+
+    /// api.json's JobState enum: SUBMITTED, PENDING, RUNNABLE, STARTING,
+    /// RUNNING, SUCCEED, FAILED, FAILED_INTERRUPTED. Every member is mapped,
+    /// an unknown value is Unknown, and the reply parses in both shapes.
+    #[test]
+    fn tencent_job_states_cover_every_documented_jobstate() {
+        let body = r#"{"JobSet":[
+            {"JobId":"j1","JobState":"SUBMITTED"},
+            {"JobId":"j2","JobState":"PENDING"},
+            {"JobId":"j3","JobState":"RUNNABLE"},
+            {"JobId":"j4","JobState":"STARTING"},
+            {"JobId":"j5","JobState":"RUNNING"},
+            {"JobId":"j6","JobState":"SUCCEED"},
+            {"JobId":"j7","JobState":"FAILED"},
+            {"JobId":"j8","JobState":"FAILED_INTERRUPTED"},
+            {"JobId":"j9","JobState":"SOMETHING_NEW"}
+        ]}"#;
+        let states = parse_tencent_job_states(body);
+        let expected = [
+            ("j1", BackendJobStatus::Pending),
+            ("j2", BackendJobStatus::Pending),
+            ("j3", BackendJobStatus::Pending),
+            ("j4", BackendJobStatus::Running),
+            ("j5", BackendJobStatus::Running),
+            ("j6", BackendJobStatus::Completed),
+            ("j7", BackendJobStatus::Failed),
+            ("j8", BackendJobStatus::Failed),
+            ("j9", BackendJobStatus::Unknown),
+        ];
+        for (id, status) in expected {
+            assert_eq!(states.get(id), Some(&status), "{id} in {states:?}");
+        }
+        let wrapped = format!(r#"{{"Response":{body}}}"#);
+        assert_eq!(parse_tencent_job_states(&wrapped), states);
+        assert!(
+            parse_tencent_job_states("garbage").is_empty(),
+            "malformed output is missing data, never a verdict"
+        );
+    }
+
+    /// The standalone `cluster status <ids>` path must talk to
+    /// `DescribeJobs` (one JSON call per ≤100 ids, region derived from the
+    /// zone) instead of answering every id Unknown.
+    #[test]
+    fn tencent_status_invocations_chunk_and_scope_the_region() {
+        let ids: Vec<String> = (0..TENCENT_DESCRIBE_JOBS_MAX_IDS + 1)
+            .map(|i| format!("job-{i}"))
+            .collect();
+        let invocations =
+            status_invocations(&ClusterBackend::TencentBatch, &ids, Some("ap-shanghai-5"));
+        assert_eq!(invocations.len(), 2, "101 ids → two DescribeJobs calls");
+        let (program, args) = &invocations[0];
+        assert_eq!(*program, "tccli");
+        assert_eq!(args[..2], ["batch", "DescribeJobs"], "{args:?}");
+        let ids_at = args.iter().position(|a| a == "--JobIds").unwrap();
+        let payload: Vec<String> = serde_json::from_str(&args[ids_at + 1]).unwrap();
+        assert_eq!(payload.len(), TENCENT_DESCRIBE_JOBS_MAX_IDS);
+        assert!(args.contains(&"--region".to_string()));
+        assert!(args.contains(&"ap-shanghai".to_string()));
+        let output_at = args.iter().position(|a| a == "--output").unwrap();
+        assert_eq!(
+            args[output_at + 1],
+            "json",
+            "tccli's machine form is JSON: {args:?}"
+        );
+        let (_, second) = &invocations[1];
+        let ids_at = second.iter().position(|a| a == "--JobIds").unwrap();
+        let payload: Vec<String> = serde_json::from_str(&second[ids_at + 1]).unwrap();
+        assert_eq!(payload.len(), 1, "the remainder id rides its own call");
+
+        // Element handles are engine bookkeeping, not real job ids; the
+        // call asks for each base once or the whole API call is rejected.
+        let elements = status_invocations(
+            &ClusterBackend::TencentBatch,
+            &[
+                "job-a:0".to_string(),
+                "job-a:1".to_string(),
+                "job-b".to_string(),
+            ],
+            None,
+        );
+        assert_eq!(elements.len(), 1);
+        let ids_at = elements[0].1.iter().position(|a| a == "--JobIds").unwrap();
+        let payload: Vec<String> = serde_json::from_str(&elements[0].1[ids_at + 1]).unwrap();
+        assert_eq!(payload, ["job-a", "job-b"], "{payload:?}");
+    }
+
+    #[test]
+    fn tencent_status_report_reads_the_json_reply() {
+        let reply = r#"{"JobSet":[
+            {"JobId":"job-a","JobState":"RUNNING"},
+            {"JobId":"job-b","JobState":"SUCCEED"}
+        ]}"#;
+        assert_eq!(
+            status_report(
+                &ClusterBackend::TencentBatch,
+                &[
+                    "job-a".to_string(),
+                    "job-b".to_string(),
+                    "job-c".to_string()
+                ],
+                reply
+            ),
+            vec![
+                ("job-a".to_string(), BackendJobStatus::Running),
+                ("job-b".to_string(), BackendJobStatus::Completed),
+                // A job the reply does not name reads Unknown, never
+                // missing and never success.
+                ("job-c".to_string(), BackendJobStatus::Unknown),
+            ]
+        );
+        // An element handle resolves to its base job's verdict (the API has
+        // no per-element row; the driver records the same aggregate).
+        assert_eq!(
+            status_report(
+                &ClusterBackend::TencentBatch,
+                &["job-a:2".to_string()],
+                reply
+            ),
+            vec![("job-a:2".to_string(), BackendJobStatus::Running)]
+        );
+    }
+
+    /// DescribeTaskLogs documents a raw Base64 string and its own example
+    /// returns a data URI — `logs()` must decode both.
+    #[test]
+    fn tencent_task_logs_decode_raw_base64_and_data_uris() {
+        assert_eq!(decode_task_log("aGVsbG8K").as_deref(), Some("hello\n"));
+        assert_eq!(
+            decode_task_log("data:text/plain;charset=utf-8;base64,aGVsbG8K").as_deref(),
+            Some("hello\n"),
+            "the API example's data-URI form"
+        );
+        assert_eq!(decode_task_log("not base64 !!"), None);
+    }
+
+    /// The tencent poller reads the unwrapped tccli body, scopes the call
+    /// with the zone-derived region, and applies the base job's verdict to
+    /// every element handle (documented aggregate provenance — per-instance
+    /// DescribeTask settlement is the RB-06 residual).
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn tencent_batch_poll_reads_the_body_and_aggregates_elements() {
+        let runs = tempfile::tempdir().unwrap();
+        let bin = tempfile::tempdir().unwrap();
+        let args_log = runs.path().join("args");
+        write_scheduler_shim(
+            bin.path(),
+            "tccli",
+            &format!(
+                "printf '%s\\n' \"$@\" >> {}\n\
+                 echo '{{\"JobSet\":[{{\"JobId\":\"job-abc\",\"JobState\":\"FAILED\"}}],\"TotalCount\":1}}'\n\
+                 exit 0",
+                args_log.display()
+            ),
+        );
+        let mut config = cluster_config();
+        config.backend = ClusterBackend::TencentBatch;
+        config.queue = Some("ap-shanghai-5".into());
+        let exec = ClusterExecutor::new(ClusterBackend::TencentBatch, config)
+            .with_scheduler_dir(bin.path().to_path_buf());
+        let statuses = exec
+            .poll(&[
+                "job-abc:0".to_string(),
+                "job-abc:1".to_string(),
+                "job-missing".to_string(),
+            ])
+            .await
+            .unwrap();
+        assert_eq!(
+            statuses.get("job-abc:0"),
+            Some(&BackendJobStatus::Failed),
+            "elements inherit the base verdict (aggregate): {statuses:?}"
+        );
+        assert_eq!(statuses.get("job-abc:1"), Some(&BackendJobStatus::Failed));
+        assert!(
+            !statuses.contains_key("job-missing"),
+            "a base the reply does not name stays absent (Unknown): {statuses:?}"
+        );
+        let argv: Vec<String> = std::fs::read_to_string(&args_log)
+            .unwrap()
+            .lines()
+            .map(str::to_string)
+            .collect();
+        assert_eq!(argv[..2], ["batch", "DescribeJobs"], "{argv:?}");
+        assert!(
+            argv.contains(&"--region".to_string()) && argv.contains(&"ap-shanghai".to_string()),
+            "the zone's region scopes the call: {argv:?}"
+        );
+    }
+
+    /// `cluster status job-…` for Tencent was an empty invocation list, so
+    /// every id answered Unknown; the JSON logs path likewise hard-coded the
+    /// `Response` envelope. Both wire calls are pinned here end to end.
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn tencent_logs_decode_the_unwrapped_reply() {
+        let bin = tempfile::tempdir().unwrap();
+        write_scheduler_shim(
+            bin.path(),
+            "tccli",
+            "if [ \"$2\" = DescribeJob ]; then\n\
+             echo '{\"JobId\":\"job-a\",\"TaskSet\":[{\"TaskName\":\"task-a\"}]}'\n\
+             else\n\
+             echo '{\"TaskInstanceLogSet\":[{\"TaskInstanceIndex\":0,\
+             \"StdoutLog\":\"aGVsbG8K\",\
+             \"StderrLog\":\"data:text/plain;charset=utf-8;base64,d29ybGQK\"}]}'\n\
+             fi\nexit 0",
+        );
+        let exec = ClusterExecutor::new(ClusterBackend::TencentBatch, cluster_config())
+            .with_scheduler_dir(bin.path().to_path_buf());
+        let logs = exec.logs("job-a").await.unwrap();
+        assert!(logs.contains("hello"), "raw base64 stdout decodes: {logs}");
+        assert!(logs.contains("world"), "data-URI stderr decodes: {logs}");
+    }
+
+    /// `list-jobs` without `--job-status` returns only RUNNING jobs, so the
+    /// raw live view asks for every non-terminal state — on the same
+    /// default queue submit would use when the profile has none.
+    #[test]
+    fn aws_live_listing_asks_every_non_terminal_status() {
+        let invocations = my_jobs_invocations(&ClusterBackend::AwsBatch, None);
+        assert_eq!(invocations.len(), 5, "{invocations:?}");
+        let mut statuses = Vec::new();
+        for (program, args) in &invocations {
+            assert_eq!(*program, "aws");
+            assert!(args.contains(&"--job-queue".to_string()));
+            assert!(
+                args.contains(&super::super::aws_batch::AWS_DEFAULT_JOB_QUEUE.to_string()),
+                "the listing queries the submit default queue: {args:?}"
+            );
+            let at = args.iter().position(|a| a == "--job-status").unwrap();
+            statuses.push(args[at + 1].clone());
+        }
+        assert_eq!(
+            statuses,
+            ["SUBMITTED", "PENDING", "RUNNABLE", "STARTING", "RUNNING"]
+        );
+        // An explicit profile queue wins over the default.
+        let explicit = my_jobs_invocations(&ClusterBackend::AwsBatch, Some("biotech"));
+        assert!(
+            explicit[0].1.contains(&"biotech".to_string()),
+            "{:?}",
+            explicit[0]
+        );
+    }
+
+    /// Tencent has no identity/queue-scoped listing (DescribeJobs needs ids
+    /// or attribute filters), so the CLI must say "unsupported", not print
+    /// a zero-job table.
+    #[test]
+    fn tencent_raw_listing_is_declared_unsupported() {
+        assert!(!supports_my_jobs_listing(&ClusterBackend::TencentBatch));
+        assert!(my_jobs_invocations(&ClusterBackend::TencentBatch, None).is_empty());
+        assert!(supports_my_jobs_listing(&ClusterBackend::AwsBatch));
+        assert!(supports_my_jobs_listing(&ClusterBackend::GcpBatch));
+    }
+
+    /// The GCP job-id source must include the array chunk directory and
+    /// stop at the run's `jobs/` container (never the run stamp or the
+    /// absolute path).
+    #[test]
+    fn gcp_job_name_source_names_the_template_and_chunk() {
+        assert_eq!(
+            gcp_job_name_source(Path::new(
+                "/run/.oxo-flow/runs/20260101/jobs/trim/chunk-2/job.sh"
+            )),
+            "trim-chunk-2"
+        );
+        assert_eq!(
+            gcp_job_name_source(Path::new(
+                "/run/.oxo-flow/runs/20260101/jobs/align_S1/job.sh"
+            )),
+            "align_S1"
+        );
+        assert_eq!(gcp_job_name_source(Path::new("job.sh")), "job");
+    }
+
+    /// GCP/Tencent element handles are engine bookkeeping, not vendor job
+    /// ids; AWS Batch child ids ARE real ids and must never be stripped.
+    #[test]
+    fn vendor_job_ids_strip_only_engine_element_handles() {
+        assert_eq!(vendor_job_id(&ClusterBackend::GcpBatch, "job-1:2"), "job-1");
+        assert_eq!(
+            vendor_job_id(&ClusterBackend::TencentBatch, "job-abc:0"),
+            "job-abc"
+        );
+        assert_eq!(
+            vendor_job_id(&ClusterBackend::AwsBatch, "parent:0"),
+            "parent:0",
+            "an AWS array child id is a real job id"
+        );
+        assert_eq!(vendor_job_id(&ClusterBackend::Slurm, "123_4"), "123_4");
+        assert_eq!(
+            vendor_job_targets(
+                &ClusterBackend::TencentBatch,
+                &[
+                    "job-1:0".to_string(),
+                    "job-1:1".to_string(),
+                    "job-2".to_string()
+                ]
+            ),
+            vec!["job-1", "job-2"]
         );
     }
 
@@ -3639,7 +4370,7 @@ ru_wallclock 82\nru_maxrss    262144\ncpu          164\n";
     #[test]
     fn parse_status_line_reads_batched_aws_describe_rows() {
         // The driver poll renders `id|STATE` rows via
-        // `--query jobs[].join(|,[jobId,status])`; the shared parser must
+        // `--query jobs[].join('|',[jobId,status])`; the shared parser must
         // read the same shape the standalone `cluster status` path emits.
         let (id, st) = parse_status_line(&ClusterBackend::AwsBatch, "abc-123|SUCCEEDED").unwrap();
         assert_eq!(id, "abc-123");
@@ -3747,26 +4478,42 @@ ru_wallclock 82\nru_maxrss    262144\ncpu          164\n";
         // take manifest files, not script arguments).
         let dir = "out";
         assert_eq!(
-            crate::cluster::submit_invocation_hint(&ClusterBackend::Slurm, dir),
+            crate::cluster::submit_invocation_hint(&ClusterBackend::Slurm, dir, None),
             "sbatch --parsable out/*.sh"
         );
         assert_eq!(
-            crate::cluster::submit_invocation_hint(&ClusterBackend::Kubernetes, dir),
+            crate::cluster::submit_invocation_hint(&ClusterBackend::Kubernetes, dir, None),
             "kubectl create -f out/*.sh"
         );
         assert!(
-            crate::cluster::submit_invocation_hint(&ClusterBackend::AwsBatch, dir)
+            crate::cluster::submit_invocation_hint(&ClusterBackend::AwsBatch, dir, None)
                 .contains("aws batch submit-job --cli-input-json")
         );
-        assert!(
-            crate::cluster::submit_invocation_hint(&ClusterBackend::GcpBatch, dir)
-                .contains("gcloud batch jobs submit")
+        // gcloud takes a plain --config path (no file://), a positional
+        // minted id, and the location where the profile has one.
+        let gcp = crate::cluster::submit_invocation_hint(
+            &ClusterBackend::GcpBatch,
+            dir,
+            Some("us-central1"),
         );
+        assert!(gcp.contains("gcloud batch jobs submit"), "{gcp}");
+        assert!(gcp.contains("--config \"$f\""), "{gcp}");
+        assert!(!gcp.contains("file://"), "no URI scheme for gcloud: {gcp}");
+        assert!(!gcp.contains("--query"), "gcloud has no --query: {gcp}");
+        assert!(gcp.contains("--location 'us-central1'"), "{gcp}");
+        // tccli is region-scoped from the Tencent zone.
+        let tencent = crate::cluster::submit_invocation_hint(
+            &ClusterBackend::TencentBatch,
+            dir,
+            Some("ap-shanghai-5"),
+        );
+        assert!(tencent.contains("tccli batch SubmitJob"), "{tencent}");
+        assert!(tencent.contains("--region 'ap-shanghai'"), "{tencent}");
     }
     #[test]
     fn cancel_invocations_match_each_backends_cli_grammar() {
         let ids = vec!["a".to_string(), "b".to_string()];
-        let k8s = cancel_invocations(&ClusterBackend::Kubernetes, &ids);
+        let k8s = cancel_invocations(&ClusterBackend::Kubernetes, &ids, None);
         assert_eq!(
             k8s,
             vec![(
@@ -3781,15 +4528,46 @@ ru_wallclock 82\nru_maxrss    262144\ncpu          164\n";
         );
         // Scheduler-array CLIs take every id in one call.
         assert_eq!(
-            cancel_invocations(&ClusterBackend::Slurm, &ids),
+            cancel_invocations(&ClusterBackend::Slurm, &ids, None),
             vec![("scancel".to_string(), ids.clone())]
         );
         // Per-job cloud APIs get one invocation per id.
-        let aws = cancel_invocations(&ClusterBackend::AwsBatch, &ids);
+        let aws = cancel_invocations(&ClusterBackend::AwsBatch, &ids, None);
         assert_eq!(aws.len(), 2);
         assert!(aws[0].1.contains(&"--job-id".to_string()));
-        let gcp = cancel_invocations(&ClusterBackend::GcpBatch, &ids);
+        // GCP cancels (CancelJob) instead of deleting: a deleted job's
+        // describe answers NotFound, so the driver could only blind-settle
+        // it. The location is what lets gcloud resolve a bare job id.
+        let gcp = cancel_invocations(&ClusterBackend::GcpBatch, &ids, Some("us-central1"));
         assert_eq!(gcp.len(), 2);
-        assert_eq!(gcp[1].1[2], "delete");
+        assert_eq!(gcp[1].1[2], "cancel");
+        assert!(gcp[1].1.contains(&"--location=us-central1".to_string()));
+        // Element handles are engine bookkeeping: cancelling both elements
+        // of one job is ONE vendor call for the base id.
+        let gcp_elements = cancel_invocations(
+            &ClusterBackend::GcpBatch,
+            &["job-1:0".to_string(), "job-1:1".to_string()],
+            None,
+        );
+        assert_eq!(gcp_elements.len(), 1);
+        assert_eq!(gcp_elements[0].1[3], "job-1");
+        // Tencent's TerminateJob is region-scoped; the zone's region is
+        // derived the same way submit derives it.
+        let tencent =
+            cancel_invocations(&ClusterBackend::TencentBatch, &ids, Some("ap-shanghai-5"));
+        assert_eq!(tencent.len(), 2);
+        assert_eq!(
+            tencent[0].1,
+            vec![
+                "batch".to_string(),
+                "TerminateJob".to_string(),
+                "--JobId".to_string(),
+                "a".to_string(),
+                "--output".to_string(),
+                "json".to_string(),
+                "--region".to_string(),
+                "ap-shanghai".to_string(),
+            ]
+        );
     }
 }

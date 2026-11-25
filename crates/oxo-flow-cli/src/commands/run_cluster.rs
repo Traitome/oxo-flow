@@ -161,8 +161,8 @@ fn job_config(cluster: &ClusterProfile) -> Result<(ClusterBackend, ClusterJobCon
     })?;
     let backend = ClusterBackend::from_str(backend_name).map_err(|_| {
         anyhow::anyhow!(
-            "unknown cluster backend '{backend_name}' — expected slurm, pbs, sge, lsf, \
-             kubernetes (k8s), aws-batch, or tencent-batch (Tencent Cloud BatchCompute)"
+            "unknown cluster backend '{backend_name}' — expected {}",
+            oxo_flow_core::cluster::SUPPORTED_BACKENDS_HINT
         )
     })?;
     let volume = cluster.volume.clone();

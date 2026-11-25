@@ -433,8 +433,8 @@ paths, and `when` conditions:
 > **`sensitive = true` and execution artifacts (issue #1120).** A sensitive
 > value is not only masked in captured output — on the cloud cluster backends
 > (`run --profile <NAME>` with `[cluster] backend = "kubernetes"`,
-> `"aws-batch"`, or `"gcp-batch"`, and the same backends via
-> `cluster submit -b …`) it is also routed out of the rendered job body
+> `"aws-batch"`, `"gcp-batch"`, or `"tencent-batch"`, and the same backends
+> via `cluster submit -b …`) it is also routed out of the rendered job body
 > before any manifest is built. Each value becomes a numbered
 > `OXO_FLOW_SENSITIVE_<n>` environment reference, identical across every rule
 > and every array element. Names are assigned once per run: values are
@@ -459,6 +459,11 @@ paths, and `when` conditions:
 >   `OXO_FLOW_SECRET_REFS='OXO_FLOW_SENSITIVE_0=projects/my-project/secrets/token/versions/latest'`.
 >   Grant the Batch service account `roles/secretmanager.secretAccessor`
 >   on the referenced secrets.
+> - **Tencent Batch** — `Task.EnvVars` is plaintext-only and SubmitJob has
+>   no secret-reference field (Tencent's `Authentications` are a COS-mount
+>   mechanism, not environment variables). The CVM image or job
+>   environment must provide each `OXO_FLOW_SENSITIVE_<n>` name; the
+>   reference expands empty otherwise and the rule fails.
 >
 > Local `docker`/`singularity` runs forward the same variables by name
 > (`docker run -e NAME`, and `APPTAINERENV_NAME`/`SINGULARITYENV_NAME` in the
@@ -953,10 +958,11 @@ the operator-level `OXO_FLOW_ENV_PASSTHROUGH` list. No `podman` backend is
 wired, so `PODMAN_*` is not admitted.
 
 **Cloud job environment (issue #1171):** cloud rules (Kubernetes, AWS
-Batch, GCP Batch) do not run as shell commands of the submitting process.
-The engine writes only the rendered rule command into the manifest/spec
-(the Kubernetes Job `args`, the AWS Batch `containerOverrides.command`, or
-the GCP Batch runnable), so the job's environment is:
+Batch, GCP Batch, Tencent Batch) do not run as shell commands of the
+submitting process. The engine writes only the rendered rule command into
+the manifest/spec (the Kubernetes Job `args`, the AWS Batch
+`containerOverrides.command`, the GCP Batch runnable, or the Tencent
+`Task.Application.Command`), so the job's environment is:
 
 - the container image's own `ENV` (or the VM image's environment for a
   GCP Batch script runnable), plus
@@ -968,12 +974,13 @@ the GCP Batch runnable), so the job's environment is:
 The submit host's ambient environment is never forwarded: a generated
 body carries no `env`/`environment` channel for ambient state (only the
 sensitive-value references above create one), and the submit-side CLI
-(`kubectl`, `aws`, `gcloud`) runs in the operator's own process
+(`kubectl`, `aws`, `gcloud`, `tccli`) runs in the operator's own process
 environment, which is likewise never written into the job. Regression
 tests pin the boundary per backend
 (`kubernetes_job_body_carries_no_submit_host_environment`,
 `aws_batch_job_body_carries_no_submit_host_environment`,
-`gcp_batch_job_body_carries_no_submit_host_environment`).
+`gcp_batch_job_body_carries_no_submit_host_environment`,
+`test_sensitive_value_never_in_tencent_batch_body`).
 
 **Stale pixi.lock fallback:** a rule declared with
 `environment = { pixi = "envs/pixi.toml" }` installs from the committed

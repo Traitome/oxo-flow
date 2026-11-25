@@ -229,7 +229,10 @@ pub fn task_element_id(base: &str, ordinal: usize) -> String {
 /// (`projects/P/locations/L/jobs/J/taskGroups/G/tasks/<n>`); the trailing
 /// index is what the handle from [`task_element_id`] names. Unrecognised
 /// states map to [`BackendJobStatus::Unknown`] — missing status data is
-/// never reported as success (issue #1132 / ledger RB-06).
+/// never reported as success (issue #1132 / ledger RB-06). `UNEXECUTED` is
+/// the task.proto terminal state for a task the Job finished without
+/// running; it is a failure of that element, not missing data, so it
+/// settles instead of waiting for the driver's blind-settlement guard.
 pub fn parse_task_states(output: &str) -> BTreeMap<u32, BackendJobStatus> {
     let mut states = BTreeMap::new();
     for line in output.lines().map(str::trim).filter(|l| !l.is_empty()) {
@@ -247,7 +250,9 @@ pub fn parse_task_states(output: &str) -> BTreeMap<u32, BackendJobStatus> {
             "PENDING" | "SCHEDULED" => BackendJobStatus::Pending,
             "ASSIGNED" | "RUNNING" => BackendJobStatus::Running,
             "SUCCEEDED" => BackendJobStatus::Completed,
-            "FAILED" => BackendJobStatus::Failed,
+            // TaskStatus.State has no CANCELLED member; a task of a
+            // cancelled/deleted job either failed or was never executed.
+            "FAILED" | "UNEXECUTED" => BackendJobStatus::Failed,
             _ => BackendJobStatus::Unknown,
         };
         states.insert(index, status);
@@ -362,6 +367,7 @@ projects/p/locations/us-central1/jobs/oxoflow-array-trim-1/taskGroups/group0/tas
 projects/p/locations/us-central1/jobs/oxoflow-array-trim-1/taskGroups/group0/tasks/1\tFAILED
 projects/p/locations/us-central1/jobs/oxoflow-array-trim-1/taskGroups/group0/tasks/2\tRUNNING
 projects/p/locations/us-central1/jobs/oxoflow-array-trim-1/taskGroups/group0/tasks/3\tSOMETHING_NEW
+projects/p/locations/us-central1/jobs/oxoflow-array-trim-1/taskGroups/group0/tasks/4\tUNEXECUTED
 ";
         let states = parse_task_states(output);
         assert_eq!(states.get(&0), Some(&BackendJobStatus::Completed));
@@ -371,6 +377,12 @@ projects/p/locations/us-central1/jobs/oxoflow-array-trim-1/taskGroups/group0/tas
             states.get(&3),
             Some(&BackendJobStatus::Unknown),
             "an unrecognised state must not be optimistically mapped"
+        );
+        assert_eq!(
+            states.get(&4),
+            Some(&BackendJobStatus::Failed),
+            "UNEXECUTED is a terminal non-success task state (task.proto), \
+             not missing data"
         );
         // Malformed rows are skipped, not guessed.
         assert!(parse_task_states("garbage\n\n").is_empty());
