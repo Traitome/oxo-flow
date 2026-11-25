@@ -368,6 +368,7 @@ pub trait ExecutorBackend: Send + Sync {
         _cmd_dir: &str,
         _count: usize,
         _sensitive_refs: &[String],
+        _workdir: Option<&str>,
     ) -> Result<String> {
         Err(OxoFlowError::Config {
             message: format!("backend '{}' does not support job arrays", self.name()),
@@ -1411,6 +1412,7 @@ mod tests {
                     "run/cmds",
                     3,
                     &[],
+                    None,
                     &config,
                 )
                 .expect("k8s array manifest"),

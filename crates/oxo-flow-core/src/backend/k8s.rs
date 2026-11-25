@@ -6,6 +6,7 @@
 
 use super::{BackendJobStatus, sanitize_cloud_name, scheduled_resources};
 use crate::cluster::ClusterJobConfig;
+use crate::environment::mirrored_spec;
 use crate::error::Result;
 use crate::executor::process::sensitive_env_refs;
 use crate::rule::Rule;
@@ -41,16 +42,92 @@ fn workdir_from_shell_cmd(shell_cmd: &str) -> Option<String> {
     }
     None
 }
-/// Mount the run workdir at its host path when the plan folded a `cd` guard
-/// into the command (single-node / shared-filesystem clusters; the documented
-/// Kubernetes deployment mode). Multus/PVC deployments pin their own mounts.
-fn attach_workdir_volume(container: &mut Value, shell_cmd: &str) {
-    let Some(workdir) = workdir_from_shell_cmd(shell_cmd) else {
+/// Mount the run workdir (and any additional absolute host directory the
+/// rendered command reads — today the array dispatch line's per-chunk
+/// command directory) at its host path, for the single-node /
+/// shared-filesystem cluster mode that is the documented Kubernetes
+/// deployment. PVC/NFS deployments pin their own mounts instead.
+///
+/// Relative paths are skipped: a `hostPath` must be absolute, and a relative
+/// one would be rejected by the API server with a confusing validation
+/// error. Entries keep their order, so single-job manifests keep their
+/// historical shape (workdir = mount #0) byte-comparable.
+fn attach_host_path_mounts(container: &mut Value, entries: &[(&'static str, String)]) {
+    let volume_mounts: Vec<Value> = entries
+        .iter()
+        .filter(|(_, path)| path.starts_with('/'))
+        .map(|(name, path)| json!({ "name": name, "mountPath": path }))
+        .collect();
+    if !volume_mounts.is_empty() {
+        container["volumeMounts"] = json!(volume_mounts);
+    }
+}
+
+/// The `volumes` array matching [`attach_host_path_mounts`] (same order,
+/// same names) for the pod spec.
+fn host_path_volumes(entries: &[(&'static str, String)]) -> Option<Value> {
+    let volumes: Vec<Value> = entries
+        .iter()
+        .filter(|(_, path)| path.starts_with('/'))
+        .map(|(name, path)| {
+            json!({
+                "name": name,
+                "hostPath": { "path": path, "type": "Directory" }
+            })
+        })
+        .collect();
+    if volumes.is_empty() {
+        None
+    } else {
+        Some(json!(volumes))
+    }
+}
+
+/// The node's container-daemon socket, when the operator opted in via
+/// `OXO_FLOW_K8S_DOCKER_SOCKET=1`. The short-term channel for
+/// docker-environment rules on Kubernetes (the plan folds the local docker
+/// wrapper into the command): the pod mounts the node's `/var/run/docker.sock`
+/// and gets `DOCKER_HOST=unix:///var/run/docker.sock`, so the folded wrapper
+/// reaches the node daemon. The rule image must carry a docker CLI, and the
+/// mount grants host-root-equivalent access — opt-in, trusted
+/// single-operator clusters only. The durable fix is image-based environment
+/// rendering (tracked as a research issue), which removes the daemon
+/// dependency entirely.
+fn docker_socket_mount() -> Option<(&'static str, &'static str)> {
+    match std::env::var("OXO_FLOW_K8S_DOCKER_SOCKET").as_deref() {
+        Ok("1" | "true" | "yes" | "on") => Some(("oxoflow-docker-sock", "/var/run/docker.sock")),
+        _ => None,
+    }
+}
+
+/// Append the docker-socket channel to a container: volume mount (hostPath
+/// type `Socket` — a different resource type than the directory mounts) and
+/// the `DOCKER_HOST` env var. Appended AFTER `attach_sensitive_env` so the
+/// env entry is added without disturbing the Secret projections.
+fn attach_docker_socket(container: &mut Value, pod_volumes: &mut Vec<Value>) {
+    let Some((name, path)) = docker_socket_mount() else {
         return;
     };
-    container["volumeMounts"] = json!([
-        { "name": "oxoflow-workdir", "mountPath": workdir }
-    ]);
+    let mounts = container
+        .as_object_mut()
+        .expect("container is an object")
+        .entry("volumeMounts")
+        .or_insert_with(|| json!([]));
+    mounts.as_array_mut().expect("array").push(json!({
+        "name": name, "mountPath": path
+    }));
+    pod_volumes.push(json!({
+        "name": name,
+        "hostPath": { "path": path, "type": "Socket" }
+    }));
+    let env = container
+        .as_object_mut()
+        .expect("container is an object")
+        .entry("env")
+        .or_insert_with(|| json!([]));
+    env.as_array_mut().expect("array").push(json!({
+        "name": "DOCKER_HOST", "value": format!("unix://{path}")
+    }));
 }
 
 /// Sanitise a string for use as a Kubernetes resource name or label value.
@@ -171,11 +248,15 @@ pub fn generate_k8s_job_manifest(
         _ => format!("oxoflow-{base}"),
     };
 
-    let container_image = rule
-        .environment
-        .docker
-        .as_deref()
-        .unwrap_or("ubuntu:latest");
+    // Registry-restricted nodes: the image is rewritten through the box-local
+    // `OXO_REGISTRY_MIRRORS` map (namespace/registry-qualified names only —
+    // a bare library name resolves through the daemon's own mirror config).
+    let container_image = mirrored_spec(
+        rule.environment
+            .docker
+            .as_deref()
+            .unwrap_or("ubuntu:latest"),
+    );
 
     let mut container = json!({
         "name": sanitize_k8s_name(&rule.name),
@@ -189,17 +270,23 @@ pub fn generate_k8s_job_manifest(
         "resources": container_resources(rule),
     });
     attach_sensitive_env(&mut container, &sensitive_env_refs(shell_cmd));
-    attach_workdir_volume(&mut container, shell_cmd);
     let workdir = workdir_from_shell_cmd(shell_cmd);
+    let mut directory_entries: Vec<(&'static str, String)> = Vec::new();
+    if let Some(workdir) = &workdir {
+        directory_entries.push(("oxoflow-workdir", workdir.clone()));
+    }
+    attach_host_path_mounts(&mut container, &directory_entries);
+    let mut pod_volumes = host_path_volumes(&directory_entries)
+        .map(|v| v.as_array().expect("array").clone())
+        .unwrap_or_default();
+    attach_docker_socket(&mut container, &mut pod_volumes);
 
     let mut pod_spec = json!({
         "restartPolicy": "Never",
         "containers": [container]
     });
-    if let Some(workdir) = &workdir {
-        pod_spec["volumes"] = json!([
-            { "name": "oxoflow-workdir", "hostPath": { "path": workdir, "type": "Directory" } }
-        ]);
+    if !pod_volumes.is_empty() {
+        pod_spec["volumes"] = json!(pod_volumes);
     }
 
     let manifest = json!({
@@ -230,6 +317,15 @@ pub fn generate_k8s_job_manifest(
 }
 
 /// Generate a Kubernetes indexed Job manifest for an array submission.
+///
+/// `workdir` is the run directory the per-index command files fold a
+/// `cd '<workdir>' &&` guard to (the driver's `ScheduledRule.workdir`). Both
+/// it and the command directory are mounted at their host paths — the pod
+/// needs the command files to dispatch AND the workdir for the commands'
+/// declared inputs/outputs to land on the shared host tree (the 2026-11-24
+/// live campaign residual: only the workdir was mounted, so array
+/// submission on Kubernetes referenced a command directory the pod could
+/// not see). Relative paths are skipped (hostPath must be absolute).
 pub fn generate_k8s_array_job_manifest(
     rule: &Rule,
     cmd_dir: &str,
@@ -237,6 +333,7 @@ pub fn generate_k8s_array_job_manifest(
     // Union of `OXO_FLOW_SENSITIVE_<n>` references over every per-index
     // command file — the dispatch line carries none of them itself.
     sensitive_refs: &[String],
+    workdir: Option<&str>,
     _cluster_config: &ClusterJobConfig,
 ) -> Result<String> {
     // The job name carries a deterministic per-chunk suffix so sibling
@@ -250,11 +347,12 @@ pub fn generate_k8s_array_job_manifest(
         array_name_suffix(cmd_dir)
     );
 
-    let container_image = rule
-        .environment
-        .docker
-        .as_deref()
-        .unwrap_or("ubuntu:latest");
+    let container_image = mirrored_spec(
+        rule.environment
+            .docker
+            .as_deref()
+            .unwrap_or("ubuntu:latest"),
+    );
 
     let dispatch_cmd =
         format!("INDEX=$((JOB_COMPLETION_INDEX + 1)); sh \"{cmd_dir}/cmd.${{INDEX}}.sh\"");
@@ -268,6 +366,28 @@ pub fn generate_k8s_array_job_manifest(
         "resources": container_resources(rule),
     });
     attach_sensitive_env(&mut container, sensitive_refs);
+    let mut directory_entries: Vec<(&'static str, String)> =
+        vec![("oxoflow-cmds", cmd_dir.to_string())];
+    if let Some(workdir) = workdir {
+        // The command files fold `cd '<workdir>' &&` themselves; without the
+        // mount the `cd` fails and every element dies before its first tool.
+        if workdir.starts_with('/') && workdir != cmd_dir {
+            directory_entries.push(("oxoflow-workdir", workdir.to_string()));
+        }
+    }
+    attach_host_path_mounts(&mut container, &directory_entries);
+    let mut pod_volumes = host_path_volumes(&directory_entries)
+        .map(|v| v.as_array().expect("array").clone())
+        .unwrap_or_default();
+    attach_docker_socket(&mut container, &mut pod_volumes);
+
+    let mut pod_spec = json!({
+        "restartPolicy": "Never",
+        "containers": [container]
+    });
+    if !pod_volumes.is_empty() {
+        pod_spec["volumes"] = json!(pod_volumes);
+    }
 
     let manifest = json!({
         "apiVersion": "batch/v1",
@@ -291,10 +411,7 @@ pub fn generate_k8s_array_job_manifest(
                         "oxoflow.io/rule": sanitize_k8s_name(&rule.name),
                     }
                 },
-                "spec": {
-                    "restartPolicy": "Never",
-                    "containers": [container]
-                }
+                "spec": pod_spec
             }
         }
     });
@@ -553,7 +670,7 @@ mod tests {
         };
 
         let manifest_str =
-            generate_k8s_array_job_manifest(&rule, "run/cmds", 5, &[], &test_config())
+            generate_k8s_array_job_manifest(&rule, "run/cmds", 5, &[], None, &test_config())
                 .expect("manifest generation must succeed");
         let val: Value = serde_json::from_str(&manifest_str).expect("manifest must be valid json");
 
@@ -570,6 +687,222 @@ mod tests {
         );
         // Array jobs must carry the same GPU limit as single jobs.
         assert_eq!(container["resources"]["limits"]["nvidia.com/gpu"], "2");
+
+        // Absolute paths are mounted (command dir first, workdir second so
+        // single-job manifests keep workdir = mount #0); relative hostPath
+        // values are skipped — the API server would reject them.
+        let mounted = generate_k8s_array_job_manifest(
+            &rule,
+            "/abs/run/jobs/t/chunk-1",
+            2,
+            &[],
+            Some("/abs/run"),
+            &test_config(),
+        )
+        .unwrap();
+        let val: Value = serde_json::from_str(&mounted).unwrap();
+        let container = &val["spec"]["template"]["spec"]["containers"][0];
+        let pod_spec = &val["spec"]["template"]["spec"];
+        assert_eq!(
+            container["volumeMounts"][0]["mountPath"], "/abs/run/jobs/t/chunk-1",
+            "the dispatch line reads the command dir — it must be mounted"
+        );
+        assert_eq!(container["volumeMounts"][0]["name"], "oxoflow-cmds");
+        assert_eq!(container["volumeMounts"][1]["mountPath"], "/abs/run");
+        assert_eq!(container["volumeMounts"][1]["name"], "oxoflow-workdir");
+        assert_eq!(
+            pod_spec["volumes"][0]["hostPath"]["path"],
+            "/abs/run/jobs/t/chunk-1"
+        );
+        assert_eq!(pod_spec["volumes"][0]["hostPath"]["type"], "Directory");
+        assert_eq!(pod_spec["volumes"][1]["hostPath"]["path"], "/abs/run");
+
+        // The live-campaign residual: without a workdir (relative or unset)
+        // only the command directory is mounted — never a bogus relative
+        // hostPath.
+        let unmounted = generate_k8s_array_job_manifest(
+            &rule,
+            "run/cmds",
+            2,
+            &[],
+            Some("relative/run"),
+            &test_config(),
+        )
+        .unwrap();
+        let val: Value = serde_json::from_str(&unmounted).unwrap();
+        assert!(
+            val["spec"]["template"]["spec"].get("volumes").is_none(),
+            "relative paths must not render hostPath volumes"
+        );
+    }
+
+    /// Registry-restricted nodes (the china-mirrors residual): the
+    /// manifest's image field is rewritten through the same
+    /// `OXO_REGISTRY_MIRRORS` map the singularity/apptainer/docker pulls use
+    /// — transport-only, the workflow never changes. A child process is
+    /// required because `std::env::set_var` is unsafe in edition 2024 and
+    /// this crate is `#![forbid(unsafe_code)]` (the
+    /// [`crate::backend::assert_cloud_body_ignores_submit_host_env`]
+    /// precedent): the parent re-executes this test binary with the mapping
+    /// injected.
+    #[test]
+    fn k8s_manifests_rewrite_images_through_the_registry_mirror_map() {
+        run_k8s_env_probe("MIRROR_DOCKER");
+        run_k8s_env_probe("MIRROR_OTHER");
+    }
+
+    /// `OXO_FLOW_K8S_DOCKER_SOCKET=1` mounts the node daemon socket with the
+    /// `Socket` hostPath type and exports `DOCKER_HOST` — the short-term
+    /// channel for docker-environment rules. Opt-in: unset (and any
+    /// unrecognized value) leaves the manifest without the channel. Same
+    /// child-process pattern as the mirror probe.
+    #[test]
+    fn docker_socket_channel_is_opt_in_and_off_by_default() {
+        run_k8s_env_probe("SOCKET_ON");
+        run_k8s_env_probe("SOCKET_OFF");
+    }
+
+    fn run_k8s_env_probe(probe: &str) {
+        let exe = std::env::current_exe().expect("test binary path");
+        let mut cmd = std::process::Command::new(exe);
+        cmd.args([
+            "--exact",
+            "backend::k8s::tests::k8s_env_probe_child",
+            "--ignored",
+            "--test-threads=1",
+            "--nocapture",
+        ])
+        .env("K8S_ENV_PROBE", probe)
+        // Empty means unset for both knobs (mirrored_spec treats an empty
+        // value as unset; the socket gate matches only truthy spellings).
+        .env(
+            "OXO_REGISTRY_MIRRORS",
+            match probe {
+                "MIRROR_DOCKER" => "docker.io=mirror.example.com",
+                "MIRROR_OTHER" => "quay.io=quay-mirror.example.com",
+                _ => "",
+            },
+        )
+        .env(
+            "OXO_FLOW_K8S_DOCKER_SOCKET",
+            if probe == "SOCKET_ON" { "1" } else { "typo" },
+        );
+        let output = cmd
+            .output()
+            .expect("failed to re-exec the test binary for the k8s env probe");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success(),
+            "the k8s env probe {probe} failed\n--- child stdout ---\n{stdout}\n--- child stderr ---\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            stdout.contains(&format!("K8S_ENV_PROBE_OK {probe}")),
+            "the k8s env probe child did not run for {probe}\n--- child stdout ---\n{stdout}"
+        );
+    }
+
+    /// The probe child started by [`run_k8s_env_probe`]; see the parents for
+    /// the injected environment.
+    #[test]
+    #[ignore]
+    fn k8s_env_probe_child() {
+        let probe = std::env::var("K8S_ENV_PROBE")
+            .expect("the probe child must be started by run_k8s_env_probe");
+        // A namespace-qualified image: `mirrored_spec`'s documented scope is
+        // `<host>/<path>` and namespace forms — a bare library name
+        // (`ubuntu:22.04`, no `/`) passes through untouched, the same
+        // semantics the docker/singularity pulls have (bare names resolve
+        // through the daemon's own registry-mirror configuration).
+        let rule = |name: &str| crate::rule::Rule {
+            name: name.to_string(),
+            environment: crate::rule::EnvironmentSpec {
+                docker: Some("biocontainers/bwa:0.7.17".to_string()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let manifest = |r: &crate::rule::Rule| {
+            serde_json::from_str::<Value>(
+                &generate_k8s_job_manifest(r, "cd '/abs/run' && true", &k8s_test_config())
+                    .expect("probe manifest must render"),
+            )
+            .expect("probe manifest must be valid json")
+        };
+        match probe.as_str() {
+            // The bare name is a docker.io namespace and follows the mapping
+            // the parent injected; with only a quay.io entry the docker.io
+            // namespace passes through untouched.
+            "MIRROR_DOCKER" => {
+                let val = manifest(&rule("pull"));
+                assert_eq!(
+                    val["spec"]["template"]["spec"]["containers"][0]["image"],
+                    "mirror.example.com/biocontainers/bwa:0.7.17",
+                    "the docker.io mapping must rewrite the manifest image: {val}"
+                );
+            }
+            "MIRROR_OTHER" => {
+                let val = manifest(&rule("pull"));
+                assert_eq!(
+                    val["spec"]["template"]["spec"]["containers"][0]["image"],
+                    "biocontainers/bwa:0.7.17",
+                    "a namespace not in the map must pass through: {val}"
+                );
+            }
+            on_off @ ("SOCKET_ON" | "SOCKET_OFF") => {
+                let val = manifest(&rule("wrap"));
+                let pod_spec = &val["spec"]["template"]["spec"];
+                let socket_volume = pod_spec["volumes"].as_array().and_then(|v| {
+                    v.iter()
+                        .find(|v| v["name"] == "oxoflow-docker-sock")
+                        .cloned()
+                });
+                let container = &pod_spec["containers"][0];
+                if on_off == "SOCKET_ON" {
+                    let socket_volume = socket_volume.expect("socket volume must be present");
+                    assert_eq!(socket_volume["hostPath"]["path"], "/var/run/docker.sock");
+                    assert_eq!(socket_volume["hostPath"]["type"], "Socket");
+                    assert!(
+                        container["volumeMounts"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .any(|m| m["name"] == "oxoflow-docker-sock"
+                                && m["mountPath"] == "/var/run/docker.sock"),
+                        "socket mount missing: {val}"
+                    );
+                    assert!(
+                        container["env"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .any(|e| e["name"] == "DOCKER_HOST"
+                                && e["value"] == "unix:///var/run/docker.sock"),
+                        "DOCKER_HOST must point at the mounted socket: {val}"
+                    );
+                } else {
+                    // Off: neither the volume nor the mount may exist — the
+                    // unrecognized value must not enable the channel.
+                    assert!(
+                        socket_volume.is_none(),
+                        "the unrecognized value must not mount the socket: {val}"
+                    );
+                    assert!(
+                        !container
+                            .get("env")
+                            .map(|e| e
+                                .as_array()
+                                .unwrap()
+                                .iter()
+                                .any(|e| e["name"] == "DOCKER_HOST"))
+                            .unwrap_or(false),
+                        "the off state must not export DOCKER_HOST: {val}"
+                    );
+                }
+            }
+            other => panic!("unknown k8s env probe {other}"),
+        }
+        println!("K8S_ENV_PROBE_OK {probe}");
     }
 
     /// Regression (issue #1226): two chunks of the SAME template must not
@@ -588,6 +921,7 @@ mod tests {
             "run/jobs/scatter_qc/chunk-1",
             3,
             &[],
+            None,
             &test_config(),
         )
         .expect("chunk 1 manifest must render");
@@ -596,6 +930,7 @@ mod tests {
             "run/jobs/scatter_qc/chunk-2",
             3,
             &[],
+            None,
             &test_config(),
         )
         .expect("chunk 2 manifest must render");
@@ -604,6 +939,7 @@ mod tests {
             "run/jobs/scatter_qc/chunk-1",
             3,
             &[],
+            None,
             &test_config(),
         )
         .expect("chunk 1 re-render must succeed");
@@ -634,6 +970,7 @@ mod tests {
                 "run/jobs/long/chunk-1",
                 2,
                 &[],
+                None,
                 &test_config(),
             )
             .expect("long-name manifest must render"),
@@ -700,13 +1037,15 @@ mod tests {
         };
         let refs = vec!["OXO_FLOW_SENSITIVE_0".to_string()];
         let manifest_str =
-            generate_k8s_array_job_manifest(&rule, "run/cmds", 5, &refs, &test_config()).unwrap();
+            generate_k8s_array_job_manifest(&rule, "run/cmds", 5, &refs, None, &test_config())
+                .unwrap();
         let val: Value = serde_json::from_str(&manifest_str).unwrap();
         let env_entry = &val["spec"]["template"]["spec"]["containers"][0]["env"][0];
         assert_eq!(env_entry["name"], "OXO_FLOW_SENSITIVE_0");
 
         let plain =
-            generate_k8s_array_job_manifest(&rule, "run/cmds", 5, &[], &test_config()).unwrap();
+            generate_k8s_array_job_manifest(&rule, "run/cmds", 5, &[], None, &test_config())
+                .unwrap();
         assert!(
             !plain.contains("\"env\""),
             "a reference-free job must stay byte-identical: {plain}"

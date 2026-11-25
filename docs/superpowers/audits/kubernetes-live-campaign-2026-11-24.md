@@ -66,6 +66,37 @@ backend end to end against a **real scheduler** (k3s), not a mock:
   namespace-level TTL or clean them up. Run-scoped names make that safe.
 - Raw transcript: [`data/kubernetes-live-campaign-2026-11-24.log`](data/kubernetes-live-campaign-2026-11-24.log).
 
+## 2026-11-25 addendum — array mounts + docker-socket channel (PR feat/k8s-array-mounts)
+
+Follow-up live drill on the same k3s node (branch `feat/k8s-array-mounts`):
+
+- **Array command-directory mounts (residual #2 closed).** A wildcard
+  fan-out workflow (3 chunks + gather, `[[values]]`) submitted as TWO
+  Indexed Jobs; both render BOTH mounts — `oxoflow-cmds` (the per-chunk
+  command directory) and `oxoflow-workdir` (the run directory):
+
+      oxoflow-array-make-reports-a4847e12   Complete   3/3
+      oxoflow-array-merge-2d51afb6          Complete   3/3
+      mounts=[{"mountPath":"…/jobs/make_reports/chunk-1","name":"oxoflow-cmds"},
+               {"mountPath":"/tmp/k8s-array-live","name":"oxoflow-workdir"}]
+
+  Under the pre-fix renderer (workdir only) both Jobs would have died on
+  `sh <cmd_dir>/cmd.1.sh`: the command directory did not exist in the pod.
+  Outputs landed on the host workdir; `provenance verify` matched 6/6.
+
+- **Docker-socket channel (`OXO_FLOW_K8S_DOCKER_SOCKET=1`).** A
+  docker-environment rule rendered the socket volume (`hostPath` type
+  `Socket`) + `DOCKER_HOST=unix:///var/run/docker.sock`, and the pod-level
+  channel WORKS: the folded docker wrapper inside the pod reached the node
+  daemon and executed the rule shell (the pod's log is the rule shell's own
+  output, not a scheduler error). The run still FAILED at the NESTED layer:
+  the rule command's own `docker run` executes inside the wrapper container,
+  whose image default `DOCKER_HOST` (tcp://docker:2375) points nowhere and
+  which has no socket mount — the wrapper does not forward the daemon
+  socket into the container it creates. That nesting is exactly what
+  image-based environment rendering (issue #1388) removes; until then the
+  channel is qualified for pod-level wrapper execution only.
+
 ## Reproduction sketch
 
 ```bash
