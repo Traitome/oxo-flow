@@ -680,11 +680,19 @@ impl BackendDriver {
                             // log prefix.
                             let mut array_rule = chunk[0].1.rule.clone();
                             array_rule.name = chunk[0].1.template.clone();
+                            // The chunk's command files fold
+                            // `cd '<workdir>' &&` to the run workdir; the
+                            // Kubernetes array manifest must mount that
+                            // directory beside the command directory (live
+                            // campaign residual: without the mount every
+                            // element died on the folded `cd`).
+                            let chunk_workdir = chunk[0].1.workdir.to_string_lossy().into_owned();
                             let script = cancel_on_error!(self.backend.render_array_script(
                                 &array_rule,
                                 &job_dir.to_string_lossy(),
                                 chunk.len(),
                                 &sensitive_refs,
+                                Some(&chunk_workdir),
                             ));
                             let script_path = job_dir.join("job.sh");
                             cancel_on_error!(
@@ -3542,6 +3550,7 @@ shell = "echo asm > out/{assembler}.txt"
             _cmd_dir: &str,
             count: usize,
             _sensitive_refs: &[String],
+            _workdir: Option<&str>,
         ) -> Result<String> {
             self.inner.lock().unwrap().array_sizes.push(count);
             Ok("exit 0".to_string())

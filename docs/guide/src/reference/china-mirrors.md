@@ -68,8 +68,13 @@ export OXO_REGISTRY_MIRRORS="docker.io=mirror.example.com;registry-1.docker.io=m
   full path, so map `docker.io=mirror.example.com` to rewrite such
   specs — a `localhost=…` key never matches anything.
 - Applies to the singularity/apptainer backend (pull target and `exec`
-  URI) and to registry-qualified docker specs. The Docker backend's bare
-  names still resolve through the daemon's own `registry-mirrors`.
+  URI), to registry-qualified docker specs, and to the **Kubernetes
+  backend's job manifests** (the container `image` field is rewritten at
+  render time, so pods on registry-restricted nodes pull from the mirror;
+  bare library names such as `ubuntu:22.04` pass through — configure the
+  container runtime's own `registry-mirrors` for those). The Docker
+  backend's bare names still resolve through the daemon's own
+  `registry-mirrors`.
 - The derived local SIF name and the environment cache key keep the
   **original** spec, so an image keeps one identity whether a box goes
   through a mirror or not.

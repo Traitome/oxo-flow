@@ -149,6 +149,17 @@ pub fn generate_submit_script_with_secrets(
 /// writes next to the script — `bash '<cmd_dir>/cmd.${INDEX}.sh'`. Per-index
 /// files (rather than an inline case table) keep arbitrary multi-line
 /// commands (shell preludes, environment-wrapped commands) valid.
+/// Extra render inputs for a cloud array body: the routed sensitive
+/// references over the chunk's command files, the operator's
+/// secret-reference map (issue #1120 / RB-12), and the run workdir the
+/// per-index command files fold `cd '<workdir>' &&` to (Kubernetes mounts it
+/// beside the command directory; other backends ignore it).
+pub struct ArrayBodyExtras<'a> {
+    pub sensitive_refs: &'a [String],
+    pub secret_refs: &'a std::collections::BTreeMap<String, String>,
+    pub workdir: Option<&'a str>,
+}
+
 pub fn generate_array_submit_script(
     backend: &ClusterBackend,
     rule: &Rule,
@@ -158,6 +169,10 @@ pub fn generate_array_submit_script(
     // the dispatch line in a cloud array body carries none of them itself
     // (issue #1120 / RB-12).
     sensitive_refs: &[String],
+    // Run directory the per-index command files fold `cd '<workdir>' &&` to.
+    // Kubernetes mounts it beside the command directory (see
+    // `generate_k8s_array_job_manifest`); other backends ignore it.
+    workdir: Option<&str>,
     config: &ClusterJobConfig,
 ) -> Result<String> {
     generate_array_submit_script_with_secrets(
@@ -165,8 +180,11 @@ pub fn generate_array_submit_script(
         rule,
         cmd_dir,
         count,
-        sensitive_refs,
-        &std::collections::BTreeMap::new(),
+        &ArrayBodyExtras {
+            sensitive_refs,
+            secret_refs: &std::collections::BTreeMap::new(),
+            workdir,
+        },
         config,
     )
 }
@@ -179,8 +197,7 @@ pub fn generate_array_submit_script_with_secrets(
     rule: &Rule,
     cmd_dir: &str,
     count: usize,
-    sensitive_refs: &[String],
-    secret_refs: &std::collections::BTreeMap<String, String>,
+    extras: &ArrayBodyExtras,
     config: &ClusterJobConfig,
 ) -> Result<String> {
     match backend {
@@ -189,7 +206,8 @@ pub fn generate_array_submit_script_with_secrets(
                 rule,
                 cmd_dir,
                 count,
-                sensitive_refs,
+                extras.sensitive_refs,
+                extras.workdir,
                 config,
             );
         }
@@ -203,8 +221,8 @@ pub fn generate_array_submit_script_with_secrets(
                 rule,
                 cmd_dir,
                 count,
-                sensitive_refs,
-                secret_refs,
+                extras.sensitive_refs,
+                extras.secret_refs,
                 config,
             );
         }
@@ -931,6 +949,7 @@ mod tests {
             "/run/jobs/align",
             3,
             &[],
+            None,
             &config,
         )
         .unwrap();
@@ -959,6 +978,7 @@ mod tests {
             "/run/jobs/align",
             3,
             &[],
+            None,
             &config,
         )
         .unwrap();
@@ -971,9 +991,16 @@ mod tests {
             (ClusterBackend::Sge, "#$ -t 1-3", "SGE_TASK_ID"),
             (ClusterBackend::Lsf, "#BSUB -J", "LSB_JOBINDEX"),
         ] {
-            let s2 =
-                generate_array_submit_script(&backend, &rule, "/run/jobs/align", 3, &[], &config)
-                    .unwrap();
+            let s2 = generate_array_submit_script(
+                &backend,
+                &rule,
+                "/run/jobs/align",
+                3,
+                &[],
+                None,
+                &config,
+            )
+            .unwrap();
             assert!(s2.contains(range), "{backend:?}: {s2}");
             assert!(s2.contains(var), "{backend:?}: {s2}");
         }
@@ -1087,6 +1114,7 @@ mod tests {
                 "/run/jobs/align",
                 3,
                 &[],
+                None,
                 &make_config(),
             )
             .unwrap();

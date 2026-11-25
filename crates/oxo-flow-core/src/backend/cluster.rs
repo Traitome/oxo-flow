@@ -7,7 +7,7 @@
 
 use super::{BackendJobStatus, ScheduledRule, TerminalRecord};
 use crate::cluster::{
-    ClusterBackend, ClusterJobConfig, generate_array_submit_script_with_secrets,
+    ArrayBodyExtras, ClusterBackend, ClusterJobConfig, generate_array_submit_script_with_secrets,
     generate_submit_script_with_secrets,
 };
 use crate::error::{OxoFlowError, Result};
@@ -962,6 +962,7 @@ impl super::ExecutorBackend for ClusterExecutor {
         cmd_dir: &str,
         count: usize,
         sensitive_refs: &[String],
+        workdir: Option<&str>,
     ) -> Result<String> {
         Ok(finish_script(
             &generate_array_submit_script_with_secrets(
@@ -969,8 +970,16 @@ impl super::ExecutorBackend for ClusterExecutor {
                 rule,
                 cmd_dir,
                 count,
-                sensitive_refs,
-                &self.secret_refs,
+                &ArrayBodyExtras {
+                    sensitive_refs,
+                    secret_refs: &self.secret_refs,
+                    // The chunk's instances share the run workdir; fall back
+                    // to the executor's own when the caller leaves it unset.
+                    workdir: workdir
+                        .map(str::to_string)
+                        .or_else(|| Some(self.workdir.to_string_lossy().into_owned()))
+                        .as_deref(),
+                },
                 &self.cluster,
             )?,
             &self.backend,
@@ -2836,7 +2845,7 @@ mod tests {
             ..crate::rule::Rule::default()
         };
         let script = exec
-            .render_array_script(&rule, "/run/jobs/align/chunk-1", 2, &[])
+            .render_array_script(&rule, "/run/jobs/align/chunk-1", 2, &[], None)
             .unwrap();
         assert_eq!(
             script.matches("set -e").count(),
