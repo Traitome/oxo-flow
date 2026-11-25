@@ -78,7 +78,7 @@ pub struct Cli {
     /// resume, info, knowledge, diagnostics, schema, verify-data, license,
     /// provenance verify, provenance diff, provenance attest, provenance
     /// attest-verify, audit verify, ai, graph, runs gc, diff (the
-    /// workflow text diff), import, env list/check,
+    /// workflow text diff), import, export-dsl, lock, env list/check,
     /// and the cluster status/cancel/logs monitors;
     /// every other command rejects the flag instead of silently ignoring it.
     /// For info and knowledge, an explicit `--format text` takes precedence
@@ -1746,8 +1746,9 @@ async fn main() -> Result<()> {
              status, wait, batch, resume, info, knowledge, diagnostics, \
              schema, license, ai, provenance verify, provenance diff, \
              provenance attest, provenance attest-verify, \
-             audit verify, verify-data, graph, runs gc, import, lock, diff (the workflow text \
-             diff), env list/check, cluster status/cancel/logs)."
+             audit verify, verify-data, graph, runs gc, import, export-dsl, lock, \
+             diff (the workflow text diff), env list/check, cluster \
+             status/cancel/logs)."
         );
     }
     // A background run never executes the workflow in the foreground

@@ -1556,7 +1556,8 @@ Outside personal mode, provider metadata is admin-only:
   `user`/`viewer` callers receive the resolution chain's provider NAMES and
   enabled state, but `effective.model`, `effective.api_url`,
   `tiers.env_model`, `tiers.env_url`, `tiers.server_model`,
-  `tiers.user_model`, and `tiers.user_api_url` are `null` — the endpoint
+  `tiers.server_api_url`, `tiers.user_model`, and `tiers.user_api_url`
+  are `null` — the endpoint
   URL identifies the internal AI proxy/gateway and the model id discloses
   the provider's shape. Admins receive the full chain.
 - `GET /api/ai/config/user` returns a row the caller saved themselves in
