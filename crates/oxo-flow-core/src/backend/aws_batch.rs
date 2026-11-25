@@ -34,10 +34,47 @@ use crate::error::Result;
 use crate::rule::Rule;
 use serde_json::json;
 
-/// Sanitise a string for use as an AWS Batch job name (letters, numbers,
-/// underscores, hyphens, max 128 chars, case preserved).
+/// AWS Batch job names: at most 128 chars, first char alphanumeric,
+/// letters/numbers/hyphens/underscores (`SubmitJobRequest.jobName`).
+pub const AWS_JOB_NAME_MAX: usize = 128;
+
+/// Engine prefix on single-job names; counted against the 128-char cap.
+pub const AWS_JOB_NAME_PREFIX: &str = "oxoflow-";
+
+/// Engine prefix on array-job names; counted against the 128-char cap.
+pub const AWS_ARRAY_JOB_NAME_PREFIX: &str = "oxoflow-array-";
+
+/// Default job queue when the profile's `queue` key is unset. Shared with
+/// the `cluster status` listing (`my_jobs_invocations`) so submit and list
+/// never disagree about which queue the engine uses.
+pub const AWS_DEFAULT_JOB_QUEUE: &str = "oxoflow-queue";
+
+/// Default job definition when the profile's `account` key is unset (the
+/// shared `ClusterJobConfig.account` key doubles as the AWS job
+/// definition).
+pub const AWS_DEFAULT_JOB_DEFINITION: &str = "oxoflow-job-def";
+
+/// Sanitise a rule name into the portion of an AWS Batch job name that
+/// follows [`AWS_JOB_NAME_PREFIX`]: the budget is
+/// [`AWS_JOB_NAME_MAX`] minus the prefix, so prefixing can never overflow
+/// the vendor's 128-char cap (the old 128-budget-plus-prefix produced 136).
 pub fn sanitize_aws_batch_name(name: &str) -> String {
-    sanitize_cloud_name(name, 128, false, "_")
+    sanitize_cloud_name(
+        name,
+        AWS_JOB_NAME_MAX - AWS_JOB_NAME_PREFIX.len(),
+        false,
+        "_",
+    )
+}
+
+/// [`sanitize_aws_batch_name`] for the longer array-job prefix.
+fn sanitize_aws_batch_array_name(name: &str) -> String {
+    sanitize_cloud_name(
+        name,
+        AWS_JOB_NAME_MAX - AWS_ARRAY_JOB_NAME_PREFIX.len(),
+        false,
+        "_",
+    )
 }
 
 /// Scheduler handle of one array element, derived from the id
@@ -98,14 +135,20 @@ pub fn generate_aws_batch_job_spec(
     shell_cmd: &str,
     cluster_config: &ClusterJobConfig,
 ) -> Result<String> {
-    let job_name = format!("oxoflow-{}", sanitize_aws_batch_name(&rule.name));
+    let job_name = format!(
+        "{AWS_JOB_NAME_PREFIX}{}",
+        sanitize_aws_batch_name(&rule.name)
+    );
 
-    let job_queue = cluster_config.queue.as_deref().unwrap_or("oxoflow-queue");
+    let job_queue = cluster_config
+        .queue
+        .as_deref()
+        .unwrap_or(AWS_DEFAULT_JOB_QUEUE);
 
     let job_definition = cluster_config
         .account
         .as_deref()
-        .unwrap_or("oxoflow-job-def");
+        .unwrap_or(AWS_DEFAULT_JOB_DEFINITION);
 
     let payload = json!({
         "jobName": job_name,
@@ -127,14 +170,20 @@ pub fn generate_aws_batch_array_spec(
     count: usize,
     cluster_config: &ClusterJobConfig,
 ) -> Result<String> {
-    let job_name = format!("oxoflow-array-{}", sanitize_aws_batch_name(&rule.name));
+    let job_name = format!(
+        "{AWS_ARRAY_JOB_NAME_PREFIX}{}",
+        sanitize_aws_batch_array_name(&rule.name)
+    );
 
-    let job_queue = cluster_config.queue.as_deref().unwrap_or("oxoflow-queue");
+    let job_queue = cluster_config
+        .queue
+        .as_deref()
+        .unwrap_or(AWS_DEFAULT_JOB_QUEUE);
 
     let job_definition = cluster_config
         .account
         .as_deref()
-        .unwrap_or("oxoflow-job-def");
+        .unwrap_or(AWS_DEFAULT_JOB_DEFINITION);
 
     let dispatch_cmd =
         format!("INDEX=$((AWS_BATCH_JOB_ARRAY_INDEX + 1)); sh \"{cmd_dir}/cmd.${{INDEX}}.sh\"");
@@ -178,6 +227,88 @@ mod tests {
     fn test_sanitize_aws_batch_name() {
         assert_eq!(sanitize_aws_batch_name("fastqc.sample1"), "fastqc-sample1");
         assert_eq!(sanitize_aws_batch_name("align_bwa-mem"), "align_bwa-mem");
+    }
+
+    /// SubmitJob caps jobName at 128 chars. The engine prefix counts
+    /// against the cap: the old 128-budget-plus-prefix produced 136 chars
+    /// and the service rejected the submission.
+    #[test]
+    fn generated_job_names_fit_the_128_char_cap() {
+        let rule = Rule {
+            name: "a".repeat(300),
+            ..Default::default()
+        };
+        let single: Value = serde_json::from_str(
+            &generate_aws_batch_job_spec(&rule, "true", &test_config()).unwrap(),
+        )
+        .unwrap();
+        let array: Value = serde_json::from_str(
+            &generate_aws_batch_array_spec(&rule, "runs/cmds", 2, &test_config()).unwrap(),
+        )
+        .unwrap();
+        for name in [
+            single["jobName"].as_str().unwrap(),
+            array["jobName"].as_str().unwrap(),
+        ] {
+            assert!(
+                name.len() <= AWS_JOB_NAME_MAX,
+                "AWS caps jobName at {} chars, got {} ({name})",
+                AWS_JOB_NAME_MAX,
+                name.len()
+            );
+            assert!(name.starts_with("oxoflow-"), "engine prefix kept: {name}");
+            assert!(
+                name.chars()
+                    .next()
+                    .is_some_and(|c| c.is_ascii_alphanumeric()),
+                "first char must be alphanumeric: {name}"
+            );
+        }
+    }
+
+    /// A profile without queue/account submits to the engine defaults the
+    /// raw `cluster status` listing also queries (one constant, two call
+    /// sites).
+    #[test]
+    fn default_queue_and_job_definition_are_shared_with_the_lister() {
+        let config = ClusterJobConfig {
+            backend: ClusterBackend::AwsBatch,
+            queue: None,
+            account: None,
+            walltime: None,
+            extra_args: Vec::new(),
+            name_scope: None,
+            volume: None,
+        };
+        let rule = Rule {
+            name: "x".into(),
+            ..Default::default()
+        };
+        let val: Value =
+            serde_json::from_str(&generate_aws_batch_job_spec(&rule, "true", &config).unwrap())
+                .unwrap();
+        assert_eq!(val["jobQueue"], AWS_DEFAULT_JOB_QUEUE);
+        assert_eq!(val["jobDefinition"], AWS_DEFAULT_JOB_DEFINITION);
+        // The raw listing must query the SAME default queue: the old
+        // empty-invocation behaviour and a second hard-coded literal both
+        // fail here.
+        let invocations =
+            crate::backend::cluster::my_jobs_invocations(&ClusterBackend::AwsBatch, None);
+        assert!(
+            !invocations.is_empty(),
+            "the raw listing must be answerable"
+        );
+        for (_, args) in &invocations {
+            let at = args
+                .iter()
+                .position(|arg| arg == "--job-queue")
+                .unwrap_or_else(|| panic!("no --job-queue in {args:?}"));
+            assert_eq!(
+                args[at + 1],
+                AWS_DEFAULT_JOB_QUEUE,
+                "the listing must reuse the submit default queue: {args:?}"
+            );
+        }
     }
 
     #[test]

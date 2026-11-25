@@ -45,16 +45,16 @@ Every action accepts `--backend` / `-b`:
 
 | Option | Short | Default | Description |
 |---|---|---|---|
-| `--backend` | `-b` | `$OXO_FLOW_CLUSTER_BACKEND`, then `slurm` | Cluster backend (`slurm`, `pbs`, `sge`, `lsf`, `kubernetes`/`k8s`, `aws-batch`, `gcp-batch`) — on a SLURM site you never need to type it |
+| `--backend` | `-b` | `$OXO_FLOW_CLUSTER_BACKEND`, then `slurm` | Cluster backend (`slurm`, `pbs`, `sge`, `lsf`, `kubernetes`/`k8s`, `aws-batch`, `gcp-batch`, `tencent-batch`) — on a SLURM site you never need to type it |
 
 An **explicit** value is always validated — `-b slrm` fails with
-`unknown cluster backend 'slrm' — expected slurm, pbs, sge, lsf, kubernetes (k8s), aws-batch, or tencent-batch (Tencent Cloud BatchCompute)` rather
+`unknown cluster backend 'slrm' — expected slurm, pbs, sge, lsf, kubernetes (k8s), aws-batch, gcp-batch, or tencent-batch (Tencent Cloud BatchCompute)` rather
 than silently querying SLURM. The default applies only when the flag is
 omitted entirely. On a non-SLURM site set the default once in your shell
 profile:
 
 ```bash
-export OXO_FLOW_CLUSTER_BACKEND=pbs   # or sge / lsf / kubernetes / aws-batch / gcp-batch
+export OXO_FLOW_CLUSTER_BACKEND=pbs   # or sge / lsf / kubernetes / aws-batch / gcp-batch / tencent-batch
 ```
 
 ---
@@ -192,7 +192,17 @@ scheduler view.
 
 `--all`, or a checkout with no run directory, keeps the raw scheduler view.
 With no ids that lists **your** queued jobs — the natural first question
-after a plain `cluster submit`:
+after a plain `cluster submit`. For AWS Batch the view asks `list-jobs`
+once per non-terminal status (the API returns only RUNNING jobs without
+`--job-status`) on the queue named by `--queue` or the engine's submit
+default; for GCP Batch pass `--queue <LOCATION>` because a bare job id is
+not resolvable without `--location`. Tencent Batch has no per-user/per-queue
+listing: with no ids the command says so instead of printing an empty table,
+and `cluster status --queue <ZONE> <JOB_ID>...` answers by id through
+`DescribeJobs`. Engine-owned array element handles are not vendor job ids:
+a GCP `{job}:{task}` handle is left unanswered by this per-id view (the
+driver settles tasks through `gcloud batch tasks list`), and a Tencent
+`{job}:{instance}` handle resolves to its base job's verdict.
 
 ```bash
 $ oxo-flow cluster status --all
@@ -213,6 +223,12 @@ oxo-flow cluster status --all 12345 12346
 ```bash
 oxo-flow cluster cancel -b slurm 12345 12346
 ```
+
+Cloud backends resolve bare ids with `--queue`: the GCP location
+(`--queue us-central1`) and the Tencent placement zone (`--queue
+ap-shanghai-5`, whose region is derived for `tccli`). AWS Batch needs no
+selector. GCP cancellation uses `gcloud batch jobs cancel` (the job record
+and its `CANCELLED` state stay queryable; `delete` would erase the record).
 
 `cancel --json` reports the command, the job ids, a success flag, and the
 scheduler's output.
@@ -459,7 +475,7 @@ to a scheduler instead of executing locally:
 ```toml
 # profiles/slurm.toml
 [cluster]
-backend       = "slurm"      # required: slurm | pbs | sge | lsf | kubernetes (k8s) | aws-batch | gcp-batch
+backend       = "slurm"      # required: slurm | pbs | sge | lsf | kubernetes (k8s) | aws-batch | gcp-batch | tencent-batch
 partition     = "compute"
 account       = "lab01"
 walltime      = "24h"        # a rule's own time_limit wins
@@ -624,10 +640,10 @@ max_array_size = 1001   # optional — the scheduler's MaxArraySize; larger
   exposes one — SLURM element ids, Kubernetes Indexed Job completion
   indexes, AWS Batch child job ids, GCP Batch task indexes — so one
   element's failure never marks its successful siblings failed. PBS/LSF/SGE
-  report only the array base id through this adapter; those element records
-  name that aggregate provenance in `skip_reason` and carry no base-level
-  exit code, and a Successful job with no accounting record records an
-  unknown (`null`) exit code rather than `0`. See
+  and Tencent Batch report only the array base id through this adapter;
+  those element records name that aggregate provenance in `skip_reason`
+  and carry no base-level exit code, and a Successful job with no
+  accounting record records an unknown (`null`) exit code rather than `0`. See
   [Run on a Cluster](../how-to/run-on-cluster.md#supported-schedulers) for
   the per-backend maturity labels.
 

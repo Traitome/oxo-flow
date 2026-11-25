@@ -1241,7 +1241,7 @@ pub enum ClusterAction {
         #[arg(
             short = 'b',
             long,
-            help = "Cluster backend: slurm, pbs, sge, lsf, kubernetes (k8s), aws-batch, or tencent-batch (Tencent Cloud BatchCompute) (defaults to $OXO_FLOW_CLUSTER_BACKEND, then slurm)"
+            help = "Cluster backend: slurm, pbs, sge, lsf, kubernetes (k8s), aws-batch, gcp-batch, or tencent-batch (Tencent Cloud BatchCompute) (defaults to $OXO_FLOW_CLUSTER_BACKEND, then slurm)"
         )]
         backend: Option<String>,
         #[arg(short = 'q', long, help = "Cluster queue or partition name")]
@@ -1293,7 +1293,7 @@ pub enum ClusterAction {
         #[arg(
             short = 'b',
             long,
-            help = "Cluster backend: slurm, pbs, sge, lsf, kubernetes (k8s), aws-batch, or tencent-batch (Tencent Cloud BatchCompute) (defaults to $OXO_FLOW_CLUSTER_BACKEND, then slurm)"
+            help = "Cluster backend: slurm, pbs, sge, lsf, kubernetes (k8s), aws-batch, gcp-batch, or tencent-batch (Tencent Cloud BatchCompute) (defaults to $OXO_FLOW_CLUSTER_BACKEND, then slurm)"
         )]
         backend: Option<String>,
         #[arg(
@@ -1310,7 +1310,7 @@ pub enum ClusterAction {
         #[arg(
             long,
             value_name = "QUEUE",
-            help = "Job queue for the aws-batch raw listing (list-jobs requires exactly one selector)"
+            help = "Job queue (aws-batch), location (gcp-batch), or availability zone (tencent-batch) that addresses the jobs; the cloud CLIs need it to resolve bare job ids"
         )]
         queue: Option<String>,
         #[arg(
@@ -1324,11 +1324,17 @@ pub enum ClusterAction {
         #[arg(
             short = 'b',
             long,
-            help = "Cluster backend: slurm, pbs, sge, lsf, kubernetes (k8s), aws-batch, or tencent-batch (Tencent Cloud BatchCompute) (defaults to $OXO_FLOW_CLUSTER_BACKEND, then slurm)"
+            help = "Cluster backend: slurm, pbs, sge, lsf, kubernetes (k8s), aws-batch, gcp-batch, or tencent-batch (Tencent Cloud BatchCompute) (defaults to $OXO_FLOW_CLUSTER_BACKEND, then slurm)"
         )]
         backend: Option<String>,
         #[arg(value_name = "JOB_IDS", required = true, help = "One or more job IDs")]
         job_ids: Vec<String>,
+        #[arg(
+            long,
+            value_name = "QUEUE",
+            help = "Location (gcp-batch) or availability zone (tencent-batch) that addresses the jobs; gcloud/tccli need it to resolve bare job ids"
+        )]
+        queue: Option<String>,
     },
     /// Fetch logs for a submitted cluster job or rule instance. Sources, in
     /// order: the engine's run-dir capture, the accounting store, then the
@@ -1337,7 +1343,7 @@ pub enum ClusterAction {
         #[arg(
             short = 'b',
             long,
-            help = "Cluster backend: slurm, pbs, sge, lsf, kubernetes (k8s), aws-batch, or tencent-batch (Tencent Cloud BatchCompute) (defaults to $OXO_FLOW_CLUSTER_BACKEND, then slurm)"
+            help = "Cluster backend: slurm, pbs, sge, lsf, kubernetes (k8s), aws-batch, gcp-batch, or tencent-batch (Tencent Cloud BatchCompute) (defaults to $OXO_FLOW_CLUSTER_BACKEND, then slurm)"
         )]
         backend: Option<String>,
         #[arg(value_name = "JOB_ID", help = "Cluster job ID or rule-instance name")]

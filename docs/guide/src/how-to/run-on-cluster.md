@@ -1,6 +1,6 @@
 # Run on a Cluster
 
-This guide explains how to execute oxo-flow workflows on HPC and cloud backends: the schedulers SLURM, PBS, SGE, and LSF, plus Kubernetes, AWS Batch, and GCP Batch for cloud runs.
+This guide explains how to execute oxo-flow workflows on HPC and cloud backends: the schedulers SLURM, PBS, SGE, and LSF, plus Kubernetes, AWS Batch, GCP Batch, and Tencent Batch for cloud runs.
 
 ---
 
@@ -30,13 +30,30 @@ There are two ways to reach a scheduler, and they suit different jobs:
 | **SGE** | Supported | Real-scheduler matrix, SoGE 8.1.9 (2026-09-22/23 campaign; not re-run per commit) | `#$` |
 | **LSF** | Supported | Experimental — no live campaign; directives/status semantics cross-checked against IBM's bsub reference | `#BSUB` |
 | **Kubernetes** | Supported (spec generation + shared-filesystem execution) | Prototype — live single-node k3s campaign (submit/status/artifacts/logs/SIGINT-cancel) for `system`-environment rules; Job manifests mount the run workdir AND the array command directory via `hostPath`, set `imagePullPolicy: IfNotPresent`, and rewrite the container image through `OXO_REGISTRY_MIRRORS` (namespace/registry-qualified names). Docker-environment rules run via the opt-in `OXO_FLOW_K8S_DOCKER_SOCKET=1` channel (mounts the node daemon socket — trusted single-operator clusters only). Multi-node clusters: declare a shared filesystem with `[cluster.volume]` (`nfs`/`pvc`, see [Cluster submission](../commands/cluster.md#shared-volume-clustervolume-kubernetes)) and pods mount it at `mount_root` instead of any submit-host path. Residual: image-based environment rendering (the durable docker-env fix, #1388) — see [`kubernetes-live-campaign-2026-11-24.md`](../../superpowers/audits/kubernetes-live-campaign-2026-11-24.md) | `k8s Job` |
-| **AWS Batch** | Supported (spec generation) | Prototype — CLI wrapper (`aws`), mock/wire tests only; live campaign pending (#1390). Submit/list/cancel shapes verified against the AWS CLI reference (2026-11-25 audit) | `aws-batch` |
-| **GCP Batch** | Supported (spec generation) | Prototype — CLI wrapper (`gcloud`), mock/wire tests only; live campaign pending (#1390; endpoint unreachable from the qualification host). Submit/describe/delete shapes verified against the gcloud reference (2026-11-25 audit) | `gcp-batch` |
-| **Tencent Batch** | Supported (spec generation) | Prototype — CLI wrapper (`tccli batch`, API 2017-03-12); parameter surface verified against tccli's own API definitions; live smoke pending (issue #1389) | `tencent-batch` |
+| **AWS Batch** | Supported (spec generation) | Prototype — CLI wrapper (`aws`), mock/wire tests only; live campaign pending (#1390). Submit/describe/list/cancel shapes verified against the botocore Batch service model and the AWS CLI v2 reference (2026-11-25 audit); array child ids, `terminate-job` cancel, and the 100-id DescribeJobs cap are pinned by wire tests — [Audit evidence](../../../superpowers/audits/cloud-cli-accuracy-2026-11-26.md). | `aws-batch` |
+| **GCP Batch** | Supported (spec generation) | Prototype — CLI wrapper (`gcloud`), mock/wire tests only; live campaign pending (#1390; endpoint unreachable from the qualification host). Submit (plain `--config` path, minted positional id)/describe/tasks-list/cancel shapes verified against the gcloud reference and `google/cloud/batch/v1` protos (2026-11-25 audit); cancel uses `CancelJob`, not `DeleteJob` — [Audit evidence](../../../superpowers/audits/cloud-cli-accuracy-2026-11-26.md). | `gcp-batch` |
+| **Tencent Batch** | Supported (spec generation) | Prototype — CLI wrapper (`tccli batch`, API 2017-03-12); payload/state/cancel/log shapes verified against tccli's own `api.json`/`examples.json` (2026-11-25 audit). Live smoke (2026-11-25, issue #1389): a named compute environment (`TENCENTBATCH_ENV_ID`) submit ran to `SUCCEED`; anonymous inline-env creation failed on the qualification account, so use `TENCENTBATCH_ENV_ID` when it does. Poll/log/cancel/array paths remain mock-verified only, and arrays settle on the base job verdict (no per-instance `DescribeTask` call yet) — [Audit evidence](../../../superpowers/audits/cloud-cli-accuracy-2026-11-26.md). | `tencent-batch` |
 
-**Per-element outcomes.** Array elements settle on their own scheduler record whenever the backend exposes one: SLURM `squeue` element ids, Kubernetes Indexed Job completion indexes (`status.completedIndexes` / `status.failedIndexes`), AWS Batch child job ids (`{parent}:{arrayIndex}`), and GCP Batch task indexes (`gcloud batch tasks list`). One element failing never turns its successful siblings into failures, and a missing accounting record leaves the exit code unknown rather than reporting `0`. PBS/LSF/SGE are polled by the array base id in this adapter; their per-instance records name that aggregate provenance in `skip_reason` and carry no base-level exit code or resource numbers, so an array-level verdict is never presented as an independently observed element outcome.
+**Per-element outcomes.** Array elements settle on their own scheduler record whenever the backend exposes one: SLURM `squeue` element ids, Kubernetes Indexed Job completion indexes (`status.completedIndexes` / `status.failedIndexes`), AWS Batch child job ids (`{parent}:{arrayIndex}`), and GCP Batch task indexes (`gcloud batch tasks list`; `UNEXECUTED` tasks settle failed). One element failing never turns its successful siblings into failures, and a missing accounting record leaves the exit code unknown rather than reporting `0`. PBS/LSF/SGE and Tencent Batch are polled by the array base id in this adapter (Tencent's per-instance records sit behind a separate `DescribeTask` call); their per-instance records name that aggregate provenance in `skip_reason` and carry no base-level exit code or resource numbers, so an array-level verdict is never presented as an independently observed element outcome.
 
-None of the cloud backends is qualified by a live campaign: their maturity label stays **Prototype** until the per-backend submit/queue/run/cancel/fail/retry/artifact campaign tracked by CL-05 (#1158) exists.
+AWS Batch and GCP Batch are not qualified by a live campaign, and Tencent Batch has only the single named-env submit smoke noted above: every cloud backend's maturity label stays **Prototype** until the per-backend submit/queue/run/cancel/fail/retry/artifact campaign tracked by CL-05 (#1158) exists.
+
+### Cloud backend profile keys
+
+The shared `[cluster]` keys carry a backend-specific meaning on cloud
+backends, the same way `partition` names a scheduler partition on the HPC
+backends:
+
+| Backend | `partition` | `account` | Environment knobs |
+|---|---|---|---|
+| `aws-batch` | `SubmitJob.jobQueue` (default `oxoflow-queue`) | `SubmitJob.jobDefinition` (default `oxoflow-job-def`) | The job definition must carry the `OXO_FLOW_SENSITIVE_<n>` names (`containerProperties.secrets` or `environment`); SubmitJob has no secrets field |
+| `gcp-batch` | `--location` (region, e.g. `us-central1`) | — | `OXO_FLOW_SECRET_REFS` projects routed names into `taskSpec.environment.secretVariables` |
+| `tencent-batch` | `Placement.Zone` (**required**, e.g. `ap-shanghai-5`; the `tccli --region` is derived from it) | CVM `ImageId` the batch nodes boot (**required**; list with `tccli cvm DescribeImages`) | `TENCENTBATCH_INSTANCE_TYPE` (default `S5.MEDIUM4`), `TENCENTBATCH_ENV_ID` (target a pre-created compute environment instead of an inline anonymous one) |
+
+`cluster status` / `cluster cancel` take the same value through
+`--queue` where the cloud CLI needs it to resolve a bare job id (the GCP
+location, the Tencent zone). AWS Batch's raw listing uses it as the
+`list-jobs --job-queue` selector, falling back to the submit default.
 
 ---
 
@@ -434,7 +451,7 @@ On clusters, the scheduler enforces resources based on the generated directives.
     reported as a completed run.
 
 !!! note "What environment a cloud job sees"
-    Cloud jobs (Kubernetes, AWS Batch, GCP Batch) never inherit the
+    Cloud jobs (Kubernetes, AWS Batch, GCP Batch, Tencent Batch) never inherit the
     submitting host's environment. The generated manifest/spec carries the
     rendered rule command (and, when sensitive values are routed, a
     `secretKeyRef` env block referencing the operator's Secret), so the job
@@ -457,8 +474,8 @@ On clusters, the scheduler enforces resources based on the generated directives.
 
 !!! warning "`sensitive = true` values need an operator-side secret on cloud backends"
     Cloud runs (`run --profile <NAME>` with `[cluster] backend = "kubernetes"`,
-    `"aws-batch"`, or `"gcp-batch"`, and `cluster submit -b` with the same
-    backends) route every `sensitive = true` config value out of the job body
+    `"aws-batch"`, `"gcp-batch"`, or `"tencent-batch"`, and `cluster submit -b`
+    with the same backends) route every `sensitive = true` config value out of the job body
     before the manifest is generated: the body carries only an
     `OXO_FLOW_SENSITIVE_<n>` reference. Names are assigned longest-value-first
     (then lexically; values under 4 characters stay on the command line), and
@@ -470,7 +487,9 @@ On clusters, the scheduler enforces resources based on the generated directives.
     for you; point each name at its Secret Manager path with
     `OXO_FLOW_SECRET_REFS`, a `NAME=REFERENCE` map — see
     [workflow-format: `[config]`](../reference/workflow-format.md#config-configuration-variables)) —
-    or the reference expands empty
+    Tencent Batch's `Task.EnvVars` is plaintext-only (there is no submit-time
+    secret-reference field), so map the names on the CVM image or job
+    environment yourself — or the reference expands empty
     and the rule fails.
     HPC scheduler scripts (SLURM/PBS/SGE/LSF) route the same way: the driver
     writes a private `0o600` env file beside the run holding only the
@@ -606,8 +625,8 @@ Every cluster action resolves its backend the same way: the `--backend` /
 SLURM site you never type `-b`; on a PBS site set the environment variable
 once (`export OXO_FLOW_CLUSTER_BACKEND=pbs`). An explicit-but-typoed value
 is still rejected outright (`unknown cluster backend '…' — expected slurm,
-pbs, sge, lsf, kubernetes (k8s), aws-batch, or tencent-batch (Tencent Cloud BatchCompute)`) — the default
-never swallows a bad name.
+pbs, sge, lsf, kubernetes (k8s), aws-batch, gcp-batch, or tencent-batch
+(Tencent Cloud BatchCompute)`) — the default never swallows a bad name.
 
 ---
 

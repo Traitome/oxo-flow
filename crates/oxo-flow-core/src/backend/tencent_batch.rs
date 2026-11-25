@@ -34,7 +34,9 @@
 //!
 //! `RedirectInfo` targets must be COS paths; when absent, task logs are
 //! collected by the Batch agent and read back through `DescribeTaskLogs`
-//! (base64 data URIs), which the executor's `logs()` decodes.
+//! (base64 `StdoutLog`/`StderrLog` — raw per the API reference, a data URI
+//! in its example; `ClusterExecutor::logs` accepts both), which the
+//! executor's `logs()` decodes.
 
 use super::sanitize_cloud_name;
 use crate::cluster::ClusterJobConfig;
@@ -42,18 +44,35 @@ use crate::error::{OxoFlowError, Result};
 use crate::rule::Rule;
 use serde_json::json;
 
-/// Sanitise a name into Tencent's job-name budget (≤60 chars) — the engine
-/// prefixes and the scope suffix must fit inside it.
+/// Tencent `Job.JobName` length limit (api.json: "字符串长度限制60").
+pub const TENCENT_JOB_NAME_MAX: usize = 60;
+
+/// Engine prefix on every Tencent job name; counted against the 60-char
+/// cap so prefixing can never overflow it.
+pub const TENCENT_JOB_NAME_PREFIX: &str = "oxoflow-";
+
+/// Sanitise a rule name into the portion of a Tencent job name that follows
+/// [`TENCENT_JOB_NAME_PREFIX`] — the same string also serves as the task
+/// name (one task per rule), for which the API states no separate cap.
 pub fn sanitize_tencent_batch_name(name: &str) -> String {
-    sanitize_cloud_name(name, 60, true, "-")
+    sanitize_cloud_name(
+        name,
+        TENCENT_JOB_NAME_MAX - TENCENT_JOB_NAME_PREFIX.len(),
+        true,
+        "-",
+    )
 }
 
-/// Scheduler handle of one array element: `{jobId}:{index}` with a
+/// Engine bookkeeping handle of one array element: `{jobId}:{index}` with a
 /// ZERO-based instance index (`TaskInstanceIndex` in `DescribeTask`), while
 /// the driver's element ordinal is 1-based (element 1 runs the generated
-/// `cmd.1.sh`, reading `BATCH_TASK_INSTANCE_INDEX=0`). The instance is
-/// individually addressable through `DescribeTask`/`TerminateTaskInstance`,
-/// so element verdicts settle on their own records (ledger RB-06).
+/// `cmd.1.sh`, reading `BATCH_TASK_INSTANCE_INDEX=0`).
+///
+/// The handle is engine-owned: Tencent addresses an instance by
+/// JobId + TaskName + index, not by this string. `ClusterExecutor::poll`
+/// reads the base job's `JobState` and applies it to every element, and the
+/// driver records that aggregate provenance in `skip_reason`; per-instance
+/// settlement through `DescribeTask` is the RB-06 residual for this backend.
 pub fn array_child_id(base: &str, ordinal: usize) -> String {
     format!("{base}:{}", ordinal.saturating_sub(1))
 }
@@ -109,9 +128,13 @@ fn task_job_payload(
     cluster_config: &ClusterJobConfig,
 ) -> Result<serde_json::Value> {
     let zone = zone(cluster_config)?;
-    let job_name = format!("oxoflow-{}", sanitize_tencent_batch_name(&rule.name));
+    let job_name = format!(
+        "{TENCENT_JOB_NAME_PREFIX}{}",
+        sanitize_tencent_batch_name(&rule.name)
+    );
     // TaskName is referenced by Dependences and DescribeTask — one task per
-    // oxo-flow rule (per-instance fan-out rides TaskInstanceNum).
+    // oxo-flow rule (per-instance fan-out rides TaskInstanceNum). The API
+    // states no separate cap; the job-name budget is a safe bound.
     let task_name = sanitize_tencent_batch_name(&rule.name);
 
     // Task.ComputeEnv and Task.EnvId are mutually exclusive. The inline
@@ -231,6 +254,31 @@ mod tests {
         assert_eq!(
             sanitize_tencent_batch_name("fastqc.sample1"),
             "fastqc-sample1"
+        );
+    }
+
+    /// `Job.JobName` is capped at 60 chars. The engine prefix counts
+    /// against the cap — the old 60-budget-plus-prefix produced 68.
+    #[test]
+    fn generated_job_name_fits_the_60_char_limit() {
+        let rule = Rule {
+            name: "b".repeat(300),
+            ..Default::default()
+        };
+        let spec = generate_tencent_batch_job_spec(&rule, "true", &test_config())
+            .expect("spec generation must succeed");
+        let val: Value = serde_json::from_str(&spec).unwrap();
+        let name = val["Job"]["JobName"].as_str().unwrap();
+        assert!(
+            name.len() <= TENCENT_JOB_NAME_MAX,
+            "Tencent caps JobName at {} chars, got {} ({name})",
+            TENCENT_JOB_NAME_MAX,
+            name.len()
+        );
+        assert!(name.starts_with(TENCENT_JOB_NAME_PREFIX), "{name}");
+        assert!(
+            val["Job"]["Tasks"][0]["TaskName"].as_str().unwrap().len() <= TENCENT_JOB_NAME_MAX,
+            "the task name shares the same bound"
         );
     }
 

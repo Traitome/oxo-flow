@@ -25,8 +25,8 @@ const STATUS_ROW_LIMIT: usize = 50;
 fn parse_backend(name: &str) -> Result<ClusterBackend> {
     ClusterBackend::from_str(name).map_err(|_| {
         anyhow::anyhow!(
-            "unknown cluster backend '{name}' — expected slurm, pbs, sge, lsf, kubernetes (k8s), \
-             aws-batch, or tencent-batch (Tencent Cloud BatchCompute)"
+            "unknown cluster backend '{name}' — expected {}",
+            oxo_flow_core::cluster::SUPPORTED_BACKENDS_HINT
         )
     })
 }
@@ -73,13 +73,16 @@ fn status_line(id: &str, status: BackendJobStatus) -> String {
 fn query_status(
     backend: &ClusterBackend,
     job_ids: &[String],
+    queue: Option<&str>,
     run: impl Fn(&str, &[String]) -> Result<String>,
 ) -> Result<Vec<(String, BackendJobStatus)>> {
     let mut report: Vec<(String, BackendJobStatus)> = job_ids
         .iter()
         .map(|id| (id.clone(), BackendJobStatus::Unknown))
         .collect();
-    for (program, args) in oxo_flow_core::backend::cluster::status_invocations(backend, job_ids) {
+    for (program, args) in
+        oxo_flow_core::backend::cluster::status_invocations(backend, job_ids, queue)
+    {
         for (id, status) in
             oxo_flow_core::backend::cluster::status_report(backend, job_ids, &run(program, &args)?)
         {
@@ -99,34 +102,35 @@ fn query_status(
 /// Ask the scheduler for the current user's live jobs and answer one
 /// `(id, status)` per listed row — the no-arguments `cluster status` view.
 /// Same execution seam as [`query_status`].
+///
+/// A backend may need more than one invocation to answer the live view
+/// (AWS Batch's list-jobs returns only RUNNING jobs unless each live
+/// status is requested explicitly), so every invocation is run and the rows
+/// are merged; the first id wins if a job transitions between calls.
 fn query_my_jobs(
     backend: &ClusterBackend,
     queue: Option<&str>,
     run: impl Fn(&str, &[String]) -> Result<String>,
 ) -> Result<Vec<(String, BackendJobStatus)>> {
-    // Every backend currently yields exactly one listing invocation, so
-    // this is a plain single call — the first answer is the answer.
-    let Some((program, args)) =
-        oxo_flow_core::backend::cluster::my_jobs_invocations(backend, queue)
-            .into_iter()
-            .next()
-    else {
-        return Ok(Vec::new());
-    };
-    eprintln!(
-        "{} Executing '{} {}'...",
-        "Cluster:".bold().cyan(),
-        program,
-        args.join(" ")
-    );
-    // A user listing has no per-requested-id contract: the rows the
-    // scheduler returns ARE the answer, so run the invocations inline
-    // rather than threading through the overwrite-only-non-Unknown
-    // machinery of query_status.
-    let listing = run(program, &args)?;
-    Ok(oxo_flow_core::backend::cluster::parse_job_listing(
-        backend, &listing,
-    ))
+    let mut listing: Vec<(String, BackendJobStatus)> = Vec::new();
+    for (program, args) in oxo_flow_core::backend::cluster::my_jobs_invocations(backend, queue) {
+        eprintln!(
+            "{} Executing '{} {}'...",
+            "Cluster:".bold().cyan(),
+            program,
+            args.join(" ")
+        );
+        // A user listing has no per-requested-id contract: the rows the
+        // scheduler returns ARE the answer.
+        let rows =
+            oxo_flow_core::backend::cluster::parse_job_listing(backend, &run(program, &args)?);
+        for row in rows {
+            if !listing.iter().any(|(id, _)| id == &row.0) {
+                listing.push(row);
+            }
+        }
+    }
+    Ok(listing)
 }
 
 /// Emit the `oxo_submit` shell helper: submits a script and echoes the bare
@@ -139,39 +143,67 @@ fn query_my_jobs(
 /// phase-1 item 1). The patterns mirror `parse_job_id` in
 /// `oxo_flow_core::backend::cluster` so the wrapper and the live submit
 /// path agree on what a job id is.
-fn generate_submit_helper(backend: &ClusterBackend) -> String {
-    let body = match backend {
+///
+/// `selector` is the profile's `queue` value where the cloud CLI needs it
+/// to address the submission (GCP location, Tencent placement zone).
+fn generate_submit_helper(backend: &ClusterBackend, selector: Option<&str>) -> String {
+    let quote = oxo_flow_core::environment::escape_for_sh_single_quote;
+    let body: String = match backend {
         // `--parsable` prints a bare id, or `<id>;<cluster>` on federated
         // clusters — keep the id.
         ClusterBackend::Slurm => {
-            "  out=$(sbatch --parsable \"$@\") || return $?\n  id=${out%%;*}\n"
+            "  out=$(sbatch --parsable \"$@\") || return $?\n  id=${out%%;*}\n".to_string()
         }
         // qsub already prints a bare id (`12345.headnode` is accepted
         // verbatim by `-W depend=`). Exactly one token, or fall through to
         // the error path — mashing multi-token output together would feed a
         // garbage id to the next job's `-W depend=`.
         ClusterBackend::Pbs => {
-            "  out=$(qsub \"$@\") || return $?\n  set -- $out\n  if [ $# -eq 1 ]; then id=\"$1\"; else id=\"\"; fi\n"
+            "  out=$(qsub \"$@\") || return $?\n  set -- $out\n  if [ $# -eq 1 ]; then id=\"$1\"; else id=\"\"; fi\n".to_string()
         }
         // "Your job 12345 (\"align\") has been submitted"
         ClusterBackend::Sge => {
-            "  out=$(qsub \"$@\") || return $?\n  id=$(printf '%s' \"$out\" | grep -oE 'Your job(-array)? [0-9]+' | grep -oE '[0-9]+$')\n"
+            "  out=$(qsub \"$@\") || return $?\n  id=$(printf '%s' \"$out\" | grep -oE 'Your job(-array)? [0-9]+' | grep -oE '[0-9]+$')\n".to_string()
         }
         // "Job <12345> is submitted to queue <normal>."
         ClusterBackend::Lsf => {
-            "  out=$(bsub \"$@\") || return $?\n  id=$(printf '%s' \"$out\" | grep -oE 'Job <[0-9]+>' | grep -oE '[0-9]+')\n"
+            "  out=$(bsub \"$@\") || return $?\n  id=$(printf '%s' \"$out\" | grep -oE 'Job <[0-9]+>' | grep -oE '[0-9]+')\n".to_string()
         }
         ClusterBackend::Kubernetes => {
-            "  out=$(kubectl create -f \"$@\" -o jsonpath='{.metadata.name}') || return $?\n  id=\"$out\"\n"
+            "  out=$(kubectl create -f \"$@\" -o jsonpath='{.metadata.name}') || return $?\n  id=\"$out\"\n".to_string()
         }
         ClusterBackend::AwsBatch => {
-            "  out=$(aws batch submit-job --cli-input-json file://\"$@\" --query 'jobId' --output text) || return $?\n  id=\"$out\"\n"
+            "  out=$(aws batch submit-job --cli-input-json file://\"$@\" --query 'jobId' --output text) || return $?\n  id=\"$out\"\n".to_string()
         }
         ClusterBackend::GcpBatch => {
-            "  out=$(gcloud batch jobs submit \"$@\" --query 'name' --format='value(name)') || return $?\n  id=\"$out\"\n"
+            // `gcloud batch jobs submit` takes a job id positionally and
+            // the manifest via --config as a PLAIN local path (a `file://`
+            // prefix fails with "file not found"). No `--query` flag exists
+            // in gcloud — the id is minted here, submitted, and echoed.
+            let location = selector
+                .map(|loc| format!(" --location '{}'", quote(loc)))
+                .unwrap_or_default();
+            format!(
+                "  id=\"oxoflow-$(basename \"$1\" .sh | tr '[:upper:]_' '[:lower:]-' | \
+                 sed 's/[^a-z0-9-]//g' | cut -c1-41)-$(date +%s)\"\n\
+                 \x20 out=$(gcloud batch jobs submit \"$id\" --config \"$1\"{location}) || return $?\n"
+            )
         }
         ClusterBackend::TencentBatch => {
-            "  out=$(tccli batch SubmitJob --cli-input-json file://\"$@\" --output json) || return $?\n  id=$(printf '%s' \"$out\" | grep -oE '\"JobId\": ?\"[^\"]+\"' | grep -oE 'job-[a-z0-9]+')\n"
+            let region = selector
+                .map(|zone| {
+                    format!(
+                        " --region '{}'",
+                        quote(oxo_flow_core::backend::tencent_batch::region_from_zone(zone))
+                    )
+                })
+                .unwrap_or_default();
+            // tccli prints the unwrapped response body (`{"JobId": …}`);
+            // the grep accepts that and the API envelope's spelling.
+            format!(
+                "  out=$(tccli batch SubmitJob --cli-input-json file://\"$@\" --output json{region}) || return $?\n\
+                 \x20 id=$(printf '%s' \"$out\" | grep -oE '\"JobId\": ?\"[^\"]+\"' | grep -oE 'job-[a-z0-9]+')\n"
+            )
         }
     };
 
@@ -179,7 +211,7 @@ fn generate_submit_helper(backend: &ClusterBackend) -> String {
     helper.push_str("# Submit one script and echo its scheduler job id.\n");
     helper.push_str("oxo_submit() {\n");
     helper.push_str("  local out id\n");
-    helper.push_str(body);
+    helper.push_str(&body);
     helper.push_str("  if [ -z \"$id\" ]; then\n");
     helper.push_str("    echo \"oxo-flow: cannot parse job id from: $out\" >&2\n");
     helper.push_str("    return 1\n");
@@ -203,6 +235,7 @@ fn generate_submit_wrapper(
     order: &[String],
     dag: &WorkflowDag,
     output_dir: &Path,
+    selector: Option<&str>,
 ) -> Result<String> {
     let mut script = String::new();
     script.push_str("#!/bin/bash\n");
@@ -210,7 +243,7 @@ fn generate_submit_wrapper(
     script.push_str("# Generated by oxo-flow\n\n");
     script.push_str("set -e\n\n");
     script.push_str("# Track job IDs\ndeclare -A JOB_IDS\n\n");
-    script.push_str(&generate_submit_helper(backend));
+    script.push_str(&generate_submit_helper(backend, selector));
 
     // Generate submit commands for each rule in order
     for rule_name in order {
@@ -1096,8 +1129,13 @@ pub async fn cluster_command(action: ClusterAction, json: bool) -> Result<()> {
 
             // Generate dependency-aware submit script if requested
             if with_dependencies && !dry_run {
-                let submit_script =
-                    generate_submit_wrapper(&cluster_backend, &order, &dag, &output)?;
+                let submit_script = generate_submit_wrapper(
+                    &cluster_backend,
+                    &order,
+                    &dag,
+                    &output,
+                    cluster_config.queue.as_deref(),
+                )?;
                 let submit_path = output.join("submit.sh");
                 std::fs::write(&submit_path, submit_script)?;
                 eprintln!(
@@ -1117,7 +1155,8 @@ pub async fn cluster_command(action: ClusterAction, json: bool) -> Result<()> {
                     "  Or manually: {}",
                     oxo_flow_core::cluster::submit_invocation_hint(
                         &cluster_backend,
-                        &output.display().to_string()
+                        &output.display().to_string(),
+                        cluster_config.queue.as_deref(),
                     )
                 );
             } else {
@@ -1133,7 +1172,8 @@ pub async fn cluster_command(action: ClusterAction, json: bool) -> Result<()> {
                         "    {}",
                         oxo_flow_core::cluster::submit_invocation_hint(
                             &cluster_backend,
-                            &output.display().to_string()
+                            &output.display().to_string(),
+                            cluster_config.queue.as_deref(),
                         )
                     );
                 } else {
@@ -1141,7 +1181,8 @@ pub async fn cluster_command(action: ClusterAction, json: bool) -> Result<()> {
                         "  Submit with: {}",
                         oxo_flow_core::cluster::submit_invocation_hint(
                             &cluster_backend,
-                            &output.display().to_string()
+                            &output.display().to_string(),
+                            cluster_config.queue.as_deref(),
                         )
                     );
                 }
@@ -1181,15 +1222,23 @@ pub async fn cluster_command(action: ClusterAction, json: bool) -> Result<()> {
                 // A scheduler failure must not hide the recorded state.
                 let ids = instance_job_ids(&instances);
                 if !ids.is_empty() {
+                    let queue_for_status = queue.clone();
                     let report = tokio::task::spawn_blocking(move || {
-                        query_status(&cluster_backend, &ids, |program, args| {
-                            let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
-                            let output = std::process::Command::new(program)
-                                .args(&arg_refs)
-                                .output()
-                                .map_err(|e| anyhow::anyhow!("Failed to execute {program}: {e}"))?;
-                            Ok(String::from_utf8_lossy(&output.stdout).to_string())
-                        })
+                        query_status(
+                            &cluster_backend,
+                            &ids,
+                            queue_for_status.as_deref(),
+                            |program, args| {
+                                let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+                                let output = std::process::Command::new(program)
+                                    .args(&arg_refs)
+                                    .output()
+                                    .map_err(|e| {
+                                        anyhow::anyhow!("Failed to execute {program}: {e}")
+                                    })?;
+                                Ok(String::from_utf8_lossy(&output.stdout).to_string())
+                            },
+                        )
                     })
                     .await
                     .context("status query task failed")?;
@@ -1268,6 +1317,23 @@ pub async fn cluster_command(action: ClusterAction, json: bool) -> Result<()> {
                 // the natural first question after a submit, and the one the
                 // old hard error left unanswered (the command used to bail
                 // with "requires at least one job ID").
+                //
+                // Tencent Batch's DescribeJobs has no per-user or per-queue
+                // scope (only job ids or attribute filters), so an empty
+                // listing there means "unsupported", not "no jobs" — say so
+                // instead of printing a misleading zero.
+                if !oxo_flow_core::backend::cluster::supports_my_jobs_listing(&cluster_backend) {
+                    eprintln!(
+                        "{} raw job listing is not supported for {} — pass job ids or use \
+                         a run-based view (`cluster status --run-dir <DIR>`)",
+                        "Note:".yellow(),
+                        cluster_backend
+                    );
+                    if json {
+                        println!("[]");
+                    }
+                    return Ok(());
+                }
                 // M-8: the scheduler round-trip is a blocking subprocess —
                 // off-thread so this async command body never parks a
                 // tokio worker.
@@ -1326,9 +1392,11 @@ pub async fn cluster_command(action: ClusterAction, json: bool) -> Result<()> {
                 }
                 return Ok(());
             }
-            for (program, args) in
-                oxo_flow_core::backend::cluster::status_invocations(&cluster_backend, &job_ids)
-            {
+            for (program, args) in oxo_flow_core::backend::cluster::status_invocations(
+                &cluster_backend,
+                &job_ids,
+                queue.as_deref(),
+            ) {
                 eprintln!(
                     "{} Executing '{} {}'...",
                     "Cluster:".bold().cyan(),
@@ -1339,25 +1407,37 @@ pub async fn cluster_command(action: ClusterAction, json: bool) -> Result<()> {
 
             let mut report = {
                 let job_ids = job_ids.clone();
+                let queue_for_status = queue.clone();
                 tokio::task::spawn_blocking(move || {
-                    query_status(&cluster_backend, &job_ids, |program, args| {
-                        let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
-                        let output =
-                            match std::process::Command::new(program).args(&arg_refs).output() {
+                    query_status(
+                        &cluster_backend,
+                        &job_ids,
+                        queue_for_status.as_deref(),
+                        |program, args| {
+                            let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+                            let output = match std::process::Command::new(program)
+                                .args(&arg_refs)
+                                .output()
+                            {
                                 Ok(out) => out,
                                 Err(e) => {
                                     eprintln!("  Is {program} installed on this system?");
                                     anyhow::bail!("Failed to execute status command: {e}");
                                 }
                             };
-                        if !output.status.success() {
-                            // A scheduler exits non-zero for "no such job" (qstat -j)
-                            // while still naming the others; what it printed still
-                            // answers for the ids it did list.
-                            eprintln!("{} exited {}", program, output.status.code().unwrap_or(-1));
-                        }
-                        Ok(String::from_utf8_lossy(&output.stdout).to_string())
-                    })
+                            if !output.status.success() {
+                                // A scheduler exits non-zero for "no such job" (qstat -j)
+                                // while still naming the others; what it printed still
+                                // answers for the ids it did list.
+                                eprintln!(
+                                    "{} exited {}",
+                                    program,
+                                    output.status.code().unwrap_or(-1)
+                                );
+                            }
+                            Ok(String::from_utf8_lossy(&output.stdout).to_string())
+                        },
+                    )
                 })
                 .await
                 .context("status query task failed")??
@@ -1423,14 +1503,23 @@ pub async fn cluster_command(action: ClusterAction, json: bool) -> Result<()> {
             }
         }
 
-        ClusterAction::Cancel { backend, job_ids } => {
+        ClusterAction::Cancel {
+            backend,
+            job_ids,
+            queue,
+        } => {
             let cluster_backend = resolve_backend(backend.as_deref())?;
             // One shared invocation mapping with the driver
-            // (`cancel_invocations`): k8s needs `kubectl delete job`, AWS/GCP
-            // cancel one id per API call, and the local schedulers take all
-            // ids at once (issue #1158 live campaign).
-            let invocations =
-                oxo_flow_core::backend::cluster::cancel_invocations(&cluster_backend, &job_ids);
+            // (`cancel_invocations`): k8s needs `kubectl delete job`, the
+            // cloud APIs cancel one id per API call, and the local
+            // schedulers take all ids at once (issue #1158 live campaign).
+            // `--queue` supplies the GCP location / Tencent zone a cloud
+            // CLI needs to resolve a bare id.
+            let invocations = oxo_flow_core::backend::cluster::cancel_invocations(
+                &cluster_backend,
+                &job_ids,
+                queue.as_deref(),
+            );
 
             // job_ids is clap-enforced as required, so the empty case never
             // reaches here — usage errors surface at argument parsing with
@@ -1598,8 +1687,8 @@ pub async fn cluster_command(action: ClusterAction, json: bool) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        cluster_command, first_log_source, generate_submit_wrapper, instance_tsv,
-        load_run_instances, overlay_scheduler_states, query_my_jobs, query_status,
+        cluster_command, first_log_source, generate_submit_helper, generate_submit_wrapper,
+        instance_tsv, load_run_instances, overlay_scheduler_states, query_my_jobs, query_status,
         read_captured_logs, resolve_backend_with, resolve_run_aware_dir, run_workdir, state_counts,
         status_line, tail_lines,
     };
@@ -1729,6 +1818,7 @@ mod tests {
             ClusterAction::Cancel {
                 backend: Some("torque".to_string()),
                 job_ids: vec!["1".to_string()],
+                queue: None,
             },
             ClusterAction::Logs {
                 backend: Some("ge".to_string()),
@@ -1744,9 +1834,7 @@ mod tests {
                 "must name the offending backend: {msg}"
             );
             assert!(
-                msg.contains(
-                    "expected slurm, pbs, sge, lsf, kubernetes (k8s), aws-batch, or tencent-batch (Tencent Cloud BatchCompute)"
-                ),
+                msg.contains(oxo_flow_core::cluster::SUPPORTED_BACKENDS_HINT),
                 "must list the accepted values: {msg}"
             );
         }
@@ -1861,6 +1949,31 @@ mod tests {
         );
     }
 
+    /// AWS needs one list-jobs call per live status; the answer is the
+    /// merge of every call (first id wins on a transition between calls),
+    /// not just the first invocation's rows.
+    #[test]
+    fn query_my_jobs_merges_every_listing_invocation() {
+        let listing = query_my_jobs(&ClusterBackend::AwsBatch, Some("q"), |program, args| {
+            assert_eq!(program, "aws");
+            let at = args.iter().position(|a| a == "--job-status").unwrap();
+            Ok(match args[at + 1].as_str() {
+                "PENDING" => "job-a|PENDING\njob-b|PENDING\n".to_string(),
+                "RUNNING" => "job-b|RUNNING\njob-c|RUNNING\n".to_string(),
+                _ => String::new(),
+            })
+        })
+        .unwrap();
+        assert_eq!(
+            listing,
+            vec![
+                ("job-a".to_string(), BackendJobStatus::Pending),
+                ("job-b".to_string(), BackendJobStatus::Pending),
+                ("job-c".to_string(), BackendJobStatus::Running),
+            ]
+        );
+    }
+
     #[test]
     fn status_answers_every_requested_id() {
         // SGE asks once per job: two invocations must not lose an answer, and
@@ -1868,6 +1981,7 @@ mod tests {
         let report = query_status(
             &oxo_flow_core::cluster::ClusterBackend::Sge,
             &["1".to_string(), "2".to_string()],
+            None,
             |program, args| {
                 assert_eq!(program, "qstat");
                 // Job 1 is running; job 2 already left the queue — qstat
@@ -1889,6 +2003,7 @@ mod tests {
         let err = query_status(
             &oxo_flow_core::cluster::ClusterBackend::Slurm,
             &["1".to_string()],
+            None,
             |_, _| Err(anyhow::anyhow!("squeue: slurm_load_jobs error")),
         )
         .unwrap_err();
@@ -1991,7 +2106,8 @@ mod tests {
             "#!/bin/bash\n#SBATCH --array=1-3\ntrue\n",
         )
         .unwrap();
-        let wrapper = generate_submit_wrapper(&ClusterBackend::Slurm, &order, &dag, out).unwrap();
+        let wrapper =
+            generate_submit_wrapper(&ClusterBackend::Slurm, &order, &dag, out, None).unwrap();
         assert!(
             wrapper
                 .contains("JOB_IDS[stats]=$(oxo_submit --dependency=aftercorr:${JOB_IDS[align]}"),
@@ -2008,7 +2124,8 @@ mod tests {
             "#!/bin/bash\n#SBATCH --array=1-4\ntrue\n",
         )
         .unwrap();
-        let wrapper = generate_submit_wrapper(&ClusterBackend::Slurm, &order, &dag, out).unwrap();
+        let wrapper =
+            generate_submit_wrapper(&ClusterBackend::Slurm, &order, &dag, out, None).unwrap();
         assert!(
             wrapper.contains("JOB_IDS[stats]=$(oxo_submit --dependency=afterok:${JOB_IDS[align]}"),
             "mismatched range must keep the ready-batch chain:\n{wrapper}"
@@ -2016,7 +2133,8 @@ mod tests {
 
         // Scalar downstream → afterok.
         std::fs::write(out.join("stats.sh"), "#!/bin/bash\necho hi\n").unwrap();
-        let wrapper = generate_submit_wrapper(&ClusterBackend::Slurm, &order, &dag, out).unwrap();
+        let wrapper =
+            generate_submit_wrapper(&ClusterBackend::Slurm, &order, &dag, out, None).unwrap();
         assert!(
             wrapper.contains("afterok:"),
             "scalar downstream must keep afterok:\n{wrapper}"
@@ -2033,7 +2151,7 @@ mod tests {
             ClusterBackend::Sge,
             ClusterBackend::Lsf,
         ] {
-            let wrapper = generate_submit_wrapper(&backend, &order, &dag, out).unwrap();
+            let wrapper = generate_submit_wrapper(&backend, &order, &dag, out, None).unwrap();
             assert!(
                 !wrapper.contains("aftercorr"),
                 "{backend} must not emit aftercorr:\n{wrapper}"
@@ -2065,7 +2183,8 @@ mod tests {
         // Even with every script present and all three ranges identical, a
         // downstream with TWO dependencies must never go element-wise —
         // aftercorr can only pair one upstream per downstream.
-        let wrapper = generate_submit_wrapper(&ClusterBackend::Slurm, &order, &dag, out).unwrap();
+        let wrapper =
+            generate_submit_wrapper(&ClusterBackend::Slurm, &order, &dag, out, None).unwrap();
         assert!(
             wrapper.contains("--dependency=afterok:${JOB_IDS[a]}:${JOB_IDS[b]}")
                 || wrapper.contains("--dependency=afterok:${JOB_IDS[b]}:${JOB_IDS[a]}"),
@@ -2075,7 +2194,8 @@ mod tests {
         // A missing script must also degrade to afterok, never break
         // wrapper generation.
         std::fs::remove_file(out.join("merge.sh")).unwrap();
-        let wrapper = generate_submit_wrapper(&ClusterBackend::Slurm, &order, &dag, out).unwrap();
+        let wrapper =
+            generate_submit_wrapper(&ClusterBackend::Slurm, &order, &dag, out, None).unwrap();
         assert!(
             wrapper.contains("--dependency=afterok:${JOB_IDS[a]}:${JOB_IDS[b]}")
                 || wrapper.contains("--dependency=afterok:${JOB_IDS[b]}:${JOB_IDS[a]}"),
@@ -2224,6 +2344,53 @@ mod tests {
         assert_eq!(
             first_log_source(vec![("run-dir", None), ("accounting", None)]),
             None
+        );
+    }
+
+    /// The dependency-aware submit wrapper shells the same CLI grammar the
+    /// executor issues. The GCP helper used to call
+    /// `gcloud batch jobs submit "$@" --query 'name' --format=…`: `--query`
+    /// is an AWS CLI flag gcloud rejects as an unknown argument, the script
+    /// path landed in the positional JOB slot, `--config` was missing, and
+    /// `id="$out"` recorded the printed Job resource (not a bare id) as the
+    /// dependency key. Pin the corrected shape, and check AWS/Tencent for
+    /// the same class of bug.
+    #[test]
+    fn cloud_submit_helpers_match_the_vendor_cli_grammar() {
+        let gcp = generate_submit_helper(&ClusterBackend::GcpBatch, Some("us-central1"));
+        assert!(
+            gcp.contains("gcloud batch jobs submit \"$id\" --config \"$1\""),
+            "the id is positional and the manifest is a plain --config path: {gcp}"
+        );
+        assert!(
+            !gcp.contains("--query"),
+            "gcloud has no --query flag (AWS only): {gcp}"
+        );
+        assert!(
+            !gcp.contains("file://"),
+            "gcloud --config takes no URI scheme: {gcp}"
+        );
+        assert!(
+            gcp.contains("--location 'us-central1'"),
+            "the location resolves the bare id: {gcp}"
+        );
+        let aws = generate_submit_helper(&ClusterBackend::AwsBatch, None);
+        assert!(
+            aws.contains("--query 'jobId' --output text"),
+            "aws-cli's --query is the real flag and yields the bare id: {aws}"
+        );
+        let tencent = generate_submit_helper(&ClusterBackend::TencentBatch, Some("ap-shanghai-5"));
+        assert!(
+            !tencent.contains("--query"),
+            "tccli has no --query flag: {tencent}"
+        );
+        assert!(
+            tencent.contains("--region 'ap-shanghai'"),
+            "the zone-derived region scopes the call: {tencent}"
+        );
+        assert!(
+            tencent.contains("JobId"),
+            "the JobId is parsed out of the unwrapped tccli body: {tencent}"
         );
     }
 }

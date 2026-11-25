@@ -336,12 +336,28 @@ pub fn submit_command(backend: &ClusterBackend) -> &'static str {
     }
 }
 
+/// The accepted backend names, for user-facing error messages. One list so
+/// the CLI's `unknown cluster backend` messages can never omit a backend
+/// the parser accepts (gcp-batch was missing from all three copies).
+pub const SUPPORTED_BACKENDS_HINT: &str = "slurm, pbs, sge, lsf, kubernetes (k8s), aws-batch, \
+                                           gcp-batch, or tencent-batch (Tencent Cloud \
+                                           BatchCompute)";
+
 /// The manual submit command for a directory of rendered scripts, in the
 /// form each backend actually accepts. The standalone `cluster submit`
 /// hints print this instead of hand-rolled strings that had drifted from
 /// the invocations `ClusterExecutor::submit` really issues (the cloud
 /// backends take manifest files, not script arguments).
-pub fn submit_invocation_hint(backend: &ClusterBackend, dir: &str) -> String {
+///
+/// `selector` is the profile's `queue` value where the backend's CLI needs
+/// one to address the submission: the GCP location (a bare `--config` path
+/// plus job id still needs `--location` unless gcloud defaults carry one)
+/// and the Tencent placement zone (whose derived region scopes tccli).
+pub fn submit_invocation_hint(
+    backend: &ClusterBackend,
+    dir: &str,
+    selector: Option<&str>,
+) -> String {
     match backend {
         ClusterBackend::Slurm => format!("sbatch --parsable {dir}/*.sh"),
         ClusterBackend::Pbs | ClusterBackend::Sge => format!("qsub {dir}/*.sh"),
@@ -350,15 +366,43 @@ pub fn submit_invocation_hint(backend: &ClusterBackend, dir: &str) -> String {
         ClusterBackend::AwsBatch => format!(
             "for f in {dir}/*.sh; do aws batch submit-job --cli-input-json \"file://$f\"; done"
         ),
-        ClusterBackend::TencentBatch => format!(
-            "for f in {dir}/*.sh; do tccli batch SubmitJob --cli-input-json \"file://$f\" --output json; done"
-        ),
-        // The manual form mirrors the executor's minted id: sanitized
-        // basename clamped to the 41-char name budget inside GCP's
-        // 63-char job-id cap.
-        ClusterBackend::GcpBatch => format!(
-            "for f in {dir}/*.sh; do n=$(basename \"$f\" .sh | tr '[:upper:]_' '[:lower:]-') | sed 's/[^a-z0-9-]//g' | cut -c1-41; gcloud batch jobs submit \"oxoflow-$n-$(date +%s)\" --config \"file://$f\"; done"
-        ),
+        ClusterBackend::TencentBatch => {
+            let region = selector
+                .map(|zone| {
+                    format!(
+                        " --region '{}'",
+                        crate::environment::escape_for_sh_single_quote(
+                            crate::backend::tencent_batch::region_from_zone(zone)
+                        )
+                    )
+                })
+                .unwrap_or_default();
+            format!(
+                "for f in {dir}/*.sh; do tccli batch SubmitJob --cli-input-json \"file://$f\" \
+                 --output json{region}; done"
+            )
+        }
+        // gcloud's `--config` takes a plain local path — the API's
+        // `file://`-style URIs are not a gcloud convention and every
+        // submit failed with "file not found" when the hint carried one.
+        // The job id is minted here the same way the executor does
+        // (sanitized basename clamped to 41 chars inside GCP's 63-char id
+        // cap).
+        ClusterBackend::GcpBatch => {
+            let location = selector
+                .map(|loc| {
+                    format!(
+                        " --location '{}'",
+                        crate::environment::escape_for_sh_single_quote(loc)
+                    )
+                })
+                .unwrap_or_default();
+            format!(
+                "for f in {dir}/*.sh; do n=$(basename \"$f\" .sh | tr '[:upper:]_' '[:lower:]-' | \
+                 sed 's/[^a-z0-9-]//g' | cut -c1-41); gcloud batch jobs submit \
+                 \"oxoflow-$n-$(date +%s)\" --config \"$f\"{location}; done"
+            )
+        }
     }
 }
 

@@ -655,7 +655,7 @@ then exec bash -c \"$1\"; else exec sh -c \"$1\"; fi";
 ///
 /// Replaces every `'` with `'\''` (close quote, escaped literal quote, reopen quote)
 /// so the value is safe regardless of what shell interprets the outer wrapper.
-pub(crate) fn escape_for_sh_single_quote(s: &str) -> String {
+pub fn escape_for_sh_single_quote(s: &str) -> String {
     s.replace('\'', "'\\''")
 }
 
