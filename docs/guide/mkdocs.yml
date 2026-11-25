@@ -112,12 +112,9 @@ extra:
     - icon: fontawesome/brands/github
       link: https://github.com/Traitome/oxo-flow
       name: oxo-flow on GitHub
-    - icon: fontawesome/brands/github
+    - icon: fontawesome/solid/people-group
       link: https://github.com/WangLabCSU
       name: WangLabCSU on GitHub
-    - icon: fontawesome/solid/people-group
-      link: https://oxo-flow-community.github.io/
-      name: oxo-flow-community catalog
 
 plugins:
   - search:
