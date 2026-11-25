@@ -1,0 +1,19 @@
+Provenance Verify /tmp/oxo-1388-prelude/.oxo-flow/checkpoint.json
+
+  • workflow path: /tmp/oxo-1388-prelude/wf-prelude.oxoflow
+  • environment-lock identity: 3/3 rule(s) resolved
+    • bash_array_lane_A1: docker|ubuntu@sha256:f64b2ffc2f10ab8f8505aa56b2664bd846cbb9df87c7e2532e30f7667021c0e6
+    • bash_array_lane_A2: docker|ubuntu@sha256:f64b2ffc2f10ab8f8505aa56b2664bd846cbb9df87c7e2532e30f7667021c0e6
+    • bash_single: docker|ubuntu@sha256:f64b2ffc2f10ab8f8505aa56b2664bd846cbb9df87c7e2532e30f7667021c0e6
+  • cluster images: 3 rule(s)
+    • bash_array_lane_A1: image ubuntu:22.04 (ubuntu:22.04) — ubuntu@sha256:f64b2ffc2f10ab8f8505aa56b2664bd846cbb9df87c7e2532e30f7667021c0e6
+    • bash_array_lane_A2: image ubuntu:22.04 (ubuntu:22.04) — ubuntu@sha256:f64b2ffc2f10ab8f8505aa56b2664bd846cbb9df87c7e2532e30f7667021c0e6
+    • bash_single: image ubuntu:22.04 (ubuntu:22.04) — ubuntu@sha256:f64b2ffc2f10ab8f8505aa56b2664bd846cbb9df87c7e2532e30f7667021c0e6
+  • workflow content hash: sha256:bb4005798217f10b3d7b1e27003b48b06d8f8a98b718904b4670a2fb9cd79741
+  • workflow content check: verified (sha256:bb4005798217f10b3d7b1e27003b48b06d8f8a98b718904b4670a2fb9cd79741)
+
+  ✓ A1.txt sha256:4fc93a7e3b47e4212e938e7565c56b87fea6951468f59b1fd19cc4c1d8343f22
+  ✓ A2.txt sha256:09d0e85fc483bcd80dc0d863b033e14450dff829a1959465b6cfad1bf1575b5d
+  ✓ single.txt sha256:12803efb46690aa3b70ba171c4a8b9e07fd66208a09a0b0b3856fb3aa623b792
+
+Summary: 3 matched, 0 mismatched, 0 missing

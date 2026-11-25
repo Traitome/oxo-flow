@@ -1,0 +1,13 @@
+Cluster: Generating kubernetes job scripts for 5 rule instances
+2026-11-25T17:07:09.834419Z  WARN Kubernetes: the rule's environment cannot be rendered as a pod image — the local environment wrapper stays folded into the job command (wrapper-fallback); the pod's own image must carry that runtime to execute it rule=fanout_lane_L2 environment="docker"
+  ✓ render-no-image/fanout_lane_L2.sh
+2026-11-25T17:07:09.835037Z  WARN Kubernetes: the rule's environment cannot be rendered as a pod image — the local environment wrapper stays folded into the job command (wrapper-fallback); the pod's own image must carry that runtime to execute it rule=fanout_lane_L1 environment="docker"
+  ✓ render-no-image/fanout_lane_L1.sh
+2026-11-25T17:07:09.835571Z  WARN Kubernetes: the rule's environment cannot be rendered as a pod image — the local environment wrapper stays folded into the job command (wrapper-fallback); the pod's own image must carry that runtime to execute it rule=image_probe environment="docker"
+  ✓ render-no-image/image_probe.sh
+  ✓ render-no-image/fallback_probe.sh
+2026-11-25T17:07:09.836412Z  WARN Kubernetes: the rule's environment cannot be rendered as a pod image — the local environment wrapper stays folded into the job command (wrapper-fallback); the pod's own image must carry that runtime to execute it rule=busybox_probe environment="docker"
+  ✓ render-no-image/busybox_probe.sh
+
+Done: 5 scripts written to render-no-image
+  Submit with: kubectl create -f render-no-image/*.sh
