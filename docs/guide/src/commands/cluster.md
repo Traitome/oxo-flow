@@ -611,6 +611,15 @@ What the renderer does with it:
   — at render time — when the run workdir is not under the volume root
   (that failure names both paths instead of mounting something wrong).
 
+Live evidence: a two-node k3s cluster (separate kernels) with a network
+NFSv4.2 export, the run workdir inside the export, an Indexed array
+settling per element across both nodes, and a dependent rule forced onto
+the second node by resource fit — see
+[`kubernetes-multinode-2026-11-26.md`](../../../superpowers/audits/kubernetes-multinode-2026-11-26.md).
+`kind = "nfs"` is live-qualified in that drill; `kind = "pvc"` remains
+render-tested only, and `kind = "hostpath"` keeps its single-node
+semantics.
+
 ### Job arrays
 
 Same-template instances that are ready together and agree on every
