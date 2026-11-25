@@ -1,0 +1,12 @@
+[workflow]
+name = "freeform-duplicate"
+metadata_file = "freeform_duplicate.tsv"
+
+[[sample_groups]]
+name = "cohort"
+samples = ["S1", "S2"]
+
+[[rules]]
+name = "step"
+output = ["out.txt"]
+shell = "touch out.txt"

@@ -126,40 +126,57 @@ fn ten_thousand_and_one_hundred_thousand_rows_are_linear_and_stable() {
     let started = Instant::now();
     let small_report = evaluate(&small);
     let small_elapsed = started.elapsed();
-    eprintln!("metadata contract perf: 10k evaluate = {small_elapsed:?}");
+    let started = Instant::now();
+    let small_digest = digest_for(&small);
+    let small_digest_elapsed = started.elapsed();
+    eprintln!(
+        "metadata contract perf: 10k evaluate = {small_elapsed:?}, digest = {small_digest_elapsed:?}"
+    );
     assert!(
         small_report.findings.is_empty(),
         "{:?}",
         small_report.findings
     );
-    assert!(small.metadata_digest.is_some());
+    assert!(small_digest.is_some());
 
     let (_large_dir, large) = generated_config(100_000);
     let started = Instant::now();
     let large_report = evaluate(&large);
     let large_elapsed = started.elapsed();
-    eprintln!("metadata contract perf: 100k evaluate = {large_elapsed:?}");
+    let started = Instant::now();
+    let large_digest = digest_for(&large);
+    let large_digest_elapsed = started.elapsed();
+    eprintln!(
+        "metadata contract perf: 100k evaluate = {large_elapsed:?}, digest = {large_digest_elapsed:?}"
+    );
     assert!(
         large_report.findings.is_empty(),
         "{:?}",
         large_report.findings
     );
 
-    // Generous debug-build bound (the measured cost is well under a
-    // second); a regression to quadratic behavior blows through it.
-    assert!(
-        large_elapsed.as_secs_f64() < 10.0,
-        "100k-row metadata validation took {large_elapsed:?}"
-    );
+    // Generous debug-build bounds (both measured costs are well under two
+    // seconds); a regression to quadratic behavior blows through them.
+    for (label, elapsed) in [
+        ("100k-row metadata validation", large_elapsed),
+        ("100k-row metadata digest", large_digest_elapsed),
+    ] {
+        assert!(elapsed.as_secs_f64() < 10.0, "{label} took {elapsed:?}");
+    }
     let small_seconds = small_elapsed.as_secs_f64().max(0.001);
     assert!(
         large_elapsed.as_secs_f64() < small_seconds * 60.0 + 1.0,
-        "100k rows took {large_elapsed:?} vs 10k {small_elapsed:?} — looks super-linear"
+        "100k evaluate took {large_elapsed:?} vs 10k {small_elapsed:?} — looks super-linear"
+    );
+    let small_digest_seconds = small_digest_elapsed.as_secs_f64().max(0.001);
+    assert!(
+        large_digest_elapsed.as_secs_f64() < small_digest_seconds * 60.0 + 1.0,
+        "100k digest took {large_digest_elapsed:?} vs 10k {small_digest_elapsed:?} — looks super-linear"
     );
 
     // Repeated runs: identical digest and findings.
     assert_eq!(evaluate(&large), large_report);
-    assert_eq!(digest_for(&large), digest_for(&large));
+    assert_eq!(digest_for(&large), large_digest);
 }
 
 #[test]

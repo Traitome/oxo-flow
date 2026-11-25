@@ -21,18 +21,51 @@ fn declared_table_columns(config: &WorkflowConfig, rows: &[MetadataRow]) -> BTre
     columns
 }
 
-/// The names that must carry a non-empty value in every row: the schema's
-/// `required_columns` plus every `columns[]` entry marked `required`. The
-/// id column is implicitly required (the loader rejects an empty id).
-fn required_columns(schema: &MetadataSchema) -> BTreeSet<String> {
-    let mut required: BTreeSet<String> = schema.required_columns.iter().cloned().collect();
+/// Where a column's required-ness was declared — named back in the finding
+/// suggestion so the operator edits the declaration that actually holds it
+/// (m7): `required_columns` vs `columns[].required`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RequiredSite {
+    RequiredColumns,
+    ColumnFlag,
+    Both,
+}
+
+/// The names that must carry a non-empty value in every row, with the
+/// declaration site. The id column is implicitly required (the loader
+/// rejects an empty id) and never needs a presence check.
+fn required_columns(schema: &MetadataSchema) -> BTreeMap<String, RequiredSite> {
+    let mut required: BTreeMap<String, RequiredSite> = schema
+        .required_columns
+        .iter()
+        .map(|name| (name.clone(), RequiredSite::RequiredColumns))
+        .collect();
     for column in &schema.columns {
         if column.required {
-            required.insert(column.name.clone());
+            required
+                .entry(column.name.clone())
+                .and_modify(|site| *site = RequiredSite::Both)
+                .or_insert(RequiredSite::ColumnFlag);
         }
     }
     required.remove(&schema.id_column);
     required
+}
+
+/// The "or remove the requirement" half of a META-001/META-002 suggestion,
+/// naming every declaration that actually holds the requirement.
+fn drop_required_hint(name: &str, site: RequiredSite) -> String {
+    match site {
+        RequiredSite::RequiredColumns => {
+            "drop it from [workflow.metadata_schema] required_columns".to_string()
+        }
+        RequiredSite::ColumnFlag => format!(
+            "drop required = true from the '{name}' entry under              [[workflow.metadata_schema.columns]]"
+        ),
+        RequiredSite::Both => format!(
+            "drop it from [workflow.metadata_schema] required_columns and from required = true              on the '{name}' column entry"
+        ),
+    }
 }
 
 /// The workflow's declared sample/pair domain: every sample-group member,
@@ -68,21 +101,33 @@ fn sample_domain(config: &WorkflowConfig) -> BTreeSet<String> {
 pub fn evaluate(config: &WorkflowConfig) -> MetadataReport {
     let schema = resolved_schema(config);
     let rows = effective_rows(config);
+    // Declaring `[workflow.metadata_schema]` opts the workflow into STRICT
+    // metadata validation. Without it the table stays free-form (the
+    // documented pre-#1368 behavior): every non-coverage finding is
+    // reported as a WARNING so a pre-upgrade table with, say, a duplicated
+    // row never starts failing, and there is no schema to relax in the
+    // failure hint. Domain coverage keeps its own `coverage` severity.
+    let strict = config.workflow.metadata_schema.is_some();
+    let severity = if strict {
+        MetadataSeverity::Error
+    } else {
+        MetadataSeverity::Warning
+    };
     let mut report = MetadataReport::default();
 
     // ── Column-level checks ────────────────────────────────────────────
     let present_columns = declared_table_columns(config, &rows);
     let required = required_columns(&schema);
-    for column in &required {
+    for (column, site) in &required {
         if !present_columns.contains(column) {
             report.push(
                 MetadataFinding::new(
                     "META-001",
-                    MetadataSeverity::Error,
+                    severity,
                     format!("required column '{column}' is missing from the metadata table"),
                     Some(format!(
-                        "add a '{column}' column to the metadata table, or drop it from \
-                         [workflow.metadata_schema] required_columns"
+                        "add a '{column}' column to the metadata table, or {}",
+                        drop_required_hint(column, *site)
                     )),
                 )
                 .in_column(column),
@@ -110,7 +155,7 @@ pub fn evaluate(config: &WorkflowConfig) -> MetadataReport {
         report.push(
             MetadataFinding::new(
                 "META-012",
-                MetadataSeverity::Error,
+                severity,
                 format!(
                     "column '{column}' is not declared by [workflow.metadata_schema] and \
                      allow_extra_columns = false"
@@ -139,7 +184,7 @@ pub fn evaluate(config: &WorkflowConfig) -> MetadataReport {
             Err(error) => report.push(
                 MetadataFinding::new(
                     "META-006",
-                    MetadataSeverity::Error,
+                    severity,
                     format!(
                         "column '{}' declares an invalid regex '{pattern}': {error}",
                         column.name
@@ -166,7 +211,7 @@ pub fn evaluate(config: &WorkflowConfig) -> MetadataReport {
             report.push(
                 MetadataFinding::new(
                     "META-003",
-                    MetadataSeverity::Error,
+                    severity,
                     format!(
                         "duplicate metadata id '{}' in column '{}'{}",
                         row.id, schema.id_column, first
@@ -184,7 +229,7 @@ pub fn evaluate(config: &WorkflowConfig) -> MetadataReport {
             first_row_by_id.insert(row.id.as_str(), row.row);
         }
 
-        for name in &required {
+        for (name, site) in &required {
             if !present_columns.contains(name) {
                 // Already reported once as META-001; do not repeat it per row.
                 continue;
@@ -197,11 +242,11 @@ pub fn evaluate(config: &WorkflowConfig) -> MetadataReport {
                 report.push(
                     MetadataFinding::new(
                         "META-002",
-                        MetadataSeverity::Error,
+                        severity,
                         format!("required column '{name}' has no value for id '{}'", row.id),
                         Some(format!(
-                            "fill in '{name}' for this row, or drop it from \
-                             [workflow.metadata_schema] required_columns"
+                            "fill in '{name}' for this row, or {}",
+                            drop_required_hint(name, *site)
                         )),
                     )
                     .at_row(row.row)
@@ -233,7 +278,7 @@ pub fn evaluate(config: &WorkflowConfig) -> MetadataReport {
                         report.push(
                             MetadataFinding::new(
                                 "META-004",
-                                MetadataSeverity::Error,
+                                severity,
                                 format!(
                                     "column '{}' is declared unique but value '{value}' repeats \
                                      (first seen at {first})",
@@ -261,7 +306,7 @@ pub fn evaluate(config: &WorkflowConfig) -> MetadataReport {
                 report.push(
                     MetadataFinding::new(
                         "META-005",
-                        MetadataSeverity::Error,
+                        severity,
                         format!(
                             "column '{}' value '{value}' is not one of the declared enum values: {}",
                             column.name,
@@ -284,7 +329,7 @@ pub fn evaluate(config: &WorkflowConfig) -> MetadataReport {
                 report.push(
                     MetadataFinding::new(
                         "META-006",
-                        MetadataSeverity::Error,
+                        severity,
                         format!(
                             "column '{}' value '{value}' does not match the declared regex '{}'",
                             column.name,
@@ -305,7 +350,7 @@ pub fn evaluate(config: &WorkflowConfig) -> MetadataReport {
                 report.push(
                     MetadataFinding::new(
                         "META-007",
-                        MetadataSeverity::Error,
+                        severity,
                         format!(
                             "column '{}' value '{value}' is not a valid {}",
                             column.name,
@@ -335,7 +380,7 @@ pub fn evaluate(config: &WorkflowConfig) -> MetadataReport {
             report.push(
                 MetadataFinding::new(
                     "META-008",
-                    MetadataSeverity::Error,
+                    severity,
                     format!(
                         "pair '{}' declares experiment == control ('{}') — the comparison has \
                          no contrast",
@@ -354,7 +399,7 @@ pub fn evaluate(config: &WorkflowConfig) -> MetadataReport {
             report.push(
                 MetadataFinding::new(
                     "META-008",
-                    MetadataSeverity::Error,
+                    severity,
                     format!("duplicate pair_id '{}'", pair.pair_id),
                     Some("make every pair_id unique — instances and outputs key on it".to_string()),
                 )
@@ -365,17 +410,27 @@ pub fn evaluate(config: &WorkflowConfig) -> MetadataReport {
     }
 
     // ── Domain coverage (META-009 … META-011) ─────────────────────────
-    // Meaningful only when a contract exists: with no metadata table and no
-    // schema there is nothing to cover, and with no declared sample/pair
-    // domain there is nothing to cover it against (a metadata table may be
-    // a pure lookup).
-    let contract_exists = !rows.is_empty() || config.workflow.metadata_schema.is_some();
+    // Meaningful only when a contract exists: with no metadata table, no
+    // declared `metadata_file`, and no schema there is nothing to cover,
+    // and with no declared sample/pair domain there is nothing to cover it
+    // against (a metadata table may be a pure lookup). A header-only
+    // `metadata_file` IS a contract — the common "forgot to populate"
+    // mistake must surface as every domain member missing a row.
+    let contract_exists = config.workflow.metadata_file.is_some()
+        || !rows.is_empty()
+        || config.workflow.metadata_schema.is_some();
     let domain = sample_domain(config);
     if let Some(severity) = schema.coverage.severity()
         && contract_exists
         && !domain.is_empty()
     {
         for pair in &config.pairs {
+            // Lookup order is sample -> pair_id -> experiment -> control: a
+            // row keyed by the pair id resolves every `{meta.*}` read for
+            // the pair, so neither member is missing coverage.
+            if config.metadata.contains_key(&pair.pair_id) {
+                continue;
+            }
             for (column, sample) in [
                 ("experiment", Some(pair.experiment.as_str())),
                 ("control", pair.control.as_deref()),
@@ -414,10 +469,14 @@ pub fn evaluate(config: &WorkflowConfig) -> MetadataReport {
                                 "sample '{sample}' in group '{}' has no metadata row",
                                 group.name
                             ),
-                            Some(format!(
-                                "add a metadata row for '{sample}', or relax \
-                                 [workflow.metadata_schema] coverage"
-                            )),
+                            Some(if config.workflow.metadata_schema.is_some() {
+                                format!(
+                                    "add a metadata row for '{sample}', or set \
+                                     [workflow.metadata_schema] coverage = \"off\""
+                                )
+                            } else {
+                                format!("add a metadata row for '{sample}'")
+                            }),
                         )
                         .in_column(&schema.id_column)
                         .for_id(sample),

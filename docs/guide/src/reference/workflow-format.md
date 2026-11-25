@@ -2746,11 +2746,15 @@ shell = "samtools stats {input[0]} > {output[0]}"
 
 The metadata table is a lookup by default; `[workflow.metadata_schema]`
 turns it into a **checked contract** (issue #1368). The contract is
-optional — omitting it keeps the table free-form — and is validated at
-plan time by `validate`, `dry-run`, and `run` (which refuses to start on an
-error finding). `validate --json` and `dry-run --json` expose every
-finding in a stable `metadata` array, and the canonical digest of the
-contract plus rows is recorded in the run checkpoint's provenance.
+optional, and an omitted contract keeps the table **free-form**: the
+built-in data findings that do not need a declared column — duplicate ids
+(`META-003`) and pair conflicts (`META-008`) — are then reported as
+**warnings**, never errors, so a pre-existing table cannot start failing.
+Declaring `[workflow.metadata_schema]` (even an empty table) opts into
+strict validation: every non-coverage finding becomes an error, `validate`
+fails, and `run` refuses to start. `validate --json` and `dry-run --json`
+expose every finding in a stable `metadata` array, and the canonical digest
+of the contract plus rows is recorded in the run checkpoint's provenance.
 
 ```toml
 [workflow]
@@ -2785,7 +2789,7 @@ enum = ["pass", "fail"]
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
-| `id_column` | string | `"sample"` | TSV/CSV header name and JSON object key holding the row id. The id is always required, non-empty, and unique (`META-003`). For the default `sample` id, a TSV/CSV whose header has no `sample` column keeps the historical first-column-is-the-id layout; any other value must name an existing header (or the load fails naming the column and the declared headers). |
+| `id_column` | string | `"sample"` | TSV/CSV header name and JSON object key holding the row id. The id is always required and non-empty; duplicates are `META-003`. **With a schema the column is strict** — the header/key must exist, or the load fails naming the column and the declared headers. Without a schema, the default `sample` keeps the historical first-column-is-the-id compatibility path. |
 | `required_columns` | array of strings | `[]` | Columns every row must carry a non-empty value for. |
 | `allow_extra_columns` | boolean | `true` | When `false`, a column outside `columns[].name` + `required_columns` is `META-012`. |
 | `coverage` | `"off"` / `"warn"` / `"error"` | `"warn"` | How gaps between the table and the declared sample/pair domain are reported (`META-009`, `META-010`, `META-011`). |
@@ -2801,7 +2805,7 @@ enum = ["pass", "fail"]
   for a whole-value match.
 - `enum` values are compared exactly (case-sensitive).
 - `unique` checks non-empty values across all rows; declaring it on the id
-  column is redundant (duplicate ids are always `META-003`).
+  column is redundant (`META-003` always covers duplicate ids).
 - The declaration itself is validated at load: an empty `id_column`,
   duplicate column names, an uncompilable regex, or an empty `enum` list
   fail with a config error naming the offending key.
@@ -2813,39 +2817,58 @@ the metadata table, `null` for table-level findings and for inline
 
 | Code | Severity | Meaning |
 |---|---|---|
-| `META-001` | error | A required column is missing from the table header/rows. |
-| `META-002` | error | A required column has no value in a row. |
-| `META-003` | error | Duplicate metadata id (the later row is reported; the first occurrence's row is named). |
-| `META-004` | error | Duplicate value in a `unique` column. |
-| `META-005` | error | Value outside the declared `enum`. |
-| `META-006` | error | Value does not match the declared `regex` (or the regex itself is invalid). |
-| `META-007` | error | Value is not a valid declared `type`. |
-| `META-008` | error | Pair conflict: `experiment == control`, or a duplicate `pair_id`. |
-| `META-009` | `coverage` | A pair's experiment/control sample has no metadata row. |
+| `META-001` | error¹ | A required column is missing from the table header/rows. |
+| `META-002` | error¹ | A required column has no value in a row. |
+| `META-003` | error¹ | Duplicate metadata id (the later row is reported; the first occurrence's row is named). |
+| `META-004` | error¹ | Duplicate value in a `unique` column. |
+| `META-005` | error¹ | Value outside the declared `enum`. |
+| `META-006` | error¹ | Value does not match the declared `regex` (or the regex itself is invalid). |
+| `META-007` | error¹ | Value is not a valid declared `type`. |
+| `META-008` | error¹ | Pair conflict: `experiment == control`, or a duplicate `pair_id`. |
+| `META-009` | `coverage` | A pair's experiment/control sample has no metadata row (a row keyed by the pair's `pair_id` satisfies both — that is the engine's lookup fallback). |
 | `META-010` | `coverage` | A sample-group member has no metadata row. |
 | `META-011` | `coverage` | A metadata row id is outside every sample group and pair domain (pair ids, experiments, and controls all count as domain ids because `{meta.*}` lookup falls back to them). |
-| `META-012` | error | A column is not declared and `allow_extra_columns = false`. |
+| `META-012` | error¹ | A column is not declared and `allow_extra_columns = false`. |
+
+¹ Reported as a **warning** when the workflow declares no
+`[workflow.metadata_schema]` (free-form tables never fail). `META-004`–
+`META-007` and `META-012` can only be emitted with a schema, because they
+depend on a declared column or declaration policy.
 
 `coverage = "off"` emits nothing for `META-009`–`META-011`; `"warn"` (the
 default) reports warnings and continues; `"error"` fails validation and
-refuses `run`. Coverage is only evaluated when a contract exists **and** a
-sample/pair domain is declared — a metadata table used as a pure constant
-lookup is never a coverage violation. Empty ids are a parse error naming
-the data row, never silently skipped.
+refuses `run`. Coverage is only evaluated when a metadata contract exists
+(a declared `metadata_file` — even header-only — table rows, or a schema)
+**and** a sample/pair domain is declared. `[[sample_groups]]`, `[[pairs]]`,
+and `sample_pattern` / `pairs_pattern` discovery all create such a domain,
+so a table carrying extra rows beyond the declared/discovered members is
+reported as `META-011`; set `coverage = "off"` (or add the ids to a domain)
+when extra rows are intentional. Without any domain the table is a pure
+lookup and coverage is silent. Empty ids are a parse error naming the data
+row, never silently skipped.
 
-**Canonical metadata digest.** Every workflow with a metadata table or a
-declared contract gets a content digest — `sha256:<hex>` over
+**Canonical metadata digest.** Every workflow that declares a
+`metadata_file` (even header-only), a `[workflow.metadata_schema]`, or
+inline `[metadata]` rows gets a content digest — `sha256:<hex>` over
 `{format, schema, rows}` — materialized with the schema defaults applied
 (`required_columns` sorted/deduped, `columns` sorted by name, enum values
-sorted), rows sorted by id, columns sorted by name, values trimmed, and
-empty values omitted. The row numbers are not part of the digest. The
-digest is therefore byte-stable across TSV, CSV, and JSON sources carrying
-the same logical rows and across input row order (an empty cell and an
-absent key are the same logical value). It is recorded in the run
-checkpoint next to the workflow content hash and is folded into the
-override-aware `workflow_resolved_hash`, so two runs whose metadata
-contract or rows differ can never share a resolved fingerprint. It is
-surfaced by `validate --json` / `dry-run --json` as `metadata_digest`, and
+sorted). Values are canonicalized **per declared column type** before
+hashing: `integer` values are parsed and re-formatted (`007` → `7`),
+`float` values are parsed as finite `f64` and re-formatted (`1.50` →
+`1.5`, `1.0` → `1`), `boolean` values are lowercased (`TRUE` → `true`),
+and `string` (or undeclared) values are trimmed with case preserved.
+Values that violate their declared type are hashed as trimmed text —
+validation reports them as `META-007`, and the digest stays computable.
+Empty values are omitted, so an empty cell and an absent key are the same
+logical value. Rows are sorted by `(id, canonical values)` and columns by
+name; row numbers are not part of the digest. The digest is therefore
+byte-stable across TSV, CSV, and JSON sources carrying the same logical
+rows — under the declared types — and across input row order, including
+tables with duplicate ids. It is recorded in the run checkpoint next to
+the workflow content hash and is folded into the override-aware
+`workflow_resolved_hash`, so two runs whose metadata contract or rows
+differ can never share a resolved fingerprint. It is surfaced by
+`validate --json` / `dry-run --json` as `metadata_digest`, and
 `provenance verify` / `provenance attest` report and bind it. It proves
 *which* typed table a run consumed — not that the values are biologically
 correct, and `provenance verify` does not re-derive it (the table bytes as

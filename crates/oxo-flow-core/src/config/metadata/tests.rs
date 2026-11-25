@@ -503,3 +503,193 @@ fn loader_honors_id_column_and_rejects_empty_ids() {
         "{message}"
     );
 }
+
+#[test]
+fn schema_less_tables_report_warnings_and_a_schema_opts_into_strict_errors() {
+    // Issue #1368 review I1: a free-form (schema-less) metadata table must
+    // never fail validation/run for the built-in table findings; declaring
+    // `[workflow.metadata_schema]` opts into strict errors.
+    let table = rows_from(
+        "sample",
+        &[
+            (Some(1), "S1", &[("batch", "b1")]),
+            (Some(2), "S1", &[("batch", "b2")]),
+        ],
+    );
+    let freeform = config_with(table.clone(), None);
+    let report = evaluate(&freeform);
+    assert_eq!(codes(&report), ["META-003"]);
+    assert_eq!(report.findings[0].severity, MetadataSeverity::Warning);
+    assert!(!report.has_errors(), "schema-less findings must not fail");
+
+    let strict = config_with(table, Some(MetadataSchema::default()));
+    let report = evaluate(&strict);
+    assert_eq!(codes(&report), ["META-003"]);
+    assert_eq!(report.findings[0].severity, MetadataSeverity::Error);
+    assert!(report.has_errors());
+
+    // A pair conflict follows the same gate.
+    let mut config = config_with(MetadataTable::default(), None);
+    config.pairs.push(crate::config::ExperimentControlPair {
+        pair_id: "P1".into(),
+        experiment: "T1".into(),
+        control: Some("T1".into()),
+        experiment_type: None,
+        metadata: Default::default(),
+        when: None,
+    });
+    let report = evaluate(&config);
+    assert_eq!(codes(&report), ["META-008"]);
+    assert_eq!(report.findings[0].severity, MetadataSeverity::Warning);
+    config.workflow.metadata_schema = Some(MetadataSchema::default());
+    let report = evaluate(&config);
+    assert_eq!(report.findings[0].severity, MetadataSeverity::Error);
+}
+
+#[test]
+fn digest_canonicalizes_declared_types() {
+    // Issue #1368 review I2: the same logical values written with different
+    // textual forms under a declared type must hash identically.
+    let schema = || MetadataSchema {
+        columns: vec![
+            crate::config::MetadataColumn {
+                name: "n".into(),
+                column_type: MetadataColumnType::Integer,
+                ..Default::default()
+            },
+            crate::config::MetadataColumn {
+                name: "v".into(),
+                column_type: MetadataColumnType::Float,
+                ..Default::default()
+            },
+            crate::config::MetadataColumn {
+                name: "flag".into(),
+                column_type: MetadataColumnType::Boolean,
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+    let plain = digest_config(
+        Some(schema()),
+        &[("S1", &[("n", "7"), ("v", "1.5"), ("flag", "true")])],
+    );
+    let padded = digest_config(
+        Some(schema()),
+        &[("S1", &[("n", "007"), ("v", "1.50"), ("flag", "TRUE")])],
+    );
+    assert_eq!(plain, padded, "declared types must canonicalize the digest");
+    // String columns keep case (only trimming is applied).
+    let string_upper = digest_config(None, &[("S1", &[("x", "ABC")])]);
+    let string_lower = digest_config(None, &[("S1", &[("x", "abc")])]);
+    assert_ne!(string_upper, string_lower);
+}
+
+#[test]
+fn digest_is_order_independent_for_duplicate_ids() {
+    // Issue #1368 review I2: duplicate ids (a strict-error shape, but one
+    // `validate --json` still digests) must not depend on source order.
+    let row = |values: &[(&str, &str)]| MetadataRow {
+        row: Some(1),
+        id: "S1".into(),
+        values: values
+            .iter()
+            .map(|(column, value)| (column.to_string(), value.to_string()))
+            .collect(),
+    };
+    let schema = MetadataSchema::default();
+    let first = compute_digest(&schema, &[row(&[("v", "a")]), row(&[("v", "b")])]);
+    let second = compute_digest(&schema, &[row(&[("v", "b")]), row(&[("v", "a")])]);
+    assert_eq!(first, second);
+}
+
+#[test]
+fn pair_id_keyed_rows_satisfy_pair_coverage() {
+    // Issue #1368 review m2: `{meta.*}` lookup falls back to pair_id, so a
+    // metadata row keyed by the pair id satisfies its experiment/control.
+    let table = rows_from("sample", &[(Some(1), "P1", &[("v", "a")])]);
+    let mut config = config_with(
+        table,
+        Some(MetadataSchema {
+            coverage: MetadataCoverage::Error,
+            ..Default::default()
+        }),
+    );
+    config.pairs.push(crate::config::ExperimentControlPair {
+        pair_id: "P1".into(),
+        experiment: "T1".into(),
+        control: Some("N1".into()),
+        experiment_type: None,
+        metadata: Default::default(),
+        when: None,
+    });
+    // P1 is in the domain (pair id), and the pair's members resolve from its
+    // row — no coverage finding at all.
+    assert!(evaluate(&config).findings.is_empty());
+}
+
+#[test]
+fn header_only_metadata_file_is_a_contract() {
+    // Issue #1368 review m6: a declared metadata_file with a header and zero
+    // rows is a contract — every domain member has no row, and the digest is
+    // still recorded.
+    let mut config = config_with(MetadataTable::default(), None);
+    config.workflow.metadata_file = Some("samples.tsv".into());
+    config.sample_groups.push(crate::config::SampleGroup {
+        name: "cohort".into(),
+        samples: vec!["S1".into()],
+        metadata: Default::default(),
+    });
+    let report = evaluate(&config);
+    assert_eq!(codes(&report), ["META-010"]);
+    assert_eq!(report.findings[0].severity, MetadataSeverity::Warning);
+    assert!(
+        digest_for(&config).is_some(),
+        "a declared header-only table must still be digested"
+    );
+}
+
+#[test]
+fn suggestions_name_the_actual_required_declaration_site() {
+    // Issue #1368 review m7: required_columns and columns[].required are
+    // different edit sites.
+    let table = rows_from("sample", &[(Some(1), "S1", &[("batch", ""), ("qc", "")])]);
+    let schema = MetadataSchema {
+        required_columns: vec!["batch".into()],
+        columns: vec![crate::config::MetadataColumn {
+            name: "qc".into(),
+            required: true,
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let report = evaluate(&config_with(table, Some(schema)));
+    let hint_for = |column: &str| {
+        report
+            .findings
+            .iter()
+            .find(|finding| finding.column.as_deref() == Some(column))
+            .and_then(|finding| finding.suggestion.clone())
+            .unwrap_or_default()
+    };
+    assert!(hint_for("batch").contains("required_columns"));
+    assert!(!hint_for("batch").contains("required = true"));
+    assert!(hint_for("qc").contains("required = true"));
+}
+
+#[test]
+fn strict_loader_requires_the_declared_id_header() {
+    // Issue #1368 review m1: once a schema is declared, an explicit
+    // `id_column = "sample"` must not fall back to the first column.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("subject.tsv");
+    std::fs::write(&path, "subject\tbatch\nS1\tb1\n").unwrap();
+    let strict =
+        crate::config::SampleMetadata::load_table_from_file_strict(&path, DEFAULT_ID_COLUMN);
+    let err = strict.unwrap_err().to_string();
+    assert!(err.contains("sample") && err.contains("subject"), "{err}");
+    // The legacy (schema-less) path still binds the first column.
+    let legacy =
+        crate::config::SampleMetadata::load_table_from_file(&path, DEFAULT_ID_COLUMN).unwrap();
+    assert_eq!(legacy.rows[0].id, "S1");
+}

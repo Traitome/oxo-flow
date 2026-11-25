@@ -943,9 +943,13 @@ async fn dry_run_command_inner(
     // Bail AFTER the JSON document so callers still get machine-readable
     // output on this failure path (same contract as `validate --json`).
     if metadata_report.has_errors() {
+        let hint = if config.workflow.metadata_schema.is_some() {
+            "fix the metadata table or relax [workflow.metadata_schema]"
+        } else {
+            "fix the metadata table"
+        };
         anyhow::bail!(
-            "metadata contract failed: {} — fix the metadata table or relax \
-             [workflow.metadata_schema]",
+            "metadata contract failed: {} — {hint}",
             oxo_flow_core::plural(metadata_report.error_count, "error", "errors")
         );
     }

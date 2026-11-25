@@ -388,30 +388,21 @@ async fn run_command_inner(
     // ── Metadata contract gate (issue #1368) ─────────────────────────────
     // Evaluated on the AS-AUTHORED config, before `--samples` filtering (a
     // filtered cohort must not turn every other metadata row into an
-    // out-of-domain finding). Error findings refuse the run before any
-    // file is touched; warnings are reported and the run proceeds.
+    // out-of-domain finding). Error findings refuse the run before any RULE
+    // is spawned or output written — the workdir lock/status file are
+    // already in place at this point (the gate runs after config load).
+    // Warnings are reported and the run proceeds. A schema-less table only
+    // ever produces warnings (see `metadata::evaluate`).
     let metadata_report = config.metadata_contract_report();
-    for finding in &metadata_report.findings {
-        let label = match finding.severity {
-            oxo_flow_core::config::MetadataSeverity::Error => "error".red().bold(),
-            oxo_flow_core::config::MetadataSeverity::Warning => "warning".yellow().bold(),
-        };
-        eprintln!(
-            "  {} [{}]: {}{}",
-            label,
-            finding.code,
-            finding.message,
-            finding
-                .suggestion
-                .as_deref()
-                .map(|hint| format!("\n    hint: {hint}"))
-                .unwrap_or_default()
-        );
-    }
+    crate::commands::quality::print_metadata_findings(&metadata_report.findings);
     if metadata_report.has_errors() {
+        let hint = if config.workflow.metadata_schema.is_some() {
+            "fix the metadata table or relax [workflow.metadata_schema]"
+        } else {
+            "fix the metadata table"
+        };
         anyhow::bail!(
-            "metadata contract failed: {} — fix the metadata table or relax \
-             [workflow.metadata_schema]",
+            "metadata contract failed: {} — {hint}",
             oxo_flow_core::plural(metadata_report.error_count, "error", "errors")
         );
     }

@@ -271,8 +271,9 @@ reports — see the [metadata contract reference](../reference/workflow-format.m
 and `"metadata_digest"` (the canonical `sha256:<hex>` digest of the
 contract plus effective rows, or `null`). Error findings make the preview
 exit non-zero **after** the JSON document is printed; warnings keep exit
-0. The section is evaluated on the as-authored workflow, before
-`--samples` filtering.
+0. Declaring `[workflow.metadata_schema]` is the strictness switch — a
+schema-less metadata table only produces warnings. The section is
+evaluated on the as-authored workflow, before `--samples` filtering.
 
 
 

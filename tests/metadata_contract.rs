@@ -197,45 +197,131 @@ fn row_level_codes_are_exact_and_sorted() {
     }
 }
 
+/// The full expected tuples for the coverage fixture: two group members
+/// with no row (META-010, table-level) and one row outside the domain
+/// (META-011, data row 2).
+fn expected_coverage(severity: &str) -> Vec<FindingTuple> {
+    vec![
+        (
+            "META-010".to_string(),
+            severity.to_string(),
+            None,
+            Some("sample".to_string()),
+            Some("S2".to_string()),
+        ),
+        (
+            "META-010".to_string(),
+            severity.to_string(),
+            None,
+            Some("sample".to_string()),
+            Some("S3".to_string()),
+        ),
+        (
+            "META-011".to_string(),
+            severity.to_string(),
+            Some(2),
+            Some("sample".to_string()),
+            Some("EXTRA".to_string()),
+        ),
+    ]
+}
+
 #[test]
 fn coverage_warn_reports_without_failing_and_error_fails() {
     let (success, warn) = validate_json("coverage_warn.oxoflow");
     assert!(success, "coverage = warn must keep exit 0: {warn}");
     assert_eq!(warn["valid"], true);
-    let warn_findings = findings(&warn);
-    let codes: Vec<&str> = warn_findings.iter().map(|f| f.0.as_str()).collect();
-    assert_eq!(codes, ["META-010", "META-010", "META-011"], "{warn}");
-    assert!(
-        warn_findings.iter().all(|f| f.1 == "warning"),
-        "coverage = warn must emit warnings: {warn}"
-    );
+    assert_eq!(findings(&warn), expected_coverage("warning"), "{warn}");
 
     let (success, strict) = validate_json("coverage_error.oxoflow");
     assert!(!success, "coverage = error must fail validation: {strict}");
-    let strict_findings = findings(&strict);
-    assert_eq!(
-        strict_findings
-            .iter()
-            .map(|f| f.0.as_str())
-            .collect::<Vec<_>>(),
-        ["META-010", "META-010", "META-011"]
-    );
-    assert!(
-        strict_findings.iter().all(|f| f.1 == "error"),
-        "coverage = error must emit errors: {strict}"
-    );
+    assert_eq!(findings(&strict), expected_coverage("error"), "{strict}");
 }
 
 #[test]
 fn pair_conflict_is_reported() {
     let (success, document) = validate_json("pair_conflict.oxoflow");
     assert!(!success, "{document}");
-    assert_eq!(findings(&document)[0].0, "META-008", "{document}");
+    assert_eq!(
+        findings(&document),
+        vec![(
+            "META-008".to_string(),
+            "error".to_string(),
+            None,
+            Some("control".to_string()),
+            Some("P1".to_string()),
+        )],
+        "{document}"
+    );
     assert!(
         document["metadata"][0]["message"]
             .as_str()
             .unwrap()
             .contains("experiment == control"),
+        "{document}"
+    );
+}
+
+#[test]
+fn pair_member_coverage_is_row_level_meta_009() {
+    // Issue #1368 review I3: a file-level META-009 case pinning the full
+    // `(code, severity, row, column, id)` tuple. P1 is fully covered; P2's
+    // members are missing. Both findings are table-level (row null).
+    let (success, document) = validate_json("pair_coverage.oxoflow");
+    assert!(
+        success,
+        "coverage = warn must keep exit 0 for missing pair members: {document}"
+    );
+    assert_eq!(
+        findings(&document),
+        vec![
+            (
+                "META-009".to_string(),
+                "warning".to_string(),
+                None,
+                Some("control".to_string()),
+                Some("N2".to_string()),
+            ),
+            (
+                "META-009".to_string(),
+                "warning".to_string(),
+                None,
+                Some("experiment".to_string()),
+                Some("T2".to_string()),
+            ),
+        ],
+        "{document}"
+    );
+}
+
+#[test]
+fn schema_less_tables_never_fail_validation() {
+    // Issue #1368 review I1: omitting [workflow.metadata_schema] keeps the
+    // table free-form — built-in findings are warnings and exit stays 0.
+    let (success, document) = validate_json("freeform_duplicate.oxoflow");
+    assert!(
+        success,
+        "a schema-less duplicate row must not fail validation: {document}"
+    );
+    assert_eq!(document["valid"], true);
+    assert_eq!(
+        findings(&document),
+        vec![
+            (
+                "META-003".to_string(),
+                "warning".to_string(),
+                Some(2),
+                Some("sample".to_string()),
+                Some("S1".to_string()),
+            ),
+            (
+                "META-010".to_string(),
+                "warning".to_string(),
+                None,
+                Some("sample".to_string()),
+                Some("S2".to_string()),
+            ),
+        ],
         "{document}"
     );
 }
@@ -378,4 +464,97 @@ fn run_records_the_metadata_digest_and_verify_reports_it() {
         changed["workflow_resolved_hash"], checkpoint["workflow_resolved_hash"],
         "the resolved-workflow identity must change with the metadata table"
     );
+}
+
+/// Copy a fixture workflow + its data file into `dir` and return the
+/// workflow path.
+fn stage_fixture(dir: &Path, workflow: &str, data: &[&str]) -> PathBuf {
+    let workflow_path = dir.join(workflow);
+    std::fs::copy(fixture(workflow), &workflow_path).unwrap();
+    for name in data {
+        std::fs::copy(fixture(name), dir.join(name)).unwrap();
+    }
+    workflow_path
+}
+
+fn run_workflow(workflow: &Path, workdir: &Path) -> std::process::Output {
+    run_cli(&[
+        "run",
+        workflow.to_str().unwrap(),
+        "--workdir",
+        workdir.to_str().unwrap(),
+        "--quiet",
+    ])
+}
+
+#[test]
+fn run_refuses_error_findings_and_does_not_execute_rules() {
+    // Issue #1368 review m8: the run-side gate is proven end to end — an
+    // error finding refuses the run and no rule output is produced.
+    let dir = tempfile::tempdir().unwrap();
+    let workflow = stage_fixture(dir.path(), "duplicate_id.oxoflow", &["duplicate_id.tsv"]);
+    let workdir = dir.path().join("work");
+    let output = run_workflow(&workflow, &workdir);
+    assert!(!output.status.success(), "the run must be refused");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("error [META-003]"), "{stderr}");
+    assert!(stderr.contains("metadata contract failed"), "{stderr}");
+    assert!(
+        !workdir.join("out.txt").exists(),
+        "no rule may execute after a metadata contract error"
+    );
+}
+
+#[test]
+fn run_reports_warnings_and_proceeds() {
+    let dir = tempfile::tempdir().unwrap();
+    let workflow = stage_fixture(dir.path(), "coverage_warn.oxoflow", &["coverage.tsv"]);
+    let workdir = dir.path().join("work");
+    let output = run_workflow(&workflow, &workdir);
+    assert!(
+        output.status.success(),
+        "warnings must not refuse the run: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("warning [META-010]"), "{stderr}");
+    assert!(!stderr.contains("metadata contract failed"), "{stderr}");
+    assert!(workdir.join("out.txt").exists(), "the rule must have run");
+}
+
+#[test]
+fn run_proceeds_for_a_schema_less_duplicate_table() {
+    // Issue #1368 review I1 end to end: no schema → the duplicate is a
+    // warning and the run proceeds.
+    let dir = tempfile::tempdir().unwrap();
+    let workflow = stage_fixture(
+        dir.path(),
+        "freeform_duplicate.oxoflow",
+        &["freeform_duplicate.tsv"],
+    );
+    let workdir = dir.path().join("work");
+    let output = run_workflow(&workflow, &workdir);
+    assert!(
+        output.status.success(),
+        "a schema-less duplicate row must not refuse the run: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("warning [META-003]"), "{stderr}");
+    assert!(!stderr.contains("metadata contract failed"), "{stderr}");
+    assert!(workdir.join("out.txt").exists());
+}
+
+#[test]
+fn validate_as_include_skips_the_metadata_contract() {
+    let path = fixture("coverage_error.oxoflow");
+    let output = run_cli(&["validate", path.to_str().unwrap(), "--as-include", "--json"]);
+    assert!(
+        output.status.success(),
+        "a fragment must not be judged against the parent's cohort: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let document: Value = serde_json::from_slice(&output.stdout).expect("validate JSON");
+    assert_eq!(document["valid"], true, "{document}");
+    assert_eq!(findings(&document), Vec::new(), "{document}");
 }

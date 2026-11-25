@@ -222,13 +222,22 @@ impl WorkflowConfig {
         let inline_metadata = config.metadata.clone();
         if let Some(ref metadata_file) = config.workflow.metadata_file {
             let meta_path = parent.join(metadata_file);
+            let schema_declared = config.workflow.metadata_schema.is_some();
             let id_column = config
                 .workflow
                 .metadata_schema
                 .as_ref()
                 .map(|schema| schema.id_column.clone())
                 .unwrap_or_else(|| crate::config::DEFAULT_ID_COLUMN.to_string());
-            let mut table = SampleMetadata::load_table_from_file(&meta_path, &id_column)?;
+            // A declared schema makes the id column STRICT: an explicit
+            // `id_column = "sample"` must not silently fall back to the
+            // first column (issue #1368 review m1). Schema-less tables keep
+            // the historical first-column compatibility path.
+            let mut table = if schema_declared {
+                SampleMetadata::load_table_from_file_strict(&meta_path, &id_column)?
+            } else {
+                SampleMetadata::load_table_from_file(&meta_path, &id_column)?
+            };
             let count = table.rows.len();
             for row in &table.rows {
                 config.metadata.insert(

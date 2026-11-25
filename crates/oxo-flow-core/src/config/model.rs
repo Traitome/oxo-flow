@@ -2055,16 +2055,22 @@ impl SampleMetadata {
     /// `[workflow.metadata_schema] id_column = "…"` uses
     /// [`Self::load_from_file_with_id_column`] instead.
     pub fn load_from_file(path: &Path) -> Result<Vec<Self>> {
-        Self::load_from_file_with_id_column(path, super::metadata::DEFAULT_ID_COLUMN)
+        Self::load_from_file_mode(path, super::metadata::DEFAULT_ID_COLUMN, false)
     }
 
-    /// [`Self::load_from_file`] honoring an explicit id column/key.
+    /// [`Self::load_from_file`] honoring an explicit id column/key. The
+    /// named column/key is STRICT: a TSV/CSV without that header fails
+    /// instead of falling back to the first column.
     ///
     /// An empty id is a parse error naming the row — a row without an id is
     /// unreachable by `{meta.*}` lookup and silently dropping it hides a
     /// broken table.
     pub fn load_from_file_with_id_column(path: &Path, id_column: &str) -> Result<Vec<Self>> {
-        let table = Self::load_table_from_file(path, id_column)?;
+        Self::load_from_file_mode(path, id_column, true)
+    }
+
+    fn load_from_file_mode(path: &Path, id_column: &str, strict_id: bool) -> Result<Vec<Self>> {
+        let table = Self::load_table_from_file_mode(path, id_column, strict_id)?;
         Ok(table
             .rows
             .into_iter()
@@ -2088,14 +2094,35 @@ impl SampleMetadata {
         path: &Path,
         id_column: &str,
     ) -> Result<super::metadata::MetadataTable> {
+        Self::load_table_from_file_mode(path, id_column, false)
+    }
+
+    /// [`Self::load_table_from_file`] with a STRICT id column: a TSV/CSV
+    /// whose header does not declare `id_column` fails, even when
+    /// `id_column` is the default `sample`. A workflow that declares
+    /// `[workflow.metadata_schema]` uses this mode (issue #1368 review m1):
+    /// opting into a contract must not silently bind ids from another
+    /// column.
+    pub fn load_table_from_file_strict(
+        path: &Path,
+        id_column: &str,
+    ) -> Result<super::metadata::MetadataTable> {
+        Self::load_table_from_file_mode(path, id_column, true)
+    }
+
+    fn load_table_from_file_mode(
+        path: &Path,
+        id_column: &str,
+        strict_id: bool,
+    ) -> Result<super::metadata::MetadataTable> {
         let content = read_tabular_file(path, "metadata")?;
         dispatch_tabular_format(
             path,
             &content,
             "metadata",
             |content, path| Self::parse_json_table(content, path, id_column),
-            |content, path| Self::parse_delimited_table(content, path, ',', id_column),
-            |content, path| Self::parse_delimited_table(content, path, '\t', id_column),
+            |content, path| Self::parse_delimited_table(content, path, ',', id_column, strict_id),
+            |content, path| Self::parse_delimited_table(content, path, '\t', id_column, strict_id),
         )
     }
 
@@ -2166,6 +2193,7 @@ impl SampleMetadata {
         path: &Path,
         delimiter: char,
         id_column: &str,
+        strict_id: bool,
     ) -> Result<super::metadata::MetadataTable> {
         let mut reader = csv::ReaderBuilder::new()
             .delimiter(delimiter as u8)
@@ -2193,7 +2221,7 @@ impl SampleMetadata {
         // not spell `sample`.
         let id_index = match headers.iter().position(|header| header == id_column) {
             Some(index) => index,
-            None if id_column == super::metadata::DEFAULT_ID_COLUMN => 0,
+            None if !strict_id && id_column == super::metadata::DEFAULT_ID_COLUMN => 0,
             None => {
                 let declared: Vec<&str> = headers.iter().collect();
                 return Err(OxoFlowError::Parse {

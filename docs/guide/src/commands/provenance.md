@@ -50,15 +50,19 @@ with `status` `matched`/`changed`/`unverifiable`, `workflow_git_dirty`).
 A workflow with a metadata table or a `[workflow.metadata_schema]` contract
 also records a **canonical metadata digest** (issue #1368):
 `sha256:<hex>` over the resolved typed schema plus the effective metadata
-rows, with rows sorted by id, columns by name, values trimmed, and empty
-values omitted. It is byte-stable across TSV/CSV/JSON sources carrying the
-same logical rows and across input row order, so it names *which* typed
-table the run consumed (and it is folded into `workflow_resolved_hash`).
-Verify reports it as `metadata_digest` (human: `• metadata digest: …`;
-absent for legacy checkpoints and contract-free workflows) but does **not**
-re-hash the metadata file: re-deriving it needs the exact loaded table
-bytes, which the checkpoint does not store — the digest is a recorded
-identity, like `workflow_resolved_hash`, not a re-verified claim.
+rows. Values are canonicalized per declared column type before hashing
+(integer/float re-formatted, boolean lowercased, strings trimmed with case
+preserved), empty values are omitted, and rows are sorted by
+`(id, canonical values)` with columns by name. It is byte-stable across
+TSV/CSV/JSON sources carrying the same logical rows under those types and
+across input row order (including duplicate-id tables), so it names *which*
+typed table the run consumed (and it is folded into
+`workflow_resolved_hash`). Verify reports it as `metadata_digest` (human:
+`• metadata digest: …`; absent for legacy checkpoints and contract-free
+workflows) but does **not** re-hash the metadata file: re-deriving it needs
+the exact loaded table bytes, which the checkpoint does not store — the
+digest is a recorded identity, like `workflow_resolved_hash`, not a
+re-verified claim.
 
 This is essential for reproducible, auditable analysis.
 

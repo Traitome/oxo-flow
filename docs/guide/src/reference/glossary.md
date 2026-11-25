@@ -432,7 +432,11 @@ has a per-sample metadata table or declares a
 `[workflow.metadata_schema]` contract (issue #1368). They are stable,
 row-level, sorted by `(code, row, column, id)`, and exposed in the
 `metadata` array of the `--json` documents. Errors fail validation; warnings
-do not. See the [metadata contract reference](./workflow-format.md#metadata-contract-workflowmetadata_schema)
+do not. `META-001`–`META-008` and `META-012` are errors only when the
+workflow declares `[workflow.metadata_schema]` — without it the table stays
+free-form and they are warnings (the schema-dependent `META-004`–`META-007`
+and `META-012` cannot fire at all without a schema). See the
+[metadata contract reference](./workflow-format.md#metadata-contract-workflowmetadata_schema)
 for the field semantics.
 
 | Code | Meaning |
