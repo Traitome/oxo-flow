@@ -1,0 +1,8 @@
+Cluster: Generating kubernetes job scripts for 2 rule instances
+2026-11-25T17:07:09.766987Z  WARN Kubernetes: the rule's environment cannot be rendered as a pod image — the local environment wrapper stays folded into the job command (wrapper-fallback); the pod's own image must carry that runtime to execute it rule=sif_align environment="singularity"
+  ✓ fallback-scripts/sif_align.sh
+2026-11-25T17:07:09.767609Z  WARN Kubernetes: the rule's environment cannot be rendered as a pod image — the local environment wrapper stays folded into the job command (wrapper-fallback); the pod's own image must carry that runtime to execute it rule=conda_qc environment="conda"
+  ✓ fallback-scripts/conda_qc.sh
+
+Done: 2 scripts written to fallback-scripts
+  Submit with: kubectl create -f fallback-scripts/*.sh

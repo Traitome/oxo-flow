@@ -1238,6 +1238,16 @@ lock from either sentinel. The field is absent when no rule needs it
 measurement protocol lives in
 `docs/superpowers/audits/cross-arch-provenance-2026-11-19.md` (§7a).
 
+A Kubernetes cluster run additionally records **which container image each
+planned rule was to run as** (`cluster_images`, keyed by rule instance; issue
+#1388), written at submit time: the rendered `image:` reference, the
+workflow-declared spec, and a digest only when the submit host's local docker
+daemon could report one offline. A rule whose environment could not be rendered
+as an image is recorded as `wrapper-fallback`, and a rule with no environment at
+all as `system`. `provenance verify` prints the map; see
+[Provenance → Cluster image identity](provenance.md#cluster-image-identity)
+for what is and is not bound.
+
 ### Run logs
 
 Every run — and `resume`, which re-enters the same path — archives its own

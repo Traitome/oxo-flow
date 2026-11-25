@@ -85,15 +85,13 @@ fn host_path_volumes(entries: &[(&'static str, String)]) -> Option<Value> {
 }
 
 /// The node's container-daemon socket, when the operator opted in via
-/// `OXO_FLOW_K8S_DOCKER_SOCKET=1`. The short-term channel for
-/// docker-environment rules on Kubernetes (the plan folds the local docker
-/// wrapper into the command): the pod mounts the node's `/var/run/docker.sock`
-/// and gets `DOCKER_HOST=unix:///var/run/docker.sock`, so the folded wrapper
-/// reaches the node daemon. The rule image must carry a docker CLI, and the
-/// mount grants host-root-equivalent access — opt-in, trusted
-/// single-operator clusters only. The durable fix is image-based environment
-/// rendering (tracked as a research issue), which removes the daemon
-/// dependency entirely.
+/// `OXO_FLOW_K8S_DOCKER_SOCKET=1`. A FALLBACK channel for jobs whose command
+/// reaches the node daemon — a non-renderable environment (local SIF,
+/// conda/pixi/venv/modules) that folds its local wrapper into the command, or
+/// a `system` rule that calls docker itself. Issue #1388 renders docker specs
+/// and singularity `docker://` URIs as the pod's own image, and an
+/// image-rendered pod never receives this mount: it has no use for a daemon
+/// and must not be granted host-root-equivalent access.
 fn docker_socket_mount() -> Option<(&'static str, &'static str)> {
     match std::env::var("OXO_FLOW_K8S_DOCKER_SOCKET").as_deref() {
         Ok("1" | "true" | "yes" | "on") => Some(("oxoflow-docker-sock", "/var/run/docker.sock")),
@@ -257,6 +255,140 @@ fn rewrite_workdir_to_mount_root(shell_cmd: &str, workdir: &str, mount_root: &st
         .replace(&format!("cd '{workdir}'"), &format!("cd '{mount_root}'"))
 }
 
+/// Whether Kubernetes renders a renderable container environment as the pod's
+/// own image (issue #1388).
+///
+/// Default on. `OXO_FLOW_K8S_IMAGE_RENDER=0|false|no|off` forces the
+/// pre-#1388 wrapper-fallback path for every rule on the box — the escape
+/// hatch for a docker rule that needs host paths outside the workdir (pair it
+/// with `OXO_FLOW_K8S_DOCKER_SOCKET=1`) or for an operator who must keep the
+/// old behavior. A truthy spelling keeps image rendering on; an unrecognized
+/// value warns and stays ON (the documented default), so a typo can never
+/// silently change execution semantics either way.
+pub fn image_rendering_enabled() -> bool {
+    image_rendering_enabled_with(std::env::var("OXO_FLOW_K8S_IMAGE_RENDER").ok().as_deref())
+}
+
+/// Pure form of [`image_rendering_enabled`] for tests.
+fn image_rendering_enabled_with(raw: Option<&str>) -> bool {
+    let Some(raw) = raw else {
+        return true;
+    };
+    if raw.trim().is_empty() {
+        return true; // an empty value is unset
+    }
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "0" | "false" | "no" | "off" => false,
+        "1" | "true" | "yes" | "on" => true,
+        other => {
+            tracing::warn!(
+                value = other,
+                "OXO_FLOW_K8S_IMAGE_RENDER is unrecognized — image rendering stays on"
+            );
+            true
+        }
+    }
+}
+
+/// The image a Kubernetes Job runs for `rule`, plus the renderable image
+/// reference when the rule's container environment is rendered as that image
+/// (issue #1388).
+///
+/// A renderable environment (docker spec, or a singularity `docker://` URI's
+/// underlying image) becomes the pod image and the job runs the wrapper-free
+/// command. Everything else keeps the historical behavior: the local
+/// environment wrapper stays folded into the command and the pod runs it in
+/// the declared docker image (or `ubuntu:latest` when none is declared).
+/// `OXO_FLOW_K8S_IMAGE_RENDER=0` forces this fallback for every rule.
+///
+/// Callers must pass the WRAPPER-FREE command for a renderable environment —
+/// [`crate::backend::ExecutorBackend::submitted_cmd`] is the single place that
+/// decision is made. Registry mirrors are applied here, at render time only;
+/// the rule's declared spec keeps one identity across mirrored and direct
+/// boxes.
+fn pod_environment(rule: &Rule) -> (String, Option<crate::environment::ContainerImageSpec>) {
+    let renderable = if image_rendering_enabled() {
+        crate::environment::renderable_container_image(&rule.environment)
+    } else {
+        None
+    };
+    match renderable {
+        Some(image) => (mirrored_spec(&image.spec), Some(image)),
+        None => (
+            mirrored_spec(
+                rule.environment
+                    .docker
+                    .as_deref()
+                    .unwrap_or("ubuntu:latest"),
+            ),
+            None,
+        ),
+    }
+}
+
+/// Annotations that make the environment-rendering decision visible in the
+/// rendered Job (issue #1388).
+///
+/// `oxoflow.io/environment-render` is `image` when the rule's container
+/// environment IS the pod image, `wrapper-fallback` when the local
+/// environment wrapper stayed folded into the command, and `system` for a
+/// rule that declares no environment at all (no wrapper exists to fall back
+/// to). Mirror rewriting is transport-only, so `environment-image` records
+/// the workflow-declared spec (the identity), not the mirrored ref the
+/// `image:` field carries.
+fn environment_annotations(
+    rule: &Rule,
+    renderable: Option<&crate::environment::ContainerImageSpec>,
+) -> serde_json::Value {
+    match renderable {
+        Some(image) => json!({
+            "oxoflow.io/environment-render": crate::executor::checkpoint::ClusterImageRecord::IMAGE,
+            "oxoflow.io/environment-kind": image.kind,
+            "oxoflow.io/environment-image": image.spec,
+        }),
+        None if rule.environment.kind() == "system" => json!({
+            "oxoflow.io/environment-render": crate::executor::checkpoint::ClusterImageRecord::SYSTEM,
+            "oxoflow.io/environment-kind": "system",
+        }),
+        None => json!({
+            "oxoflow.io/environment-render":
+                crate::executor::checkpoint::ClusterImageRecord::WRAPPER_FALLBACK,
+            "oxoflow.io/environment-kind": rule.environment.kind(),
+        }),
+    }
+}
+
+/// One warning per rendered Job whose declared environment cannot run as the
+/// pod image: the folded wrapper needs that runtime inside the pod. A
+/// `system` rule declares no environment, so its fallback is the documented
+/// deployment mode, not a degradation — no warning for it.
+fn warn_wrapper_fallback(rule: &Rule) {
+    let kind = rule.environment.kind();
+    if kind == "system" {
+        return;
+    }
+    // The operator's explicit opt-out is not an impossibility: say which one
+    // happened (review M3).
+    if !image_rendering_enabled()
+        && crate::environment::renderable_container_image(&rule.environment).is_some()
+    {
+        tracing::warn!(
+            rule = %rule.name,
+            environment = kind,
+            "Kubernetes: image rendering is disabled by OXO_FLOW_K8S_IMAGE_RENDER — the folded \
+             local environment wrapper is submitted instead (wrapper-fallback)"
+        );
+        return;
+    }
+    tracing::warn!(
+        rule = %rule.name,
+        environment = kind,
+        "Kubernetes: the rule's environment cannot be rendered as a pod image — the local \
+         environment wrapper stays folded into the job command (wrapper-fallback); the pod's \
+         own image must carry that runtime to execute it"
+    );
+}
+
 /// Generate a Kubernetes batch/v1 Job manifest for a single rule.
 pub fn generate_k8s_job_manifest(
     rule: &Rule,
@@ -280,16 +412,27 @@ pub fn generate_k8s_job_manifest(
         _ => format!("oxoflow-{base}"),
     };
 
-    // Registry-restricted nodes: the image is rewritten through the box-local
-    // `OXO_REGISTRY_MIRRORS` map (namespace/registry-qualified names only —
-    // a bare library name resolves through the daemon's own mirror config).
-    let container_image = mirrored_spec(
-        rule.environment
-            .docker
-            .as_deref()
-            .unwrap_or("ubuntu:latest"),
-    );
+    // Image-based environment rendering (issue #1388): a renderable
+    // container environment IS the pod image and `shell_cmd` is then the
+    // wrapper-free command (the caller selected it through
+    // `ExecutorBackend::submitted_cmd`). Otherwise the historical shape
+    // applies — the folded local wrapper runs in the declared image.
+    let (container_image, renderable) = pod_environment(rule);
+    if renderable.is_none() {
+        warn_wrapper_fallback(rule);
+    }
 
+    // Shell contract (issue #1388): the local docker/singularity wrapper ran
+    // the rule through CONTAINER_BASH_SHIM — bash when the image has it, the
+    // image's POSIX `sh` otherwise — so an image-rendered pod must do the
+    // same: `/bin/sh` always exists (busybox/alpine included), and the shim
+    // selects bash when available (preludes such as `set -o pipefail` rely on
+    // it). The fallback path keeps the historical `/bin/bash -c`.
+    let job_command = if renderable.is_some() {
+        json!(["/bin/sh", "-c"])
+    } else {
+        json!(["/bin/bash", "-c"])
+    };
     let mut container = json!({
         "name": sanitize_k8s_name(&rule.name),
         "image": container_image,
@@ -297,7 +440,7 @@ pub fn generate_k8s_job_manifest(
         // implicit `Always` pull on `:latest` would need a registry the
         // compute node may not reach.
         "imagePullPolicy": "IfNotPresent",
-        "command": ["/bin/bash", "-c"],
+        "command": job_command,
         "args": [shell_cmd],
         "resources": container_resources(rule),
     });
@@ -333,7 +476,11 @@ pub fn generate_k8s_job_manifest(
         }
         _ => shell_cmd.to_string(),
     };
-    container["args"] = json!([rendered_cmd]);
+    container["args"] = if renderable.is_some() {
+        json!([crate::environment::CONTAINER_BASH_SHIM, "sh", rendered_cmd])
+    } else {
+        json!([rendered_cmd])
+    };
     let mut pod_volumes: Vec<Value> = Vec::new();
     match &volume {
         Some(volume) => {
@@ -353,7 +500,12 @@ pub fn generate_k8s_job_manifest(
                 .unwrap_or_default();
         }
     }
-    attach_docker_socket(&mut container, &mut pod_volumes);
+    // The daemon socket exists only for the WRAPPER FALLBACK (issue #1388):
+    // an image-rendered pod needs no daemon, so mounting a host-root-
+    // equivalent socket into it would grant access with no use.
+    if renderable.is_none() {
+        attach_docker_socket(&mut container, &mut pod_volumes);
+    }
 
     let mut pod_spec = json!({
         "restartPolicy": "Never",
@@ -371,7 +523,8 @@ pub fn generate_k8s_job_manifest(
             "labels": {
                 "oxoflow.io/managed-by": "oxo-flow",
                 "oxoflow.io/rule": sanitize_k8s_name(&rule.name),
-            }
+            },
+            "annotations": environment_annotations(rule, renderable.as_ref()),
         },
         "spec": {
             "backoffLimit": 0,
@@ -421,18 +574,27 @@ pub fn generate_k8s_array_job_manifest(
         array_name_suffix(cmd_dir)
     );
 
-    let container_image = mirrored_spec(
-        rule.environment
-            .docker
-            .as_deref()
-            .unwrap_or("ubuntu:latest"),
-    );
+    let (container_image, renderable) = pod_environment(rule);
+    if renderable.is_none() {
+        warn_wrapper_fallback(rule);
+    }
 
+    // Shell contract (issue #1388): an image-rendered pod starts the
+    // dispatcher with `/bin/sh` (always present) and runs each per-index
+    // command file through CONTAINER_BASH_FILE_SHIM, so a bash-bearing image
+    // keeps its prelude semantics (`set -o pipefail`, `[[ ]]`) while a
+    // bash-less image (busybox/alpine) still starts. The fallback keeps the
+    // historical `/bin/bash -c` dispatcher.
+    let job_command = if renderable.is_some() {
+        json!(["/bin/sh", "-c"])
+    } else {
+        json!(["/bin/bash", "-c"])
+    };
     let mut container = json!({
         "name": sanitize_k8s_name(&rule.name),
         "image": container_image,
         "imagePullPolicy": "IfNotPresent",
-        "command": ["/bin/bash", "-c"],
+        "command": job_command,
         "args": [],
         "resources": container_resources(rule),
     });
@@ -459,8 +621,14 @@ pub fn generate_k8s_array_job_manifest(
         }
         _ => cmd_dir.to_string(),
     };
-    let dispatch_cmd =
-        format!("INDEX=$((JOB_COMPLETION_INDEX + 1)); sh \"{dispatch_dir}/cmd.${{INDEX}}.sh\"");
+    let dispatch_cmd = if renderable.is_some() {
+        format!(
+            "INDEX=$((JOB_COMPLETION_INDEX + 1)); sh -c '{}' sh \"{dispatch_dir}/cmd.${{INDEX}}.sh\"",
+            crate::environment::CONTAINER_BASH_FILE_SHIM
+        )
+    } else {
+        format!("INDEX=$((JOB_COMPLETION_INDEX + 1)); sh \"{dispatch_dir}/cmd.${{INDEX}}.sh\"")
+    };
     container["args"] = json!([dispatch_cmd]);
     match volume {
         Some(volume) => {
@@ -486,7 +654,12 @@ pub fn generate_k8s_array_job_manifest(
                 .unwrap_or_default();
         }
     }
-    attach_docker_socket(&mut container, &mut pod_volumes);
+    // The daemon socket exists only for the WRAPPER FALLBACK (issue #1388):
+    // an image-rendered pod needs no daemon, so mounting a host-root-
+    // equivalent socket into it would grant access with no use.
+    if renderable.is_none() {
+        attach_docker_socket(&mut container, &mut pod_volumes);
+    }
 
     let mut pod_spec = json!({
         "restartPolicy": "Never",
@@ -504,7 +677,8 @@ pub fn generate_k8s_array_job_manifest(
             "labels": {
                 "oxoflow.io/managed-by": "oxo-flow",
                 "oxoflow.io/rule": sanitize_k8s_name(&rule.name),
-            }
+            },
+            "annotations": environment_annotations(rule, renderable.as_ref()),
         },
         "spec": {
             "completions": count,
@@ -871,6 +1045,15 @@ mod tests {
         run_k8s_env_probe("SOCKET_OFF");
     }
 
+    /// `OXO_FLOW_K8S_IMAGE_RENDER=0` forces the pre-#1388 wrapper fallback for
+    /// a renderable environment (issue #1388 review M3): same rule, fallback
+    /// manifest, wrapper preserved, `/bin/bash` invocation, and no image
+    /// identity claimed. Same child-process pattern as the mirror probe.
+    #[test]
+    fn image_render_switch_forces_the_wrapper_fallback() {
+        run_k8s_env_probe("IMAGE_RENDER_OFF");
+    }
+
     fn run_k8s_env_probe(probe: &str) {
         let exe = std::env::current_exe().expect("test binary path");
         let mut cmd = std::process::Command::new(exe);
@@ -895,6 +1078,14 @@ mod tests {
         .env(
             "OXO_FLOW_K8S_DOCKER_SOCKET",
             if probe == "SOCKET_ON" { "1" } else { "typo" },
+        )
+        .env(
+            "OXO_FLOW_K8S_IMAGE_RENDER",
+            if probe == "IMAGE_RENDER_OFF" {
+                "0"
+            } else {
+                "1"
+            },
         );
         let output = cmd
             .output()
@@ -908,6 +1099,195 @@ mod tests {
         assert!(
             stdout.contains(&format!("K8S_ENV_PROBE_OK {probe}")),
             "the k8s env probe child did not run for {probe}\n--- child stdout ---\n{stdout}"
+        );
+    }
+
+    /// Issue #1388: every rendered Job states how its environment was
+    /// rendered. A renderable container environment is the pod image and
+    /// names no wrapper-fallback; every other environment is explicitly
+    /// marked `wrapper-fallback` with the backend kind, so a manifest read
+    /// (or `kubectl get job -o yaml`) shows that the pod needs the folded
+    /// runtime rather than silently implying image rendering.
+    #[test]
+    fn environment_render_mode_is_annotated_on_single_and_array_jobs() {
+        let env_rule = |name: &str, environment: crate::rule::EnvironmentSpec| Rule {
+            name: name.to_string(),
+            environment,
+            ..Default::default()
+        };
+        let docker = env_rule(
+            "align",
+            crate::rule::EnvironmentSpec {
+                docker: Some("busybox:1.36".to_string()),
+                ..Default::default()
+            },
+        );
+        let conda = env_rule(
+            "qc",
+            crate::rule::EnvironmentSpec {
+                conda: Some("envs/qc.yaml".to_string()),
+                ..Default::default()
+            },
+        );
+
+        let single: Value = serde_json::from_str(
+            &generate_k8s_job_manifest(&docker, "cd '/r' && true", &test_config()).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            single["metadata"]["annotations"]["oxoflow.io/environment-render"],
+            "image"
+        );
+        assert_eq!(
+            single["metadata"]["annotations"]["oxoflow.io/environment-image"],
+            "busybox:1.36"
+        );
+
+        let array: Value = serde_json::from_str(
+            &generate_k8s_array_job_manifest(&docker, "run/cmds", 2, &[], None, &test_config())
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            array["metadata"]["annotations"]["oxoflow.io/environment-render"], "image",
+            "an image-mode array must say so: {array}"
+        );
+
+        let fallback: Value = serde_json::from_str(
+            &generate_k8s_job_manifest(&conda, "cd '/r' && conda run true", &test_config())
+                .unwrap(),
+        )
+        .unwrap();
+        let annotations = &fallback["metadata"]["annotations"];
+        assert_eq!(
+            annotations["oxoflow.io/environment-render"],
+            "wrapper-fallback"
+        );
+        assert_eq!(annotations["oxoflow.io/environment-kind"], "conda");
+        assert!(
+            annotations.get("oxoflow.io/environment-image").is_none(),
+            "a fallback must not claim an image identity: {fallback}"
+        );
+        // The historical fallback shape is intact: base image + folded wrapper.
+        let container = &fallback["spec"]["template"]["spec"]["containers"][0];
+        assert_eq!(container["image"], "ubuntu:latest");
+        assert!(
+            container["args"][0]
+                .as_str()
+                .unwrap()
+                .contains("conda run true")
+        );
+
+        // A `system` rule has no wrapper at all and must not be labelled a
+        // fallback (issue #1388 review M2).
+        let system = env_rule("report", crate::rule::EnvironmentSpec::default());
+        let manifest: Value = serde_json::from_str(
+            &generate_k8s_job_manifest(&system, "cd '/r' && true", &test_config()).unwrap(),
+        )
+        .unwrap();
+        let annotations = &manifest["metadata"]["annotations"];
+        assert_eq!(annotations["oxoflow.io/environment-render"], "system");
+        assert_eq!(annotations["oxoflow.io/environment-kind"], "system");
+    }
+
+    /// Issue #1388 review F1: image mode must preserve the replaced
+    /// container wrapper's shell contract. The pod starts `/bin/sh` (always
+    /// present — busybox/alpine included) and the same bash-if-available shim
+    /// selects bash for the rule text; Indexed Jobs exec their per-index FILE
+    /// through the file-level shim, so a `set -euo pipefail` prelude works in
+    /// an array too.
+    #[test]
+    fn image_rendered_jobs_run_through_the_bash_shim() {
+        let docker = Rule {
+            name: "align".to_string(),
+            environment: crate::rule::EnvironmentSpec {
+                docker: Some("busybox:1.36".to_string()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let single: Value = serde_json::from_str(
+            &generate_k8s_job_manifest(&docker, "cd '/r' && true", &test_config()).unwrap(),
+        )
+        .unwrap();
+        let container = &single["spec"]["template"]["spec"]["containers"][0];
+        assert_eq!(
+            container["command"],
+            json!(["/bin/sh", "-c"]),
+            "a bash-less image must be able to START the container: {single}"
+        );
+        assert_eq!(
+            container["args"],
+            json!([
+                crate::environment::CONTAINER_BASH_SHIM,
+                "sh",
+                "cd '/r' && true"
+            ]),
+            "the rule text must run through the bash-if-available shim: {single}"
+        );
+
+        let array: Value = serde_json::from_str(
+            &generate_k8s_array_job_manifest(&docker, "run/cmds", 2, &[], None, &test_config())
+                .unwrap(),
+        )
+        .unwrap();
+        let container = &array["spec"]["template"]["spec"]["containers"][0];
+        assert_eq!(container["command"], json!(["/bin/sh", "-c"]));
+        let dispatch = container["args"][0].as_str().unwrap();
+        assert!(
+            dispatch.contains(crate::environment::CONTAINER_BASH_FILE_SHIM),
+            "the per-index file must run with bash when the image has it: {dispatch}"
+        );
+        assert!(
+            dispatch.contains("cmd.${INDEX}.sh"),
+            "the dispatch must keep the per-index file path: {dispatch}"
+        );
+
+        // Fallback jobs keep the historical `/bin/bash -c` (pre-#1388 shape).
+        let conda = Rule {
+            name: "qc".to_string(),
+            environment: crate::rule::EnvironmentSpec {
+                conda: Some("envs/qc.yaml".to_string()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let fallback: Value = serde_json::from_str(
+            &generate_k8s_job_manifest(&conda, "cd '/r' && conda run true", &test_config())
+                .unwrap(),
+        )
+        .unwrap();
+        let container = &fallback["spec"]["template"]["spec"]["containers"][0];
+        assert_eq!(container["command"], json!(["/bin/bash", "-c"]));
+        assert_eq!(
+            container["args"],
+            json!(["cd '/r' && conda run true"]),
+            "a fallback is not re-wrapped in the shim: {fallback}"
+        );
+    }
+
+    /// Pure parser behind `OXO_FLOW_K8S_IMAGE_RENDER`: on by default, off for
+    /// the documented off spellings, on for truthy values, and a typo warns
+    /// and stays ON (never silently changes semantics).
+    #[test]
+    fn image_rendering_switch_parses_off_truthy_and_junk() {
+        assert!(image_rendering_enabled_with(None));
+        assert!(image_rendering_enabled_with(Some("")));
+        for raw in ["0", "false", "FALSE", "no", "off", " off "] {
+            assert!(
+                !image_rendering_enabled_with(Some(raw)),
+                "{raw:?} must disable image rendering"
+            );
+        }
+        for raw in ["1", "true", "yes", "on", "ON"] {
+            assert!(
+                image_rendering_enabled_with(Some(raw)),
+                "{raw:?} must keep image rendering on"
+            );
+        }
+        assert!(
+            image_rendering_enabled_with(Some("tpyo")),
+            "an unrecognized value must stay on (the default)"
         );
     }
 
@@ -931,6 +1311,17 @@ mod tests {
             },
             ..Default::default()
         };
+        // The socket channel serves the WRAPPER FALLBACK (issue #1388): a
+        // conda environment cannot be rendered as a pod image, so its pod
+        // still executes the folded local wrapper and may need the daemon.
+        let fallback_rule = |name: &str| crate::rule::Rule {
+            name: name.to_string(),
+            environment: crate::rule::EnvironmentSpec {
+                conda: Some("envs/align.yaml".to_string()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
         let manifest = |r: &crate::rule::Rule| {
             serde_json::from_str::<Value>(
                 &generate_k8s_job_manifest(r, "cd '/abs/run' && true", &k8s_test_config())
@@ -949,6 +1340,19 @@ mod tests {
                     "mirror.example.com/biocontainers/bwa:0.7.17",
                     "the docker.io mapping must rewrite the manifest image: {val}"
                 );
+                // The manifest annotation keeps the WORKFLOW spec: mirror
+                // rewriting is transport-only, so the recorded identity does
+                // not change on a mirrored box (issue #1388).
+                assert_eq!(
+                    val["metadata"]["annotations"]["oxoflow.io/environment-image"],
+                    "biocontainers/bwa:0.7.17",
+                    "the identity annotation must stay mirror-neutral: {val}"
+                );
+                // Image mode means no local `docker run` in the pod body.
+                assert_eq!(
+                    val["metadata"]["annotations"]["oxoflow.io/environment-render"], "image",
+                    "{val}"
+                );
             }
             "MIRROR_OTHER" => {
                 let val = manifest(&rule("pull"));
@@ -958,8 +1362,32 @@ mod tests {
                     "a namespace not in the map must pass through: {val}"
                 );
             }
-            on_off @ ("SOCKET_ON" | "SOCKET_OFF") => {
+            "IMAGE_RENDER_OFF" => {
+                assert!(
+                    !image_rendering_enabled(),
+                    "the child must see the injected opt-out"
+                );
                 let val = manifest(&rule("wrap"));
+                let container = &val["spec"]["template"]["spec"]["containers"][0];
+                assert_eq!(
+                    container["image"], "biocontainers/bwa:0.7.17",
+                    "the fallback keeps the rule's base image: {val}"
+                );
+                assert_eq!(container["command"], json!(["/bin/bash", "-c"]));
+                assert_eq!(
+                    val["metadata"]["annotations"]["oxoflow.io/environment-render"],
+                    "wrapper-fallback",
+                    "an opted-out renderable environment is a wrapper fallback: {val}"
+                );
+                assert!(
+                    val["metadata"]["annotations"]
+                        .get("oxoflow.io/environment-image")
+                        .is_none(),
+                    "no image identity may be claimed when rendering is off: {val}"
+                );
+            }
+            on_off @ ("SOCKET_ON" | "SOCKET_OFF") => {
+                let val = manifest(&fallback_rule("wrap"));
                 let pod_spec = &val["spec"]["template"]["spec"];
                 let socket_volume = pod_spec["volumes"].as_array().and_then(|v| {
                     v.iter()
@@ -988,6 +1416,21 @@ mod tests {
                             .any(|e| e["name"] == "DOCKER_HOST"
                                 && e["value"] == "unix:///var/run/docker.sock"),
                         "DOCKER_HOST must point at the mounted socket: {val}"
+                    );
+                    // Issue #1388: an IMAGE-RENDERED rule needs no daemon —
+                    // the opt-in must not mount a host-root-equivalent socket
+                    // into a pod that cannot use it.
+                    let image_val = manifest(&rule("image"));
+                    let image_pod = &image_val["spec"]["template"]["spec"];
+                    assert!(
+                        !image_pod["volumes"]
+                            .as_array()
+                            .is_some_and(|v| v.iter().any(|v| v["name"] == "oxoflow-docker-sock")),
+                        "an image-rendered pod must not receive the daemon socket: {image_val}"
+                    );
+                    assert!(
+                        image_pod["containers"][0].get("env").is_none(),
+                        "an image-rendered pod must not export DOCKER_HOST: {image_val}"
                     );
                 } else {
                     // Off: neither the volume nor the mount may exist — the

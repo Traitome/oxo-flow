@@ -1,0 +1,79 @@
+# /tmp/oxo-1388-final2
+### busybox.txt
+busybox-ok
+
+### busybox-bash.txt
+bash-absent
+
+### os.txt
+VERSION_ID=22.04
+
+### docker-cli.txt
+docker-cli-absent
+
+### socket.txt
+socket-absent
+
+### result.txt
+image-mode-ok
+
+### base.txt
+base-image=22.04
+
+### L1.txt
+L1
+
+### L2.txt
+L2
+
+### status jobs/busybox_probe/status.json -> COMPLETED
+command: cd '/tmp/oxo-1388-final2' && echo busybox-ok > busybox.txt; if [ -x /bin/bash ]; then echo bash-present > busybox-bash.txt; else echo bash-absent > busybox-bash.txt; fi
+
+### status jobs/fallback_probe/status.json -> COMPLETED
+command: cd '/tmp/oxo-1388-final2' && printf 'base-image=%s
+' "$(. /etc/os-release; echo $VERSION_ID)" > base.txt
+
+### status jobs/fanout_lane_L1/status.json -> COMPLETED
+command: cd '/tmp/oxo-1388-final2' && echo 'L1' > 'L1.txt'
+
+### status jobs/fanout_lane_L2/status.json -> COMPLETED
+command: cd '/tmp/oxo-1388-final2' && echo 'L2' > 'L2.txt'
+
+### status jobs/image_probe/status.json -> COMPLETED
+command: cd '/tmp/oxo-1388-final2' && . /etc/os-release
+printf 'VERSION_ID=%s
+' "$VERSION_ID" > os.txt
+if command -v docker >/dev/null 2>&1; then echo docker-cli-present > docker-cli.txt; else echo docker-cli-absent > docker-cli.txt; fi
+if [ -S /var/run/docker.sock ]; then echo socket-present > socket.txt; else echo socket-absent > socket.txt; fi
+echo image-mode-ok > result.txt
+
+
+# /tmp/oxo-1388-prelude
+### single.txt
+single-bash-ok
+
+### A1.txt
+A1
+
+### A2.txt
+A2
+
+### status jobs/bash_array_lane_A1/status.json -> COMPLETED
+command: cd '/tmp/oxo-1388-prelude' && set -euo pipefail
+[[ -n 'A1' ]] && echo 'A1' > 'A1.txt'
+
+### status jobs/bash_array_lane_A2/status.json -> COMPLETED
+command: cd '/tmp/oxo-1388-prelude' && set -euo pipefail
+[[ -n 'A2' ]] && echo 'A2' > 'A2.txt'
+
+### status jobs/bash_single/status.json -> COMPLETED
+command: cd '/tmp/oxo-1388-prelude' && set -euo pipefail
+[[ -n "single" ]] && echo single-bash-ok > single.txt
+
+### cmd file jobs/bash_array/chunk-1/cmd.1.sh
+cd '/tmp/oxo-1388-prelude' && set -euo pipefail
+[[ -n 'A1' ]] && echo 'A1' > 'A1.txt'
+
+### cmd file jobs/bash_array/chunk-1/cmd.2.sh
+cd '/tmp/oxo-1388-prelude' && set -euo pipefail
+[[ -n 'A2' ]] && echo 'A2' > 'A2.txt'

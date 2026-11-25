@@ -29,7 +29,7 @@ There are two ways to reach a scheduler, and they suit different jobs:
 | **PBS/Torque** | Supported | Real-scheduler matrix, OpenPBS 23.06 (2026-09-22/23 campaign; not re-run per commit) | `#PBS` |
 | **SGE** | Supported | Real-scheduler matrix, SoGE 8.1.9 (2026-09-22/23 campaign; not re-run per commit) | `#$` |
 | **LSF** | Supported | Experimental — no live campaign; directives/status semantics cross-checked against IBM's bsub reference | `#BSUB` |
-| **Kubernetes** | Supported (spec generation + shared-filesystem execution) | Prototype — **live two-node k3s campaign (2026-11-26)**: k3s server + agent with separate kernels, a network NFSv4.2 export behind `[cluster.volume] kind = "nfs"`, the run workdir inside the export, an Indexed array settling per element across both nodes, a dependent 2048 MiB rule forced onto the second node by resource fit, outputs returned to the submit host through the volume, and `provenance verify` 3/3 — see [`kubernetes-multinode-2026-11-26.md`](../../../superpowers/audits/kubernetes-multinode-2026-11-26.md). Earlier: live single-node k3s campaign (submit/status/artifacts/logs/SIGINT-cancel) for `system`-environment rules; in single-node mode Job manifests mount the run workdir AND the array command directory via `hostPath`, set `imagePullPolicy: IfNotPresent`, and rewrite the container image through `OXO_REGISTRY_MIRRORS` (namespace/registry-qualified names). Docker-environment rules run via the opt-in `OXO_FLOW_K8S_DOCKER_SOCKET=1` channel (mounts the node daemon socket — trusted single-operator clusters only). Multi-node clusters: declare a shared filesystem with `[cluster.volume]` (`nfs` live-qualified; `pvc` render-tested only, no live claim/provisioner drill — see [Cluster submission](../commands/cluster.md#shared-volume-clustervolume-kubernetes)) and pods mount it at `mount_root` instead of any submit-host path; `hostpath` keeps single-node semantics. Residuals: image-based environment rendering (the durable docker-env fix, #1388); PVC live qualification; multi-control-plane/HA and cloud-provider volumes — see [`kubernetes-live-campaign-2026-11-24.md`](../../../superpowers/audits/kubernetes-live-campaign-2026-11-24.md) | `k8s Job` |
+| **Kubernetes** | Supported (spec generation + shared-filesystem execution) | Prototype — **live two-node k3s campaign (2026-11-26)**: k3s server + agent with separate kernels, a network NFSv4.2 export behind `[cluster.volume] kind = "nfs"`, the run workdir inside the export, an Indexed array settling per element across both nodes, a dependent 2048 MiB rule forced onto the second node by resource fit, outputs returned to the submit host through the volume, and `provenance verify` 3/3 — see [`kubernetes-multinode-2026-11-26.md`](../../../superpowers/audits/kubernetes-multinode-2026-11-26.md). Earlier: live single-node k3s campaigns (submit/status/artifacts/logs/SIGINT-cancel, and image-based environment rendering) for `system`- and container-environment rules; in single-node mode Job manifests mount the run workdir AND the array command directory via `hostPath`, set `imagePullPolicy: IfNotPresent`, and rewrite the container image through `OXO_REGISTRY_MIRRORS` (namespace/registry-qualified names). **Container environments are rendered as the pod image** (docker specs and singularity `docker://` URIs — see [Container environments on Kubernetes](#container-environments-on-kubernetes)): no docker CLI or node socket is needed. Non-renderable environments (local SIF, conda/pixi/venv/modules) keep the folded local wrapper and are marked `wrapper-fallback` (a `system` rule is marked `system`); `OXO_FLOW_K8S_IMAGE_RENDER=0` forces that fallback box-wide, and a fallback job whose command must reach the node daemon can opt in to `OXO_FLOW_K8S_DOCKER_SOCKET=1` (mounts the node daemon socket — trusted single-operator clusters only; never attached to an image-rendered pod). Multi-node clusters: declare a shared filesystem with `[cluster.volume]` (`nfs` live-qualified; `pvc` render-tested only, no live claim/provisioner drill — see [Cluster submission](../commands/cluster.md#shared-volume-clustervolume-kubernetes)) and pods mount it at `mount_root` instead of any submit-host path; `hostpath` keeps single-node semantics. Residuals: image mode combined with a multi-node `[cluster.volume]` run is single-node-proven only (see [`kubernetes-image-render-2026-11-25.md`](../../../superpowers/audits/kubernetes-image-render-2026-11-25.md)); PVC live qualification; multi-control-plane/HA and cloud-provider volumes — see [`kubernetes-live-campaign-2026-11-24.md`](../../../superpowers/audits/kubernetes-live-campaign-2026-11-24.md) | `k8s Job` |
 | **AWS Batch** | Supported (spec generation) | Prototype — CLI wrapper (`aws`), mock/wire tests only; live campaign pending (#1390). Submit/describe/list/cancel shapes verified against the botocore Batch service model and the AWS CLI v2 reference (2026-11-25 audit); array child ids, `terminate-job` cancel, and the 100-id DescribeJobs cap are pinned by wire tests — [Audit evidence](../../../superpowers/audits/cloud-cli-accuracy-2026-11-26.md). | `aws-batch` |
 | **GCP Batch** | Supported (spec generation) | Prototype — CLI wrapper (`gcloud`), mock/wire tests only; live campaign pending (#1390; endpoint unreachable from the qualification host). Submit (plain `--config` path, minted positional id)/describe/tasks-list/cancel shapes verified against the gcloud reference and `google/cloud/batch/v1` protos (2026-11-25 audit); cancel uses `CancelJob`, not `DeleteJob` — [Audit evidence](../../../superpowers/audits/cloud-cli-accuracy-2026-11-26.md). | `gcp-batch` |
 | **Tencent Batch** | Supported (spec generation) | Prototype — CLI wrapper (`tccli batch`, API 2017-03-12); payload/state/cancel/log shapes verified against tccli's own `api.json`/`examples.json` (2026-11-25 audit). Live smoke (2026-11-25, issue #1389): a named compute environment (`TENCENTBATCH_ENV_ID`) submit ran to `SUCCEED`; anonymous inline-env creation failed on the qualification account, so use `TENCENTBATCH_ENV_ID` when it does. Poll/log/cancel/array paths remain mock-verified only, and arrays settle on the base job verdict (no per-instance `DescribeTask` call yet) — [Audit evidence](../../../superpowers/audits/cloud-cli-accuracy-2026-11-26.md). | `tencent-batch` |
@@ -54,6 +54,109 @@ backends:
 `--queue` where the cloud CLI needs it to resolve a bare job id (the GCP
 location, the Tencent zone). AWS Batch's raw listing uses it as the
 `list-jobs --job-queue` selector, falling back to the submit default.
+
+---
+
+## Container environments on Kubernetes
+
+A rule's **container environment becomes the pod image** (issue #1388) instead of
+a local container runtime folded into the command:
+
+| Declared environment | How the Kubernetes job runs | Node needs |
+|---|---|---|
+| `docker = "<image>"` | Image mode: pod `image:` = `<image>`; the rule command runs directly in it | Nothing — no docker CLI, no daemon socket |
+| `singularity = "docker://<image>"` | Image mode: pod `image:` = the underlying `<image>` | Nothing |
+| `singularity = "/shared/x.sif"` (or any non-`docker://` URI) | Wrapper fallback: the folded `singularity exec …` runs in the pod | None available: the base is `ubuntu:latest` (no singularity), and adding `docker` wins `kind()` → image mode; bake the SIF into an image |
+| `conda` / `mamba` / `pixi` | Wrapper fallback: the folded wrapper runs in the pod | Declare `docker = "<image with the runtime>"` too — these rank above `docker`, so the wrapper stays and the image supplies the runtime; without it `ubuntu:latest` has no conda |
+| `venv` | Wrapper fallback: `source …/activate` runs in the pod | None available: `docker` outranks `venv`, so adding an image flips to image mode; bake the venv into an image or run locally |
+| `modules` | Wrapper fallback: `module load` runs in the pod shell | None available: `modules` + `docker` is rejected by validation and `ubuntu:latest` has no module system; run on HPC |
+| no environment (`system`) | No wrapper exists: the command runs in `ubuntu:latest`; annotated `system` | — |
+
+**Shell contract.** Image mode preserves the shell contract of the local
+container wrapper it replaces: the pod starts `/bin/sh` (always present — a
+busybox/alpine image included) and runs the rule text through the same
+bash-if-available shim (`bash -c` when the image has bash, else `sh -c`), so
+`[defaults] shell_prelude = "set -euo pipefail"` and other bashisms keep
+working in images that carry bash. Indexed Jobs apply the same choice to each
+per-index command file. A fallback job keeps the historical `/bin/bash -c`
+dispatcher.
+
+**What is visible in the artifact.** Every rendered Job carries annotations that
+state the decision, so a manifest review does not have to infer it:
+
+```yaml
+metadata:
+  annotations:
+    oxoflow.io/environment-render: image              # or "wrapper-fallback" / "system"
+    oxoflow.io/environment-kind: docker               # the backend that supplied it
+    oxoflow.io/environment-image: biocontainers/bwa:0.7.17   # image mode only
+```
+
+A wrapper fallback also logs one `WARN` per rendered Job naming the rule and
+environment kind. A fallback job whose command must reach the node daemon can
+opt in to the `OXO_FLOW_K8S_DOCKER_SOCKET=1` fallback channel — it mounts the
+node's `/var/run/docker.sock` into the pod (host-root-equivalent; trusted
+single-operator clusters only). The channel is never attached to an
+image-rendered rule: that pod cannot benefit and must not receive the socket.
+
+**Forcing the fallback.** `OXO_FLOW_K8S_IMAGE_RENDER=0` (also `false`, `no`,
+`off`) turns image rendering off for the whole box: a docker-environment rule
+then keeps the folded `docker run` wrapper exactly like pre-#1388 — pair it with
+`OXO_FLOW_K8S_DOCKER_SOCKET=1` and an image that carries the docker CLI when the
+rule needs host paths outside the workdir or a nested container. The fallback
+keeps the pre-#1388 `/bin/bash -c` dispatcher, so that image must carry bash
+(and a docker CLI for the folded wrapper). Under this opt-out the per-Job WARN
+says rendering is disabled — not that it is impossible. Truthy values keep
+rendering on; an unrecognized value warns and stays on.
+
+**Fallback reality check.** The fallback pod's base image is `ubuntu:latest`
+unless the rule ALSO declares `docker`, which the fallback then uses as the pod
+base image. Whether that stays a fallback depends on `EnvironmentSpec::kind()`
+precedence: `mamba` / `conda` / `pixi` rank ABOVE `docker`, so
+`environment = { conda = "envs/qc.yaml", docker = "<image with conda>" }` keeps
+the conda wrapper and supplies a runtime-bearing base image (runnable). A local
+SIF and `venv` rank BELOW `docker` — adding an image flips them to image mode
+and the SIF/venv is ignored; `modules` + `docker` is rejected by validation.
+Those three cannot acquire a compatible base image today: bake the environment
+into an image and declare `docker = "<image>"`, or run the rule on a local/HPC
+backend. The fallback remains functional for conda-family rules with a
+runtime-bearing base image, for a docker rule that opts out (above), and for a
+`system` rule that invokes docker itself.
+
+Only Kubernetes consumes image rendering today. The plan seam
+(`ScheduledRule::container_image` + `ExecutorBackend::renders_container_image`)
+is backend-agnostic, so AWS Batch / GCP Batch / Tencent Batch can adopt it
+without re-deriving the environment.
+
+**Registry mirrors.** `OXO_REGISTRY_MIRRORS` is applied when the Job's `image:`
+field is rendered (see [China network mirrors](../reference/china-mirrors.md)).
+The annotation and the checkpoint record keep the workflow-declared spec, so the
+identity does not change on a mirrored box.
+
+**Provenance.** The cluster path records each planned rule's image identity in the
+run checkpoint (`cluster_images`), and `oxo-flow provenance verify` prints
+it: the rendered `image:` reference, the workflow-declared spec, and the
+image digest **only when the submit host's local docker daemon could report one
+offline**. A missing digest is reported as exactly that ("digest not resolved on
+the submit host") — it does not prove what a compute node pulled. A fallback
+entry says `wrapper-fallback` and names its pod base image; no image identity is
+claimed for it.
+
+**Limits.** In image mode the pod sees only the run workdir (or the
+`[cluster.volume]` mount). Absolute host paths outside that tree that the local
+docker backend would bind-mount are not mounted — stage reference data onto the
+shared volume, or force the wrapper fallback with
+`OXO_FLOW_K8S_IMAGE_RENDER=0` + `OXO_FLOW_K8S_DOCKER_SOCKET=1`. A configured
+`[engine] tmp_dir` / `OXO_FLOW_TMPDIR` is exported into the pod command like on
+every other backend, so it must name a directory the pod can see (put it under
+the workdir or the shared volume). Image-mode pods run as the image's default
+user — root in most stock images — with no `securityContext` rendered, so files
+they create on a `hostPath` workdir are root-owned on the submit host (the local
+docker wrapper runs as the invoking uid instead). Use an image whose `USER`
+matches the run uid, a `pvc`/`nfs` volume with suitable ownership/permissions,
+or the fallback path when host ownership matters. Building conda/pixi
+environments into images automatically is out of scope; bake the image
+explicitly and declare it as `docker = …`.
 
 ---
 

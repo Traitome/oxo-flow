@@ -761,6 +761,27 @@ fn plan_submissions(
     }
 }
 
+/// Record the per-rule container-image provenance for a Kubernetes submission
+/// (issue #1388) into `ck`.
+///
+/// Extracted from [`run_on_cluster`] so the wiring — which instances, which
+/// map, merged into the checkpoint — is unit-tested without a live scheduler
+/// (review M7). Persistence stays with the caller, which writes the checkpoint
+/// before submitting so a crashed driver still leaves the record. The record
+/// describes what the run PLANNED to submit; an abort after this point leaves
+/// an identity for a job that may never have left.
+fn record_planned_cluster_images(
+    ck: &mut CheckpointState,
+    plan: &ScheduledPlan,
+    to_run: &HashSet<String>,
+) {
+    let mut planned: Vec<String> = to_run.iter().cloned().collect();
+    planned.sort();
+    ck.record_cluster_images(oxo_flow_core::backend::cluster_image_records(
+        plan, &planned,
+    ));
+}
+
 /// Submit and track this workflow through the scheduler named by `cluster`.
 pub(crate) async fn run_on_cluster(
     cluster: &ClusterProfile,
@@ -889,6 +910,22 @@ pub(crate) async fn run_on_cluster(
     reject_scratch_rules(&plan, &to_run)?;
     reject_unbound_placeholders(&plan, args.config, &to_run)?;
     reject_lifecycle_hooks(&plan, args.config, &to_run)?;
+
+    // Container-image provenance (issue #1388). Kubernetes renders a rule's
+    // container environment as the pod's own image; record which image each
+    // planned rule is to run as — or that it fell back to the folded local
+    // wrapper, or runs a system environment — so `provenance verify` can
+    // report it after the fact. The digest is the submit host's offline
+    // `docker image inspect` answer, or absent; it never claims what a node
+    // pulled. Recorded (and persisted) before submission so a crashed driver
+    // still leaves the record.
+    if backend == ClusterBackend::Kubernetes {
+        let mut ck = args.checkpoint.lock().await;
+        record_planned_cluster_images(&mut ck, &plan, &to_run);
+        if let Err(e) = ck.save_to_file_async(args.checkpoint_path).await {
+            tracing::warn!("Failed to save checkpoint: {e}");
+        }
+    }
 
     let driver_defaults = DriverConfig::default();
     let mut max_submitted = args
@@ -1123,6 +1160,7 @@ mod tests {
     use super::check_budget;
     use super::cluster_env_cache_dir;
     use super::plan_submissions;
+    use super::record_planned_cluster_images;
     use super::reject_checkpoint_reentry;
     use super::reject_lifecycle_hooks;
     use super::reject_localrules;
@@ -1174,6 +1212,80 @@ mod tests {
             &HashMap::new(),
         )
         .unwrap()
+    }
+
+    /// A plan spanning the three render decisions: an image-rendered docker
+    /// rule, a conda fallback, and a system rule (issue #1388 review M7).
+    fn image_plan(workdir: &std::path::Path) -> ScheduledPlan {
+        let toml = "[workflow]\nname = \"images\"\n\
+                    [[rules]]\nname = \"aligned\"\nshell = \"true\"\noutput = [\"a.out\"]\n\
+                    environment = { docker = \"busybox:1.36\" }\n\
+                    [[rules]]\nname = \"qc\"\nshell = \"true\"\noutput = [\"q.out\"]\n\
+                    environment = { conda = \"envs/qc.yaml\" }\n\
+                    [[rules]]\nname = \"report\"\nshell = \"true\"\noutput = [\"r.out\"]\n";
+        let path = workdir.join("wf.oxoflow");
+        std::fs::write(&path, toml).unwrap();
+        let mut config = WorkflowConfig::from_file(&path).unwrap();
+        config.apply_defaults();
+        config.expand_wildcards().unwrap();
+        let dag = WorkflowDag::from_rules(&config.rules).unwrap();
+        ScheduledPlan::build(
+            &config,
+            &dag,
+            workdir,
+            &EnvironmentResolver::new(),
+            &HashMap::new(),
+        )
+        .unwrap()
+    }
+
+    /// Issue #1388 review M7: the run-cluster recording wiring stores the
+    /// planned instances' render decisions (image / wrapper-fallback /
+    /// system) in the checkpoint and persists them.
+    #[test]
+    fn planned_cluster_images_are_recorded_and_persisted() {
+        let dir = tempfile::tempdir().unwrap();
+        let plan = image_plan(dir.path());
+        let to_run: std::collections::HashSet<String> =
+            ["aligned".to_string(), "report".to_string()]
+                .into_iter()
+                .collect();
+        let mut ck = CheckpointState::new();
+
+        record_planned_cluster_images(&mut ck, &plan, &to_run);
+
+        assert_eq!(
+            ck.cluster_images.len(),
+            2,
+            "only planned rules are recorded"
+        );
+        assert!(
+            !ck.cluster_images.contains_key("qc"),
+            "a rule outside to_run must not be recorded"
+        );
+        assert_eq!(
+            ck.cluster_images["aligned"].render,
+            oxo_flow_core::executor::checkpoint::ClusterImageRecord::IMAGE
+        );
+        assert_eq!(ck.cluster_images["aligned"].spec, "busybox:1.36");
+        assert!(
+            !ck.cluster_images["aligned"].image.contains("docker run"),
+            "the record names an image, not a command"
+        );
+        assert_eq!(
+            ck.cluster_images["report"].render,
+            oxo_flow_core::executor::checkpoint::ClusterImageRecord::SYSTEM
+        );
+
+        // Persisted through the shared checkpoint writer (the run uses the
+        // async variant of the same save path).
+        let path = dir.path().join("checkpoint.json");
+        ck.save_to_file(&path).unwrap();
+        let json = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            json.contains("\"cluster_images\"") && json.contains("busybox:1.36"),
+            "the record must survive serialization: {json}"
+        );
     }
 
     #[test]

@@ -179,19 +179,44 @@ fn resolve_or_sentinel(resolved: String) -> String {
 
 /// Default container-digest resolver: best-effort, offline, never pulls.
 fn default_container_digest(backend: &str, spec: &str) -> String {
+    local_container_digest(backend, spec).unwrap_or_default()
+}
+
+/// The container digest a LOCAL runtime can report offline for `spec`, or
+/// `None` when it cannot (issue #1388 reuses this for the cluster-image
+/// provenance record).
+///
+/// Only `docker` is queried, with `docker image inspect` — the same offline
+/// check [`compute_env_lock_identity`] uses. It never pulls (a pull is a
+/// network side effect the recording layer must not have) and never invents a
+/// value: an absent image or unreachable daemon is `None`.
+#[must_use]
+pub fn local_container_digest(backend: &str, spec: &str) -> Option<String> {
     match backend {
-        "docker" => docker_image_digest(spec),
-        // singularity/apptainer: no reliable offline digest query; the caller
-        // sees the explicit sentinel rather than a fabricated one.
-        _ => String::new(),
+        "docker" => {
+            let digest = docker_image_digest(spec);
+            if digest.trim().is_empty() {
+                None
+            } else {
+                Some(digest)
+            }
+        }
+        _ => None,
     }
 }
 
 /// Local, offline `docker image inspect` digest query. Returns the empty
 /// string when the image is absent or the daemon is unreachable — it never
 /// pulls (a pull is a network side effect the recording layer must not have).
+///
+/// Bounded by [`DOCKER_DIGEST_TIMEOUT`]: a blackholed `DOCKER_HOST` would
+/// otherwise stall run start for the docker CLI's own connect timeout on every
+/// ruled image (issue #1388 review M11). A timeout is the same "unresolved"
+/// answer as a missing image — never a fabricated digest.
 fn docker_image_digest(spec: &str) -> String {
-    let out = std::process::Command::new("docker")
+    use std::io::Read;
+    use std::process::Stdio;
+    let Ok(mut child) = std::process::Command::new("docker")
         .args([
             "image",
             "inspect",
@@ -199,12 +224,42 @@ fn docker_image_digest(spec: &str) -> String {
             "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
             spec,
         ])
-        .output();
-    match out {
-        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).trim().to_string(),
-        _ => String::new(),
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+    else {
+        return String::new();
+    };
+    let deadline = std::time::Instant::now() + DOCKER_DIGEST_TIMEOUT;
+    let outcome = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) if std::time::Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return String::new();
+            }
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(20)),
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return String::new();
+            }
+        }
+    };
+    if !outcome.is_some_and(|status| status.success()) {
+        return String::new();
     }
+    let mut digest = String::new();
+    if let Some(mut stdout) = child.stdout.take() {
+        let _ = stdout.read_to_string(&mut digest);
+    }
+    digest.trim().to_string()
 }
+
+/// Ceiling for one offline container-digest query (see
+/// [`docker_image_digest`]).
+const DOCKER_DIGEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Key-ordered lock hash over `(label, value)` pairs: sorts a copy so
 /// insertion/host order never leaks into the digest (the persisted-artifact

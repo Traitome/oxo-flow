@@ -1,0 +1,56 @@
+{
+  "apiVersion": "batch/v1",
+  "kind": "Job",
+  "metadata": {
+    "annotations": {
+      "oxoflow.io/environment-image": "biocontainers/bwa:0.7.17",
+      "oxoflow.io/environment-kind": "docker",
+      "oxoflow.io/environment-render": "image"
+    },
+    "labels": {
+      "oxoflow.io/managed-by": "oxo-flow",
+      "oxoflow.io/rule": "mirror-probe"
+    },
+    "name": "oxoflow-mirror-probe-29e62ded"
+  },
+  "spec": {
+    "backoffLimit": 0,
+    "template": {
+      "metadata": {
+        "labels": {
+          "oxoflow.io/managed-by": "oxo-flow",
+          "oxoflow.io/rule": "mirror-probe"
+        }
+      },
+      "spec": {
+        "containers": [
+          {
+            "args": [
+              "if command -v bash >/dev/null 2>&1; then exec bash -c \"$1\"; else exec sh -c \"$1\"; fi",
+              "sh",
+              "echo ok > out.txt"
+            ],
+            "command": [
+              "/bin/sh",
+              "-c"
+            ],
+            "image": "mirror.example.com/biocontainers/bwa:0.7.17",
+            "imagePullPolicy": "IfNotPresent",
+            "name": "mirror-probe",
+            "resources": {
+              "limits": {
+                "cpu": "1",
+                "memory": "1024Mi"
+              },
+              "requests": {
+                "cpu": "1",
+                "memory": "1024Mi"
+              }
+            }
+          }
+        ],
+        "restartPolicy": "Never"
+      }
+    }
+  }
+}

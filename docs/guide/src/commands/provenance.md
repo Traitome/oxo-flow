@@ -92,6 +92,9 @@ Provenance Verify .oxo-flow/checkpoint.json
 
   • workflow git HEAD: 3f2a1c9d8b7e6f5a4c3d2e1f0a9b8c7d6e5f4a3b
   • workflow path: /home/user/proj/pipeline.oxoflow
+  • cluster images: 2 rule(s)
+    • align: image biocontainers/bwa:0.7.17 (biocontainers/bwa:0.7.17) — biocontainers/bwa@sha256:abc123...
+    • report: system environment (no wrapper), pod base image ubuntu:latest
   • workflow content hash: sha256:e3b0c442...
   • workflow git tree: clean
   • workflow content check: verified (sha256:e3b0c442...)
@@ -103,6 +106,43 @@ Provenance Verify .oxo-flow/checkpoint.json
 
 Summary: 2 matched, 1 mismatched, 0 missing, 1 cleaned (by design)
 ```
+
+The `cluster images` block appears only on checkpoints written by a
+Kubernetes cluster run (see [Cluster image identity](#cluster-image-identity)).
+
+### Cluster image identity
+
+A cluster run on the Kubernetes backend records, per planned rule, the
+container image its job was to run as (issue #1388). The record is written
+before submission (so a crashed driver still leaves it); if the run aborts
+before a job leaves, it names what that job would have run as. The checkpoint
+field is `cluster_images`; `verify` prints it and `--json` carries it verbatim.
+Each record has:
+
+- `render` — `image` (the rule's container environment WAS the pod image),
+  `wrapper-fallback` (the local environment wrapper stayed folded into the
+  command; no image identity is claimed for that environment), or `system`
+  (the rule declares no environment at all, so there is no wrapper to fall
+  back to).
+- `kind` — the backend that supplied the environment (`docker`, `singularity`,
+  `conda`, …).
+- `spec` — the workflow-declared container reference. Mirror-neutral: it keeps
+  the original spec even when `OXO_REGISTRY_MIRRORS` rewrote the transport.
+- `image` — the reference the Job's `image:` field carries (mirrors applied;
+  the pod base image for a fallback).
+- `resolved_digest` — present **only** when the submit host's local docker
+  daemon could report the image digest offline. Absent means "not resolved on
+  the submit host", which verify states explicitly. It is never an invented
+  digest, and it does not prove what a compute node actually pulled — that
+  requires node-side inspection, which this record deliberately does not
+  claim.
+
+The record is additive: checkpoints written by local/HPC runs or older
+releases omit the field and load unchanged. It is checkpoint-level evidence;
+the portable attestation (`provenance attest`) binds the environment through
+`environment.env_lock_identity`, which is unchanged (a container rule records
+`docker|<digest-or-unresolved>` there) — `cluster_images` is not copied into
+the attestation document.
 
 ## Notes
 
@@ -180,6 +220,21 @@ carries nothing else):
       {"file": "output/report.html", "status": "mismatched", "expected": "sha256:xxx", "actual": "sha256:yyy"},
       {"file": ".oxo-flow/chunks/chr/chr1.g.vcf.gz", "status": "cleaned", "expected": "sha256:ccc..."}
     ],
+    "cluster_images": {
+      "align": {
+        "render": "image",
+        "kind": "docker",
+        "spec": "busybox:1.36",
+        "image": "busybox:1.36",
+        "resolved_digest": "busybox@sha256:abc123..."
+      },
+      "qc": {
+        "render": "wrapper-fallback",
+        "kind": "conda",
+        "spec": "",
+        "image": "ubuntu:latest"
+      }
+    },
     "workflow_content_hash": "sha256:e3b0c442...",
     "workflow_resolved_hash": "sha256:9f86d081...",
     "metadata_digest": "sha256:6b1d3c7f...",

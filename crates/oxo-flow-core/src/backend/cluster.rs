@@ -1288,13 +1288,29 @@ impl super::ExecutorBackend for ClusterExecutor {
             &generate_submit_script_with_secrets(
                 &self.backend,
                 &rule.rule,
-                &rule.shell_cmd,
+                // Issue #1388: Kubernetes renders a renderable container
+                // environment as the pod image and must receive the
+                // wrapper-free command; every other backend receives the
+                // wrapper-folded text unchanged.
+                self.submitted_cmd(rule),
                 &self.secret_refs,
                 &self.cluster,
             )?,
             &self.backend,
             &rule.workdir,
         ))
+    }
+
+    /// Kubernetes is the image-rendering backend (issue #1388): a rule whose
+    /// environment resolves to a container image runs AS that image, so the
+    /// job command is the wrapper-free `ScheduledRule::container_image`
+    /// command. `OXO_FLOW_K8S_IMAGE_RENDER=0` forces the pre-#1388 wrapper
+    /// fallback on the box. Every other backend keeps executing the local
+    /// environment wrapper inside its job.
+    fn renders_container_image(&self, rule: &crate::rule::Rule) -> bool {
+        self.backend == ClusterBackend::Kubernetes
+            && crate::backend::k8s::image_rendering_enabled()
+            && crate::environment::renderable_container_image(&rule.environment).is_some()
     }
 
     fn render_array_script(
@@ -2425,6 +2441,7 @@ mod tests {
     use crate::config::WorkflowConfig;
     use crate::dag::WorkflowDag;
     use crate::environment::EnvironmentResolver;
+    use serde_json::Value;
     use std::collections::HashMap;
 
     fn single_rule_plan() -> crate::backend::ScheduledPlan {
@@ -2485,6 +2502,226 @@ mod tests {
             &plan.rules["align"].workdir,
         );
         assert_eq!(via_trait, direct);
+    }
+
+    /// A one-rule plan whose rule declares `environment` (issue #1388
+    /// fixtures). Built through the canonical TOML/plan path so the
+    /// wrapper-free command comes from the real builder, not a hand-written
+    /// stand-in.
+    fn environment_plan(environment: &str) -> crate::backend::ScheduledPlan {
+        let dir = tempfile::tempdir().unwrap();
+        let toml = format!(
+            "[workflow]\nname = \"env\"\n[[rules]]\nname = \"align\"\n\
+             shell = \"bwa mem ref.fa in.fq > out.bam\"\noutput = [\"out.bam\"]\n\
+             environment = {{ {environment} }}\n"
+        );
+        let path = dir.path().join("wf.oxoflow");
+        std::fs::write(&path, toml).unwrap();
+        let mut config = WorkflowConfig::from_file(&path).unwrap();
+        config.apply_defaults();
+        config.expand_wildcards().unwrap();
+        let dag = WorkflowDag::from_rules(&config.rules).unwrap();
+        crate::backend::ScheduledPlan::build(
+            &config,
+            &dag,
+            std::path::Path::new("/abs/run"),
+            &EnvironmentResolver::new(),
+            &HashMap::new(),
+        )
+        .unwrap()
+    }
+
+    /// The rule text a rendered Job executes: an image-rendered job runs it
+    /// through the container bash shim (args `[shim, "sh", text]`), the
+    /// historical fallback keeps `args = [text]` under `/bin/bash -c`.
+    fn executed_rule_text(container: &Value) -> &str {
+        let args = container["args"].as_array().expect("args array");
+        if args.first().and_then(Value::as_str) == Some(crate::environment::CONTAINER_BASH_SHIM) {
+            args[2].as_str().expect("shim command text")
+        } else {
+            args[0].as_str().expect("command text")
+        }
+    }
+
+    /// Issue #1388: a docker environment becomes the Kubernetes pod image and
+    /// the local `docker run` wrapper disappears from the submitted command —
+    /// no node daemon, no socket channel.
+    #[test]
+    fn kubernetes_renders_a_docker_environment_as_the_pod_image() {
+        let plan = environment_plan("docker = \"biocontainers/bwa:0.7.17\"");
+        let exec = ClusterExecutor::new(ClusterBackend::Kubernetes, cluster_config());
+        let scheduled = &plan.rules["align"];
+        let render = scheduled
+            .container_image
+            .as_ref()
+            .expect("a docker spec must resolve for image rendering");
+        assert_eq!(render.kind, "docker");
+        assert_eq!(render.spec, "biocontainers/bwa:0.7.17");
+        assert!(
+            !render.command.contains("docker run"),
+            "the wrapper-free command must not start a container runtime: {}",
+            render.command
+        );
+        assert!(
+            scheduled.shell_cmd.contains("docker run"),
+            "precondition: the wrapper is present in the folded command: {}",
+            scheduled.shell_cmd
+        );
+        assert!(exec.renders_container_image(&scheduled.rule));
+        assert_eq!(exec.submitted_cmd(scheduled), render.command);
+
+        let manifest: Value =
+            serde_json::from_str(&exec.render_script(scheduled).unwrap()).unwrap();
+        let container = &manifest["spec"]["template"]["spec"]["containers"][0];
+        assert_eq!(container["image"], "biocontainers/bwa:0.7.17");
+        assert_eq!(
+            container["command"],
+            serde_json::json!(["/bin/sh", "-c"]),
+            "a bash-less image must be able to start the pod"
+        );
+        let args = executed_rule_text(container);
+        assert!(
+            !args.contains("docker run"),
+            "the pod must not run `docker run` inside itself: {args}"
+        );
+        assert!(
+            args.contains("cd '/abs/run' && bwa mem ref.fa in.fq > out.bam"),
+            "the rule command (and its cd guard) must survive wrapper removal: {args}"
+        );
+        let annotations = &manifest["metadata"]["annotations"];
+        assert_eq!(annotations["oxoflow.io/environment-render"], "image");
+        assert_eq!(annotations["oxoflow.io/environment-kind"], "docker");
+        assert_eq!(
+            annotations["oxoflow.io/environment-image"], "biocontainers/bwa:0.7.17",
+            "the manifest records the mirror-neutral workflow spec"
+        );
+    }
+
+    /// Issue #1388: a singularity `docker://` URI renders its UNDERLYING
+    /// docker image — the pod runtime pulls the image directly, so the local
+    /// `singularity exec` wrapper is not submitted.
+    #[test]
+    fn kubernetes_renders_singularity_docker_uris_as_the_underlying_image() {
+        let plan = environment_plan("singularity = \"docker://quay.io/biocontainers/bwa:0.7.17\"");
+        let exec = ClusterExecutor::new(ClusterBackend::Kubernetes, cluster_config());
+        let scheduled = &plan.rules["align"];
+        let render = scheduled
+            .container_image
+            .as_ref()
+            .expect("a docker:// URI must resolve for image rendering");
+        assert_eq!(render.kind, "singularity");
+        assert_eq!(render.spec, "quay.io/biocontainers/bwa:0.7.17");
+        assert!(
+            !render.command.contains("singularity exec")
+                && !render.command.contains("apptainer exec"),
+            "the wrapper-free command must not invoke singularity: {}",
+            render.command
+        );
+
+        let manifest: Value =
+            serde_json::from_str(&exec.render_script(scheduled).unwrap()).unwrap();
+        let container = &manifest["spec"]["template"]["spec"]["containers"][0];
+        assert_eq!(container["image"], "quay.io/biocontainers/bwa:0.7.17");
+        let args = executed_rule_text(container);
+        assert!(
+            !args.contains("singularity exec") && !args.contains("apptainer exec"),
+            "the pod must not exec a local singularity/apptainer wrapper: {args}"
+        );
+        assert_eq!(
+            manifest["metadata"]["annotations"]["oxoflow.io/environment-kind"],
+            "singularity"
+        );
+    }
+
+    /// Issue #1388: environments with no renderable image (a local SIF, a
+    /// conda env, a system rule) keep the historical wrapper-folding, the
+    /// base image, and are marked `wrapper-fallback` in the manifest.
+    #[test]
+    fn kubernetes_marks_non_renderable_environments_as_the_wrapper_fallback() {
+        for (environment, wrapper_fragment) in [
+            (
+                "singularity = \"/shared/containers/bwa.sif\"",
+                "singularity exec",
+            ),
+            ("conda = \"envs/align.yaml\"", "conda run"),
+        ] {
+            let plan = environment_plan(environment);
+            let exec = ClusterExecutor::new(ClusterBackend::Kubernetes, cluster_config());
+            let scheduled = &plan.rules["align"];
+            assert!(
+                scheduled.container_image.is_none(),
+                "{environment}: no image can be rendered"
+            );
+            assert!(!exec.renders_container_image(&scheduled.rule));
+            assert_eq!(exec.submitted_cmd(scheduled), scheduled.shell_cmd);
+            assert!(
+                scheduled.shell_cmd.contains(wrapper_fragment)
+                    || (wrapper_fragment == "singularity exec"
+                        && scheduled.shell_cmd.contains("apptainer exec")),
+                "{environment}: the local wrapper must stay folded in: {}",
+                scheduled.shell_cmd
+            );
+
+            let manifest: Value =
+                serde_json::from_str(&exec.render_script(scheduled).unwrap()).unwrap();
+            let container = &manifest["spec"]["template"]["spec"]["containers"][0];
+            assert_eq!(
+                container["image"], "ubuntu:latest",
+                "{environment}: fallback keeps the historical base image"
+            );
+            assert!(
+                container["args"][0]
+                    .as_str()
+                    .unwrap()
+                    .contains(wrapper_fragment)
+                    || (wrapper_fragment == "singularity exec"
+                        && container["args"][0]
+                            .as_str()
+                            .unwrap()
+                            .contains("apptainer exec")),
+                "{environment}: the pod runs the folded wrapper"
+            );
+            let annotations = &manifest["metadata"]["annotations"];
+            assert_eq!(
+                annotations["oxoflow.io/environment-render"], "wrapper-fallback",
+                "{environment}: the fallback must be visible in the artifact"
+            );
+            assert!(
+                annotations.get("oxoflow.io/environment-image").is_none(),
+                "{environment}: no image identity may be claimed for a fallback"
+            );
+        }
+    }
+
+    /// Issue #1388: only the image-rendering backend unwraps. An HPC backend
+    /// keeps the docker wrapper it has always run natively on the node.
+    #[test]
+    fn hpc_backends_never_unwrap_a_renderable_container_environment() {
+        let plan = environment_plan("docker = \"ubuntu:22.04\"");
+        let scheduled = &plan.rules["align"];
+        assert!(
+            scheduled.container_image.is_some(),
+            "precondition: the environment IS renderable"
+        );
+        for backend in [
+            ClusterBackend::Slurm,
+            ClusterBackend::Pbs,
+            ClusterBackend::Sge,
+            ClusterBackend::Lsf,
+        ] {
+            let exec = ClusterExecutor::new(backend, cluster_config());
+            assert!(!exec.renders_container_image(&scheduled.rule));
+            assert_eq!(
+                exec.submitted_cmd(scheduled),
+                scheduled.shell_cmd,
+                "{backend} must keep the wrapper"
+            );
+            let script = exec.render_script(scheduled).unwrap();
+            assert!(
+                script.contains("docker run"),
+                "{backend} must render the local docker wrapper: {script}"
+            );
+        }
     }
 
     #[test]

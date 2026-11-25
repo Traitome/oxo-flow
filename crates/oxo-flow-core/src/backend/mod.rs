@@ -356,6 +356,44 @@ pub trait ExecutorBackend: Send + Sync {
         None
     }
 
+    /// Whether this backend runs a rule's container environment as the job's
+    /// own image (issue #1388) instead of executing the local
+    /// `docker run`/`singularity exec` wrapper inside the job.
+    ///
+    /// [`Self::submitted_cmd`] consults this together with
+    /// [`ScheduledRule::container_image`]; a backend that returns `true` must
+    /// also render the image into its job artifact. Default: `false` — every
+    /// existing backend keeps the wrapper.
+    fn renders_container_image(&self, _rule: &Rule) -> bool {
+        false
+    }
+
+    /// The command text a job for `rule` executes (issue #1388).
+    ///
+    /// A backend that renders the rule's container environment as the job's
+    /// own image submits the wrapper-free
+    /// [`ScheduledRule::container_image`] command — the job image IS the
+    /// environment, so a folded `docker run` would try to start a container
+    /// runtime inside the job container. Every other backend keeps the
+    /// historical wrapper-folded `shell_cmd`.
+    fn submitted_cmd<'a>(&self, rule: &'a ScheduledRule) -> &'a str {
+        // Latent-invariant guard (issue #1388 review M6): an image-rendering
+        // backend derives its pod image from the rule's environment, so a
+        // ScheduledRule built WITHOUT the wrapper-free descriptor would render
+        // an image-mode pod whose args still fold `docker run …`. Every
+        // production constructor pairs them; fail loudly in debug/test builds
+        // rather than emit a manifest that cannot start.
+        debug_assert!(
+            !self.renders_container_image(&rule.rule) || rule.container_image.is_some(),
+            "image-rendering backend received rule '{}' without a wrapper-free command",
+            rule.rule.name
+        );
+        match &rule.container_image {
+            Some(render) if self.renders_container_image(&rule.rule) => &render.command,
+            _ => &rule.shell_cmd,
+        }
+    }
+
     fn uses_secret_env_file(&self) -> bool {
         false
     }
@@ -423,6 +461,138 @@ pub trait ExecutorBackend: Send + Sync {
     }
 }
 
+/// One rule's container environment resolved for image-based cluster
+/// rendering (issue #1388).
+///
+/// Kubernetes runs each rule in a pod: rendering the rule's docker image (or
+/// a singularity `docker://` URI's underlying image) as that pod's own image
+/// removes the local `docker run` / `singularity exec` wrapper — and with it
+/// the node-daemon dependency the opt-in `OXO_FLOW_K8S_DOCKER_SOCKET` channel
+/// used to paper over. The wrapper-free [`Self::command`] is what makes that
+/// possible: by the time a backend sees `ScheduledRule::shell_cmd` the
+/// wrapper is opaque text, so it cannot be removed reliably at render time.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContainerImageRender {
+    /// Backend kind that supplied the image: `"docker"`, or `"singularity"`
+    /// for a `docker://` pull URI.
+    pub kind: &'static str,
+    /// The workflow-declared image reference — without the `docker://`
+    /// transport prefix and WITHOUT `OXO_REGISTRY_MIRRORS` rewriting. This is
+    /// the identity key shared with the environment cache and provenance;
+    /// mirrors are applied at render time only.
+    pub spec: String,
+    /// The rule command with the folded `cd` guard, shell prelude, routed
+    /// sensitive references and scratch exports, but WITHOUT the local
+    /// container wrapper.
+    pub command: String,
+}
+
+/// Pair a rule's renderable container environment with its wrapper-free
+/// command (issue #1388). `command` must be the full job command the wrapped
+/// `shell_cmd` was built around (the `cd` guard included); `None` when the
+/// environment has no renderable image reference
+/// ([`crate::environment::renderable_container_image`]).
+#[must_use]
+pub fn container_image_render(rule: &Rule, command: &str) -> Option<ContainerImageRender> {
+    let image = crate::environment::renderable_container_image(&rule.environment)?;
+    Some(ContainerImageRender {
+        kind: image.kind,
+        spec: image.spec,
+        command: command.to_string(),
+    })
+}
+
+/// Per-rule container-image provenance for a cluster run (issue #1388),
+/// keyed by rule instance.
+///
+/// `rules` names the instances the run PLANS to submit. The record is written
+/// before submission (so a crashed driver still leaves the identity); if the
+/// run aborts before a job leaves, the record still names what that job would
+/// have run as, not a job that ran. A rule the run skipped is not recorded.
+///
+/// The digest resolves through `container_digest` (production:
+/// [`crate::env_lock::local_container_digest`], offline and never pulling) —
+/// `None` means "this submit host could not resolve one", never an invented
+/// digest, and never proof of what a compute node pulled.
+///
+/// `image_rendering` mirrors the renderer's decision
+/// ([`crate::backend::k8s::image_rendering_enabled`]): when off, a renderable
+/// environment is recorded as the wrapper fallback it will actually use.
+pub fn cluster_image_records(
+    plan: &ScheduledPlan,
+    rules: &[String],
+) -> std::collections::BTreeMap<String, crate::executor::checkpoint::ClusterImageRecord> {
+    cluster_image_records_with(
+        plan,
+        rules,
+        crate::backend::k8s::image_rendering_enabled(),
+        &crate::env_lock::local_container_digest,
+    )
+}
+
+fn cluster_image_records_with(
+    plan: &ScheduledPlan,
+    rules: &[String],
+    image_rendering: bool,
+    container_digest: &dyn Fn(&str, &str) -> Option<String>,
+) -> std::collections::BTreeMap<String, crate::executor::checkpoint::ClusterImageRecord> {
+    use crate::executor::checkpoint::ClusterImageRecord;
+    // One offline inspect per unique rendered image, not per instance: an
+    // array fan-out shares one image across every element (issue #1388
+    // review M11).
+    let mut digests: std::collections::BTreeMap<String, Option<String>> =
+        std::collections::BTreeMap::new();
+    let mut out = std::collections::BTreeMap::new();
+    for name in rules {
+        let Some(scheduled) = plan.rules.get(name) else {
+            continue;
+        };
+        let env = &scheduled.rule.environment;
+        let record = match &scheduled.container_image {
+            Some(render) if image_rendering => {
+                let image = crate::environment::mirrored_spec(&render.spec);
+                // The rendered pod image is a docker reference whichever
+                // backend declared it, so the offline inspect asks the
+                // docker daemon; a missing image is `None`, never a guess.
+                let digest = digests
+                    .entry(image.clone())
+                    .or_insert_with(|| container_digest("docker", &image))
+                    .clone();
+                ClusterImageRecord {
+                    render: ClusterImageRecord::IMAGE.to_string(),
+                    kind: render.kind.to_string(),
+                    spec: render.spec.clone(),
+                    resolved_digest: digest,
+                    image,
+                }
+            }
+            _ => {
+                let kind = env.kind();
+                ClusterImageRecord {
+                    // A `system` rule has no wrapper at all; naming it a
+                    // fallback would be a false claim about what executed.
+                    render: if kind == "system" {
+                        ClusterImageRecord::SYSTEM.to_string()
+                    } else {
+                        ClusterImageRecord::WRAPPER_FALLBACK.to_string()
+                    },
+                    kind: kind.to_string(),
+                    // A fallback whose base image comes from a docker spec
+                    // still names an image; the folded wrapper — not that
+                    // image — is the environment that actually executes.
+                    spec: env.docker.clone().unwrap_or_default(),
+                    image: crate::environment::mirrored_spec(
+                        env.docker.as_deref().unwrap_or("ubuntu:latest"),
+                    ),
+                    resolved_digest: None,
+                }
+            }
+        };
+        out.insert(name.clone(), record);
+    }
+    out
+}
+
 /// One executable unit of the static plan: a fully resolved rule instance.
 #[derive(Debug, Clone)]
 pub struct ScheduledRule {
@@ -435,6 +605,12 @@ pub struct ScheduledRule {
     pub template: String,
     /// Environment-wrapped command with `cd <workdir>` folded in.
     pub shell_cmd: String,
+    /// Image-based environment rendering (issue #1388): `Some` when the
+    /// rule's container environment resolves to an image a cluster backend
+    /// can run directly; `command` is then the SAME command without the
+    /// local container wrapper. `None` keeps the historical wrapper-folded
+    /// `shell_cmd`.
+    pub container_image: Option<ContainerImageRender>,
     /// Working directory the command runs in.
     pub workdir: PathBuf,
     /// Instance-level dependencies (DAG edges + resolved `depends_on`).
@@ -566,6 +742,12 @@ impl ScheduledPlan {
         if let Some(tmp) = tmp_dir {
             for rule in plan.rules.values_mut() {
                 rule.shell_cmd = with_tmp_dir_exports(&rule.shell_cmd, tmp);
+                // The wrapper-free sibling must carry the same scratch exports
+                // — an image-rendered pod starts from the same clean scheduler
+                // environment (issue #1388).
+                if let Some(render) = &mut rule.container_image {
+                    render.command = with_tmp_dir_exports(&render.command, tmp);
+                }
             }
         }
         Ok(plan)
@@ -707,6 +889,12 @@ fn build_rule(
     let quoted_workdir =
         crate::environment::escape_for_sh_single_quote(&workdir.display().to_string());
     let shell_cmd = format!("cd '{quoted_workdir}' && {wrapped}");
+    // Issue #1388: keep the wrapper-free command beside the wrapped one, so an
+    // image-rendering backend (Kubernetes) can run the environment as the
+    // job's own image instead of starting a container runtime inside the job.
+    // `cmd` at this point carries the prelude and the routed sensitive
+    // references — the same text the wrapper received.
+    let container_image = container_image_render(rule, &format!("cd '{quoted_workdir}' && {cmd}"));
     let template = config
         .template_of(name)
         .map(str::to_string)
@@ -715,6 +903,7 @@ fn build_rule(
         rule: rule.clone(),
         template,
         shell_cmd,
+        container_image,
         workdir: workdir.to_path_buf(),
         dependencies,
         wildcard_values: wildcard_values.clone(),
@@ -906,6 +1095,234 @@ mod tests {
         );
     }
 
+    /// A one-rule plan whose rule declares `environment` (issue #1388
+    /// fixtures), built through the canonical TOML/plan path.
+    fn environment_plan(environment: &str) -> ScheduledPlan {
+        let dir = tempfile::tempdir().unwrap();
+        let toml = format!(
+            "[workflow]\nname = \"env\"\n[[rules]]\nname = \"align\"\n\
+             shell = \"bwa mem ref.fa in.fq > out.bam\"\noutput = [\"out.bam\"]\n\
+             environment = {{ {environment} }}\n"
+        );
+        let path = dir.path().join("wf.oxoflow");
+        std::fs::write(&path, toml).unwrap();
+        let mut config = WorkflowConfig::from_file(&path).unwrap();
+        config.apply_defaults();
+        config.expand_wildcards().unwrap();
+        let dag = WorkflowDag::from_rules(&config.rules).unwrap();
+        ScheduledPlan::build(
+            &config,
+            &dag,
+            std::path::Path::new("/tmp/wf"),
+            &EnvironmentResolver::new(),
+            &HashMap::new(),
+        )
+        .unwrap()
+    }
+
+    /// Issue #1388: the plan keeps the wrapper-free command beside the
+    /// wrapped one for a renderable container environment — and applies the
+    /// scratch exports to BOTH forms, because an image-rendered pod starts
+    /// from the same clean scheduler environment.
+    #[test]
+    fn plan_keeps_the_wrapper_free_command_for_image_rendering() {
+        let plan = environment_plan("docker = \"busybox:1.36\"");
+        let r = &plan.rules["align"];
+        let render = r
+            .container_image
+            .as_ref()
+            .expect("a docker spec must resolve for image rendering");
+        assert_eq!(render.kind, "docker");
+        assert_eq!(render.spec, "busybox:1.36");
+        assert!(
+            !render.command.contains("docker run"),
+            "the wrapper-free command must not carry the local wrapper: {}",
+            render.command
+        );
+        assert!(
+            r.shell_cmd.contains("docker run"),
+            "the wrapped command keeps the local wrapper: {}",
+            r.shell_cmd
+        );
+        assert!(
+            render.command.starts_with("cd '/tmp/wf' && bwa mem"),
+            "the cd guard and the rule command must survive: {}",
+            render.command
+        );
+
+        // Only a renderable environment gets a descriptor.
+        for environment in [
+            "conda = \"envs/align.yaml\"",
+            "venv = \"venv/\"",
+            "singularity = \"/shared/bwa.sif\"",
+        ] {
+            let plan = environment_plan(environment);
+            assert!(
+                plan.rules["align"].container_image.is_none(),
+                "{environment} must not resolve to an image"
+            );
+        }
+    }
+
+    #[test]
+    fn plan_scratch_exports_reach_the_wrapper_free_command() {
+        let plan = {
+            let dir = tempfile::tempdir().unwrap();
+            let toml = "[workflow]\nname = \"env\"\n[[rules]]\nname = \"align\"\n\
+                        shell = \"true\"\noutput = [\"out.txt\"]\n\
+                        environment = { docker = \"busybox:1.36\" }\n";
+            let path = dir.path().join("wf.oxoflow");
+            std::fs::write(&path, toml).unwrap();
+            let mut config = WorkflowConfig::from_file(&path).unwrap();
+            config.apply_defaults();
+            config.expand_wildcards().unwrap();
+            let dag = WorkflowDag::from_rules(&config.rules).unwrap();
+            ScheduledPlan::build_with_scratch(
+                &config,
+                &dag,
+                std::path::Path::new("/tmp/wf"),
+                &EnvironmentResolver::new(),
+                &HashMap::new(),
+                Some(std::path::Path::new("/scratch/oxo")),
+            )
+            .unwrap()
+        };
+        let render = plan.rules["align"]
+            .container_image
+            .as_ref()
+            .expect("descriptor");
+        let exports = "export TMPDIR='/scratch/oxo' TMP='/scratch/oxo' TEMP='/scratch/oxo' && ";
+        assert!(
+            render
+                .command
+                .starts_with(&format!("cd '/tmp/wf' && {exports}")),
+            "the wrapper-free command must carry the scratch exports: {}",
+            render.command
+        );
+        assert!(
+            !render.command.contains("docker run"),
+            "and still no wrapper: {}",
+            render.command
+        );
+    }
+
+    /// Issue #1388: the checkpoint record names each submitted rule's image
+    /// (or its explicit fallback), and a digest is recorded only when the
+    /// injected offline resolver reports one — never invented.
+    #[test]
+    fn cluster_image_records_record_image_and_fallback_without_inventing_digests() {
+        let plan = {
+            let dir = tempfile::tempdir().unwrap();
+            let toml = "[workflow]\nname = \"env\"\n\
+                        [[rules]]\nname = \"aligned\"\n\
+                        shell = \"bwa mem ref.fa in.fq > out.bam\"\noutput = [\"out.bam\"]\n\
+                        environment = { docker = \"busybox:1.36\" }\n\
+                        [[rules]]\nname = \"aligned2\"\n\
+                        shell = \"bwa mem ref2.fa in.fq > out2.bam\"\noutput = [\"out2.bam\"]\n\
+                        environment = { docker = \"busybox:1.36\" }\n\
+                        [[rules]]\nname = \"qc\"\n\
+                        shell = \"fastqc in.fq\"\noutput = [\"qc.html\"]\n\
+                        environment = { conda = \"envs/qc.yaml\" }\n\
+                        [[rules]]\nname = \"report\"\n\
+                        shell = \"echo done\"\noutput = [\"report.txt\"]\n";
+            let path = dir.path().join("wf.oxoflow");
+            std::fs::write(&path, toml).unwrap();
+            let mut config = WorkflowConfig::from_file(&path).unwrap();
+            config.apply_defaults();
+            config.expand_wildcards().unwrap();
+            let dag = WorkflowDag::from_rules(&config.rules).unwrap();
+            ScheduledPlan::build(
+                &config,
+                &dag,
+                std::path::Path::new("/tmp/wf"),
+                &EnvironmentResolver::new(),
+                &HashMap::new(),
+            )
+            .unwrap()
+        };
+        let calls = std::cell::Cell::new(0usize);
+        let resolve = |kind: &str, spec: &str| -> Option<String> {
+            calls.set(calls.get() + 1);
+            (kind == "docker" && spec.contains("busybox"))
+                .then(|| "busybox@sha256:feedface".to_string())
+        };
+        let rules = [
+            "aligned".to_string(),
+            "aligned2".to_string(),
+            "qc".to_string(),
+            "report".to_string(),
+        ];
+        let records = cluster_image_records_with(&plan, &rules, true, &resolve);
+
+        let aligned = &records["aligned"];
+        assert_eq!(
+            aligned.render,
+            crate::executor::checkpoint::ClusterImageRecord::IMAGE
+        );
+        assert_eq!(aligned.kind, "docker");
+        assert_eq!(aligned.spec, "busybox:1.36");
+        assert_eq!(
+            aligned.resolved_digest.as_deref(),
+            Some("busybox@sha256:feedface")
+        );
+        // The second instance shares the image: one offline inspect, not two.
+        assert_eq!(
+            records["aligned2"].resolved_digest, aligned.resolved_digest,
+            "instances sharing one image must share the resolved digest"
+        );
+        assert_eq!(
+            calls.get(),
+            1,
+            "the digest must be resolved once per unique image"
+        );
+
+        let qc = &records["qc"];
+        assert_eq!(
+            qc.render,
+            crate::executor::checkpoint::ClusterImageRecord::WRAPPER_FALLBACK
+        );
+        assert_eq!(qc.kind, "conda");
+        assert_eq!(qc.spec, "");
+        assert_eq!(qc.image, crate::environment::mirrored_spec("ubuntu:latest"));
+        assert_eq!(qc.resolved_digest, None);
+
+        // A system rule has no wrapper at all; it is not a fallback.
+        assert_eq!(
+            records["report"].render,
+            crate::executor::checkpoint::ClusterImageRecord::SYSTEM
+        );
+        assert_eq!(records["report"].kind, "system");
+
+        // `OXO_FLOW_K8S_IMAGE_RENDER=0`: a renderable environment is recorded
+        // as the wrapper fallback the manifest will actually use.
+        let forced =
+            cluster_image_records_with(&plan, &["aligned".to_string()], false, &|_,
+                                                                                 _|
+             -> Option<
+                String,
+            > {
+                Some("should-not-be-asked".to_string())
+            });
+        assert_eq!(
+            forced["aligned"].render,
+            crate::executor::checkpoint::ClusterImageRecord::WRAPPER_FALLBACK
+        );
+        assert_eq!(forced["aligned"].kind, "docker");
+        assert_eq!(forced["aligned"].image, "busybox:1.36");
+        assert_eq!(forced["aligned"].resolved_digest, None);
+
+        // No digest anywhere: the field stays absent, not fabricated.
+        let unresolved =
+            cluster_image_records_with(&plan, &["aligned".to_string()], true, &|_,
+                                                                                _|
+             -> Option<
+                String,
+            > {
+                None
+            });
+        assert_eq!(unresolved["aligned"].resolved_digest, None);
+    }
+
     #[test]
     fn with_tmp_dir_exports_leads_unchanged_commands() {
         // The standalone `cluster submit` renderer carries no `cd` guard
@@ -1003,6 +1420,7 @@ mod tests {
             rule: crate::rule::Rule::default(),
             template: "t".to_string(),
             shell_cmd: cmd.to_string(),
+            container_image: None,
             workdir: std::path::PathBuf::from("/tmp/wf"),
             dependencies: Vec::new(),
             wildcard_values: HashMap::new(),
@@ -1102,6 +1520,28 @@ mod tests {
         assert!(
             cmd.contains("${OXO_FLOW_SENSITIVE_0}"),
             "the command must reference the routed var: {cmd}"
+        );
+        // Issue #1388: the wrapper-free sibling carries the SAME reference —
+        // on an image-rendered pod the `-e NAME` forwarding is gone, so the
+        // reference must resolve through the manifest's secretKeyRef instead.
+        let render = plan.rules["leak_probe"]
+            .container_image
+            .as_ref()
+            .expect("the docker environment is renderable");
+        assert!(
+            !render.command.contains(sentinel),
+            "the sentinel must not survive routing in the wrapper-free command: {}",
+            render.command
+        );
+        assert!(
+            render.command.contains("${OXO_FLOW_SENSITIVE_0}"),
+            "the wrapper-free command must carry the routed reference: {}",
+            render.command
+        );
+        assert!(
+            !render.command.contains("docker run"),
+            "the wrapper-free command must not start a container runtime: {}",
+            render.command
         );
 
         // Contrast: the pre-routing build path still carries the literal
