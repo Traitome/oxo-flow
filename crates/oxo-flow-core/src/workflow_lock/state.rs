@@ -135,12 +135,14 @@ impl LockState {
 /// (issue #1399 review I3): a key whose `_`/`-`/camel-case segments name a
 /// credential is stored as a digest even without an explicit
 /// `sensitive = true`. Segment-based equality keeps ordinary keys such as
-/// `hockey` or `monkey` verbatim; `api_token`, `API_KEY`, `dbPassword`,
-/// `aws_secret` and `secret_sauce` match.
+/// `hockey` or `monkey` verbatim; `api_token`, `API_KEY`, `apiKey`,
+/// `APIKey`, `apikey`, `dbPassword`, `aws_secret` and `secret_sauce` match.
 #[must_use]
 pub(crate) fn is_credential_key(key: &str) -> bool {
     const EXACT: &[&str] = &[
+        "APIKEY",
         "KEY",
+        "PWD",
         "TOKEN",
         "SECRET",
         "PASSWORD",
@@ -157,11 +159,40 @@ pub(crate) fn is_credential_key(key: &str) -> bool {
         "CREDENTIALS",
     ];
     key.split(|c: char| !c.is_ascii_alphanumeric())
-        .map(str::to_ascii_uppercase)
+        .filter(|run| !run.is_empty())
+        .flat_map(split_camel_case)
+        .map(|segment| segment.to_ascii_uppercase())
         .any(|segment| {
             EXACT.contains(&segment.as_str())
                 || SUFFIXES
                     .iter()
                     .any(|suffix| segment.len() > suffix.len() && segment.ends_with(suffix))
         })
+}
+
+/// Split one alphanumeric run on camel-case boundaries so `apiKey` becomes
+/// `api` + `Key` and `APIKey` becomes `API` + `Key`, while all-lowercase
+/// words (`hockey`, `monkey`) stay a single segment (issue #1399 review
+/// R2-1). Boundaries: lower→upper, and upper→upper→lower (the end of an
+/// acronym run before a capitalized word).
+fn split_camel_case(run: &str) -> Vec<String> {
+    let chars: Vec<char> = run.chars().collect();
+    let mut parts = Vec::new();
+    let mut start = 0;
+    for index in 1..chars.len() {
+        let lower_upper =
+            chars[index - 1].is_ascii_lowercase() && chars[index].is_ascii_uppercase();
+        let acronym_end = chars[index - 1].is_ascii_uppercase()
+            && chars[index].is_ascii_uppercase()
+            && index + 1 < chars.len()
+            && chars[index + 1].is_ascii_lowercase();
+        if lower_upper || acronym_end {
+            parts.push(chars[start..index].iter().collect());
+            start = index;
+        }
+    }
+    if start < chars.len() {
+        parts.push(chars[start..].iter().collect());
+    }
+    parts
 }

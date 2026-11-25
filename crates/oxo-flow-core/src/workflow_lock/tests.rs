@@ -664,6 +664,7 @@ version = "1.0"
 [config]
 API_TOKEN = "supersecret-value"
 dbPassword = "hunter2"
+apiKey = "camel-secret"
 hockey = "sticks"
 
 [[rules]]
@@ -675,11 +676,17 @@ shell = "echo hi"
     let (lock, state) = generate(&workflow);
     let json = lock.canonical_json();
     assert!(
-        !json.contains("supersecret-value") && !json.contains("hunter2"),
+        !json.contains("supersecret-value")
+            && !json.contains("hunter2")
+            && !json.contains("camel-secret"),
         "credential-shaped values must not land in plaintext: {json}"
     );
     assert!(lock.config["API_TOKEN"].starts_with("sha256:"));
     assert!(lock.config["dbPassword"].starts_with("sha256:"));
+    assert!(
+        lock.config["apiKey"].starts_with("sha256:"),
+        "camel-case apiKey must be hashed (review R2-1)"
+    );
     assert_eq!(lock.config["hockey"], "sticks");
     assert!(verify_lock(&lock, &state).ok());
 
@@ -719,8 +726,14 @@ fn credential_key_heuristic_is_conservative() {
     for key in [
         "API_TOKEN",
         "apiToken",
+        "apiKey",
+        "myApiKey",
+        "APIKey",
+        "apikey",
         "api_key",
         "API-KEY",
+        "pwd",
+        "dbPassword",
         "db_password",
         "aws_secret",
         "mySecret",

@@ -47,8 +47,9 @@ The document is canonical, key-sorted JSON with the format tag
 - the resolved `[config]` snapshot (engine-injected keys excluded). Stored
   forms: keys declared `sensitive = true` are always SHA-256 digests; a key
   that is not declared sensitive but whose name looks like a credential
-  (a `KEY`/`TOKEN`/`SECRET`/`PASSWORD`/`PASSWD`/`CREDENTIAL(S)` segment,
-  e.g. `API_TOKEN`, `apiKey`, `db_password`) is **also** stored as a
+  (a `KEY`/`TOKEN`/`SECRET`/`PASSWORD`/`PASSWD`/`CREDENTIAL(S)` segment —
+  including camel-case splits — or the bare `apikey`/`pwd` spellings, e.g.
+  `API_TOKEN`, `apiKey`, `apikey`, `db_password`) is **also** stored as a
   SHA-256 digest; **every other config value, including an undeclared
   `--arg KEY=VALUE`, is stored verbatim**. `lock` warns before committing
   when an undeclared override is pinned in plaintext. Never pin a secret

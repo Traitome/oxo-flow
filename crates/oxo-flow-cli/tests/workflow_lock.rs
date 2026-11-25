@@ -808,6 +808,7 @@ version = "1.0"
 
 [config]
 token = { default = "declared-default", sensitive = true }
+apiKey = "camel-declared"
 
 [[rules]]
 name = "touch"
@@ -832,6 +833,14 @@ shell = "echo hi"
         "credential-shaped keys must be hashed: {lock_text}"
     );
     assert!(lock_text.contains("sha256:"));
+    assert!(
+        !lock_text.contains("camel-declared"),
+        "a declared camel-case apiKey must be hashed, not plaintext (review R2-1): {lock_text}"
+    );
+    assert!(
+        lock_text.contains("\"apiKey\""),
+        "the key is still pinned (as a digest): {lock_text}"
+    );
     assert!(
         lock_text.contains("PLAIN_NOTE") && lock_text.contains("hello"),
         "a non-credential undeclared override is pinned verbatim: {lock_text}"
