@@ -1813,6 +1813,8 @@
       
         
       
+        
+      
     
     
     
@@ -1868,6 +1870,34 @@
     
   
     agent-docs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands/audit/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    audit
   
 
     
@@ -3651,6 +3681,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#hash-chained-audit-trail-issue-1372" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Hash-chained audit trail (issue #1372)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#tenant-execution-boundary-rb-01" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4499,6 +4540,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#hash-chained-audit-trail-issue-1372" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Hash-chained audit trail (issue #1372)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#tenant-execution-boundary-rb-01" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4982,6 +5034,63 @@ issue #1133). Locally executed runs on Linux additionally enforce the
 workflow's declared memory with <code>RLIMIT_DATA</code> on the spawned CLI process
 tree; other platforms and remote (cluster) runs remain advisory — see
 <a href="../web-api/#declared-resource-enforcement">Quota → Declared-resource enforcement</a>.</p>
+<h3 id="hash-chained-audit-trail-issue-1372">Hash-chained audit trail (issue #1372)<a class="headerlink" href="#hash-chained-audit-trail-issue-1372" title="Permanent link">#</a></h3>
+<p>The audit trail is two layers with different mutability:</p>
+<ul>
+<li><code>audit_logs</code> — the mutable listing surface (<code>GET /api/audit</code>, the Audit
+  page). Rows are written ahead of a mutation, finalized after it, and
+  cascade-deleted when their user account is deleted.</li>
+<li><code>audit_chain</code> + <code>audit_chain_head</code> — an append-only SHA-256 chain. Every
+  audit write (pending intent, terminal finalize, legacy post-handler row)
+  appends one immutable event carrying the complete canonical record, in the
+  same transaction as the <code>audit_logs</code> write. Each event hashes its fixed
+  field set and names its predecessor's hash; the single head row names the
+  chain's end (genesis = seq 0, 64 zero hex digits). No code path updates or
+  deletes a chain row; a database-level edit is detected by verification
+  rather than prevented (see the limits below).</li>
+</ul>
+<p>Append serialization is backend-native: SQLite opens <code>BEGIN IMMEDIATE</code> (the
+write lock is taken before the head is read), PostgreSQL takes <code>SELECT …
+FOR UPDATE</code> on the head row as the first statement of every chain write. Both
+orders are identical across <code>begin</code>/<code>finalize</code>/<code>record</code>, so appends cannot
+deadlock and cannot produce a gap or duplicate <code>seq</code>. That is true <strong>by
+construction</strong> — the write lock / row lock is the serialization point. The
+measured PostgreSQL evidence is single-host, single-instance PostgreSQL
+16.15; multi-instance deployment, remote/networked databases, pool
+exhaustion, network partitions, and crash recovery remain unmeasured. (SQLite
+serializes processes sharing the file on one host; a SQLite file on a network
+filesystem is not a supported deployment.) A finalize is idempotent:
+the <code>(audit_id, phase)</code> unique index admits one terminal event, a repeated
+finalize is a no-op, and the first terminal outcome wins over a conflicting
+later one (documented behavior, not an error). A snapshot
+(<code>audit_chain_snapshot</code>) reads the head, events, and <code>audit_logs</code> in one
+transaction — SQLite's WAL read snapshot is stable; PostgreSQL <code>FOR SHARE</code> on
+the head makes chain appenders wait — so an export is consistent with respect
+to chain appends. It is not a fully serialized read: on PostgreSQL READ
+COMMITTED each plain <code>SELECT</code> takes a fresh snapshot, so a concurrent user
+deletion (the <code>users</code> → <code>audit_logs</code> cascade, the only writer that changes log
+rows without the head lock) can commit between the event and log reads and
+surface a transient <code>MISSING_LOG_ROW</code> for an untampered chain.</p>
+<p>Exports are canonical (<code>oxo-flow.audit-chain/v1</code>: sorted keys, canonical
+metadata JSON, fixed <code>YYYY-MM-DDTHH:MM:SS.ffffffZ</code> timestamps for new rows)
+and verify offline with <code>oxo-flow audit verify</code> (exit 0 valid, 2
+invalid/tampered, 4 malformed with <code>AUDIT_EXPORT_INVALID</code>). The web
+<code>GET /api/audit/chain/verify</code> answers 200 with <code>ok:false</code> findings for
+deletion, reorder, insertion, mutation, duplicate phase, bad genesis, and
+truncation.</p>
+<p>Limits, stated plainly: the chain is not a signature and is not external
+notarization. An actor who can rewrite the whole chain and the head
+consistently — including deleting every event and resetting the head to
+genesis — passes local verification; a previously exported document is what
+exposes a later wholesale rewrite. Audit-row cascade deletes surface as
+<code>MISSING_LOG_ROW</code>, by design. The chain does not cover <code>audit_logs</code> rows that
+predate the upgrade (the migration does not backfill), and it proves nothing
+about the truthfulness of an event the server itself wrote. A structurally
+broken chain — a missing or deleted <code>audit_chain_head</code> row — is deliberately
+not a 200 finding: the snapshot cannot be represented, both endpoints answer
+<code>500 DB_ERROR</code> (fail-closed; every audited write also fails in that state),
+and an export without a head is malformed input (exit 4) to the offline
+verifier.</p>
 <h3 id="tenant-execution-boundary-rb-01">Tenant execution boundary (RB-01)<a class="headerlink" href="#tenant-execution-boundary-rb-01" title="Permanent link">#</a></h3>
 <p>Every locally executed run spawns through one choke point
 (<code>spawn_background_run_with_args</code>), which layers four independent OS-level

@@ -1815,6 +1815,8 @@
       
         
       
+        
+      
     
     
     
@@ -1870,6 +1872,34 @@
     
   
     agent-docs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../audit/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    audit
   
 
     
@@ -4600,6 +4630,22 @@ checkpoint — a run-to-run identity label (see
 in the <code>--json</code> <code>verify</code> document (<code>workflow_git_sha</code>,
 <code>workflow_content_hash</code>, <code>workflow_resolved_hash</code>, <code>workflow_content_check</code>
 with <code>status</code> <code>matched</code>/<code>changed</code>/<code>unverifiable</code>, <code>workflow_git_dirty</code>).</p>
+<p>A workflow with a metadata table or a <code>[workflow.metadata_schema]</code> contract
+also records a <strong>canonical metadata digest</strong> (issue #1368):
+<code>sha256:&lt;hex&gt;</code> over the resolved typed schema plus the effective metadata
+rows. Values are canonicalized per declared column type before hashing
+(integer/float re-formatted, boolean lowercased, strings trimmed with case
+preserved), empty values are omitted, and rows are sorted by
+<code>(id, canonical values)</code> with columns by name. It is byte-stable across
+TSV/CSV/JSON sources carrying the same logical rows under those types and
+across input row order (including duplicate-id tables), so it names <em>which</em>
+typed table the run consumed (and it is folded into
+<code>workflow_resolved_hash</code>). Verify reports it as <code>metadata_digest</code> (human:
+<code>• metadata digest: …</code>; absent for legacy checkpoints and contract-free
+workflows) but does <strong>not</strong> re-hash the metadata file: re-deriving it needs
+the exact loaded table bytes, which the checkpoint does not store — the
+digest is a recorded identity, like <code>workflow_resolved_hash</code>, not a
+re-verified claim.</p>
 <p>This is essential for reproducible, auditable analysis.</p>
 <h2 id="options">Options<a class="headerlink" href="#options" title="Permanent link">#</a></h2>
 <table>
@@ -4721,9 +4767,10 @@ carries nothing else):</p>
 </span><span id="__span-4-13"><a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a>    ],
 </span><span id="__span-4-14"><a id="__codelineno-4-14" name="__codelineno-4-14" href="#__codelineno-4-14"></a>    "workflow_content_hash": "sha256:e3b0c442...",
 </span><span id="__span-4-15"><a id="__codelineno-4-15" name="__codelineno-4-15" href="#__codelineno-4-15"></a>    "workflow_resolved_hash": "sha256:9f86d081...",
-</span><span id="__span-4-16"><a id="__codelineno-4-16" name="__codelineno-4-16" href="#__codelineno-4-16"></a>    "workflow_content_check": {"status": "matched", "recorded": "sha256:e3b0c442...", "actual": "sha256:e3b0c442..."}
-</span><span id="__span-4-17"><a id="__codelineno-4-17" name="__codelineno-4-17" href="#__codelineno-4-17"></a>  }
-</span><span id="__span-4-18"><a id="__codelineno-4-18" name="__codelineno-4-18" href="#__codelineno-4-18"></a>}
+</span><span id="__span-4-16"><a id="__codelineno-4-16" name="__codelineno-4-16" href="#__codelineno-4-16"></a>    "metadata_digest": "sha256:6b1d3c7f...",
+</span><span id="__span-4-17"><a id="__codelineno-4-17" name="__codelineno-4-17" href="#__codelineno-4-17"></a>    "workflow_content_check": {"status": "matched", "recorded": "sha256:e3b0c442...", "actual": "sha256:e3b0c442..."}
+</span><span id="__span-4-18"><a id="__codelineno-4-18" name="__codelineno-4-18" href="#__codelineno-4-18"></a>  }
+</span><span id="__span-4-19"><a id="__codelineno-4-19" name="__codelineno-4-19" href="#__codelineno-4-19"></a>}
 </span></code></pre></div>
 <p><code>entries</code> is byte-stable: stored files first in sorted path order, then
 cleaned files in sorted path order. <code>workflow_content_check</code> is <code>null</code>
@@ -4819,8 +4866,9 @@ optionally, signed.</p>
 <code>checkpoint.json</code> / <code>.oxo-flow/checkpoint.json</code>.</p>
 <h3 id="what-the-document-binds">What the document binds<a class="headerlink" href="#what-the-document-binds" title="Permanent link">#</a></h3>
 <ul>
-<li><code>workflow</code>: path, git HEAD SHA, dirty marker, raw content digest and the
-  override-aware resolved fingerprint (#1350)</li>
+<li><code>workflow</code>: path, git HEAD SHA, dirty marker, raw content digest, the
+  override-aware resolved fingerprint (#1350), and the canonical metadata
+  digest of the typed cohort table when one was consumed (#1368)</li>
 <li><code>includes</code>: recorded include checkout SHAs (repo@ref → HEAD)</li>
 <li><code>config</code>: the resolved config snapshot; sensitive values are already
   SHA-256 digests in the checkpoint, never plaintext</li>

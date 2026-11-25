@@ -1815,6 +1815,8 @@
       
         
       
+        
+      
     
     
     
@@ -1870,6 +1872,34 @@
     
   
     agent-docs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../audit/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    audit
   
 
     
@@ -4775,7 +4805,16 @@ code:</p>
 <p>Status values: <code>run-never-completed</code>, <code>run-input-changed</code>,
 <code>run-config-changed</code>, <code>run-outputs-missing</code>, <code>run-cascaded</code>,
 <code>run-cascaded-upstream</code>, <code>run-forced</code>, <code>skip</code>, <code>skip-fresh</code>,
-<code>skip-when-condition</code>.</p>
+<code>skip-when-condition</code>.
+The metadata contract (issue #1368) appears under the top-level keys
+<code>"metadata"</code> (the same stable, sorted findings array <code>validate --json</code>
+reports — see the <a href="../../reference/workflow-format/#metadata-contract-workflowmetadata_schema">metadata contract reference</a>)
+and <code>"metadata_digest"</code> (the canonical <code>sha256:&lt;hex&gt;</code> digest of the
+contract plus effective rows, or <code>null</code>). Error findings make the preview
+exit non-zero <strong>after</strong> the JSON document is printed; warnings keep exit
+0. Declaring <code>[workflow.metadata_schema]</code> is the strictness switch — a
+schema-less metadata table only produces warnings. The section is
+evaluated on the as-authored workflow, before <code>--samples</code> filtering.</p>
 <p><code>--json</code> also emits the <strong>execution-plan surface</strong> at the top level
 (<code>schema_version: 1</code>) — the structured mirror of the human stderr plan,
 for CI scripts and tooling that today grep the colored text:</p>

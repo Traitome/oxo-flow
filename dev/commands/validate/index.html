@@ -1815,6 +1815,8 @@
       
         
       
+        
+      
     
     
     
@@ -1870,6 +1872,34 @@
     
   
     agent-docs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../audit/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    audit
   
 
     
@@ -3062,6 +3092,17 @@
     <span class="md-ellipsis">
       
         Unbound wildcard (W024 surfaced in validate)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#metadata-contract-findings-meta-" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Metadata contract findings (META-*)
       
     </span>
   </a>
@@ -4343,6 +4384,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#metadata-contract-findings-meta-" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Metadata contract findings (META-*)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#aggregation-race-sci-agg-race-surfaced-in-validate" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4481,8 +4533,10 @@
 </span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">  </span><span class="nt">"dependencies"</span><span class="p">:</span><span class="w"> </span><span class="mi">4</span><span class="p">,</span>
 </span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="w">  </span><span class="nt">"errors"</span><span class="p">:</span><span class="w"> </span><span class="p">[],</span>
 </span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="w">  </span><span class="nt">"warnings"</span><span class="p">:</span><span class="w"> </span><span class="p">[],</span>
-</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="w">  </span><span class="nt">"missing_inputs"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"refs/genome.fa"</span><span class="p">]</span>
-</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="p">}</span>
+</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="w">  </span><span class="nt">"missing_inputs"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"refs/genome.fa"</span><span class="p">],</span>
+</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="w">  </span><span class="nt">"metadata"</span><span class="p">:</span><span class="w"> </span><span class="p">[],</span>
+</span><span id="__span-3-11"><a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a><span class="w">  </span><span class="nt">"metadata_digest"</span><span class="p">:</span><span class="w"> </span><span class="s2">"sha256:4f2c…"</span>
+</span><span id="__span-3-12"><a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a><span class="p">}</span>
 </span></code></pre></div>
 <h3 id="invalid-toml-syntax">Invalid TOML syntax<a class="headerlink" href="#invalid-toml-syntax" title="Permanent link">#</a></h3>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>✗ pipeline.oxoflow — parse error in pipeline.oxoflow: TOML parse error at line 15, column 1
@@ -4549,6 +4603,36 @@ collapse to a single line — the double-print the issue reporter saw —
 while each fan-out instance still logs its own line, because the message
 names the expanded instance (<code>step1_lane_L1</code>) rather than the template
 rule.</p>
+<h3 id="metadata-contract-findings-meta-">Metadata contract findings (<code>META-*</code>)<a class="headerlink" href="#metadata-contract-findings-meta-" title="Permanent link">#</a></h3>
+<p>When the workflow declares <code>[workflow.metadata_schema]</code> (or has a
+<code>metadata_file</code> table that violates a built-in rule such as duplicate ids),
+<code>validate</code> evaluates the contract and reports stable, row-level <code>META-*</code>
+findings — see the <a href="../../reference/workflow-format/#metadata-contract-workflowmetadata_schema">metadata contract reference</a>
+for the full code table and field semantics. Without a declared schema the
+table is free-form: the built-in duplicate-id and pair-conflict findings
+are <strong>warnings</strong>, so a pre-upgrade workflow keeps validating green; the
+schema-driven checks do not run. Findings live in a dedicated <code>metadata</code>
+array in <code>--json</code> output (they are NOT duplicated in the <code>errors</code> /
+<code>warnings</code> arrays); the human surface prints exactly one line per finding:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>  error [META-002]: required column 'batch' has no value for id 'S2'
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>    hint: fill in 'batch' for this row, or drop it from [workflow.metadata_schema] required_columns
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>✗ cohort.oxoflow — 1 validation error
+</span></code></pre></div>
+<p>Each finding carries <code>code</code>, <code>severity</code> (<code>error</code> / <code>warning</code>), <code>row</code>
+(1-based data row, <code>null</code> for table-level findings and inline <code>[metadata]</code>
+rows), <code>column</code>, <code>id</code>, <code>message</code>, and <code>suggestion</code>; the array is sorted by
+<code>(code, row, column, id)</code> so it is byte-stable across runs. Error findings
+set <code>"valid": false</code> and exit <code>1</code>; warnings are reported and keep exit <code>0</code>.
+The declaration is the strictness switch: with no
+<code>[workflow.metadata_schema]</code> every non-coverage finding is a warning; with
+one, it is an error. <code>coverage</code> additionally decides whether domain gaps
+(<code>META-009</code> … <code>META-011</code>) are off, warnings (the default), or errors. The
+document also carries <code>metadata_digest</code> — the canonical digest of the
+contract plus effective rows (recorded by <code>run</code> in the checkpoint
+provenance; <code>null</code> when the workflow declares no <code>metadata_file</code>, no
+schema, and has no inline rows).
+<code>--as-include</code> skips the contract (a fragment does not own the parent's
+cohort table).</p>
 <h3 id="aggregation-race-sci-agg-race-surfaced-in-validate">Aggregation race (SCI-AGG-RACE surfaced in validate)<a class="headerlink" href="#aggregation-race-sci-agg-race-surfaced-in-validate" title="Permanent link">#</a></h3>
 <p>A rule that fans out across a sample, pair, <code>[[values]]</code>, or
 <code>output_pattern</code> dimension while its declared outputs are <strong>not keyed by
@@ -4558,10 +4642,10 @@ statically detectable (no expansion needed), and <code>validate</code> now repor
 it with the same detector and code <a href="../dry-run/#scientific-preflight"><code>dry-run</code></a>
 uses, so the first gate no longer waves through a workflow that will
 crash or corrupt results at run time:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>✓ agg.oxoflow — 1 rule, 0 dependencies
-</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>
-</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>  warning [SCI-AGG-RACE]: rule fans out per the sample domain — no {sample}/{group} wildcard keys the outputs: … (rule: multiqc)
-</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>    hint: if the fan-out is unintentional … for a genuine per-element rule, key the outputs by that dimension's wildcard …
+<div class="language-text highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>✓ agg.oxoflow — 1 rule, 0 dependencies
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>
+</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>  warning [SCI-AGG-RACE]: rule fans out per the sample domain — no {sample}/{group} wildcard keys the outputs: … (rule: multiqc)
+</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>    hint: if the fan-out is unintentional … for a genuine per-element rule, key the outputs by that dimension's wildcard …
 </span></code></pre></div>
 <p><code>--json</code> carries the same finding in <code>warnings</code>. The warning keeps exit
 code <code>0</code> — it identifies a design defect, not a parse/DAG error — and

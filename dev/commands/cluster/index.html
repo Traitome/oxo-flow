@@ -1815,6 +1815,8 @@
       
         
       
+        
+      
     
     
     
@@ -1870,6 +1872,34 @@
     
   
     agent-docs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../audit/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    audit
   
 
     
@@ -5365,6 +5395,14 @@ run workdir <code>/exports/oxoflow/lab/rna</code>, the pod sees the workdir at
   — at render time — when the run workdir is not under the volume root
   (that failure names both paths instead of mounting something wrong).</li>
 </ul>
+<p>Live evidence: a two-node k3s cluster (separate kernels) with a network
+NFSv4.2 export, the run workdir inside the export, an Indexed array
+settling per element across both nodes, and a dependent rule forced onto
+the second node by resource fit — see
+<a href="../../../superpowers/audits/kubernetes-multinode-2026-11-26.md"><code>kubernetes-multinode-2026-11-26.md</code></a>.
+<code>kind = "nfs"</code> is live-qualified in that drill; <code>kind = "pvc"</code> remains
+render-tested only, and <code>kind = "hostpath"</code> keeps its single-node
+semantics.</p>
 <h3 id="job-arrays">Job arrays<a class="headerlink" href="#job-arrays" title="Permanent link">#</a></h3>
 <p>Same-template instances that are ready together and agree on every
 scheduler-visible directive (threads, memory, time limit, partition,

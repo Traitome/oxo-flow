@@ -1813,6 +1813,8 @@
       
         
       
+        
+      
     
     
     
@@ -1868,6 +1870,34 @@
     
   
     agent-docs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands/audit/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    audit
   
 
     
@@ -4312,6 +4342,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#metadata-contract-findings-meta-" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Metadata contract findings (META-*)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#lint-warnings-lint" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -5284,6 +5325,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#metadata-contract-findings-meta-" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Metadata contract findings (META-*)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#lint-warnings-lint" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -5748,6 +5800,77 @@ below list every code the engine currently emits.</p>
 <tr>
 <td><code>E023</code></td>
 <td>A fan-out domain is statically degenerate, so the workflow would plan zero instances or plan literal placeholders while reporting success (issue #1153, WF-02). Covers: a <code>[[rules.scatter]]</code> with an empty value domain (<code>values = []</code>, no <code>values_from</code>, or a <code>values_from</code> that resolves to an empty list) or an empty <code>variable</code>; a <code>transform</code> rule with an empty/missing <code>split.by</code>, no split source at all, a <code>split.values_from</code> that resolves to an empty list, or a <code>split.n</code> that is zero, negative, non-integer, or above the 100,000-instance expansion cap. An unresolvable <code>config.&lt;key&gt;</code> reference is left to expansion (a CLI <code>--arg</code> override or parent include may supply it); a <code>sample_pattern</code>/<code>split.glob</code> that matches zero files is a data-dependent plan-time error, not E023. The same inputs also hard-fail <code>run</code>/<code>dry-run</code> at expansion time</td>
+</tr>
+</tbody>
+</table>
+<h3 id="metadata-contract-findings-meta-">Metadata contract findings (<code>META-*</code>)<a class="headerlink" href="#metadata-contract-findings-meta-" title="Permanent link">#</a></h3>
+<p>Emitted by <code>validate</code> and <code>dry-run</code> (and enforced by <code>run</code>) when a workflow
+has a per-sample metadata table or declares a
+<code>[workflow.metadata_schema]</code> contract (issue #1368). They are stable,
+row-level, sorted by <code>(code, row, column, id)</code>, and exposed in the
+<code>metadata</code> array of the <code>--json</code> documents. Errors fail validation; warnings
+do not. <code>META-001</code>–<code>META-008</code> and <code>META-012</code> are errors only when the
+workflow declares <code>[workflow.metadata_schema]</code> — without it the table stays
+free-form and they are warnings (the schema-dependent <code>META-001</code>,
+<code>META-002</code>, <code>META-004</code>–<code>META-007</code>, and <code>META-012</code> cannot fire at all
+without a schema). See the
+<a href="../workflow-format/#metadata-contract-workflowmetadata_schema">metadata contract reference</a>
+for the field semantics.</p>
+<table>
+<thead>
+<tr>
+<th>Code</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>META-001</code></td>
+<td>A required column is missing from the metadata table header/rows</td>
+</tr>
+<tr>
+<td><code>META-002</code></td>
+<td>A required column has no value in a row (<code>row</code> is the 1-based data row)</td>
+</tr>
+<tr>
+<td><code>META-003</code></td>
+<td>Duplicate metadata id — the later row is reported and the first occurrence's row is named</td>
+</tr>
+<tr>
+<td><code>META-004</code></td>
+<td>Duplicate value in a column declared <code>unique</code></td>
+</tr>
+<tr>
+<td><code>META-005</code></td>
+<td>Value outside the column's declared <code>enum</code></td>
+</tr>
+<tr>
+<td><code>META-006</code></td>
+<td>Value does not match the column's declared <code>regex</code> (or the regex declaration itself is invalid)</td>
+</tr>
+<tr>
+<td><code>META-007</code></td>
+<td>Value is not a valid declared <code>type</code> (<code>integer</code> / <code>float</code> / <code>boolean</code>)</td>
+</tr>
+<tr>
+<td><code>META-008</code></td>
+<td>Pair conflict: <code>experiment == control</code>, or a duplicate <code>pair_id</code></td>
+</tr>
+<tr>
+<td><code>META-009</code></td>
+<td>A pair's experiment/control sample has no metadata row — severity follows <code>coverage</code> (<code>off</code> / <code>warn</code> / <code>error</code>)</td>
+</tr>
+<tr>
+<td><code>META-010</code></td>
+<td>A <code>[[sample_groups]]</code> member has no metadata row — severity follows <code>coverage</code></td>
+</tr>
+<tr>
+<td><code>META-011</code></td>
+<td>A metadata row id is outside every sample group and pair domain (pair ids/experiments/controls count as domain ids) — severity follows <code>coverage</code></td>
+</tr>
+<tr>
+<td><code>META-012</code></td>
+<td>A column is not declared and <code>allow_extra_columns = false</code></td>
 </tr>
 </tbody>
 </table>

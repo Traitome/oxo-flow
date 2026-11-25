@@ -1813,6 +1813,8 @@
       
         
       
+        
+      
     
     
     
@@ -1868,6 +1870,34 @@
     
   
     agent-docs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands/audit/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    audit
   
 
     
@@ -4600,10 +4630,12 @@ entry's durability is explicit per action (WEB-15 / issue #1140):</p>
   edits, chat, and pipeline create/update/fork — log a warning and still
   answer normally if the write fails.</li>
 </ul>
-<p>The audit row is written after the handler, not in the same transaction, so
-a REQUIRED-audit <code>500</code> means the action <strong>may already have been applied</strong> —
-verify the affected resource before retrying, since a blind retry can
-duplicate the effect. Successful sign-ins are a handler-owned REQUIRED row
+<p>The audit row is written <strong>ahead</strong> of the handler (a durable <code>pending</code> intent)
+and finalized with the observed outcome after it (issue #1311), so a crash
+between the mutation and its outcome write leaves a <code>pending</code> row instead of
+no row. A REQUIRED-audit <code>500</code> still means the action <strong>may already have been
+applied</strong> — verify the affected resource before retrying, since a blind retry
+can duplicate the effect. Successful sign-ins are a handler-owned REQUIRED row
 (the middleware only sees the pre-auth request and would misattribute it);
 the session is persisted before the audit write, so a login <code>500</code> means a
 session token may already have been minted. For every mutation the
@@ -4611,6 +4643,41 @@ middleware handles, the structured event stream emits an <code>audit</code> even
 when the database insert fails. Do not treat a missing entry as proof that
 no action occurred; check the structured event stream as well. The trail
 spans all users and is admin-only outside personal mode.</p>
+<p><strong>Audit-chain backup/restore caveat (issue #1372).</strong> Every audit write also
+appends an immutable SHA-256-chained event (<code>audit_chain</code> + the one-row
+<code>audit_chain_head</code>) in the same transaction, and
+<code>GET /api/audit/chain/verify</code> reports tampering as <code>ok:false</code> findings. The
+chain is stored in the same database as <code>audit_logs</code>:</p>
+<ul>
+<li>A <strong>consistent</strong> backup/restore of the whole database preserves the chain
+  and verifies cleanly.</li>
+<li>A <strong>partial</strong> restore — restoring <code>audit_logs</code> without <code>audit_chain</code> (or an
+  older chain with newer rows) — is reported as <code>MISSING_LOG_ROW</code>,
+  <code>UNCHAINED_LOG_ROW</code>, or <code>HEAD_MISMATCH</code>. That is the feature working, not
+  corruption of the verifier; restore both tables (and the head row) together.
+  A restore that drops the <code>audit_chain_head</code> row is structural, not a
+  finding: both endpoints answer <code>500 DB_ERROR</code> until the head is restored,
+  and every audited write fails closed.</li>
+<li><code>pg_dump</code>/<code>sqlite3 .backup</code> of the whole database is consistent; copying
+  only the log table is not.</li>
+<li>Export (<code>GET /api/audit/chain/export</code>) and archive the document off-host
+  before a migration or restore. A previously held export is the only way to
+  detect a wholesale, self-consistent rewrite of the live chain.</li>
+<li>Deleting a user cascades their <code>audit_logs</code> rows but not the immutable
+  chain, so verification flags <code>MISSING_LOG_ROW</code> for them; correlate with the
+  account-deletion audit record. On PostgreSQL, a concurrent user deletion
+  during an export can land between the snapshot's plain <code>SELECT</code>s and
+  surface a <strong>transient</strong> <code>MISSING_LOG_ROW</code> for an untampered chain (each
+  READ COMMITTED statement takes a fresh snapshot); re-run the export after
+  the deletion commits.</li>
+<li><strong>Rolling upgrades</strong>: an older server binary sharing the database writes
+  audit rows without chain events. Those rows surface as
+  <code>UNCHAINED_LOG_ROW</code> (they are newer than the first chain event). Stop old
+  instances before treating verification as clean, or accept the findings as
+  the honest record of un-chained writes.</li>
+</ul>
+<p>See <a href="../../reference/web-system-architecture/#hash-chained-audit-trail-issue-1372">Web System Architecture → Hash-chained audit trail</a>
+and the <a href="../../commands/audit/"><code>audit</code> command reference</a>.</p>
 <p><strong>Workspace isolation</strong>:
 <div class="language-text highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>workspace/
 </span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>└── users/

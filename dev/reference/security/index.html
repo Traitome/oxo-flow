@@ -1813,6 +1813,8 @@
       
         
       
+        
+      
     
     
     
@@ -1868,6 +1870,34 @@
     
   
     agent-docs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands/audit/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    audit
   
 
     
@@ -3847,6 +3877,34 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#layer-6-audit-trail-integrity" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Layer 6 — Audit Trail Integrity
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Layer 6 — Audit Trail Integrity">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#threat-model-what-it-does-and-does-not-prove" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Threat model — what it does and does not prove
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#best-practices" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4293,6 +4351,34 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#layer-6-audit-trail-integrity" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Layer 6 — Audit Trail Integrity
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Layer 6 — Audit Trail Integrity">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#threat-model-what-it-does-and-does-not-prove" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Threat model — what it does and does not prove
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#best-practices" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4660,6 +4746,63 @@ sub-path mount (<code>--base-path /oxo-flow</code>), the mount-root SPA index
 (<code>GET /oxo-flow/</code>) is routed through the same middleware as the nested
 app, pinned by the <code>base_path_mount_headers</code> integration test.</p>
 <hr />
+<h2 id="layer-6-audit-trail-integrity">Layer 6 — Audit Trail Integrity<a class="headerlink" href="#layer-6-audit-trail-integrity" title="Permanent link">#</a></h2>
+<p>The web server's audit trail is tamper-evident, not just append-intended
+(issue #1372). Every state-changing request writes its <code>pending</code> audit row
+ahead of the mutation and finalizes it afterwards; each of those writes also
+appends an immutable event to a SHA-256 hash chain (<code>audit_chain</code> plus a
+one-row head) <strong>in the same transaction</strong>. Each event links to its
+predecessor; the head names the chain's end (genesis = seq 0, 64 hex zeros).
+Appends serialize on the backend (SQLite <code>BEGIN IMMEDIATE</code>, PostgreSQL
+<code>FOR UPDATE</code> on the head), so the sequence cannot gap or duplicate under
+concurrent writers. This is true by construction (the lock is the
+serialization point); the measured PostgreSQL evidence is single-host,
+single-instance PostgreSQL 16.15, and multi-instance deployment remains
+unmeasured.</p>
+<p>Two admin-only endpoints expose it:</p>
+<ul>
+<li><code>GET /api/audit/chain/export</code> — the deterministic
+  <code>oxo-flow.audit-chain/v1</code> document (head, events, full audit-row snapshot).</li>
+<li><code>GET /api/audit/chain/verify</code> — 200 with <code>ok:false</code> findings for a deleted,
+  reordered, inserted, or mutated event/row, duplicate phase, bad genesis, or
+  a truncated chain.</li>
+</ul>
+<p><code>oxo-flow audit verify &lt;export.json&gt;</code> repeats the whole check offline with no
+database or network access (exit 0 valid, 2 invalid/tampered, 4 malformed
+with <code>AUDIT_EXPORT_INVALID</code>). See the
+<a href="../../commands/audit/"><code>audit</code> command reference</a>.</p>
+<h3 id="threat-model-what-it-does-and-does-not-prove">Threat model — what it does and does not prove<a class="headerlink" href="#threat-model-what-it-does-and-does-not-prove" title="Permanent link">#</a></h3>
+<ul>
+<li><strong>Detects</strong>: accidental or partial database edits, naive row deletion, a
+  reordered/inserted event, a mutated audit field, a truncated table, and a
+  log row inserted without its chain event. Both the mutable <code>audit_logs</code>
+  table and the chain must agree for verification to pass.</li>
+<li><strong>Does not detect by itself</strong>: an actor with write access to the entire
+  database who rewrites every event AND the head self-consistently — including
+  deleting the whole chain and resetting the head to genesis. Hash
+  chains are not signatures; there is no secret and no external anchor.
+  Holding a previously exported document (archived off-host, attached to a
+  change record) is what exposes such a rewrite — the attacker cannot edit
+  the copy you already have.</li>
+<li><strong>No external notarization, legal compliance, or confidentiality is
+  claimed.</strong> The chain records what the server wrote; it cannot prove an
+  event was truthful, and it is readable by anyone who can read the database.</li>
+<li><strong>Historical rows</strong>: <code>audit_logs</code> rows older than the first chain event are
+  not covered (the upgrade does not backfill), and deleting a user
+  cascade-deletes their audit rows while their chain events persist — the
+  verifier reports <code>MISSING_LOG_ROW</code> so the shrinkage is visible.</li>
+<li><strong>Structural corruption is fail-closed, not a finding</strong>: a missing or
+  deleted <code>audit_chain_head</code> row makes the snapshot unrepresentable, so both
+  endpoints answer <code>500 DB_ERROR</code> (and every audited write also fails) rather
+  than a 200 <code>ok:false</code>; an export without a head is malformed input (exit 4)
+  to the offline verifier.</li>
+<li><strong>Availability</strong>: the export is admin-only and unbounded in size (it grows
+  with the audit trail); treat a very large export as an administrative
+  operation, not a per-request health check.</li>
+</ul>
+<p>Backup/restore guidance for the chain is in
+<a href="../../how-to/deploy-modes/#mode-2-team">Deployment Modes</a>.</p>
+<hr />
 <h2 id="best-practices">Best Practices<a class="headerlink" href="#best-practices" title="Permanent link">#</a></h2>
 <ol>
 <li><strong>Never hardcode secrets</strong> — Use environment variables (<code>{env.VAR}</code>) instead</li>
@@ -4683,6 +4826,7 @@ the same rules so they load with the skill.</p>
 <li><a href="../workflow-format/">Workflow Format</a> — rule field reference</li>
 <li><a href="../ai-cli/">AI CLI</a> — AI-powered workflow analysis</li>
 <li><a href="../../how-to/agent-safety/">Agent Safety &amp; Workspace Discipline</a> — operating contract for AI agents</li>
+<li><a href="../../commands/audit/">Audit command</a> — offline verification of the hash-chained audit export</li>
 <li><a href="../../how-to/troubleshooting/">Troubleshooting</a> — common issues</li>
 </ul>
 

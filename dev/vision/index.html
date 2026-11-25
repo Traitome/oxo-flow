@@ -457,10 +457,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#5-verification-snapshot-2026-11-17" class="md-nav__link">
+  <a href="#5-verification-snapshot-2026-11-25" class="md-nav__link">
     <span class="md-ellipsis">
       
-        5. Verification snapshot (2026-11-17)
+        5. Verification snapshot (2026-11-25)
       
     </span>
   </a>
@@ -1987,6 +1987,8 @@
       
         
       
+        
+      
     
     
     
@@ -2042,6 +2044,34 @@
     
   
     agent-docs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../commands/audit/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    audit
   
 
     
@@ -4257,10 +4287,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#5-verification-snapshot-2026-11-17" class="md-nav__link">
+  <a href="#5-verification-snapshot-2026-11-25" class="md-nav__link">
     <span class="md-ellipsis">
       
-        5. Verification snapshot (2026-11-17)
+        5. Verification snapshot (2026-11-25)
       
     </span>
   </a>
@@ -4392,10 +4422,10 @@
 <li><strong>Deterministic AI evaluations.</strong> <code>eval/frontier/</code>, <code>eval/gold/</code>, and <code>eval/interpretation/</code> score generation and interpretation quality with deterministic checks and negative controls; provider-backed runs record git SHA, gold/knowledge hashes, and per-trial metadata in capture manifests so results are auditable. The CI gate runs the deterministic harness and gold-consistency checks, not paid provider calls.</li>
 <li><strong>Controlled benchmark campaigns.</strong> The remaining exit evidence for publication-tier claims (matched arms, held-out intents, multiple seeds, run-level cost/failure data, human-factors study) is specified in ROADMAP Stage 12.4 — and none of it has run yet. Production deployments are the intended substrate for a future pre-registered scalability campaign.</li>
 </ul>
-<h2 id="5-verification-snapshot-2026-11-17">5. Verification snapshot (2026-11-17)<a class="headerlink" href="#5-verification-snapshot-2026-11-17" title="Permanent link">#</a></h2>
-<p>The quantitative claims on this page were checked against <code>main@55dddf3c</code> on 2026-11-17; the cluster <code>--provenance</code> behavior was re-verified after #1096 (<code>main@3406208f</code>):</p>
+<h2 id="5-verification-snapshot-2026-11-25">5. Verification snapshot (2026-11-25)<a class="headerlink" href="#5-verification-snapshot-2026-11-25" title="Permanent link">#</a></h2>
+<p>The quantitative claims on this page were checked against <code>main@55dddf3c</code> on 2026-11-17; the cluster <code>--provenance</code> behavior was re-verified after #1096 (<code>main@3406208f</code>); the CLI/OpenAPI counts were re-checked on 2026-11-25 on the reviewed branch <code>feat/1372-audit-chain</code> at <code>6416732b</code> — <code>main@d0618816</code> plus #1372, which is not yet on main — the branch that contains the <code>audit</code> subcommand and its two endpoints:</p>
 <ul>
-<li>38 CLI subcommands; 91 OpenAPI paths / 106 operations served by <code>GET /api/openapi.json</code> (default build, non-HPC mode).</li>
+<li>39 CLI subcommands; 96 OpenAPI paths / 111 operations served by <code>GET /api/openapi.json</code> (default build, non-HPC mode).</li>
 <li>31 built-in diagnostic patterns; biological type contracts firing on a deliberately mismatched workflow (<code>TYPE-001</code>–<code>TYPE-003</code> observed live, <code>TYPE-004</code>–<code>TYPE-010</code> covered by unit tests; <code>TYPE-008</code>/<code>TYPE-009</code>/<code>TYPE-010</code> are advisory unverifiable-edge codes).</li>
 <li>33 prebuilt cluster and re-entry integration tests passing on a Linux host.</li>
 <li>Live <code>[engine] dispatch_order</code> (local execution), run-aware <code>cluster status --json</code> / <code>cluster logs</code>, interrupted-rule re-queue, <code>provenance verify</code>, and the strict-placeholder gate exercised on a mock-Slurm Linux host.</li>
