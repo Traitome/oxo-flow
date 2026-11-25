@@ -101,8 +101,8 @@ See [AGENTS.md](AGENTS.md) for the contributor/agent context and [`docs/guide/sr
 | **Web interface** | Built-in React 19 SPA + 100+ OpenAPI operations + SSE live events | External Snakemake-UI / panoptes | Nextflow Tower / Seqera Platform (commercial) |
 | **Editor & IDE** | First-party VS Code IDE (Open VSX + VS Code Marketplace) & native desktop shell | Community editor plugins | Community editor plugins |
 | **Reporting** | Built-in HTML/JSON/Markdown/PDF reports from checkpoint data + domain QC parser + `--r-data` TSV | Via MultiQC | Via Nextflow Tower / MultiQC |
-| **Cluster backends** | SLURM, PBS, SGE, LSF, k8s, AWS Batch, GCP Batch | SLURM, PBS, SGE, LSF | SLURM, PBS, SGE, LSF, k8s, AWS Batch |
-| **Security** | Shell sanitization, path traversal prevention, rate limiting; no OS-level tenant boundary yet | No built-in web auth/rate limiting | No built-in web auth/rate limiting (Tower adds commercial auth) |
+| **Cluster backends** | SLURM, PBS, SGE, LSF, Kubernetes, AWS Batch, GCP Batch, Tencent Batch | SLURM, PBS, SGE, LSF | SLURM, PBS, SGE, LSF, k8s, AWS Batch |
+| **Security** | Shell sanitization, path traversal prevention, rate limiting, and a dimensional tenant boundary: environment allowlist (always on), Linux CPU/memory/process rlimits, and an opt-in kernel Landlock filesystem/TCP sandbox (fail-closed when requested); UDP/ICMP, PID namespaces, per-run uid, per-tenant containers, and the sandbox-off mode remain residuals | No built-in web auth/rate limiting | No built-in web auth/rate limiting (Tower adds commercial auth) |
 | **AI Companion** | Architectural citizen — unified agent, 31 domain diagnostic patterns, Scientist Team | Not built-in | Not built-in |
 | **Testing** | Rust unit/integration suites, schema-drift checks, and deterministic AI-eval harness + gold gates in CI; provider-backed benchmark runs record git SHA and content hashes per capture | pytest-based | Spock / varied |
 
@@ -261,7 +261,7 @@ oxo-flow report my-pipeline.oxoflow -f html -o report.html
 
 ## Cluster / HPC
 
-oxo-flow supports job submission to HPC and cloud batch schedulers including SLURM, PBS/PBS Pro, SGE/UGE, LSF, Kubernetes, AWS Batch, and GCP Batch. The `oxo-flow cluster` subcommand manages the full submission lifecycle.
+oxo-flow supports job submission to HPC and cloud batch schedulers including SLURM, PBS/PBS Pro, SGE/UGE, LSF, Kubernetes, AWS Batch, GCP Batch, and Tencent Batch. The `oxo-flow cluster` subcommand manages the full submission lifecycle.
 
 ```bash
 # Submit a workflow to a SLURM cluster
@@ -282,7 +282,7 @@ oxo-flow cluster logs <job-id-or-instance> --tail 50
 oxo-flow cluster cancel --backend slurm <job-id>
 ```
 
-**Supported backends:** `slurm`, `pbs`, `sge`, `lsf`, `kubernetes`/`k8s`, `aws-batch`, `gcp-batch`. Cluster submissions are configured inline via `oxo-flow cluster submit` flags.
+**Supported backends:** `slurm`, `pbs`, `sge`, `lsf`, `kubernetes`/`k8s`, `aws-batch`, `gcp-batch`, `tencent-batch`. Cluster submissions are configured inline via `oxo-flow cluster submit` flags.
 
 `run --profile <name>` is the everyday cluster path: jobs submit as native scheduler arrays, terminal verdicts fold into the checkpoint as each job settles (a crashed driver loses no completion state), and a restarted run re-queues interrupted rules instead of trusting their partially written outputs. `[engine] dispatch_order = "sample"` orders equal-priority ties by sample so each sample's stages run adjacent instead of in global phases (priority aging still applies). See [Running on a cluster](docs/guide/src/how-to/run-on-cluster.md).
 

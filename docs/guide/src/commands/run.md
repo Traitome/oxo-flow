@@ -693,7 +693,7 @@ recorded as jobs settle, and `-k` keeps in-flight independents running
 past a required failure).
 
 Cluster scheduler submission (SLURM, PBS, SGE, LSF, Kubernetes, AWS Batch,
-GCP Batch) is configured
+GCP Batch, Tencent Batch) is configured
 separately — see the [`cluster`](cluster.md) command.
 
 ### Partial module runs (`--module`)

@@ -1,0 +1,367 @@
+{
+  "version": 1,
+  "comment": "Registry for scripts/check-doc-claims.py (make claims-check). Each claim derives its value from a deterministic source and asserts the user-facing docs still state it. Update the source (code/evidence) or the docs when a claim legitimately changes; never edit a number here alone. Paths are relative to the repository root; no network or paid calls are involved.",
+  "claims": [
+    {
+      "id": "cli.subcommands",
+      "description": "Number of oxo-flow CLI subcommands (clap help list minus the implicit help command).",
+      "source": {
+        "kind": "cli_help_subcommands",
+        "binary": "target/debug/oxo-flow"
+      },
+      "checks": [
+        {
+          "path": "README.md",
+          "contains": ["{value} subcommands", "CLI ({value} subcommands)"],
+          "not_contains": ["38 subcommands", "37 subcommands"]
+        },
+        {
+          "path": "AGENTS.md",
+          "contains": "{value} subcommands via clap derive",
+          "not_contains": ["38 subcommands", "37 subcommands"]
+        },
+        {
+          "path": "docs/guide/src/vision.md",
+          "contains": "- {value} CLI subcommands",
+          "not_contains": ["38 subcommands", "37 subcommands"]
+        },
+        {
+          "path": "docs/guide/src/reference/architecture.md",
+          "contains": "{value} subcommands",
+          "not_contains": ["38 subcommands", "37 subcommands"]
+        },
+        {
+          "path": "docs/index.html",
+          "contains": "{value} subcommands",
+          "not_contains": ["38 subcommands", "37 subcommands"]
+        }
+      ]
+    },
+    {
+      "id": "diagnostics.runtime_patterns",
+      "description": "Runtime failure patterns enumerated by `oxo-flow diagnostics list runtime --json`.",
+      "source": {
+        "kind": "cli_diagnostics_count",
+        "binary": "target/debug/oxo-flow",
+        "catalog": "runtime"
+      },
+      "checks": [
+        {
+          "path": "README.md",
+          "contains": "{value} domain diagnostic patterns"
+        },
+        {
+          "path": "AGENTS.md",
+          "contains": "diagnostics engine ({value} patterns)"
+        },
+        {
+          "path": "docs/guide/src/vision.md",
+          "contains": ["{value} domain diagnostic patterns", "{value} built-in diagnostic patterns"]
+        },
+        {
+          "path": "docs/guide/src/index.md",
+          "contains": ["{value} domain diagnostic patterns", "{value} diagnostic patterns"]
+        },
+        {
+          "path": "docs/guide/src/reference/diagnostics-engine.md",
+          "contains": "{value} patterns total across five categories"
+        }
+      ]
+    },
+    {
+      "id": "diagnostics.sci_rules",
+      "description": "Curated SCI-* scientific-preflight rules enumerated by `oxo-flow diagnostics list scientific --json`.",
+      "source": {
+        "kind": "cli_diagnostics_count",
+        "binary": "target/debug/oxo-flow",
+        "catalog": "scientific"
+      },
+      "checks": [
+        {
+          "path": "README.md",
+          "contains": "{value} curated `SCI-*` scientific preflight rules"
+        },
+        {
+          "path": "ROADMAP.md",
+          "contains": "all {value} curated `SCI-*` rules"
+        },
+        {
+          "path": "docs/guide/src/reference/diagnostics-engine.md",
+          "contains": "for all {value} rules"
+        }
+      ]
+    },
+    {
+      "id": "diagnostics.type_codes",
+      "description": "TYPE-* diagnostic codes declared in crates/oxo-flow-core/src/types/type_codes.rs.",
+      "source": {
+        "kind": "rust_const_strings",
+        "path": "crates/oxo-flow-core/src/types/type_codes.rs",
+        "regex": "pub const TYPE_[0-9]{3}: &str = \"(TYPE-[0-9]{3})\";"
+      },
+      "checks": [
+        {
+          "path": "README.md",
+          "contains": "{first}`–`{last}"
+        },
+        {
+          "path": "docs/guide/src/vision.md",
+          "contains": ["{first}", "{last}"]
+        },
+        {
+          "path": "docs/guide/src/reference/diagnostics-engine.md",
+          "contains": ["{first}", "{last}"]
+        }
+      ]
+    },
+    {
+      "id": "diagnostics.meta_codes",
+      "description": "META-* diagnostic codes emitted by the cohort-metadata evaluator.",
+      "source": {
+        "kind": "regex_unique",
+        "path": "crates/oxo-flow-core/src/config/metadata/evaluate.rs",
+        "regex": "\"(META-[0-9]{3})\""
+      },
+      "checks": [
+        {
+          "path": "AGENTS.md",
+          "contains": "{first}`–`{last}"
+        },
+        {
+          "path": "docs/guide/src/reference/workflow-format.md",
+          "contains": ["{first}", "{last}"]
+        },
+        {
+          "path": "docs/guide/src/reference/glossary.md",
+          "contains": ["{first}", "{last}"]
+        }
+      ]
+    },
+    {
+      "id": "biotype.truth_set_cases",
+      "description": "Number of independently authored cases in the measured BioType truth set (cases_total must equal the case rows).",
+      "source": {
+        "kind": "json_number",
+        "path": "docs/superpowers/audits/data/biotype-truth-set-results.json",
+        "key": "cases_total",
+        "must_equal_len_of": "cases"
+      },
+      "checks": [
+        {
+          "path": "README.md",
+          "contains": ["{value} independently-authored cases", "diagnostic codes {value}/{value}"],
+          "not_contains": ["53 independently-authored cases", "55 independently-authored cases"]
+        }
+      ]
+    },
+    {
+      "id": "repair.verified_campaign",
+      "description": "Verified-repair campaign result parsed from eval/frontier/PILOT_FINDINGS.md (applied and verified rerun must agree).",
+      "source": {
+        "kind": "pilot_repair_ratio",
+        "path": "eval/frontier/PILOT_FINDINGS.md"
+      },
+      "checks": [
+        {
+          "path": "README.md",
+          "contains": ["closes {applied}/{total} cases end-to-end", "all {applied} repairable"],
+          "not_contains": ["3/10 applied", "3/10 verified", "3/10 cases end-to-end", "all 3 repairable seeded cases", "all 3 repairable infra faults"]
+        },
+        {
+          "path": "docs/guide/src/vision.md",
+          "contains": ["at {applied}/{total} applied, {applied}/{total} verified, and {applied}/{total} rerun successfully", "closes {applied}/{total} cases end-to-end"],
+          "not_contains": ["3/10 applied", "3/10 verified", "3/10 cases end-to-end", "all 3 repairable seeded cases", "all 3 repairable infra faults"]
+        },
+        {
+          "path": "ROADMAP.md",
+          "contains": "{applied}/{total} applied, {applied}/{total} verified, {applied}/{total} rerun successfully",
+          "not_contains": ["3/10 applied", "3/10 verified", "3/10 cases end-to-end"]
+        }
+      ]
+    },
+    {
+      "id": "openapi.default_counts",
+      "description": "Generated default-mode OpenAPI path/operation counts (mirrors GET /api/openapi.json without the HPC-only route).",
+      "source": {
+        "kind": "openapi_counts",
+        "binary": "target/debug/examples/openapi_counts",
+        "min": {
+          "operations": 100
+        }
+      },
+      "checks": [
+        {
+          "path": "docs/guide/src/vision.md",
+          "contains": "{paths} OpenAPI paths / {operations} operations",
+          "not_contains": ["91 OpenAPI paths", "94 OpenAPI paths", "106 operations", "109 operations"]
+        },
+        {
+          "path": "README.md",
+          "contains": "100+ OpenAPI operations"
+        },
+        {
+          "path": "AGENTS.md",
+          "contains": "100+ OpenAPI-documented operations"
+        }
+      ]
+    },
+    {
+      "id": "web.domains",
+      "description": "Number of domain modules under crates/oxo-flow-web/src/domains.",
+      "source": {
+        "kind": "directory_count",
+        "path": "crates/oxo-flow-web/src/domains"
+      },
+      "checks": [
+        {
+          "path": "README.md",
+          "contains": "across {value} domains"
+        },
+        {
+          "path": "AGENTS.md",
+          "contains": "across {value} domains"
+        },
+        {
+          "path": "docs/guide/src/reference/architecture.md",
+          "contains": "{value} domains"
+        }
+      ]
+    },
+    {
+      "id": "backends.tencent_listed",
+      "description": "Tencent Batch must appear in every backend enumeration (README, guide index, run.md, architecture, execution-backends, AGENTS).",
+      "checks": [
+        {
+          "path": "README.md",
+          "row_starts_with": "| **Cluster backends** |",
+          "row_contains": "Tencent Batch"
+        },
+        {
+          "path": "README.md",
+          "contains": ["GCP Batch, and Tencent Batch", "`tencent-batch`"]
+        },
+        {
+          "path": "docs/guide/src/index.md",
+          "row_starts_with": "| **Cluster backends** |",
+          "row_contains": "Tencent Batch"
+        },
+        {
+          "path": "docs/guide/src/commands/run.md",
+          "contains": "GCP Batch, Tencent Batch"
+        },
+        {
+          "path": "docs/guide/src/reference/architecture.md",
+          "contains": ["8 backends", "Tencent Batch"]
+        },
+        {
+          "path": "docs/guide/src/reference/execution-backends.md",
+          "contains": ["AWS/GCP/Tencent Batch", "Tencent Batch"]
+        },
+        {
+          "path": "AGENTS.md",
+          "row_starts_with": "| `OXO_FLOW_CLUSTER_BACKEND` |",
+          "row_contains": "`tencent-batch`"
+        }
+      ]
+    },
+    {
+      "id": "backends.maturity",
+      "description": "Per-backend cloud maturity: Kubernetes live-qualified for the tested scope, Tencent named-env smoke only, AWS/GCP blocked.",
+      "checks": [
+        {
+          "path": "docs/guide/src/how-to/run-on-cluster.md",
+          "contains": [
+            "live two-node k3s campaign (2026-11-26)",
+            "named compute environment",
+            "ran to `SUCCEED`",
+            "AWS Batch and GCP Batch are not qualified by a live campaign"
+          ]
+        },
+        {
+          "path": "ROADMAP.md",
+          "row_starts_with": "| Kubernetes and cloud batch executors |",
+          "row_contains": ["Kubernetes", "two-node k3s", "Tencent Batch", "AWS Batch", "GCP Batch", "blocked"],
+          "row_not_contains": ["live submit/run/cancel/retrieve campaigns are required"]
+        },
+        {
+          "path": "docs/guide/src/reference/execution-backends.md",
+          "contains": ["live-qualified for the tested scope", "Tencent Batch", "AWS Batch", "GCP Batch", "blocked"],
+          "not_contains": "Kubernetes, AWS Batch, and GCP Batch remain **Prototype**"
+        }
+      ]
+    },
+    {
+      "id": "roadmap.maturity_rows",
+      "description": "Stage 12 rows whose remaining-evidence text must track the landed evidence.",
+      "checks": [
+        {
+          "path": "ROADMAP.md",
+          "row_starts_with": "| Unified run-ledger storage abstraction |",
+          "row_contains": "admission_backend_parity.rs",
+          "row_not_contains": "SQLite-vs-PostgreSQL differential on the same guard NOT re-checked"
+        },
+        {
+          "path": "ROADMAP.md",
+          "row_starts_with": "| Team/HPC isolation and RBAC |",
+          "row_contains": "2026-11-24",
+          "row_not_contains": "NOT yet been executed on a Linux host"
+        },
+        {
+          "path": "ROADMAP.md",
+          "row_starts_with": "| Immutable run history and atomic admission |",
+          "row_contains": ["Implemented and verified", "#1130", "#1131", "admission_backend_parity.rs"],
+          "row_not_contains": "Planned / blocked"
+        },
+        {
+          "path": "ROADMAP.md",
+          "row_starts_with": "| Guided editor and cross-surface state |",
+          "row_contains": "Round-trip semantic preservation",
+          "row_not_contains": ["tenant-scoped drafts", "stale-validation blocking"]
+        }
+      ]
+    },
+    {
+      "id": "security.tenant_boundary",
+      "description": "README/vision must describe the dimensional tenant boundary shipped in #1129, not the retired 'no OS-level tenant boundary' claim.",
+      "checks": [
+        {
+          "path": "README.md",
+          "row_starts_with": "| **Security** |",
+          "row_contains": ["Landlock", "rlimit", "residuals"],
+          "row_not_contains": "no OS-level tenant boundary"
+        },
+        {
+          "path": "docs/guide/src/vision.md",
+          "contains": ["Landlock", "UDP/ICMP", "per-run uid identities"],
+          "not_contains": "no OS-level tenant boundary"
+        },
+        {
+          "path": "ROADMAP.md",
+          "contains": "dimensional #1129 OS boundary",
+          "not_contains": "no OS-level tenant boundary"
+        }
+      ]
+    },
+    {
+      "id": "vision.provenance",
+      "description": "The verification snapshot must cite current main and the claims gate, not the pre-merge audit-chain branch.",
+      "checks": [
+        {
+          "path": "docs/guide/src/vision.md",
+          "contains": ["main@99bb8b56", "2026-11-26", "make claims-check", "docs/claims.json"],
+          "not_contains": ["feat/1372-audit-chain", "which is not yet on main"]
+        }
+      ]
+    },
+    {
+      "id": "contributing.gate_list",
+      "description": "Contributor docs must name the claims gate.",
+      "checks": [
+        {
+          "path": "docs/guide/src/development/contributing.md",
+          "contains": ["claims-check", "docs/claims.json"]
+        }
+      ]
+    }
+  ]
+}
