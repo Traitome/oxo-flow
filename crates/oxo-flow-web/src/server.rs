@@ -195,6 +195,24 @@ async fn api_not_found() -> impl IntoResponse {
     )
 }
 
+/// JSON 405 for a registered path called with an unsupported method.
+///
+/// Method-not-allowed used to be the one routing error outside the
+/// documented `{code, message, detail, suggestion}` envelope (the default
+/// axum answer is an empty body — audit M1). The fallback is installed on
+/// every method router; returning JSON for a wrong-method SPA request too
+/// keeps one error contract instead of special-casing `/api`.
+async fn api_method_not_allowed(
+    method: axum::http::Method,
+    uri: axum::http::Uri,
+) -> impl IntoResponse {
+    crate::domains::workflow::handlers::err(
+        StatusCode::METHOD_NOT_ALLOWED,
+        "METHOD_NOT_ALLOWED",
+        format!("Method {method} is not allowed for {}", uri.path()),
+    )
+}
+
 /// `GET /api/openapi.json` — the code-generated OpenAPI 3.1 specification
 /// (issue #82 P1-13: derived from `#[utoipa::path]` annotations on every
 /// route handler, no hand-maintained static file).
@@ -817,6 +835,9 @@ fn build_router_with_limiter(
     router
         .merge(api_fallback)
         .merge(spa_fallback)
+        // Every registered method router gets the structured 405 answer
+        // (audit M1). Applied after all merges so it reaches every route.
+        .method_not_allowed_fallback(api_method_not_allowed)
         .layer(LicenseHeaderLayer)
         .layer(axum::middleware::from_fn(security_headers))
         // Layer order matters (issue #79 P1-04): in axum the LAST layer is
@@ -1191,37 +1212,19 @@ pub(crate) fn json_error(status: StatusCode, error: ApiError) -> axum::response:
         .into_response()
 }
 
-/// Middleware: require authentication for team/hpc mode.
+/// Whether `path` bypasses the team/hpc auth middleware for this request.
 ///
-/// Validates the Bearer token against the `sessions` table — the token must
-/// exist and not be expired.  Returns 401 for missing, malformed, or invalid
-/// tokens.  Public endpoints (login, OAuth, health, etc.) bypass this check.
-async fn require_auth(
-    headers: axum::http::HeaderMap,
-    mut request: axum::extract::Request,
-    next: axum::middleware::Next,
-) -> axum::response::Response {
-    let path = request.uri().path();
-
-    // Allow public endpoints without auth. The list is deliberately narrow
-    // (issue #82 P0-5): system/metrics/hpc metrics and AI-config writes are
-    // NOT public in team/hpc modes — anonymous callers must not see cluster
-    // internals or reconfigure the shared AI provider.
-    let method = request.method().clone();
-    // Presenting credentials opts into normal authentication even on a
-    // public route: `GET /api/ai/config` stays discoverable anonymously, but
-    // the middleware must resolve the caller's identity so an admin sees the
-    // real provider/model instead of the masked anonymous payload
-    // (journey-power P3).
-    let has_credentials = headers
-        .get("authorization")
-        .and_then(|v| v.to_str().ok())
-        .is_some_and(|v| !v.trim().is_empty())
-        || headers
-            .get("x-api-key")
-            .and_then(|v| v.to_str().ok())
-            .is_some_and(|v| !v.trim().is_empty());
-    let is_public = path == "/api/auth/login"
+/// THE single source of truth shared by the `require_auth` middleware and the generated
+/// OpenAPI security declarations (`openapi.rs`), so the published contract
+/// cannot drift from the runtime gate. `has_credentials` keeps a
+/// public-but-identity-aware route (`GET /api/ai/config`) anonymous-only:
+/// presenting a token opts the request into normal authentication.
+pub fn is_public_route(path: &str, method: &axum::http::Method, has_credentials: bool) -> bool {
+    // The list is deliberately narrow (issue #82 P0-5):
+    // system/metrics/hpc metrics and AI-config writes are NOT public in
+    // team/hpc modes — anonymous callers must not see cluster internals or
+    // reconfigure the shared AI provider.
+    path == "/api/auth/login"
         || path == "/api/auth/me"
         || path.starts_with("/api/auth/oauth")
         || path == "/api/health"
@@ -1240,15 +1243,44 @@ async fn require_auth(
         // above instead — `has_credentials` keeps the public bypass
         // anonymous-only (journey-power P3).
         || (path == "/api/ai/config"
-            && method == axum::http::Method::GET
+            && *method == axum::http::Method::GET
             && !has_credentials)
         || path == "/"
         || path.starts_with("/assets/")
         || path == "/favicon.svg"
         || path == "/icons.svg"
         || path == "/logo.svg"
-        || path == "/logo-light.svg";
-    if is_public {
+        || path == "/logo-light.svg"
+}
+
+/// Middleware: require authentication for team/hpc mode.
+///
+/// Validates the Bearer token against the `sessions` table — the token must
+/// exist and not be expired.  Returns 401 for missing, malformed, or invalid
+/// tokens.  Public endpoints (login, OAuth, health, etc.) bypass this check.
+async fn require_auth(
+    headers: axum::http::HeaderMap,
+    mut request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let path = request.uri().path();
+
+    // Allow public endpoints without auth.
+    let method = request.method().clone();
+    // Presenting credentials opts into normal authentication even on a
+    // public route: `GET /api/ai/config` stays discoverable anonymously, but
+    // the middleware must resolve the caller's identity so an admin sees the
+    // real provider/model instead of the masked anonymous payload
+    // (journey-power P3).
+    let has_credentials = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| !v.trim().is_empty())
+        || headers
+            .get("x-api-key")
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|v| !v.trim().is_empty());
+    if is_public_route(path, &method, has_credentials) {
         return next.run(request).await;
     }
 

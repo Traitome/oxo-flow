@@ -101,6 +101,49 @@ fn runtime_api_key(stored: Option<&str>) -> Option<String> {
     runtime_optional(&crate::infra::crypto::open(stored.unwrap_or_default()))
 }
 
+/// Whether a provider needs an API key to be usable.
+///
+/// Ollama is keyless by design and `disabled` selects no provider; every
+/// other (validated) kind requires a credential. THE single definition for
+/// the save-time key contract and the startup restore skip rule.
+fn provider_requires_api_key(provider: &str) -> bool {
+    !(provider.eq_ignore_ascii_case("ollama") || provider.eq_ignore_ascii_case("disabled"))
+}
+
+/// Whether a stored (possibly sealed) key decrypts to a non-blank value.
+fn stored_key_is_usable(stored: Option<&str>) -> bool {
+    stored.is_some_and(|key| !crate::infra::crypto::open(key).trim().is_empty())
+}
+
+/// The structured refusal for a shared-tier save that would leave a
+/// key-requiring provider without a usable key.
+///
+/// A blank request key means "keep the stored server key"; when no usable
+/// server key exists there is nothing to keep, and a keyless row is skipped
+/// by `restore_ai_config_from_db` on the next start (the original I1
+/// symptom). Personal mode may instead promote the acting user's existing
+/// key for the same provider; team mode requires the administrator to type
+/// one.
+fn ai_key_required_error(provider: &str) -> (StatusCode, Json<ApiError>) {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(ApiError {
+            code: "AI_KEY_REQUIRED".into(),
+            message: format!("An API key is required to save the shared '{provider}' provider"),
+            detail: Some(
+                "No usable key is stored in the shared tier and the request left \
+                 api_key blank. A blank key only means \"keep the stored server key\"."
+                    .into(),
+            ),
+            suggestion: Some(
+                "Enter the API key (or choose the keyless Ollama provider or disabled) \
+                 and save again."
+                    .into(),
+            ),
+        }),
+    )
+}
+
 /// Fail fast with the same structured `AI_NOT_CONFIGURED` chat and translate
 /// answer when the acting user resolves to no usable provider — an explicit
 /// `OXO_FLOW_AI_PROVIDER=disabled` pin, a disabled settings row, or an
@@ -767,26 +810,37 @@ pub async fn restore_ai_config_from_db() {
         None => backend.get_ai_provider_config(None).await.ok().flatten(),
     };
     let Some(row) = row else { return };
-    let api_key = row.api_key.unwrap_or_default();
-    if api_key.is_empty() {
-        return;
-    }
-    // A sealed credential that cannot be read back (missing or rotated
-    // OXO_FLOW_MASTER_KEY) must not be registered as an empty-key provider:
-    // the config would look configured while every AI call fails. Leaving it
-    // unset keeps the "needs re-entry" state visible.
-    if !crate::infra::crypto::is_recoverable(&api_key) {
-        tracing::error!(
-            "AI provider '{}' is saved but its credential cannot be decrypted with \
-             the current OXO_FLOW_MASTER_KEY; re-enter the API key in the settings UI \
-             to restore AI features",
-            row.provider
-        );
-        return;
-    }
+    let stored_key = row.api_key.clone().unwrap_or_default();
+    // Keyless providers (Ollama/disabled) restore without a credential and
+    // IGNORE any residual key — it may be a stale other-vendor credential or
+    // an unreadable ciphertext, and sending it anywhere would be wrong.
+    // Key-requiring providers use the SAME `stored_key_is_usable` predicate
+    // as the save path, so a `v1:` ciphertext of an empty key is correctly
+    // treated as unusable rather than non-empty text.
+    let runtime_key = if provider_requires_api_key(&row.provider) {
+        if !stored_key_is_usable(Some(&stored_key)) {
+            // A sealed credential that cannot be read back (missing or
+            // rotated OXO_FLOW_MASTER_KEY) must not be registered as an
+            // empty-key provider: the config would look configured while
+            // every AI call fails. Leaving it unset keeps the "needs
+            // re-entry" state visible.
+            if !stored_key.trim().is_empty() && !crate::infra::crypto::is_recoverable(&stored_key) {
+                tracing::error!(
+                    "AI provider '{}' is saved but its credential cannot be decrypted \
+                     with the current OXO_FLOW_MASTER_KEY; re-enter the API key in the \
+                     settings UI to restore AI features",
+                    row.provider
+                );
+            }
+            return;
+        }
+        runtime_api_key(Some(&stored_key))
+    } else {
+        None
+    };
     if let Err(error) = crate::ai_provider::AiProviderRegistry::global().reconfigure(
         &row.provider,
-        Some(crate::infra::crypto::open(&api_key)),
+        runtime_key,
         Some(row.api_url.unwrap_or_default()),
         Some(row.model.unwrap_or_default()),
     ) {
@@ -813,6 +867,17 @@ pub async fn restore_ai_config_from_db() {
     )
 )]
 /// GET /api/ai/config/effective
+///
+/// Reports the documented resolution chain as FIELD-LEVEL provenance:
+/// `effective` is the SHARED runtime — the fallback a caller uses when they
+/// have no private row; a caller with a per-user row resolves that row
+/// instead (`provider_for`) — while each `tiers.*` entry is read from its own
+/// source — the user row,
+/// the server (`user_id IS NULL`) row, and the environment. The server tier
+/// used to be filled from the active runtime, so an env or per-user value
+/// was misattributed to the server row; the env tier read only
+/// `OXO_FLOW_AI_MODEL`, missing the provider-specific variables the runtime
+/// honours (Task 7b / I2).
 pub async fn get_ai_config_effective(
     authenticated: Option<Extension<CurrentUser>>,
 ) -> ApiResult<serde_json::Value> {
@@ -821,12 +886,44 @@ pub async fn get_ai_config_effective(
     let user = resolve(authenticated.as_ref());
     let registry = AiProviderRegistry::global();
     let config = registry.get_config();
-    let user_row = get_backend()?
+    let backend = get_backend()?;
+    let user_row = backend
         .get_ai_provider_config(Some(&user.id))
         .await
         .map_err(|e| ai_db_error("loading effective AI provider config", e))?;
+    let server_row = backend
+        .get_ai_provider_config(None)
+        .await
+        .map_err(|e| ai_db_error("loading effective server AI provider config", e))?;
+    let non_blank = |value: Option<String>| {
+        value
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+    };
     let (user_provider, user_model, user_url) = match user_row {
-        Some(row) => (Some(row.provider), row.model, row.api_url),
+        Some(row) => (
+            Some(row.provider),
+            non_blank(row.model),
+            non_blank(row.api_url),
+        ),
+        None => (None, None, None),
+    };
+    let (server_provider, server_model, server_url) = match server_row {
+        Some(row) => (
+            Some(row.provider),
+            non_blank(row.model),
+            non_blank(row.api_url),
+        ),
+        None => (None, None, None),
+    };
+    // The environment tier is resolved with the SAME provider-specific
+    // variables the runtime factory reads (OPENAI_MODEL, ANTHROPIC_MODEL,
+    // OLLAMA_MODEL, the generic OXO_FLOW_AI_MODEL/_API_URL overrides, and
+    // the standard credential auto-detection). It reports only values the
+    // environment supplies — never a provider's built-in default.
+    let env_tier = oxo_flow_ai::provider::env_provider_tier();
+    let (env_provider, env_model, env_url) = match env_tier {
+        Some(tier) => (Some(tier.provider), tier.model, tier.api_url),
         None => (None, None, None),
     };
 
@@ -835,17 +932,15 @@ pub async fn get_ai_config_effective(
     // endpoint URLs or model ids — those identify the internal AI
     // proxy/gateway and the provider version. Admins keep the full view.
     let detail_visible = may_read_provider_metadata(&user);
-    let effective_model = detail_visible.then(|| config.model.clone()).flatten();
-    let effective_url = detail_visible.then(|| config.api_url.clone()).flatten();
-    let server_model = detail_visible.then(|| config.model.clone()).flatten();
-    let env_model = detail_visible
-        .then(|| std::env::var("OXO_FLOW_AI_MODEL").ok())
-        .flatten();
-    let env_url = detail_visible
-        .then(|| std::env::var("OXO_FLOW_AI_API_URL").ok())
-        .flatten();
-    let user_model = detail_visible.then_some(user_model).flatten();
-    let user_url = detail_visible.then_some(user_url).flatten();
+    let visible = |value: Option<String>| detail_visible.then_some(value).flatten();
+    let effective_model = visible(config.model.clone());
+    let effective_url = visible(config.api_url.clone());
+    let server_model = visible(server_model);
+    let server_url = visible(server_url);
+    let env_model = visible(env_model);
+    let env_url = visible(env_url);
+    let user_model = visible(user_model);
+    let user_url = visible(user_url);
 
     Ok(Json(serde_json::json!({
         "effective": {
@@ -856,11 +951,12 @@ pub async fn get_ai_config_effective(
         },
         "disabled_by_env": oxo_flow_ai::provider::provider_pinned_disabled(),
         "tiers": {
-            "env_provider": std::env::var("OXO_FLOW_AI_PROVIDER").ok(),
+            "env_provider": env_provider,
             "env_model": env_model,
             "env_url": env_url,
-            "server_provider": config.provider,
+            "server_provider": server_provider,
             "server_model": server_model,
+            "server_api_url": server_url,
             "user_provider": user_provider,
             "user_model": user_model,
             "user_api_url": user_url,
@@ -941,6 +1037,7 @@ pub async fn get_server_ai_config(
     put,
     path = "/api/ai/config/server",
     tag = "ai",
+    request_body = serde_json::Value,
     responses(
         (status = 200, description = "Success", body = serde_json::Value),
         (status = 403, description = "Error", body = ApiError),
@@ -980,9 +1077,51 @@ pub async fn update_server_ai_config(
             format!("AI provider '{provider}' is not supported: {error}"),
         )
     })?;
-    // An absent/empty key means "keep the stored one" — the API never returns
-    // the key, so a settings save that omits it must not wipe it.
-    let stored_api_key = crate::infra::crypto::seal(api_key);
+    // Blank-key contract (review round 2, Important 1): a blank request key
+    // means "keep the stored server key". When no usable server key exists a
+    // key-requiring provider cannot be made usable by this save — personal
+    // mode may promote the acting pseudo-user's key for the SAME provider;
+    // otherwise refuse instead of persisting a keyless row that startup
+    // restore skips (the original I1 symptom).
+    let request_key = api_key.trim();
+    let request_key_blank = request_key.is_empty();
+    // The stored server key may only be reused when the request names the
+    // SAME provider: a blank-key provider switch must not send one vendor's
+    // credential to another vendor's endpoint (review round 3, M1).
+    let existing_matches_provider = existing
+        .as_ref()
+        .is_some_and(|row| row.provider.eq_ignore_ascii_case(&provider));
+    let existing_server_key_usable = existing_matches_provider
+        && stored_key_is_usable(existing.as_ref().and_then(|row| row.api_key.as_deref()));
+    let mut promoted_key: Option<String> = None;
+    if request_key_blank && provider_requires_api_key(&provider) && !existing_server_key_usable {
+        if crate::server::running_mode() == "personal" {
+            let user_row = backend
+                .get_ai_provider_config(Some(&user.id))
+                .await
+                .map_err(|e| ai_db_error("loading personal AI key for promotion", e))?;
+            if let Some(user_row) = user_row
+                && user_row.provider.eq_ignore_ascii_case(&provider)
+                && stored_key_is_usable(user_row.api_key.as_deref())
+            {
+                promoted_key = user_row.api_key;
+            }
+        }
+        if promoted_key.is_none() {
+            return Err(ai_key_required_error(&provider));
+        }
+    }
+    let keep_stored_server_key = request_key_blank && existing_server_key_usable;
+    let stored_api_key = if !request_key_blank {
+        crate::infra::crypto::seal(request_key)
+    } else if keep_stored_server_key {
+        // Placeholder; the backend keeps the stored row's key.
+        crate::infra::crypto::seal("")
+    } else {
+        // A promoted key is already in stored form; keyless providers store
+        // an empty key.
+        promoted_key.clone().unwrap_or_default()
+    };
     let now = chrono::Utc::now().to_rfc3339();
     let row = models::AiProviderConfigRow {
         id: uuid::Uuid::new_v4().to_string(),
@@ -1001,9 +1140,61 @@ pub async fn update_server_ai_config(
         updated_at: now,
     };
     let saved = backend
-        .save_ai_provider_config(&row, api_key.is_empty())
+        .save_ai_provider_config(&row, keep_stored_server_key)
         .await
         .map_err(|e| ai_db_error("saving server AI provider config", e))?;
+
+    // Sync the acting user's private row with the persisted shared tier:
+    //  - personal mode's pseudo-user `"default"` row, which BOTH
+    //    provider_for() and restore_ai_config_from_db() prefer; and
+    //  - a team admin's private row, which provider_for() prefers for that
+    //    admin's own calls (and which the admin SPA user PUT would otherwise
+    //    let reconfigure the shared runtime with a stale private key).
+    // Preserve the row's advanced toggles and, when the shared tier is
+    // keyless (Ollama/disabled), its stored key. Partial-failure contract:
+    // the server tier is already durable if this mirror write fails — the
+    // handler returns 500 and the next Save rewrites both tiers; there is no
+    // rollback of the primary write.
+    if crate::server::running_mode() == "personal" || user.is_admin() {
+        let existing_user = backend
+            .get_ai_provider_config(Some(&user.id))
+            .await
+            .map_err(|e| ai_db_error("loading acting-user AI provider mirror", e))?;
+        let server_key = saved.api_key.clone().unwrap_or_default();
+        let server_key_usable = stored_key_is_usable(Some(&server_key));
+        let mirror_key = if server_key_usable {
+            Some(server_key)
+        } else {
+            existing_user.as_ref().and_then(|row| row.api_key.clone())
+        };
+        let mirror = models::AiProviderConfigRow {
+            id: existing_user
+                .as_ref()
+                .map_or_else(|| uuid::Uuid::new_v4().to_string(), |row| row.id.clone()),
+            user_id: Some(user.id.clone()),
+            provider: saved.provider.clone(),
+            api_key: mirror_key.clone(),
+            api_url: saved.api_url.clone(),
+            model: saved.model.clone(),
+            search_enabled: existing_user.as_ref().map_or(1, |row| row.search_enabled),
+            monitor_enabled: existing_user.as_ref().map_or(1, |row| row.monitor_enabled),
+            auto_retry_enabled: existing_user
+                .as_ref()
+                .map_or(0, |row| row.auto_retry_enabled),
+            max_correction_rounds: existing_user
+                .as_ref()
+                .map_or(3, |row| row.max_correction_rounds),
+            created_at: existing_user
+                .as_ref()
+                .map_or_else(|| saved.created_at.clone(), |row| row.created_at.clone()),
+            updated_at: saved.updated_at.clone(),
+        };
+        backend
+            .save_ai_provider_config(&mirror, mirror_key.is_none())
+            .await
+            .map_err(|e| ai_db_error("saving acting-user AI provider mirror", e))?;
+        crate::ai_provider::invalidate_provider_for(&user.id);
+    }
 
     // Apply only after durable persistence so a failed save cannot leave the
     // runtime pointing at a configuration that disappears on restart.
@@ -1037,6 +1228,7 @@ pub async fn update_server_ai_config(
         "status": "updated",
         "provider": saved.provider,
         "applied_to_runtime": !pinned_disabled,
+        "disabled_by_env": pinned_disabled,
     })))
 }
 
@@ -1121,6 +1313,7 @@ pub async fn get_user_ai_config(
     put,
     path = "/api/ai/config/user",
     tag = "ai",
+    request_body = serde_json::Value,
     responses(
         (status = 200, description = "Success", body = serde_json::Value),
         (status = 400, description = "Error", body = ApiError),
@@ -1156,8 +1349,10 @@ pub async fn update_user_ai_config(
     })?;
     // An absent/empty key means "keep the stored one". Compared as a flag,
     // not by the sealed value: with a master key configured seal("") is a
-    // non-empty ciphertext.
-    let stored_api_key = crate::infra::crypto::seal(api_key);
+    // non-empty ciphertext. Whitespace is the same unfinished input.
+    let request_key = api_key.trim();
+    let request_key_blank = request_key.is_empty();
+    let stored_api_key = crate::infra::crypto::seal(request_key);
     let search_enabled = req
         .get("search_enabled")
         .and_then(|v| v.as_bool())
@@ -1190,7 +1385,7 @@ pub async fn update_user_ai_config(
         updated_at: now,
     };
     let saved = backend
-        .save_ai_provider_config(&row, api_key.is_empty())
+        .save_ai_provider_config(&row, request_key_blank)
         .await
         .map_err(|e| ai_db_error("saving user AI provider config", e))?;
 
@@ -1226,6 +1421,7 @@ pub async fn update_user_ai_config(
         "status": "updated",
         "provider": saved.provider,
         "applied_to_runtime": applied,
+        "disabled_by_env": pinned_disabled,
     })))
 }
 

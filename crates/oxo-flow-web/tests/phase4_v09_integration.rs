@@ -458,6 +458,7 @@ async fn test_ai_config_update_server() {
         "/api/ai/config/server",
         &json!({
             "provider": "openai",
+            "api_key": "sk-phase4-server",
             "api_url": "https://api.openai.com/v1",
             "model": "gpt-4o"
         }),

@@ -64,8 +64,8 @@ async fn persist_assistant_message(user: &CurrentUser, session_id: &str, content
     post,
     path = "/api/chat/send",
     tag = "chat",
-    security(("bearerAuth" = [])),
     request_body = ChatRequest,
+    security(("bearerAuth" = [])),
     responses(
         (status = 200, description = "Success", content_type = "text/event-stream"),
         (status = 400, description = "Error", body = ApiError),

@@ -41,6 +41,7 @@ pub struct EditPayload {
     post,
     path = "/api/pipeline/{id}/command",
     tag = "dag",
+    request_body = EditPayload,
     responses(
         (status = 200, description = "Success", body = super::service::DagEditResponse),
         (status = 400, description = "Error", body = ApiError),
@@ -70,6 +71,7 @@ pub struct CurrentToml {
     post,
     path = "/api/pipeline/{id}/undo",
     tag = "dag",
+    request_body = CurrentToml,
     responses(
         (status = 200, description = "Success", body = serde_json::Value),
         (status = 400, description = "Error", body = ApiError),
@@ -117,6 +119,7 @@ pub async fn undo_command(
     post,
     path = "/api/pipeline/{id}/redo",
     tag = "dag",
+    request_body = CurrentToml,
     responses(
         (status = 200, description = "Success", body = serde_json::Value),
         (status = 400, description = "Error", body = ApiError),

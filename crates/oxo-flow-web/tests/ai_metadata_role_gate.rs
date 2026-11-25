@@ -92,6 +92,13 @@ async fn provider_metadata_is_role_gated() {
         std::env::remove_var("OXO_FLOW_AI_PROVIDER");
         std::env::remove_var("OXO_FLOW_AI_MODEL");
         std::env::remove_var("OXO_FLOW_AI_API_URL");
+        std::env::remove_var("OXO_FLOW_AI_API_KEY");
+        std::env::remove_var("ANTHROPIC_AUTH_TOKEN");
+        std::env::remove_var("ANTHROPIC_API_KEY");
+        std::env::remove_var("CLAUDE_API_KEY");
+        std::env::remove_var("OPENAI_API_KEY");
+        std::env::remove_var("DEEPSEEK_API_KEY");
+        std::env::remove_var("OLLAMA_HOST");
         std::env::set_var("HOME", &home);
     }
 
@@ -105,6 +112,21 @@ async fn provider_metadata_is_role_gated() {
             Some(MODEL.to_string()),
         )
         .expect("test provider configures");
+    // The server TIER must exist as a DB row: `tiers.server_*` is read from
+    // the `user_id IS NULL` row, never from the active runtime (Task 7b/I2).
+    sqlx::query(
+        "INSERT INTO ai_provider_config (id, user_id, provider, api_key, api_url, model, \
+         search_enabled, monitor_enabled, auto_retry_enabled, max_correction_rounds, \
+         created_at, updated_at) \
+         VALUES (?, NULL, 'openai', 'sk-web15-test', ?, ?, 1, 1, 0, 3, \
+                 '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+    )
+    .bind(uuid::Uuid::new_v4().to_string())
+    .bind(URL)
+    .bind(MODEL)
+    .execute(oxo_flow_web::infra::db::sqlite::pool())
+    .await
+    .unwrap();
 
     let app = server::build_router("team");
     let admin = Some("web15-admin-token");
@@ -292,14 +314,14 @@ async fn provider_metadata_is_role_gated() {
         );
         assert_eq!(body["code"], "ACCESS_DENIED", "{role}: {body}");
     }
-    // The shared runtime was configured directly (no persisted server row in
-    // this test), so the admin sees the endpoint with `server_config: null` —
-    // the point here is the gate, not the row shape.
+    // The shared server row exists (seeded above); the point here is the
+    // gate, not the row shape.
     let (status, body) = get(&app, "/api/ai/config/server", admin).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert!(
         body.get("server_config").is_some(),
         "the admin payload carries the server tier key: {body}"
     );
+    assert_eq!(body["server_config"]["provider"], "openai", "{body}");
     assert_eq!(body["disabled_by_env"], false, "{body}");
 }

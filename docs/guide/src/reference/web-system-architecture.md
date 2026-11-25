@@ -92,7 +92,8 @@ Applied outermost-first in `server.rs::build_router`:
   (`/api/events`, `/api/ai/translate/stream`) stream uncompressed.
 - **Tracing** — `TraceLayer` emits an INFO `http.request` span plus a
   completion log (status, latency) per request; `/api/health` runs at DEBUG
-  because the dashboard polls it every few seconds.
+  because the dashboard polls it every 30 seconds (`STATUS_POLL_MS` in
+  `Layout.tsx`).
 - **CORS → Rate limit → Security headers → License header** — the rate
   limiter sits inside the `Extension` layer so it can see the shared
   limiter state.
@@ -494,9 +495,11 @@ List endpoints do not share a single uniform envelope:
 
 - `GET /api/runs` uses cursor pagination — `{items, next_cursor, total}`,
   where `next_cursor: null` means the last page.
-- Most other list endpoints return bare JSON arrays capped at 100 items:
-  `GET /api/pipelines` returns at most 100 items (ordered by last update),
-  and `GET /api/templates` returns all templates.
+- Most other list endpoints return bare JSON arrays capped at 100 items
+  (`GET /api/pipelines` returns at most 100, ordered by last update). The
+  exceptions are `GET /api/templates`, `GET /api/users`, and
+  `GET /api/clusters`, which return every row and are intentionally uncapped
+  administrative lists.
 
 ```json
 [{ "id": "...", "name": "...", ... }]
@@ -551,10 +554,10 @@ data: {"pipeline_id": "...", ...}
 
 The frontend (`frontend/`, React 19 + TypeScript) follows a few shared UX conventions so behavior stays consistent across pages:
 
-- **Collapsible sections**: Settings sections, the Rule Inspector field groups (inputs/outputs, resources, advanced), and the run monitor's alert cards + Recent Events table fold behind clickable headers (`role="button"`, `aria-expanded`, Enter/Space toggles, rotating chevron). Sections default to open — the monitor's alert cards and events table are the exception, defaulting collapsed so a burst of alerts doesn't bury the live view. Collapsing only hides children; form state lives in the parent component, so no draft input is lost.
+- **Collapsible sections**: Settings sections, the Rule Inspector field groups (inputs/outputs, resources, advanced), and the run monitor's alert cards + Recent Events table fold behind clickable headers (`role="button"`, `aria-expanded`, Enter/Space toggles, rotating chevron). Settings and Rule Inspector sections default to open, and the monitor's alert cards default expanded (one card per alert); the Recent Events table defaults collapsed for every run so a burst of alerts doesn't bury the live view. Collapsing only hides children; form state lives in the parent component, so no draft input is lost.
 - **Styled confirmation dialogs**: destructive actions (pipeline delete) open the shared `Modal` component instead of `window.confirm` — the native dialog cannot be styled and blocks the event loop in the embedded desktop shell. The modal provides Escape/backdrop close, a focus trap, and focus restore.
 - **Honest AI-disabled state**: when no AI provider is configured, the Dashboard entry card renders a "configure AI" call-to-action linking to `/settings` (with a note about server-side configuration), and the chat composer's editor hand-off CTA only renders outside the editor context.
-- **Unified app navigation**: the SPA has exactly one primary nav — a sectioned sidebar (`WORKSPACE` / `INTELLIGENCE` / `INFRASTRUCTURE` / `ADMINISTRATION`) defined once in `Layout.tsx` with per-item role gating; the header is deliberately nav-free. At ≥1280px the sidebar is collapsible (240px ↔ 72px icon rail, persisted per device in localStorage, Ctrl/Cmd+B toggles); 1024–1279px forces the icon rail; below 1024px the sidebar becomes a drawer opened from the header toggle — a `role="dialog"` with focus trap, focus moved in on open, Escape/scrim/route-change dismissal. Icon-rail tooltips show on hover and keyboard focus. Version and license render exactly once, in the page footer; `/login` is a standalone centered card outside the app shell (same pattern as `/share`).
+- **Unified app navigation**: the SPA has exactly one primary nav — a sectioned sidebar (`WORKSPACE` / `INTELLIGENCE` / `INFRASTRUCTURE` / `ADMINISTRATION`) defined once in `Layout.tsx` with per-item role gating; the header is deliberately nav-free. At ≥1280px the sidebar is collapsible (240px ↔ 72px icon rail, persisted per device in localStorage, Ctrl/Cmd+B toggles); 1024–1279px forces the icon rail; below 1024px the sidebar becomes a drawer opened from the header toggle — a `role="dialog"` with focus trap, focus moved in on open, Escape/scrim/route-change dismissal. Icon-rail tooltips show on hover and keyboard focus. Version and license render in the page footer on every route; the Dashboard additionally renders a Version stat card from `health.version` (so the running engine version is visible at a glance). `/login` is a standalone centered card outside the app shell (same pattern as `/share`).
 - **Polling-stable UI state**: expansion/collapse choices on the run monitor are keyed by stable alert identifiers (`alert_id`, falling back to `rule-prediction`), so they survive the 5-second polling re-render.
 - **Truthful environment labels on the monitor canvas**: the run monitor's DAG canvas draws each rule with the environment the run actually wraps it in — `GET /api/runs/{id}/dag-status` resolves it from the run's own pipeline snapshot the way the run path does (the same `apply_defaults` fold `run`/`dry-run` make: `env_group` → the rule's inline environment → `[defaults] environment`, issue #1210), and the canvas renders that kind (`conda`, `mamba`, `pixi`, `docker`, `singularity`, `venv`, `modules`, `system`) instead of painting every node `system` (issue #1149, audit UX-07). A node that no longer maps to a snapshot rule (an orphaned instance left by an edited workflow) is labelled `unknown` — the canvas never guesses `system`. The label is per rule, so the same rule's instances share it; the Metro view's process grouping therefore splits stations by real environment.
 - **End-to-end workflow lifecycle & Command Palette**: the Command Center (`Dashboard.tsx`) surfaces a 5-stage lifecycle architecture grid (`1. Data & Samples` → `2. Author & AI` → `3. Validate & Lint` → `4. Execute & Guard` → `5. Provenance & Report`) that links directly to the corresponding editor modals (`/editor?modal=data`, `/editor?modal=engine`) and monitor tabs. A global keyboard Command Palette (`⌘K` / `Ctrl+K`) in `Layout.tsx` provides quick search across pages, lifecycle modals, and theme/locale toggles without adding header navigation links. The editor integrates sample-sheet cohort parsing (`POST /api/data/samplesheet/parse`), workspace file uploads (`GET/POST /api/files`), vendor MD5 delivery verification (`POST /api/data/verify`), `[engine]` disk-pressure & protected-tree configuration, canonical formatting (`POST /api/pipelines/format`), and best-practice linting (`POST /api/pipelines/lint`); the run launcher and monitor expose `--provenance` (`GET /api/runs/{id}/provenance-verify`), `--allow-protected-drift` (`GET /api/runs/{id}/protected-drift`), `--arg KEY=VALUE` overrides, and output file preview/download (`GET /api/runs/{id}/files`).

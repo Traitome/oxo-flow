@@ -2350,12 +2350,14 @@ fn resolve_provider(
     AiProvider::Noop
 }
 
-/// Zero-config detection tier: derive a provider from the standard
-/// credential variables users (and gateway setups) already export in
-/// their shell. Mirrors the web fallback chain's philosophy — never
-/// invent a configuration the user did not signal (no phantom
-/// localhost:11434 unless OLLAMA_HOST says otherwise).
-fn detect_provider_from_env(env: &EnvSnapshot) -> Option<AiProvider> {
+/// The provider kind the standard credential variables select, if any.
+///
+/// This is the detection order the runtime uses (Claude first, because
+/// Anthropic-shaped gateways are the dominant deployment shape). Split out
+/// from [`detect_provider_from_env`] so status surfaces that report the
+/// ENVIRONMENT tier resolve the same kind without constructing a backend
+/// or emitting auto-detection logs on every request.
+fn detect_env_provider_kind(env: &EnvSnapshot) -> Option<ProviderKind> {
     // A credential only counts when it survives a trim: a whitespace-only
     // export is an unfinished setup, not a working backend, and letting it
     // win detection would bury a real credential for another provider.
@@ -2366,41 +2368,119 @@ fn detect_provider_from_env(env: &EnvSnapshot) -> Option<AiProvider> {
         || has_credential(&env.anthropic_api_key)
         || has_credential(&env.claude_api_key)
     {
-        let provider = create_provider_in(ProviderKind::Claude, None, None, None, env);
-        tracing::info!(
+        Some(ProviderKind::Claude)
+    } else if has_credential(&env.openai_api_key) {
+        Some(ProviderKind::OpenAi)
+    } else if has_credential(&env.deepseek_api_key) {
+        Some(ProviderKind::DeepSeek)
+    } else if has_credential(&env.ollama_host) {
+        Some(ProviderKind::Ollama)
+    } else {
+        None
+    }
+}
+
+/// Zero-config detection tier: derive a provider from the standard
+/// credential variables users (and gateway setups) already export in
+/// their shell. Mirrors the web fallback chain's philosophy — never
+/// invent a configuration the user did not signal (no phantom
+/// localhost:11434 unless OLLAMA_HOST says otherwise).
+fn detect_provider_from_env(env: &EnvSnapshot) -> Option<AiProvider> {
+    let kind = detect_env_provider_kind(env)?;
+    let provider = create_provider_in(kind, None, None, None, env);
+    match kind {
+        ProviderKind::Claude => tracing::info!(
             "AI provider auto-detected from ANTHROPIC_* env: {} (endpoint: {})",
             provider.name(),
             provider.api_url().unwrap_or_default()
-        );
-        return Some(provider);
-    }
-    if has_credential(&env.openai_api_key) {
-        let provider = create_provider_in(ProviderKind::OpenAi, None, None, None, env);
-        tracing::info!(
+        ),
+        ProviderKind::OpenAi => tracing::info!(
             "AI provider auto-detected from OPENAI_API_KEY: {} (endpoint: {})",
             provider.name(),
             provider.api_url().unwrap_or_default()
-        );
-        return Some(provider);
-    }
-    if has_credential(&env.deepseek_api_key) {
-        let provider = create_provider_in(ProviderKind::DeepSeek, None, None, None, env);
-        tracing::info!(
+        ),
+        ProviderKind::DeepSeek => tracing::info!(
             "AI provider auto-detected from DEEPSEEK_API_KEY: {}",
             provider.name()
-        );
-        return Some(provider);
-    }
-    if has_credential(&env.ollama_host) {
-        let provider = create_provider_in(ProviderKind::Ollama, None, None, None, env);
-        tracing::info!(
+        ),
+        ProviderKind::Ollama => tracing::info!(
             "AI provider auto-detected from OLLAMA_HOST: {} (endpoint: {})",
             provider.name(),
             provider.api_url().unwrap_or_default()
-        );
-        return Some(provider);
+        ),
     }
-    None
+    Some(provider)
+}
+
+/// The environment tier's provider metadata: which provider the process
+/// environment selects and the model/endpoint overrides it supplies.
+///
+/// This deliberately reports only ENV-SUPPLIED values — never a provider's
+/// built-in default model or endpoint — so a status surface cannot
+/// misattribute a default to the environment. Persisted tiers are out of
+/// scope here: callers combine this with DB rows to show the documented
+/// user → server → environment chain.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnvProviderTier {
+    pub provider: String,
+    pub model: Option<String>,
+    pub api_url: Option<String>,
+}
+
+/// Resolve [`EnvProviderTier`] from the live process environment.
+///
+/// Precedence matches the runtime factory's `create_provider_in`: an explicit
+/// `OXO_FLOW_AI_PROVIDER` wins (a typo falls through to credential
+/// detection, exactly like the runtime), otherwise the standard credential
+/// variables auto-detect a provider. `OXO_FLOW_AI_PROVIDER=disabled`
+/// reports the pin as `provider: "disabled"`. `None` means the environment
+/// supplies no provider selection at all (an invalid explicit name with no
+/// detectable credentials also resolves to `None`).
+pub fn env_provider_tier() -> Option<EnvProviderTier> {
+    env_provider_tier_from(&EnvSnapshot::from_process_env())
+}
+
+/// [`env_provider_tier`] against an explicit environment snapshot (the
+/// testable core; env mutation is process-global otherwise).
+fn env_provider_tier_from(env: &EnvSnapshot) -> Option<EnvProviderTier> {
+    let provider_env = env.oxo_flow_provider.clone().unwrap_or_default();
+    if provider_name_is_disabled(&provider_env) {
+        return Some(EnvProviderTier {
+            provider: "disabled".to_string(),
+            model: None,
+            api_url: None,
+        });
+    }
+    // `create_provider_in` applies `OXO_FLOW_AI_MODEL`/`_API_URL` before the
+    // provider-specific variable, so the reported tier uses the same order.
+    let kind = provider_env
+        .parse::<ProviderKind>()
+        .ok()
+        .or_else(|| detect_env_provider_kind(env))?;
+    let non_blank = |value: &Option<String>| {
+        value
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(str::to_string)
+    };
+    let model = non_blank(&env.oxo_flow_model).or_else(|| match kind {
+        ProviderKind::Claude => non_blank(&env.anthropic_model),
+        ProviderKind::OpenAi => non_blank(&env.openai_model),
+        ProviderKind::DeepSeek => None,
+        ProviderKind::Ollama => non_blank(&env.ollama_model),
+    });
+    let api_url = non_blank(&env.oxo_flow_api_url).or_else(|| match kind {
+        ProviderKind::Claude => non_blank(&env.anthropic_base_url),
+        ProviderKind::OpenAi => non_blank(&env.openai_base_url),
+        ProviderKind::DeepSeek => non_blank(&env.deepseek_base_url),
+        ProviderKind::Ollama => non_blank(&env.ollama_host),
+    });
+    Some(EnvProviderTier {
+        provider: kind.as_str().to_string(),
+        model,
+        api_url,
+    })
 }
 
 /// Snapshot of every environment variable the resolution tiers read.
@@ -3800,6 +3880,125 @@ mod tests {
             resolve_provider("", None, &EnvSnapshot::default()),
             AiProvider::Noop
         ));
+    }
+
+    #[test]
+    fn env_provider_tier_requires_an_environment_signal() {
+        assert_eq!(
+            env_provider_tier_from(&EnvSnapshot::default()),
+            None,
+            "an empty environment has no provider tier to report"
+        );
+    }
+
+    #[test]
+    fn env_provider_tier_reports_provider_specific_variables() {
+        // Each provider's own model/endpoint variables are the env tier's
+        // values — not the provider's built-in defaults.
+        let cases = [
+            (
+                EnvSnapshot {
+                    anthropic_auth_token: Some("sk-ant".into()),
+                    anthropic_model: Some("claude-env-model".into()),
+                    anthropic_base_url: Some("https://anthropic.example/v1".into()),
+                    ..EnvSnapshot::default()
+                },
+                "claude",
+                "claude-env-model",
+                "https://anthropic.example/v1",
+            ),
+            (
+                EnvSnapshot {
+                    openai_api_key: Some("sk-openai".into()),
+                    openai_model: Some("openai-env-model".into()),
+                    openai_base_url: Some("https://openai.example/v1".into()),
+                    ..EnvSnapshot::default()
+                },
+                "openai",
+                "openai-env-model",
+                "https://openai.example/v1",
+            ),
+            (
+                EnvSnapshot {
+                    deepseek_api_key: Some("sk-deepseek".into()),
+                    deepseek_base_url: Some("https://deepseek.example/v1".into()),
+                    ..EnvSnapshot::default()
+                },
+                "deepseek",
+                "",
+                "https://deepseek.example/v1",
+            ),
+            (
+                EnvSnapshot {
+                    ollama_host: Some("http://ollama.example:11434".into()),
+                    ollama_model: Some("ollama-env-model".into()),
+                    ..EnvSnapshot::default()
+                },
+                "ollama",
+                "ollama-env-model",
+                "http://ollama.example:11434",
+            ),
+        ];
+        for (env, provider, model, url) in cases {
+            let tier = env_provider_tier_from(&env).expect("env tier");
+            assert_eq!(tier.provider, provider, "{env:?}");
+            assert_eq!(
+                tier.model.as_deref().unwrap_or(""),
+                model,
+                "{env:?}: a provider default must not masquerade as an env value"
+            );
+            assert_eq!(tier.api_url.as_deref().unwrap_or(""), url, "{env:?}");
+        }
+    }
+
+    #[test]
+    fn env_provider_tier_prefers_generic_overrides_like_the_factory() {
+        // `create_provider_in` applies OXO_FLOW_AI_MODEL / _API_URL BEFORE
+        // the provider-specific variable; the reported tier must agree.
+        let env = EnvSnapshot {
+            openai_api_key: Some("sk-openai".into()),
+            openai_model: Some("provider-model".into()),
+            openai_base_url: Some("https://provider.example/v1".into()),
+            oxo_flow_model: Some("generic-model".into()),
+            oxo_flow_api_url: Some("https://generic.example/v1".into()),
+            ..EnvSnapshot::default()
+        };
+        let tier = env_provider_tier_from(&env).expect("env tier");
+        assert_eq!(tier.provider, "openai");
+        assert_eq!(tier.model.as_deref(), Some("generic-model"));
+        assert_eq!(tier.api_url.as_deref(), Some("https://generic.example/v1"));
+    }
+
+    #[test]
+    fn env_provider_tier_names_the_disabled_pin() {
+        let env = EnvSnapshot {
+            oxo_flow_provider: Some("disabled".into()),
+            openai_api_key: Some("sk-openai".into()),
+            ..EnvSnapshot::default()
+        };
+        assert_eq!(
+            env_provider_tier_from(&env),
+            Some(EnvProviderTier {
+                provider: "disabled".into(),
+                model: None,
+                api_url: None,
+            })
+        );
+    }
+
+    #[test]
+    fn env_provider_tier_falls_back_to_detection_after_a_typo() {
+        // A typo'd provider name is ignored by the runtime in favour of
+        // credential detection; the reported tier must not claim the typo.
+        let env = EnvSnapshot {
+            oxo_flow_provider: Some("cluade".into()),
+            openai_api_key: Some("sk-openai".into()),
+            openai_model: Some("detected-model".into()),
+            ..EnvSnapshot::default()
+        };
+        let tier = env_provider_tier_from(&env).expect("detected tier");
+        assert_eq!(tier.provider, "openai");
+        assert_eq!(tier.model.as_deref(), Some("detected-model"));
     }
 
     #[test]

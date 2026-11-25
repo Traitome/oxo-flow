@@ -272,6 +272,22 @@ fn generated_spec_is_valid_json_and_openapi_3_1() {
         serde_json::from_str(&json).expect("generated spec must parse as JSON");
 
     assert_eq!(spec["openapi"], "3.1.0", "spec must be OpenAPI 3.1.0");
+    // Audit M2: explicit metadata — utoipa's derived contact parsed the
+    // workspace authors URL as an email ("http") and the license name was
+    // empty because the crate uses `license-file`.
+    assert_eq!(
+        spec["info"]["contact"]["url"],
+        "https://github.com/Traitome/oxo-flow"
+    );
+    assert!(
+        spec["info"]["contact"].get("email").is_none(),
+        "the contact must not carry a bogus derived email: {}",
+        spec["info"]["contact"]
+    );
+    assert_eq!(
+        spec["info"]["license"]["name"],
+        "Academic / Commercial (dual)"
+    );
     assert!(
         spec["paths"].is_object(),
         "spec must contain a paths object"
@@ -435,6 +451,340 @@ fn ai_routes_document_their_request_bodies() {
     );
 }
 
+/// Task 7b / I3: a handler whose signature parses `ApiJson<T>` is a
+/// body-carrying operation, and the generated contract must say so. The
+/// check is mechanical over ALL crate sources (not a hand list): for every
+/// `ApiJson<` occurrence outside a `#[cfg(test)]` module/function, the
+/// nearest preceding `#[utoipa::path(...)]` block must contain
+/// `request_body`.
+///
+/// Review I-1: the scanner used to truncate each file at the FIRST
+/// `#[cfg(test)]`, so `execution/handlers.rs` (a `#[cfg(test)] mod
+/// quota_tests` appears before the run handlers) was silently never
+/// scanned. It now brace-matches every `#[cfg(test)] mod|fn` range and skips
+/// only those, and walks every `.rs` under `src/` (the extractor definition
+/// is excluded because its `ApiJson` mentions are the type itself, not
+/// routes).
+#[test]
+fn every_api_json_handler_declares_a_request_body() {
+    fn collect_sources(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        for entry in std::fs::read_dir(dir).expect("source dir is readable") {
+            let path = entry.expect("dir entry").path();
+            if path.is_dir() {
+                collect_sources(&path, out);
+            } else if path.extension().and_then(|ext| ext.to_str()) == Some("rs")
+                && path.file_name().and_then(|name| name.to_str()) != Some("extract.rs")
+            {
+                out.push(path);
+            }
+        }
+    }
+
+    /// End offset of the `#[cfg(test)] mod|fn ...` item starting at `start`,
+    /// matched by braces (string literals ignored). `None` for `cfg(test)`
+    /// attributes on non-braced items (e.g. match arms), which cannot hide
+    /// a handler.
+    fn cfg_test_range(text: &str, start: usize) -> Option<usize> {
+        let after = start + "#[cfg(test)]".len();
+        let rest = &text[after..];
+        let mut probe = rest.trim_start();
+        if probe.starts_with("pub ") || probe.starts_with("pub(crate) ") {
+            probe = probe
+                .split_once(char::is_whitespace)
+                .map_or(probe, |(_, r)| r.trim_start());
+        }
+        if probe.starts_with("async ") {
+            probe = probe["async ".len()..].trim_start();
+        }
+        if !(probe.starts_with("mod ") || probe.starts_with("fn ")) {
+            return None;
+        }
+        let open = after + rest.find('{')?;
+        let mut depth = 0usize;
+        let mut in_string = false;
+        let mut escaped = false;
+        for (offset, ch) in text[open..].char_indices() {
+            if in_string {
+                if escaped {
+                    escaped = false;
+                } else if ch == '\\' {
+                    escaped = true;
+                } else if ch == '"' {
+                    in_string = false;
+                }
+                continue;
+            }
+            match ch {
+                '"' => in_string = true,
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(open + offset + 1);
+                    }
+                }
+                _ => {}
+            }
+        }
+        Some(text.len())
+    }
+
+    /// End offset of a balanced paren group starting at `open`, ignoring
+    /// parens inside string literals (review I-1: an attribute
+    /// `description = "...(...)"` must not truncate the block).
+    fn matching_paren(text: &str, open: usize) -> usize {
+        let mut depth = 0usize;
+        let mut in_string = false;
+        let mut escaped = false;
+        for (offset, ch) in text[open..].char_indices() {
+            if in_string {
+                if escaped {
+                    escaped = false;
+                } else if ch == '\\' {
+                    escaped = true;
+                } else if ch == '"' {
+                    in_string = false;
+                }
+                continue;
+            }
+            match ch {
+                '"' => in_string = true,
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return open + offset + 1;
+                    }
+                }
+                _ => {}
+            }
+        }
+        text.len()
+    }
+
+    /// Whether `idx` sits in a line or block comment (doc comments mention
+    /// `ApiJson<T>` in prose; they are not handler signatures).
+    fn in_comment(text: &str, idx: usize) -> bool {
+        let line_start = text[..idx].rfind('\n').map_or(0, |line| line + 1);
+        if text[line_start..idx].contains("//") {
+            return true;
+        }
+        let before = &text[..idx];
+        let last_open = before.rfind("/*");
+        let last_close = before.rfind("*/");
+        last_open.is_some_and(|open| last_close.is_none_or(|close| open > close))
+    }
+
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut files = Vec::new();
+    collect_sources(&src, &mut files);
+    assert!(!files.is_empty(), "no sources found under {src:?}");
+
+    let mut offenders = Vec::new();
+    let mut execution_handlers_scanned = 0usize;
+    for path in &files {
+        let text = std::fs::read_to_string(path).expect("source is UTF-8");
+        let mut skipped: Vec<(usize, usize)> = text
+            .match_indices("#[cfg(test)]")
+            .filter_map(|(idx, _)| cfg_test_range(&text, idx).map(|end| (idx, end)))
+            .collect();
+        skipped.sort_unstable();
+        let is_execution_handlers = path.ends_with("domains/execution/handlers.rs");
+
+        for (idx, _) in text.match_indices("ApiJson<") {
+            if in_comment(&text, idx)
+                || skipped
+                    .iter()
+                    .any(|(start, end)| idx >= *start && idx < *end)
+            {
+                continue;
+            }
+            if is_execution_handlers {
+                execution_handlers_scanned += 1;
+            }
+            let Some(attr_start) = text[..idx].rfind("#[utoipa::path(") else {
+                offenders.push(format!(
+                    "{}: `ApiJson<` without a preceding #[utoipa::path]",
+                    path.display()
+                ));
+                continue;
+            };
+            if skipped
+                .iter()
+                .any(|(start, end)| attr_start >= *start && attr_start < *end)
+            {
+                continue;
+            }
+            let open = attr_start
+                + text[attr_start..]
+                    .find('(')
+                    .expect("attribute has an opening paren");
+            let end = matching_paren(&text, open);
+            let block = &text[attr_start..end];
+            // A free helper after a route must not borrow that route's
+            // attribute: the occurrence has to sit in a function signature.
+            if !text[end..idx].contains("fn ") {
+                offenders.push(format!(
+                    "{}: `ApiJson<` is not inside a documented handler signature",
+                    path.display()
+                ));
+                continue;
+            }
+            if !block.contains("request_body") {
+                let route = block
+                    .split("path = \"")
+                    .nth(1)
+                    .and_then(|rest| rest.split('"').next())
+                    .unwrap_or("<unknown path>");
+                offenders.push(format!("{}: {route}", path.display()));
+            }
+        }
+    }
+    // Regression pin for review I-1: execution/handlers.rs has 7 ApiJson
+    // handlers after a cfg(test) module and must actually be scanned.
+    assert!(
+        execution_handlers_scanned >= 7,
+        "execution/handlers.rs must contribute its ApiJson handlers to the scan \
+         (got {execution_handlers_scanned}); the cfg(test) skipping regressed"
+    );
+    assert!(
+        offenders.is_empty(),
+        "handlers that parse ApiJson<T> must declare `request_body` in their \
+         #[utoipa::path]:\n  {}",
+        offenders.join("\n  ")
+    );
+}
+
+/// Task 7b / I3: every operation declares its security posture. Protected
+/// operations accept either the session bearer token or `X-API-Key`; public
+/// ones declare `"security": []` explicitly. The public/protected split is
+/// asserted against `server::is_public_route` — the same predicate the auth
+/// middleware uses — so the spec cannot drift from the runtime gate.
+#[test]
+fn every_operation_declares_its_security() {
+    let spec: serde_json::Value = serde_json::from_str(&oxo_flow_web::openapi::spec_json("hpc"))
+        .expect("generated spec must parse as JSON");
+    let paths = spec["paths"].as_object().expect("paths object");
+    let methods = [
+        "get", "put", "post", "delete", "patch", "options", "head", "trace",
+    ];
+
+    let mut offenders = Vec::new();
+    for (path, item) in paths {
+        for method in methods {
+            let Some(operation) = item.get(method) else {
+                continue;
+            };
+            let http_method = axum::http::Method::from_bytes(method.to_uppercase().as_bytes())
+                .expect("known method");
+            let public = oxo_flow_web::server::is_public_route(path, &http_method, false);
+            let security = operation.get("security");
+            if public {
+                match security {
+                    Some(serde_json::Value::Array(entries)) if entries.is_empty() => {}
+                    other => offenders.push(format!(
+                        "{method_upper} {path}: public operation must declare \
+                         \"security\": [], got {other:?}",
+                        method_upper = method.to_uppercase()
+                    )),
+                }
+                continue;
+            }
+            let entries = security
+                .and_then(serde_json::Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            let schemes: Vec<&str> = entries
+                .iter()
+                .filter_map(serde_json::Value::as_object)
+                .flat_map(|entry| entry.keys().map(String::as_str))
+                .collect();
+            if !schemes.contains(&"bearerAuth") || !schemes.contains(&"apiKey") {
+                offenders.push(format!(
+                    "{method_upper} {path}: protected operation must declare bearerAuth \
+                     and apiKey, got {security:?}",
+                    method_upper = method.to_uppercase()
+                ));
+            }
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "OpenAPI security declarations are incomplete:\n  {}",
+        offenders.join("\n  ")
+    );
+}
+
+/// The `apiKey` scheme must be advertised and referenced wherever the
+/// middleware accepts `X-API-Key` (Task 7b / I3).
+#[test]
+fn api_key_scheme_is_advertised_and_referenced() {
+    let spec: serde_json::Value = serde_json::from_str(&oxo_flow_web::openapi::spec_json("hpc"))
+        .expect("generated spec must parse as JSON");
+    let scheme = &spec["components"]["securitySchemes"]["apiKey"];
+    assert_eq!(scheme["type"], "apiKey", "{scheme}");
+    assert_eq!(scheme["in"], "header", "{scheme}");
+    assert_eq!(scheme["name"], "X-API-Key", "{scheme}");
+
+    let references = spec["paths"]
+        .as_object()
+        .expect("paths object")
+        .values()
+        .filter_map(serde_json::Value::as_object)
+        .flat_map(|item| item.values())
+        .filter_map(|operation| operation.get("security"))
+        .filter_map(serde_json::Value::as_array)
+        .flatten()
+        .filter_map(serde_json::Value::as_object)
+        .filter(|requirement| requirement.contains_key("apiKey"))
+        .count();
+    assert!(
+        references > 0,
+        "the apiKey scheme is advertised but never referenced by an operation"
+    );
+}
+
+/// The audit's concrete examples (I3): the AI probe, login, pipeline
+/// create, user create, cluster upsert, webhook update, and the AI
+/// translate/generation routes must all document a JSON body.
+#[test]
+fn representative_write_routes_document_request_bodies() {
+    let spec: serde_json::Value = serde_json::from_str(&oxo_flow_web::openapi::spec_json("hpc"))
+        .expect("generated spec must parse as JSON");
+    for (path, method) in [
+        ("/api/ai/test", "post"),
+        ("/api/ai/translate", "post"),
+        ("/api/ai/explain", "post"),
+        ("/api/ai/interpret", "post"),
+        ("/api/ai/optimize", "post"),
+        ("/api/ai/config", "post"),
+        ("/api/ai/config/server", "put"),
+        ("/api/ai/config/user", "put"),
+        ("/api/auth/login", "post"),
+        ("/api/pipelines", "post"),
+        ("/api/pipelines/{id}", "put"),
+        ("/api/users", "post"),
+        ("/api/clusters", "post"),
+        ("/api/webhook", "put"),
+        ("/api/chat/send", "post"),
+        ("/api/chat/send/json", "post"),
+        ("/api/runs/{id}/retry", "post"),
+        ("/api/runs/{id}/report/ask", "post"),
+        ("/api/runs/{id}/resume-checkpoint", "post"),
+        ("/api/pipelines/{id}/rollback", "post"),
+    ] {
+        let operation = &spec["paths"][path][method];
+        assert!(
+            operation.get("requestBody").is_some(),
+            "{method} {path} must declare a requestBody"
+        );
+        assert!(
+            operation["requestBody"]["content"]["application/json"].is_object(),
+            "{method} {path} requestBody must document an application/json schema"
+        );
+    }
+}
+
 /// #914 review NIT: POST /api/events/ticket must document its response body
 /// (TicketResponse), not just an untyped 200 JSON blob.
 #[test]
@@ -460,4 +810,52 @@ fn events_ticket_documents_its_response_body() {
         component["properties"]["expires_in_secs"]["type"], "integer",
         "TicketResponse.expires_in_secs must be an integer: {component}"
     );
+}
+
+/// Task 7b / I3 review Minor 2: the security declarations are derived from
+/// `server::is_public_route`, the same predicate the auth middleware uses —
+/// by construction the spec cannot disagree with itself. This behavioural
+/// test pins the outcome in team mode so a wrong classification (e.g. a
+/// protected path added to the public list) fails even though the
+/// source-scanning assertions share the predicate.
+#[tokio::test]
+async fn public_route_predicate_matches_team_mode_middleware() {
+    use axum::body::Body;
+    use tower::ServiceExt;
+
+    let app = oxo_flow_web::server::build_router("team");
+    async fn status(app: &axum::Router, uri: &str) -> u16 {
+        let response = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri(uri)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        response.status().as_u16()
+    }
+
+    for uri in [
+        "/api/health",
+        "/api/openapi.json",
+        "/api/ai/config",
+        "/api/license",
+    ] {
+        assert_eq!(status(&app, uri).await, 200, "{uri} must stay public");
+    }
+    for uri in [
+        "/api/pipelines",
+        "/api/runs",
+        "/api/audit",
+        "/api/ai/config/effective",
+    ] {
+        assert_eq!(
+            status(&app, uri).await,
+            401,
+            "{uri} must require authentication in team mode"
+        );
+    }
 }

@@ -8,10 +8,10 @@ oxo-flow includes a built-in REST API server for building, validating, running, 
 
 - **Envelope**: success responses are bare JSON objects/arrays; errors are `{ code, message, detail, suggestion }` — `detail` and `suggestion` are always present and are `null` when the error carries no extra context
 - **Errors**: the `code` value is a stable semantic string per failure class (`AUTH_REQUIRED`, `NOT_FOUND`, `RUN_RATE_LIMITED`, `AI_TIMEOUT`, …). Engine [diagnostic codes](./glossary.md#diagnostic-codes) (`E0xx`) surface inside `message` (e.g. a parse failure reported as `RUN_ERROR` carries `E017: unknown key …` in its message), not as the envelope `code`
-- **Lists**: `GET /api/runs` returns a cursor-paginated envelope `{ items, next_cursor, total }` (limit ≤ 500, `status`/`q` filters); other list endpoints return bare arrays (≤ 100 items)
+- **Lists**: `GET /api/runs` returns a cursor-paginated envelope `{ items, next_cursor, total }` (limit ≤ 500, `status`/`q` filters); other list endpoints return bare arrays. Most are capped at 100 items, but `GET /api/templates` (all templates), `GET /api/users` (all accounts), and `GET /api/clusters` (all connections) are **not** capped — they are small administrative lists by design.
 - **Versioning**: `/api/` prefix for all endpoints
-- **Authentication**: in team/hpc mode, protected endpoints accept an `Authorization: Bearer <token>` session token or an `X-API-Key` header. The generated OpenAPI spec at `GET /api/openapi.json` declares both `bearerAuth` and `apiKey` security schemes; public endpoints (health, login, license, openapi.json, etc.) require no auth.
-- **Self-discoverable**: OpenAPI 3.1 spec at `GET /api/openapi.json`. The spec is **code-generated** via [utoipa](https://github.com/juhaku/utoipa) from the `#[utoipa::path]` annotations on every route handler — there is no hand-maintained static file. `crates/oxo-flow-web/tests/openapi_gate.rs` is the drift gate: it asserts every route in the router appears in the generated spec, so a new route without an annotation fails CI.
+- **Authentication**: in team/hpc mode, protected endpoints accept an `Authorization: Bearer <token>` session token or an `X-API-Key` header. The generated OpenAPI spec at `GET /api/openapi.json` declares both `bearerAuth` and `apiKey` security schemes and marks every operation's security: protected operations list both schemes, public operations declare `security: []`. The protected/public split is the same predicate the auth middleware uses (`server::is_public_route`), so the spec and the runtime gate cannot drift. Public endpoints (health, login, license, openapi.json, etc.) require no auth.
+- **Self-discoverable**: OpenAPI 3.1 spec at `GET /api/openapi.json`. The spec is **code-generated** via [utoipa](https://github.com/juhaku/utoipa) from the `#[utoipa::path]` annotations on every route handler — there is no hand-maintained static file. Every body-parsing handler declares its `requestBody` schema. `crates/oxo-flow-web/tests/openapi_gate.rs` is the drift gate: it asserts every route in the router appears in the generated spec, every `ApiJson<T>` handler documents a request body, and every operation declares its security posture, so a new route without those annotations fails CI.
 
 ### Structured Error Format
 
@@ -89,7 +89,7 @@ In `hpc` mode, `components.scheduler` reports `{"status":"ok"}` when a scheduler
 
 `components.ai_key_storage` is `"encrypted"` when `OXO_FLOW_MASTER_KEY` is set, `"plaintext"` otherwise.
 
-`components.ai_provider` is `{"status": "connected", "latency_ms": null}` while a provider is active and `{"status": "disabled", "latency_ms": null}` when AI is off — explicitly pinned with `OXO_FLOW_AI_PROVIDER=disabled`, disabled at runtime, or nothing resolved. The pin outranks every persisted tier: `~/.oxo-flow/ai_config.json`, the platform config file, and DB-persisted settings can supply credentials for any other provider value but cannot resurrect a disabled registry. In that state the AI endpoints answer the structured `AI_NOT_CONFIGURED` error without any outbound request. Configuration updates follow the same rule with one distinction: the runtime-only `POST /api/ai/config` answers `409 AI_DISABLED_BY_ENV` (it has no durable tier, so refusing is the only honest answer), while the persisted `PUT /api/ai/config/server` and `PUT /api/ai/config/user` still save (200, `applied_to_runtime: false`) — Settings stays usable and the saved config applies after an unpinned restart — but never reconfigure the pinned runtime. `POST /api/ai/test` answers `success: false` with `provider: "disabled"` without constructing a provider or opening a connection (see the AI endpoints section below).
+`components.ai_provider` is `{"status": "connected", "latency_ms": null}` while a provider is active and `{"status": "disabled", "latency_ms": null}` when AI is off — explicitly pinned with `OXO_FLOW_AI_PROVIDER=disabled`, disabled at runtime, or nothing resolved. The pin outranks every persisted tier: `~/.oxo-flow/ai_config.json`, the platform config file, and DB-persisted settings can supply credentials for any other provider value but cannot resurrect a disabled registry. In that state the AI endpoints answer the structured `AI_NOT_CONFIGURED` error without any outbound request. Configuration updates follow the same rule with one distinction: the runtime-only `POST /api/ai/config` answers `409 AI_DISABLED_BY_ENV` (it has no durable tier, so refusing is the only honest answer), while the persisted `PUT /api/ai/config/server` and `PUT /api/ai/config/user` still save (200, `applied_to_runtime: false`) — subject to the blank-key contract (a key-requiring provider with no usable stored/request key answers `400 AI_KEY_REQUIRED`) — Settings stays usable and the saved config applies after an unpinned restart — but never reconfigure the pinned runtime. `POST /api/ai/test` answers `success: false` with `provider: "disabled"` without constructing a provider or opening a connection (see the AI endpoints section below).
 
 `components.engine` reports the engine CLI the server spawns for runs, resolved once at startup by running `<binary> --version`:
 
@@ -1428,7 +1428,7 @@ GET  /api/ai/config/user        # The acting user's private provider config
 PUT  /api/ai/config/user        # Set the acting user's private provider config
 GET  /api/ai/config/server      # Server-level provider config (admin-only outside personal mode)
 PUT  /api/ai/config/server      # Set the server-level provider config
-GET  /api/ai/config/effective   # The config a run would use: user → server → env fallback chain (endpoint/model redacted for non-admins)
+GET  /api/ai/config/effective   # Shared runtime + per-tier provenance (a caller's private row overrides it for that caller; endpoint/model redacted for non-admins)
 GET  /api/knowledge/tools       # Tool catalog the AI can call
 GET  /api/knowledge/skills      # Skill catalog the AI can follow
 ```
@@ -1443,6 +1443,12 @@ size, not the hit count.
 The translate endpoints take `{ "intent": "<natural-language description>",
 "context": { "data_analysis_id": "<uuid>" } }` — `intent` is REQUIRED (sending
 only a `prompt` field fails deserialization); `context` is optional.
+
+`POST /api/ai/test` requires a JSON request body — send `{}` when no
+overrides are needed (a bodyless request answers `400 INVALID_BODY`). The
+probe ignores provider fields in the body; it tests the resolved runtime
+provider (or answers `provider: "disabled"` without dialing out under the
+pin). The body is documented in the OpenAPI spec as `AiConfigRequest`.
 
 `POST /api/ai/translate` (the non-streaming variant) budgets the WHOLE
 generation — every tool and validation round — at
@@ -1566,10 +1572,26 @@ normal `401` auth gate.
 
 The config endpoints form a three-level resolution chain: a user's private
 provider overrides the server-wide one, which overrides environment
-variables. `GET /api/ai/config/effective` shows the resolved result and
-which level supplied each field. The `effective.model` field is the model
-the active backend was actually constructed with: an explicit config model
-wins, otherwise the environment override (`ANTHROPIC_MODEL`,
+variables. `GET /api/ai/config/effective` shows the tier provenance and the
+shared runtime: `effective` is the process-global registry — the provider a
+caller uses when they have **no** private row; a caller with a saved private
+row resolves that row instead (`provider_for()`), so `effective` is not
+necessarily what that caller's request would use. Each `tiers.*` entry is
+read from its own source — `tiers.user_*` from the caller's DB row,
+`tiers.server_*` from the shared `user_id IS NULL` DB row (never from the
+active runtime, which may be carrying an env or per-user override), and
+`tiers.env_*` from the same provider-specific environment resolution the
+runtime uses (`OPENAI_MODEL`, `ANTHROPIC_MODEL`, `OLLAMA_MODEL`,
+`OXO_FLOW_AI_MODEL`, the matching base-URL
+variables, and `OXO_FLOW_AI_PROVIDER`; credential auto-detection fills in
+the provider name when no explicit selection is set). The env tier reports
+only values the environment supplies — a provider's built-in default model
+or endpoint is never attributed to it — and an explicitly selected env
+provider is reported even before its credential exists (so
+`tiers.env_provider` can name a provider while `effective` is still
+`disabled`). The `effective.model` field is the
+model the active backend was actually constructed with: an explicit config
+model wins, otherwise the environment override (`ANTHROPIC_MODEL`,
 `OPENAI_MODEL`, `OLLAMA_MODEL`, `OXO_FLOW_AI_MODEL`) or the provider
 default is reported — it is `null` only when no provider is configured.
 `GET /api/ai/config` returns the same resolved model. API keys are never echoed back — responses
@@ -1585,6 +1607,47 @@ path, and again on the next startup when the row is restored). Omitting
 `provider` in a PUT body defaults to `"disabled"`, so a save that only flips
 a toggle must carry the current provider over (the bundled Settings page
 does exactly that).
+
+The bundled Settings page's primary **Save** is role/state-aware: an admin
+(and the personal-mode local operator) writes the durable shared tier
+`PUT /api/ai/config/server`, which the server also applies to its runtime,
+and then syncs the acting user's private row through
+`PUT /api/ai/config/user` — because `provider_for()` prefers a private row
+for that caller's requests, and personal mode's startup restore prefers the
+pseudo-user `"default"` row. The server save itself also mirrors the shared
+values into the acting user's row (the personal-mode `"default"` row, or a
+team admin's private row), preserving that row's advanced toggles, so the
+two tiers agree immediately after a shared save (API-only clients get the
+same consistency). A later user-tier save — the advanced-options button or
+any API client — can still diverge the private row, and that tier retains
+its documented per-caller precedence. The primary Save is an explicit shared
+configuration action: it also overwrites an acting user's private row that
+was set to `provider: "disabled"` (the personal fallback marker).
+
+The blank-key contract is explicit: a blank `api_key` means **keep the
+stored server key when the request names the same provider**. Switching
+providers with a blank key is treated as having no reusable server key, so
+one vendor's credential is never sent to another vendor's endpoint; personal
+mode may still promote the acting pseudo-user's stored key when it belongs
+to the requested provider, and team mode rejects with `400 AI_KEY_REQUIRED`
+(the administrator must type the key). Keyless providers (`ollama`) and
+`disabled` are exempt. A keyless row is never silently accepted for a
+key-requiring provider, because startup restore skips such rows and the
+saved shared provider would be lost.
+
+A non-admin `user`/`viewer` writes only
+their own row through `PUT /api/ai/config/user` and never calls the
+admin-only runtime endpoint `POST /api/ai/config`. Both PUT responses carry
+`{status, provider, applied_to_runtime, disabled_by_env}` — under
+`OXO_FLOW_AI_PROVIDER=disabled` the row persists while
+`applied_to_runtime` stays `false`, and the page reports the saved-but-
+pinned state instead of treating the pin as a failed save.
+
+The primary Save is not transactional across tiers: if the personal/admin
+mirror write (or the SPA's second PUT) fails after the shared tier was
+written, the handler returns an error while the shared row and runtime keep
+the new value. The state is recoverable — the next Save rewrites both tiers —
+and no rollback is attempted; the shared tier is the primary write.
 
 Provider names are validated before either configuration endpoint writes
 to storage. An unsupported name returns `400 INVALID_AI_PROVIDER` and
@@ -1603,9 +1666,11 @@ configuration tier and every runtime update. While it is set:
   its only effect) returns `409 AI_DISABLED_BY_ENV` with the standard
   `{code, message, detail, suggestion}` shape.
 - `PUT /api/ai/config/server` and `PUT /api/ai/config/user` still persist
-  the row and return `200` with `applied_to_runtime: false`: Settings stays
-  usable and the saved configuration applies after an unpinned restart,
-  but the pinned runtime is never reconfigured.
+  the row and return `200` with `applied_to_runtime: false` (provided the
+  save satisfies the blank-key contract above — a key-requiring provider
+  with no usable stored/request key answers `400 AI_KEY_REQUIRED` even
+  while pinned): Settings stays usable and the saved configuration applies
+  after an unpinned restart, but the pinned runtime is never reconfigured.
 - `POST /api/ai/test` returns `200` with `success: false`,
   `provider: "disabled"`, `model: null`, and a message stating that no
   connection was attempted. No provider is resolved and no HTTP client is
@@ -1619,8 +1684,8 @@ configuration tier and every runtime update. While it is set:
   `503 AI_NOT_CONFIGURED`.
 
 Lifting the pin requires restarting the server without the variable (or
-with a provider name); configuration saves are rejected, not queued,
-while it is set.
+with a provider name); runtime-only configuration saves (`POST
+/api/ai/config`) are rejected, not queued, while it is set.
 
 See [AI Translation Layer](ai-translation.md) for details.
 
