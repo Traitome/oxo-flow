@@ -194,6 +194,33 @@ rows, which is where SLURM puts it — the allocation row leaves it blank), PBS
 and SGE report the equivalent `resources_used` / `ru_*` fields, and LSF
 reports state alone.
 
+### Resource accounting coverage (issue #1371)
+
+The normalized `oxo-flow.resource-ledger/v1` document (`oxo-flow report
+--resource-ledger`) reads the cluster path's persisted `resource_usage`
+records. Each metric is `Option`: a backend that cannot prove a value
+leaves it unknown, and every record carries a `ResourceSource` naming the
+backend, tool, and raw fields — never a synthetic zero.
+
+| Field | local | SLURM (`sacct`) | PBS (`qstat -x`) | SGE (`qacct`) | LSF (`bacct`) | SLURM fallback (`scontrol`) | k8s / AWS / GCP / Tencent |
+|---|---|---|---|---|---|---|---|
+| wall / elapsed | sampled | `ElapsedRaw`/`Elapsed` | `resources_used.walltime` | `ru_wallclock` | — | — | — |
+| CPU seconds | sampled (rule process + threads) | `TotalCPU` (max over step rows) | `resources_used.cput` | `cpu` | — | — | — |
+| peak RSS bytes | sampled subtree | `MaxRSS` (max over step rows) | `resources_used.mem` | `ru_maxrss` | — | — | — |
+| I/O bytes | Linux `/proc/<pid>/io` | `AveDiskRead`/`AveDiskWrite` | — | — | — | — | — |
+| scheduler wait | — | `Submit`→`Start` | — | — | — | — | — |
+| nodes / cores | — | `NNodes` / `AllocCPUS` | — | — | — | — | — |
+| exit code | process status | `ExitCode` | `Exit_status` | `exit_status` | state only | `ExitCode` | via the poller, not accounting |
+| provenance | `sysinfo` + `proc` | `sacct` + raw fields | `qstat -x` + raw fields | `qacct` + raw fields | `bacct` note | `scontrol` note | `none` note |
+
+"`—`" means the adapter does not parse that value from the store; the
+ledger renders it as unknown (absent), not as a measured zero. LSF's
+`bacct` columns vary too much between versions to parse blind, and the
+cloud backends expose no accounting API in this adapter at all. A baseline
+array record on PBS/LSF/SGE has its per-process numbers withdrawn (the
+aggregate is not one element's measurement), so those elements report
+unknown memory/CPU/I/O rather than the array's numbers.
+
 ## Assumptions
 
 - Outputs, workdir, and logs live on **shared storage** — every compute node

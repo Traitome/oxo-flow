@@ -1,5 +1,6 @@
 use crate::error::{OxoFlowError, Result};
 use crate::executor::JobRecord;
+use crate::resource_ledger::ResourceUsage;
 use crate::rule::{FilePatterns, Rule};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -747,6 +748,29 @@ pub struct CheckpointState {
     #[serde(default)]
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub cluster_images: BTreeMap<String, ClusterImageRecord>,
+
+    /// Normalized per-rule resource measurements (issue #1371): I/O bytes,
+    /// scheduler queue wait, node/core allocation, and the source metadata
+    /// every number needs. Kept beside — not inside — `benchmarks` because it
+    /// also covers failed and cancelled rules, which have no
+    /// [`BenchmarkRecord`]. Populated by [`Self::record_run`]. Legacy
+    /// checkpoints load with an empty map, and the resource ledger renders
+    /// those rules' unknown metrics as absent, never zero.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub resource_usage: BTreeMap<String, ResourceUsage>,
+
+    /// Rules whose LATEST attempt was a skip, keyed by rule name → the skip
+    /// reason (`outputs up-to-date`, a false `when`, …). Kept separate from
+    /// `rule_runs` so the last REAL execution's record — exit code, command,
+    /// output tails, timings — survives a later no-op run, while the resource
+    /// ledger can still tell that this run did not execute the rule (issue
+    /// #1371 review I4). A real `record_run` clears the entry; invalidation
+    /// drops it with the other reuse records. Legacy checkpoints load with an
+    /// empty map.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub skipped_attempts: BTreeMap<String, String>,
 }
 
 /// Canonical on-the-wire form: template → combos → key-sorted
@@ -887,6 +911,8 @@ impl CheckpointState {
             repair_record: None,
             env_lock_identity: BTreeMap::new(),
             cluster_images: BTreeMap::new(),
+            resource_usage: BTreeMap::new(),
+            skipped_attempts: BTreeMap::new(),
         }
     }
 
@@ -1021,6 +1047,8 @@ impl CheckpointState {
         self.when_verdicts.clear();
         self.tombstones.clear();
         self.rule_runs.clear();
+        self.resource_usage.clear();
+        self.skipped_attempts.clear();
         self.reentries.clear();
         self.output_pattern_domains.clear();
         // A foreign checkpoint's protected-tree baselines describe another
@@ -1058,6 +1086,8 @@ impl CheckpointState {
             self.input_manifests.remove(rule);
             self.when_verdicts.remove(rule);
             self.rule_runs.remove(rule);
+            self.resource_usage.remove(rule);
+            self.skipped_attempts.remove(rule);
             self.reentries.retain(|r| r.rule != *rule);
         }
     }
@@ -1209,6 +1239,45 @@ impl CheckpointState {
         self.benchmarks.insert(rule.to_string(), benchmark);
     }
 
+    /// Record that a rule's LATEST attempt was skipped without executing
+    /// (issue #1371 review I4). Unlike [`Self::record_run`], this leaves the
+    /// rule's last real execution record — exit code, command, tails, and
+    /// timings in `rule_runs` — untouched; the resource ledger reads this
+    /// marker to avoid presenting a previous run's measurements as this
+    /// run's. A real attempt clears it (see [`Self::record_run`]).
+    pub fn record_skipped_attempt(&mut self, rule: &str, reason: &str) {
+        self.skipped_attempts
+            .insert(rule.to_string(), reason.to_string());
+    }
+
+    /// Start a new execution invocation: mark every rule that already has a
+    /// recorded attempt as "not executed in this invocation".
+    ///
+    /// A checkpoint is shared across invocations of the same workdir, so
+    /// preserved completions (a cluster re-run with nothing to submit, a
+    /// local `--target`/`--from-rule` subset, a rule blocked behind a
+    /// failure) must not be reported as work this invocation performed. A
+    /// terminal [`Self::record_run`] clears the marker; a skip rewrites it;
+    /// a crash mid-flight leaves it, which is the honest answer — the
+    /// invocation did not complete that rule.
+    ///
+    /// Call at run start on both execution paths, before any scheduling
+    /// decision, and persist the result.
+    pub fn begin_execution_pass(&mut self) {
+        const REASON: &str = "preserved from an earlier invocation — not executed in this run";
+        let names: BTreeSet<String> = self
+            .benchmarks
+            .keys()
+            .chain(self.completed_rules.iter())
+            .chain(self.failed_rules.iter())
+            .chain(self.rule_runs.keys())
+            .cloned()
+            .collect();
+        for name in names {
+            self.skipped_attempts.insert(name, REASON.to_string());
+        }
+    }
+
     /// Mark a rule as completed without touching its benchmark.
     ///
     /// Used when a skip verdict ("outputs up-to-date") re-completes a rule
@@ -1232,7 +1301,35 @@ impl CheckpointState {
     /// of each output stream. Call at completion/failure time, before the
     /// corresponding `mark_completed`/`mark_failed`. `tail_bytes` bounds
     /// each excerpt (see [`DEFAULT_OUTPUT_TAIL_BYTES`]).
+    ///
+    /// Also persists the run's normalized resource measurements (issue
+    /// #1371) into `resource_usage` when the record carries any — the one
+    /// collection point both the local executor and the cluster driver flow
+    /// through, so a failed rule's CPU/I-O/wait/source survive even though
+    /// it has no benchmark record — and maintains the skip marker: a skip
+    /// attempt marks the rule, any real attempt clears the marker.
     pub fn record_run(&mut self, record: &JobRecord, tail_bytes: usize) {
+        match record.status {
+            crate::executor::JobStatus::Skipped => self.record_skipped_attempt(
+                &record.rule,
+                record.skip_reason.as_deref().unwrap_or("skipped"),
+            ),
+            // Only a TERMINAL attempt proves this invocation executed the
+            // rule. The cluster path persists a `Running` placeholder at
+            // submit time; clearing the marker there would let a crashed
+            // invocation present the previous run's metrics as its own.
+            crate::executor::JobStatus::Success
+            | crate::executor::JobStatus::Failed
+            | crate::executor::JobStatus::Cancelled
+            | crate::executor::JobStatus::TimedOut => {
+                self.skipped_attempts.remove(&record.rule);
+            }
+            crate::executor::JobStatus::Pending | crate::executor::JobStatus::Running => {}
+        }
+        if let Some(usage) = &record.resources {
+            self.resource_usage
+                .insert(record.rule.clone(), usage.clone());
+        }
         self.rule_runs.insert(
             record.rule.clone(),
             RuleRunRecord {
@@ -2776,6 +2873,7 @@ mod tests {
         let started_at = chrono::Utc::now() - chrono::Duration::seconds(3);
         let finished_at = chrono::Utc::now();
         let record = JobRecord {
+            resources: None,
             rule: "slow_scan".into(),
             status: crate::executor::JobStatus::Cancelled,
             enqueued_at: None,
@@ -2805,6 +2903,115 @@ mod tests {
     }
 
     #[test]
+    fn skip_marker_is_set_by_skips_and_cleared_by_real_attempts() {
+        // Issue #1371 review I4: the marker lives beside rule_runs so a
+        // no-op re-run does not erase the last real execution record.
+        let mut ck = CheckpointState::default();
+        ck.record_skipped_attempt("fastqc", "outputs up-to-date");
+        assert_eq!(
+            ck.skipped_attempts.get("fastqc").map(String::as_str),
+            Some("outputs up-to-date")
+        );
+
+        let mut record = JobRecord {
+            resources: None,
+            rule: "fastqc".into(),
+            status: crate::executor::JobStatus::Success,
+            enqueued_at: None,
+            started_at: None,
+            finished_at: None,
+            exit_code: Some(0),
+            stdout: None,
+            stderr: None,
+            command: None,
+            retries: 0,
+            skip_reason: None,
+            max_rss_mb: None,
+            cpu_seconds: None,
+            caption: None,
+            signal: None,
+        };
+        ck.record_run(&record, DEFAULT_OUTPUT_TAIL_BYTES);
+        assert!(
+            !ck.skipped_attempts.contains_key("fastqc"),
+            "a real attempt clears the skip marker"
+        );
+
+        record.status = crate::executor::JobStatus::Skipped;
+        record.skip_reason = Some("outputs up-to-date".into());
+        ck.record_run(&record, DEFAULT_OUTPUT_TAIL_BYTES);
+        assert_eq!(
+            ck.skipped_attempts.get("fastqc").map(String::as_str),
+            Some("outputs up-to-date")
+        );
+
+        // A legacy checkpoint never carried the marker.
+        let legacy = CheckpointState::from_json(
+            r#"{"completed_rules": [], "failed_rules": [], "benchmarks": {}}"#,
+        )
+        .unwrap();
+        assert!(legacy.skipped_attempts.is_empty());
+    }
+
+    #[test]
+    fn begin_execution_pass_marks_preserved_work_until_it_really_runs() {
+        // Issue #1371 re-review N1: a new invocation must not present a
+        // preserved completion as work it performed.
+        let mut ck = CheckpointState::default();
+        ck.mark_completed(
+            "kept",
+            BenchmarkRecord {
+                rule: "kept".into(),
+                wall_time_secs: 2.0,
+                max_memory_mb: None,
+                memory_limit_mb: None,
+                cpu_seconds: None,
+                retries: 0,
+                recorded_as: None,
+            },
+        );
+        ck.begin_execution_pass();
+        assert!(
+            ck.skipped_attempts.contains_key("kept"),
+            "preserved work starts the invocation marked as not executed"
+        );
+
+        // An in-flight placeholder (the cluster submit record) must NOT
+        // clear the marker: the invocation has not proved execution yet.
+        let mut record = JobRecord {
+            resources: None,
+            rule: "kept".into(),
+            status: crate::executor::JobStatus::Running,
+            enqueued_at: None,
+            started_at: None,
+            finished_at: None,
+            exit_code: None,
+            stdout: None,
+            stderr: None,
+            command: None,
+            retries: 0,
+            skip_reason: None,
+            max_rss_mb: None,
+            cpu_seconds: None,
+            caption: None,
+            signal: None,
+        };
+        ck.record_run(&record, DEFAULT_OUTPUT_TAIL_BYTES);
+        assert!(
+            ck.skipped_attempts.contains_key("kept"),
+            "a Running placeholder does not prove execution"
+        );
+
+        // A terminal record does.
+        record.status = crate::executor::JobStatus::Failed;
+        ck.record_run(&record, DEFAULT_OUTPUT_TAIL_BYTES);
+        assert!(
+            !ck.skipped_attempts.contains_key("kept"),
+            "a terminal attempt clears the preserved marker"
+        );
+    }
+
+    #[test]
     fn demote_failed_to_cancelled_only_for_signal_deaths() {
         // Issue #498: the abort reconciliation may demote a failure to a
         // cancellation ONLY when the failure's evidence is a signal death
@@ -2821,6 +3028,7 @@ mod tests {
                     signal: Option<i32>|
          -> JobRecord {
             JobRecord {
+                resources: None,
                 rule: "slow_scan".into(),
                 status,
                 enqueued_at: None,

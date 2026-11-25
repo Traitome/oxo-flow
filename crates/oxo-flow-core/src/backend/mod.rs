@@ -293,7 +293,7 @@ impl BackendJobStatus {
 /// with nothing, and PBS/SGE/LSF each expose a different subset — so a
 /// backend reports what it can prove and leaves the rest `None` rather than
 /// inventing a number that would land in a checkpoint as fact.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct TerminalRecord {
     /// Terminal state, mapped from the store's native vocabulary.
     pub status: BackendJobStatus,
@@ -310,6 +310,11 @@ pub struct TerminalRecord {
     pub max_rss_mb: Option<u64>,
     /// Total CPU seconds consumed across all cores.
     pub cpu_seconds: Option<u64>,
+    /// Everything else the store proved (issue #1371): I/O bytes, submit→start
+    /// wait, node/core allocation, and the provenance of every number.
+    /// `None` for a store that reports state and nothing else — the driver
+    /// substitutes a source-only record naming the backend.
+    pub resources: Option<crate::resource_ledger::ResourceUsage>,
 }
 
 impl TerminalRecord {

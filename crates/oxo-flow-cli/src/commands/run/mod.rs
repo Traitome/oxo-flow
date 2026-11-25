@@ -801,6 +801,19 @@ async fn run_command_inner(
         );
     }
 
+    // Issue #1371 review N1: a checkpoint is shared across invocations.
+    // Mark preserved work as NOT executed in this invocation so a subset
+    // (`--target` / `--from-rule`) run or an all-up-to-date re-run never
+    // presents an earlier run's benchmark/timestamps as this one's in the
+    // resource ledger. Rules this invocation really executes clear their
+    // marker in `record_run`; skipped rules keep/rewrite it. Persisted
+    // before scheduling so even an early abort cannot lose the boundary.
+    {
+        let mut ck = checkpoint.lock().await;
+        ck.begin_execution_pass();
+        ck.save_to_file(&checkpoint_path)?;
+    }
+
     // Sensitive keys are needed by the snapshot-drift warning below and by
     // config-change detection.
     let sensitive_keys = sensitive_keys_of(&config);

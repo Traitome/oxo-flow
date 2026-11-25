@@ -1699,6 +1699,448 @@ fn cli_report_stdout_dash_and_extension_inference() {
     assert!(serde_json::from_str::<serde_json::Value>(&content).is_ok());
 }
 
+// ─── report: resource ledger (issue #1371) ──────────────────────────────────
+
+/// Write a two-rule checkpoint with one fully measured rule (source +
+/// I/O + allocation) and one wall-time-only rule.
+fn write_resource_checkpoint(dir: &std::path::Path) -> PathBuf {
+    let ck_dir = dir.join(".oxo-flow");
+    fs::create_dir_all(&ck_dir).unwrap();
+    let checkpoint = serde_json::json!({
+        "completed_rules": ["hello", "world"],
+        "failed_rules": [],
+        "benchmarks": {
+            "hello": {
+                "rule": "hello",
+                "wall_time_secs": 10.0,
+                "max_memory_mb": 100,
+                "cpu_seconds": 5.0,
+                "retries": 0
+            },
+            "world": {"rule": "world", "wall_time_secs": 20.0, "retries": 0}
+        },
+        "rule_runs": {
+            "hello": {"exit_code": 0, "status": "success"},
+            "world": {"exit_code": 0, "status": "success"}
+        },
+        "resource_usage": {
+            "hello": {
+                "max_rss_bytes": 104857600,
+                "io_read_bytes": 4096,
+                "io_write_bytes": 2048,
+                "scheduler_wait_secs": 3,
+                "nodes": 1,
+                "cores": 4,
+                "source": {
+                    "backend": "slurm",
+                    "tool": "sacct",
+                    "raw_fields": {"MaxRSS": "100M", "TotalCPU": "00:00:05"}
+                }
+            },
+            "world": {
+                "source": {"backend": "local", "tool": "sysinfo"}
+            }
+        }
+    });
+    let path = ck_dir.join("checkpoint.json");
+    fs::write(&path, serde_json::to_string(&checkpoint).unwrap()).unwrap();
+    path
+}
+
+fn two_rule_workflow(dir: &std::path::Path) -> PathBuf {
+    write_workflow(
+        dir,
+        "[[rules]]\nname = \"hello\"\nshell = \"echo hi\"\n\n\
+         [[rules]]\nname = \"world\"\nshell = \"echo bye\"\n",
+    )
+}
+
+#[test]
+fn cli_report_resource_ledger_json_unknown_is_not_zero() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = two_rule_workflow(dir.path());
+    write_resource_checkpoint(dir.path());
+
+    let first = oxo_flow_cmd()
+        .args([
+            "report",
+            wf.to_str().unwrap(),
+            "--resource-ledger",
+            "-f",
+            "json",
+            "-o",
+            "-",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        first.status.success(),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    let stdout = String::from_utf8(first.stdout).unwrap();
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("stdout must be pure JSON");
+
+    assert_eq!(parsed["schema"], "oxo-flow.resource-ledger/v1");
+    assert_eq!(parsed["rules"].as_array().unwrap().len(), 2);
+    let hello = &parsed["rules"][0];
+    assert_eq!(hello["rule"], "hello");
+    assert_eq!(hello["status"], "completed");
+    assert_eq!(hello["wall_time_secs"], 10.0);
+    assert_eq!(hello["cpu_seconds"], 5.0);
+    assert_eq!(hello["max_rss_bytes"], 104_857_600u64);
+    assert_eq!(hello["io_read_bytes"], 4096);
+    assert_eq!(hello["scheduler_wait_secs"], 3);
+    assert_eq!(hello["source"]["backend"], "slurm");
+    assert_eq!(hello["source"]["tool"], "sacct");
+    // The second rule reported no CPU/memory/I/O: the fields are absent,
+    // never a fabricated zero.
+    let world = &parsed["rules"][1];
+    assert_eq!(world["wall_time_secs"], 20.0);
+    assert!(world.get("cpu_seconds").is_none(), "{world}");
+    assert!(world.get("max_rss_bytes").is_none(), "{world}");
+    assert!(world.get("io_read_bytes").is_none(), "{world}");
+    assert_eq!(world["source"]["backend"], "local");
+    // Totals are partial sums with explicit completeness.
+    assert_eq!(parsed["run"]["totals"]["wall_time_secs"], 30.0);
+    assert_eq!(parsed["run"]["totals"]["wall_time_secs_complete"], true);
+    assert_eq!(parsed["run"]["totals"]["cpu_seconds"], 5.0);
+    assert_eq!(parsed["run"]["totals"]["cpu_seconds_complete"], false);
+
+    // Identical state renders identical bytes.
+    let second = oxo_flow_cmd()
+        .args([
+            "report",
+            wf.to_str().unwrap(),
+            "--resource-ledger",
+            "-f",
+            "json",
+            "-o",
+            "-",
+        ])
+        .output()
+        .unwrap();
+    assert!(second.status.success());
+    assert_eq!(stdout, String::from_utf8(second.stdout).unwrap());
+}
+
+/// End-to-end collection → checkpoint → ledger, including the runner-up
+/// "everything up to date" path (issue #1371 review C1/I4/M5): the earlier
+/// CLI tests hand-write checkpoints, so neither the executor's I/O/CPU fold
+/// nor `record_run`'s persistence nor the skip marker was exercised.
+#[test]
+fn cli_run_then_resource_ledger_reflects_collected_measurements() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = write_workflow(
+        dir.path(),
+        "[[rules]]\nname = \"hello\"\noutput = [\"out.txt\"]\n\
+         shell = \"sleep 0.5; echo hi > out.txt\"\n",
+    );
+
+    let ledger = |dir: &std::path::Path, wf: &std::path::Path| -> serde_json::Value {
+        let out = oxo_flow_cmd()
+            .args([
+                "report",
+                wf.to_str().unwrap(),
+                "--resource-ledger",
+                "-f",
+                "json",
+                "-o",
+                "-",
+            ])
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        serde_json::from_str(&String::from_utf8_lossy(&out.stdout))
+            .expect("stdout must be pure JSON")
+    };
+
+    // First run executes the rule.
+    let run = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    let first = ledger(dir.path(), &wf);
+    assert_eq!(first["run"]["totals"]["rules_executed"], 1);
+    let rule = &first["rules"][0];
+    assert_eq!(rule["status"], "completed");
+    assert_eq!(rule["source"]["backend"], "local");
+    assert_eq!(rule["source"]["tool"], "sysinfo");
+    let wall = rule["wall_time_secs"].as_f64().expect("wall time recorded");
+    assert!(wall >= 0.4, "wall time {wall}");
+    assert!(
+        rule["max_rss_bytes"].as_u64().is_some(),
+        "the sampled peak RSS must reach the ledger: {rule}"
+    );
+    assert_eq!(
+        rule["source"]["raw_fields"]["sample_interval_ms"], "200",
+        "the local source names its method: {rule}"
+    );
+    // Linux-only I/O source; the fields are present (value may legitimately
+    // be 0 for a page-cache write) and the method marker is recorded.
+    #[cfg(target_os = "linux")]
+    {
+        assert!(
+            rule.get("io_read_bytes").is_some() && rule.get("io_write_bytes").is_some(),
+            "Linux /proc I/O must reach the ledger: {rule}"
+        );
+        assert_eq!(rule["source"]["raw_fields"]["io_source"], "proc");
+    }
+    assert!(
+        first["run"].get("scheduler_source").is_none(),
+        "no raw export → no scheduler side"
+    );
+
+    // Second run: outputs are up to date, nothing executes. The ledger must
+    // not recycle the first run's measurements (review I4).
+    let rerun = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        rerun.status.success(),
+        "{}",
+        String::from_utf8_lossy(&rerun.stderr)
+    );
+    let second = ledger(dir.path(), &wf);
+    assert_eq!(
+        second["run"]["totals"]["rules_executed"], 0,
+        "an all-up-to-date run executed nothing: {second}"
+    );
+    assert_eq!(second["rules"][0]["status"], "skipped");
+    assert!(second["rules"][0].get("wall_time_secs").is_none());
+    assert!(second["rules"][0].get("max_rss_bytes").is_none());
+    assert!(second["run"]["totals"].get("wall_time_secs").is_none());
+}
+
+/// Issue #1371 re-review N1: a subset invocation (`--target`) preserves the
+/// other rules' checkpoint work, but the ledger must not claim that work ran
+/// in this invocation (benchmarks/timestamps from the earlier run).
+#[test]
+fn cli_targeted_rerun_ledger_excludes_preserved_completions() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = write_workflow(
+        dir.path(),
+        "[[rules]]\nname = \"alpha\"\noutput = [\"alpha.txt\"]\n\
+         shell = \"sleep 0.2; echo a > alpha.txt\"\n\n\
+         [[rules]]\nname = \"beta\"\noutput = [\"beta.txt\"]\n\
+         shell = \"sleep 0.2; echo b > beta.txt\"\n",
+    );
+    let run = |args: &[&str]| {
+        let out = oxo_flow_cmd()
+            .args(["run", wf.to_str().unwrap()])
+            .args(args)
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    let ledger = || -> serde_json::Value {
+        let out = oxo_flow_cmd()
+            .args([
+                "report",
+                wf.to_str().unwrap(),
+                "--resource-ledger",
+                "-f",
+                "json",
+                "-o",
+                "-",
+            ])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        serde_json::from_str(&String::from_utf8_lossy(&out.stdout))
+            .expect("stdout must be pure JSON")
+    };
+
+    // First invocation runs both rules.
+    run(&[]);
+    let first = ledger();
+    assert_eq!(first["run"]["totals"]["rules_executed"], 2, "{first}");
+
+    // Second invocation targets only `beta` and forces it to run.
+    run(&["--target", "beta", "--rerun"]);
+    let second = ledger();
+    assert_eq!(
+        second["run"]["totals"]["rules_executed"], 1,
+        "only the targeted rule executed in this invocation: {second}"
+    );
+    let rules = second["rules"].as_array().unwrap();
+    let alpha = rules.iter().find(|r| r["rule"] == "alpha").unwrap();
+    let beta = rules.iter().find(|r| r["rule"] == "beta").unwrap();
+    assert_eq!(alpha["status"], "skipped", "{alpha}");
+    assert!(alpha.get("wall_time_secs").is_none(), "{alpha}");
+    assert!(alpha.get("max_rss_bytes").is_none(), "{alpha}");
+    assert!(
+        alpha["source"]["note"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("not executed in this run"),
+        "{alpha}"
+    );
+    assert_eq!(beta["status"], "completed", "{beta}");
+    let beta_wall = beta["wall_time_secs"]
+        .as_f64()
+        .expect("targeted rule executed");
+    // Totals describe only this invocation's work (the targeted rule).
+    let totals = &second["run"]["totals"];
+    assert_eq!(
+        totals["wall_time_secs"].as_f64(),
+        Some(beta_wall),
+        "{totals}"
+    );
+}
+
+#[test]
+fn cli_report_resource_ledger_csv_has_a_total_row() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = two_rule_workflow(dir.path());
+    write_resource_checkpoint(dir.path());
+    let out = dir.path().join("ledger.csv");
+
+    // No -f: the .csv extension selects CSV.
+    oxo_flow_cmd()
+        .args([
+            "report",
+            wf.to_str().unwrap(),
+            "--resource-ledger",
+            "-o",
+            out.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    let csv = fs::read_to_string(&out).unwrap();
+    let lines: Vec<&str> = csv.lines().collect();
+    assert!(
+        lines[0].starts_with("record_type,rule,status,wall_time_secs,cpu_seconds,max_rss_bytes"),
+        "{}",
+        lines[0]
+    );
+    assert_eq!(lines.len(), 4, "header + 2 rules + TOTAL");
+    assert!(lines[1].starts_with("rule,hello,completed,10.000,5.000,104857600"));
+    let total: Vec<&str> = lines[3].split(',').collect();
+    assert_eq!(total[0], "total");
+    assert_eq!(total[1], "TOTAL");
+    assert_eq!(total[3], "30.000");
+    assert!(total[20].contains("cpu_seconds"));
+}
+
+#[test]
+fn cli_report_resource_ledger_requires_a_checkpoint() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = two_rule_workflow(dir.path());
+
+    // A ledger is an execution artifact — no checkpoint is a data-source
+    // failure (the --strict exit-code contract), not an empty report.
+    oxo_flow_cmd()
+        .args(["report", wf.to_str().unwrap(), "--resource-ledger"])
+        .assert()
+        .code(2);
+}
+
+#[test]
+fn cli_report_resource_ledger_reconciles_raw_accounting() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = two_rule_workflow(dir.path());
+    // Both rules must report CPU for the per-rule sum to be comparable;
+    // rewrite the checkpoint with a complete CPU side.
+    write_resource_checkpoint(dir.path());
+    let ck_path = dir.path().join(".oxo-flow/checkpoint.json");
+    let mut ck: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&ck_path).unwrap()).unwrap();
+    ck["benchmarks"]["world"]["cpu_seconds"] = serde_json::json!(7.0);
+    fs::write(&ck_path, serde_json::to_string(&ck).unwrap()).unwrap();
+
+    let acct = dir.path().join("acct.csv");
+    // A whole-account export: `unrelated` is not an executed rule of this
+    // checkpoint and must be ignored, not folded into the raw totals
+    // (issue #1371 review I2).
+    fs::write(
+        &acct,
+        "JobID,JobName,State,Elapsed,CPUTime,MaxRSS\n\
+1,hello,COMPLETED,00:00:10,00:05:00,100M\n\
+2,world,COMPLETED,00:00:20,00:07:00,\n\
+3,unrelated,COMPLETED,01:00:00,09:00:00,64G\n",
+    )
+    .unwrap();
+
+    let output = oxo_flow_cmd()
+        .args([
+            "report",
+            wf.to_str().unwrap(),
+            "--resource-ledger",
+            "-f",
+            "json",
+            "-o",
+            "-",
+            "--acct",
+            acct.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let parsed: serde_json::Value = serde_json::from_str(&String::from_utf8_lossy(&output.stdout))
+        .expect("stdout must be pure JSON");
+
+    // Raw elapsed (30 s) agrees with the per-rule sum — the unrelated job's
+    // hour is excluded; raw CPU (720 s) does not (12 s) — reported as a
+    // conflict naming both numbers and sources.
+    assert_eq!(parsed["run"]["scheduler_totals"]["wall_time_secs"], 30.0);
+    assert_eq!(parsed["run"]["scheduler_totals"]["cpu_seconds"], 720.0);
+    assert_eq!(parsed["run"]["scheduler_source"]["tool"], "sacct-csv");
+    assert!(
+        parsed["run"]["scheduler_source"]["note"]
+            .as_str()
+            .unwrap()
+            .contains("ignored 1 job name(s) not matched to an executed rule: unrelated"),
+        "{}",
+        parsed["run"]["scheduler_source"]
+    );
+    let conflicts = parsed["run"]["conflicts"].as_array().unwrap();
+    assert_eq!(conflicts.len(), 1, "{conflicts:?}");
+    assert_eq!(conflicts[0]["metric"], "cpu_seconds");
+    assert_eq!(conflicts[0]["per_rule_total"], 12.0);
+    assert_eq!(conflicts[0]["scheduler_total"], 720.0);
+    assert_eq!(conflicts[0]["scheduler_source"]["tool"], "sacct-csv");
+    // The comparison outcome is self-describing: wall+CPU compared,
+    // memory skipped because the raw export leaves one MaxRSS empty.
+    let reconciliation = &parsed["run"]["reconciliation"];
+    assert_eq!(reconciliation["compared_metrics"][0], "wall_time_secs");
+    assert_eq!(reconciliation["compared_metrics"][1], "cpu_seconds");
+    assert_eq!(
+        reconciliation["note"],
+        "1 of 2 compared metric(s) disagree beyond tolerance"
+    );
+}
+
 #[test]
 fn cli_report_md_format() {
     let dir = tempfile::tempdir().unwrap();

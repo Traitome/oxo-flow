@@ -392,6 +392,14 @@ pub(crate) async fn execute_rule_task(
                 // poll renders phantom Running nodes.
                 if record.skip_reason.as_deref() != Some("outputs up-to-date") {
                     let mut ck = ctx.checkpoint.lock().await;
+                    // Mark the rule's latest attempt as a skip (issue #1371
+                    // review I4) without overwriting its last real
+                    // rule_runs record: the resource ledger must not count
+                    // stale work as this run's.
+                    ck.record_skipped_attempt(
+                        &rule_name,
+                        record.skip_reason.as_deref().unwrap_or("skipped"),
+                    );
                     ck.clear_running(&rule_name);
                     if let Err(e) = ck.save_to_file_async(&ctx.checkpoint_path).await {
                         tracing::warn!("Failed to save checkpoint (skip): {e}");
@@ -422,6 +430,11 @@ pub(crate) async fn execute_rule_task(
                     // oxo_flow_rule_duration_seconds sum these
                     // records (issue #481).
                     let mut ck = ctx.checkpoint.lock().await;
+                    // Mark the latest attempt as a skip (issue #1371 review
+                    // I4) so the ledger does not present the preserved
+                    // benchmark/resource_usage as this run's work. The
+                    // existing rule_runs record is left intact.
+                    ck.record_skipped_attempt(&rule_name, "outputs up-to-date");
                     if !ck.benchmarks.contains_key(&rule_name) {
                         let benchmark = oxo_flow_core::executor::checkpoint::BenchmarkRecord {
                             rule: rule_name.clone(),
@@ -583,6 +596,7 @@ pub(crate) async fn execute_rule_task(
             // captures the same diagnostics the report will show
             // (issue #83 WS2).
             let record = oxo_flow_core::executor::JobRecord {
+                resources: None,
                 signal: None,
                 rule: rule_name.clone(),
                 status: oxo_flow_core::executor::JobStatus::Failed,

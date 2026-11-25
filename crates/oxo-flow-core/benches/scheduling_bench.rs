@@ -70,6 +70,7 @@ fn simulate_100(c: &mut Criterion) {
                 for name in ready {
                     state.mark_running(&name);
                     state.mark_completed(JobRecord {
+                        resources: None,
                         signal: None,
                         rule: name,
                         status: JobStatus::Success,

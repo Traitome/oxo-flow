@@ -62,6 +62,7 @@ pub mod protected;
 pub mod readiness;
 pub mod reentry;
 pub mod references;
+pub mod resource_ledger;
 pub mod result;
 
 pub mod report;

@@ -731,6 +731,60 @@ is still rejected outright (`unknown cluster backend '…' — expected slurm,
 pbs, sge, lsf, kubernetes (k8s), aws-batch, gcp-batch, or tencent-batch
 (Tencent Cloud BatchCompute)`) — the default never swallows a bad name.
 
+### Resource ledger and scheduler limits
+
+`oxo-flow report --run <DIR> --resource-ledger` turns the stored accounting
+records into the normalized `oxo-flow.resource-ledger/v1` document (JSON or
+CSV — see
+[`report`](../commands/report.md#resource-ledger-resource-ledger)). The
+cluster path persists the scheduler's measurements in the checkpoint's
+`resource_usage` map together with the program that answered, so every
+number in the ledger can be traced back to a raw field.
+
+What each scheduler can supply:
+
+| Scheduler | Accounting source | Reported |
+|---|---|---|
+| SLURM | `sacct` | exit code, `ElapsedRaw`/`Elapsed`, `MaxRSS`, `TotalCPU`, `Submit`→`Start` wait, `AllocCPUS`, `NNodes`, `AveDiskRead`/`AveDiskWrite` |
+| PBS | `qstat -x` | exit code, `resources_used.walltime` / `.mem` / `.cput` |
+| SGE | `qacct` | exit code, `ru_wallclock`, `ru_maxrss`, `cpu` |
+| LSF | `bacct` | terminal state only |
+| SLURM without `slurmdbd` | `scontrol` | `JobState` + `ExitCode` (controller cache only) |
+| Kubernetes / AWS Batch / GCP Batch / Tencent Batch | — | nothing; the ledger carries a source note, not a fabricated zero |
+
+Limits worth knowing before comparing numbers:
+
+- **`sacct` omissions are honored.** A site whose accounting store leaves a
+  column blank (or a store that predates the extended `--format` request)
+  gets `null`/an empty CSV cell for that metric, never `0`. The same applies
+  to every cloud backend: no accounting API is called, so every measurement
+  is unknown rather than assumed.
+- **Memory is a peak.** `MaxRSS` is the maximum over the job's step rows
+  (the allocation and `.batch` rows describe the same work, so summing them
+  would double-count). The ledger's run-level memory is the maximum across
+  rules.
+- **Array elements on PBS/LSF/SGE are aggregate verdicts.** This adapter
+  polls those backends by the array base id; the record names its provenance
+  in `skip_reason` and withdraws the aggregate's exit code, memory, and CPU.
+  The ledger reports those elements' measurements as unknown instead of
+  attributing the aggregate to one element.
+- **Invocation boundary.** Every cluster run marks previously recorded
+  rules as not executed before submitting anything; a rule that settles
+  clears its mark, while a no-op re-run (nothing to submit), a subset
+  submission, or a rule blocked behind a failure stays marked. The ledger
+  therefore reports a cluster no-op as `rules_executed: 0` rather than
+  recycling the earlier run's benchmarks.
+- **Reconcile with an independent export.** `--resource-ledger --acct
+  <sacct.csv>` reduces the CSV to the rules that executed in this run (a
+  whole-account `sacct -a` export's unrelated jobs are ignored and counted
+  in the source note), sums the remaining batch rows into
+  `run.scheduler_totals`, and names that raw side's own provenance in
+  `run.scheduler_source`. Disagreements beyond 5 % (1 s / 1 MiB floor) are
+  listed under `run.conflicts`, naming both numbers and both sources;
+  `run.reconciliation` records which metrics were compared and which were
+  skipped (and why). A CSV that does not cover every executed rule is
+  treated as a coverage gap, not a conflict.
+
 ---
 
 ## Driver Defaults and the `[cluster]` Profile Block

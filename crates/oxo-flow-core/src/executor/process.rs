@@ -309,6 +309,12 @@ pub struct JobRecord {
     /// run abort" from "self-failed with an exit code" (issue #498).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signal: Option<i32>,
+    /// Normalized resource measurements beyond `max_rss_mb`/`cpu_seconds`
+    /// (issue #1371): exact peak-RSS bytes, I/O bytes, scheduler wait,
+    /// node/core allocation, and the source metadata. `None` when no
+    /// sampler or accounting store ran for this attempt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resources: Option<crate::resource_ledger::ResourceUsage>,
 }
 
 /// Configuration for the executor.
@@ -2210,6 +2216,25 @@ impl LocalExecutor {
         }
     }
 
+    /// Fold one handle's sampled CPU, peak RSS, and disk I/O into the running
+    /// per-rule accumulators. A handle that never observed its child leaves
+    /// every accumulator untouched (unknown stays unknown).
+    fn fold_handle(
+        handle: &super::rss::RssHandle,
+        cpu_seconds: &mut Option<f64>,
+        peak_bytes: &mut u64,
+        io_read_bytes: &mut Option<u64>,
+        io_write_bytes: &mut Option<u64>,
+    ) {
+        *cpu_seconds = Self::fold_cpu_seconds(*cpu_seconds, handle);
+        if let Some((read, write)) = handle.io_bytes() {
+            *io_read_bytes = Some(io_read_bytes.map_or(read, |total| total.saturating_add(read)));
+            *io_write_bytes =
+                Some(io_write_bytes.map_or(write, |total| total.saturating_add(write)));
+        }
+        *peak_bytes = (*peak_bytes).max(handle.peak_bytes());
+    }
+
     /// Execute a single rule with typed config values for condition
     /// evaluation.
     ///
@@ -2268,6 +2293,7 @@ impl LocalExecutor {
         let timeout = self.get_timeout(rule);
 
         let mut record = JobRecord {
+            resources: None,
             signal: None,
             rule: rule.name.clone(),
             status: JobStatus::Running,
@@ -3133,6 +3159,10 @@ impl LocalExecutor {
         // Sampled CPU seconds across every attempt (issue #83 P1-13);
         // `None` until the sampler observes the child alive in a tick.
         let mut cpu_seconds: Option<f64> = None;
+        // Sampled disk I/O across every attempt (issue #1371); `None` until
+        // /proc/<pid>/io reports (Linux only).
+        let mut io_read_bytes: Option<u64> = None;
+        let mut io_write_bytes: Option<u64> = None;
 
         for attempt in 0..max_attempts {
             if attempt > 0 {
@@ -3264,8 +3294,14 @@ impl LocalExecutor {
                         last_exit_code = Some(124);
                         combined_stderr.push_str("command timed out");
                         if let Some(handle) = rss_handle {
-                            cpu_seconds = Self::fold_cpu_seconds(cpu_seconds, &handle);
-                            peak_bytes = peak_bytes.max(handle.finish());
+                            Self::fold_handle(
+                                &handle,
+                                &mut cpu_seconds,
+                                &mut peak_bytes,
+                                &mut io_read_bytes,
+                                &mut io_write_bytes,
+                            );
+                            handle.finish();
                         }
                         break;
                     }
@@ -3292,8 +3328,14 @@ impl LocalExecutor {
                                 }
                             }
                             if let Some(handle) = rss_handle {
-                                cpu_seconds = Self::fold_cpu_seconds(cpu_seconds, &handle);
-                                peak_bytes = peak_bytes.max(handle.finish());
+                                Self::fold_handle(
+                                    &handle,
+                                    &mut cpu_seconds,
+                                    &mut peak_bytes,
+                                    &mut io_read_bytes,
+                                    &mut io_write_bytes,
+                                );
+                                handle.finish();
                             }
                             break;
                         }
@@ -3305,16 +3347,31 @@ impl LocalExecutor {
                         record.status = JobStatus::Failed;
                         combined_stderr.push_str(&e.to_string());
                         if let Some(handle) = rss_handle {
-                            cpu_seconds = Self::fold_cpu_seconds(cpu_seconds, &handle);
-                            peak_bytes = peak_bytes.max(handle.finish());
+                            Self::fold_handle(
+                                &handle,
+                                &mut cpu_seconds,
+                                &mut peak_bytes,
+                                &mut io_read_bytes,
+                                &mut io_write_bytes,
+                            );
+                            handle.finish();
                         }
                         break;
                     }
                 }
 
+                // Success path: fold EVERY metric, including I/O — the
+                // sampler has been accumulating it since spawn and the
+                // handle is about to be consumed.
                 if let Some(handle) = rss_handle {
-                    cpu_seconds = Self::fold_cpu_seconds(cpu_seconds, &handle);
-                    peak_bytes = peak_bytes.max(handle.finish());
+                    Self::fold_handle(
+                        &handle,
+                        &mut cpu_seconds,
+                        &mut peak_bytes,
+                        &mut io_read_bytes,
+                        &mut io_write_bytes,
+                    );
+                    handle.finish();
                 }
             }
 
@@ -3363,6 +3420,38 @@ impl LocalExecutor {
             record.max_rss_mb = Some(peak_bytes.div_ceil(1024 * 1024));
         }
         record.cpu_seconds = cpu_seconds;
+        // Normalized resource record (issue #1371): the exact peak in bytes
+        // (the MB field above is the rounded display value) plus the sampled
+        // I/O and the method behind every number. The one collection point
+        // `CheckpointState::record_run` persists.
+        record.resources = Some(crate::resource_ledger::ResourceUsage {
+            max_rss_bytes: (peak_bytes > 0).then_some(peak_bytes),
+            // Persisted here (not only in the success benchmark) so a failed
+            // or cancelled attempt still contributes the CPU it burned.
+            cpu_seconds,
+            io_read_bytes,
+            io_write_bytes,
+            scheduler_wait_secs: None,
+            nodes: None,
+            cores: None,
+            source: Some(crate::resource_ledger::ResourceSource {
+                backend: "local".to_string(),
+                tool: "sysinfo".to_string(),
+                version: None,
+                note: None,
+                raw_fields: {
+                    let mut raw = std::collections::BTreeMap::new();
+                    raw.insert(
+                        "sample_interval_ms".to_string(),
+                        super::rss::SAMPLE_INTERVAL_MILLIS.to_string(),
+                    );
+                    if io_read_bytes.is_some() || io_write_bytes.is_some() {
+                        raw.insert("io_source".to_string(), "proc".to_string());
+                    }
+                    raw
+                },
+            }),
+        });
 
         self.release_resources(&rule).await;
 
@@ -3711,6 +3800,7 @@ impl LocalExecutor {
                 }
 
                 JobRecord {
+                    resources: None,
                     signal: None,
                     rule: rule.name.clone(),
                     status: JobStatus::Skipped,

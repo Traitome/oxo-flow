@@ -83,6 +83,30 @@ fn run(dir: &Path, args: &[&str]) -> std::process::Output {
         .unwrap()
 }
 
+/// The normalized resource ledger for a run directory (issue #1371).
+fn resource_ledger(dir: &Path) -> serde_json::Value {
+    let out = StdCommand::new(workspace_bin("oxo-flow"))
+        .args([
+            "report",
+            "--run",
+            ".",
+            "--resource-ledger",
+            "-f",
+            "json",
+            "-o",
+            "-",
+        ])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "ledger failed:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    serde_json::from_slice(&out.stdout).expect("ledger stdout must be pure JSON")
+}
+
 /// Rules the cluster path submitted, read from the run directory's event log.
 fn submitted_rules(dir: &Path) -> Vec<String> {
     let events =
@@ -205,6 +229,27 @@ fn run_profile_slurm_submits_tracks_and_records() {
         "second run should be a no-op:\n{}",
         String::from_utf8_lossy(&second.stderr)
     );
+
+    // Issue #1371 re-review N1: the no-op re-run preserved all four
+    // completions but executed none of them. The ledger must say so instead
+    // of recycling the first run's benchmarks/timestamps.
+    let ledger = resource_ledger(dir.path());
+    assert_eq!(
+        ledger["run"]["totals"]["rules_executed"], 0,
+        "an all-up-to-date cluster re-run executed nothing: {ledger}"
+    );
+    assert!(
+        ledger["run"]["totals"].get("wall_time_secs").is_none(),
+        "the preserved run's wall time must not become this invocation's total: {ledger}"
+    );
+    let rules = ledger["rules"].as_array().unwrap();
+    assert_eq!(rules.len(), 4, "{ledger}");
+    for rule in rules {
+        assert_eq!(rule["status"], "skipped", "{rule}");
+        assert!(rule.get("wall_time_secs").is_none(), "{rule}");
+        assert!(rule.get("cpu_seconds").is_none(), "{rule}");
+        assert!(rule.get("max_rss_bytes").is_none(), "{rule}");
+    }
 }
 
 /// The parity contract: from identical state, the cluster path submits

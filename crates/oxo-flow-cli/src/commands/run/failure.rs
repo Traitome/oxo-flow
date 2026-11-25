@@ -194,6 +194,7 @@ pub(crate) async fn handle_run_failure_abort(
                     continue;
                 }
                 let record = oxo_flow_core::executor::JobRecord {
+                    resources: None,
                     signal: None,
                     rule: rule_name.clone(),
                     status: oxo_flow_core::executor::JobStatus::Cancelled,
@@ -557,6 +558,7 @@ pub(crate) async fn propagate_transitive_failures(ctx: TransitiveFailureContext<
         }
         ctx.sched
             .mark_completed(oxo_flow_core::executor::JobRecord {
+                resources: None,
                 signal: None,
                 rule: name.clone(),
                 status: oxo_flow_core::executor::JobStatus::Skipped,
