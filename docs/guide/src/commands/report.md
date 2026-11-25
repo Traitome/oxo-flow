@@ -60,7 +60,7 @@ auto-discovered — see [Workflow discovery](#workflow-discovery).
 |---|---|
 | `0` | Report generated (including template-only reports without a checkpoint; `--diff` always exits 0) |
 | `1` | Rendering/usage error (e.g. unsupported format, multiple `[report].format` entries under `--strict`, `--diff` without both checkpoints, `--acct` with `--resource-ledger -f csv`) |
-| `2` | Data source unavailable — under `--strict` when the checkpoint is missing or the configured template fails to render; always when `--resource-ledger` finds no checkpoint (a ledger without execution records is not an empty report) |
+| `2` | Data source unavailable — under `--strict` when the checkpoint is missing or the configured template fails to render; when `--resource-ledger` finds no checkpoint and no usage error precedes it (an unsupported format or CSV + `--acct` exits `1` first; a ledger without execution records is not an empty report) |
 
 The general `run`/`dry-run` exit-code contract (0 success, 1 failure) is
 documented in [`run`](run.md#exit-codes).
@@ -420,13 +420,17 @@ used to prefer the batch row over step rows). `Elapsed`/`CPUTime` accept
 `MaxRSS` uses the same grammar as the scheduler adapters (one shared
 `oxo_flow_core::backend::cluster::parse_rss_bytes` parser): `K`/`KB`,
 `M`/`MB`, `G`/`GB`, `T`/`TB` suffixes (case-insensitive, base-1024), a
-trailing `c`/`C` meaning bytes (SLURM's unit for a value that is not a
-whole KiB), a trailing `n` as SLURM's per-node qualifier, and a bare number
-meaning kilobytes. The figure is rounded to the nearest whole MB, and a
-measured sub-MiB peak reports as 1 MB — never a fabricated zero; `0` is the
-"not reported" sentinel (unknown, not a measured zero). A missing required
-column is a hard error — silently dropping a column would fake a complete
-table.
+trailing `n` as SLURM's per-node qualifier, and a bare number meaning
+kilobytes. The `c` suffix is positional: after a unit letter it is SLURM's
+per-core qualifier and leaves the unit unchanged (`512Kc` = 512 KiB,
+`512Mc` = 512 MiB), while directly after the number it is SLURM's byte unit
+(`2048c` = 2,048 bytes, the value `sacct` prints for a non-whole-KiB
+figure). A store that uses `c` for the other meaning will disagree with
+this reading. The figure is rounded to the nearest whole MB, and a measured
+sub-MiB peak reports as 1 MB — never a fabricated zero; `0` is the "not
+reported" sentinel (unknown, not a measured zero), whatever its suffix. A
+missing required column is a hard error — silently dropping a column would
+fake a complete table.
 
 ### Resource ledger (`--resource-ledger`)
 
@@ -602,6 +606,11 @@ partial sum is never presented as a full one.
 `MaxRSS` and `TotalCPU` come from the step rows, where SLURM records them;
 the reported figure is the maximum across the job's rows (the allocation
 and `.batch` rows describe the same work, so summing would double-count).
+Memory figures accept SLURM's qualifiers positionally: `512Mn`/`512Kc`/
+`512Mc` keep the preceding unit (per-node/per-core), while a bare
+`<number>c` is the byte unit and a plain `<number>` is kilobytes; zero with
+any suffix is unknown. A store that emits `c` with the other meaning falls
+outside this mapping (see the `--acct` grammar above).
 `AveDiskRead`/`AveDiskWrite` are per-task averages; the engine submits one
 task per job, so the average is the rule's total.
 

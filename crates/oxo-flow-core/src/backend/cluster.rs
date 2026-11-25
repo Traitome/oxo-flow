@@ -2184,16 +2184,27 @@ fn parse_accounting_duration_secs(raw: &str) -> Option<u64> {
 ///
 /// - `K`/`KB`, `M`/`MB`, `G`/`GB`, `T`/`TB` are case-insensitive binary
 ///   multiples (SLURM, PBS).
-/// - A trailing `c`/`C` is SLURM's byte unit (`sacct` prints `12345C` for a
-///   value that is not a whole KiB); the figure is bytes as reported.
 /// - A trailing `n`/`N` is SLURM's per-node qualifier and does not change
-///   the unit (`512Mn` = 512 MiB).
+///   the unit (`512Mn` = 512 MiB). A trailing `c`/`C` *after a unit letter*
+///   is the per-core qualifier and is equally transparent (`512Kc` =
+///   512 KiB, `512Mc` = 512 MiB).
+/// - A trailing `c`/`C` directly after the number is SLURM's byte unit
+///   (`sacct` prints `12345C` for a value that is not a whole KiB); the
+///   figure is bytes as reported. `c` is therefore positional: `<unit>c`
+///   qualifies, `<number>c` counts bytes.
 /// - A bare number is kilobytes — what every one of these stores means by a
 ///   bare figure (SLURM `MaxRSS`, SGE `ru_maxrss`).
-/// - A zero figure (`0`, `0K`, `0C`, …) is the store's "not reported"
+/// - A zero figure (`0`, `0K`, `0C`, `0c`, …) is the store's "not reported"
 ///   sentinel: `None`, never a measured zero.
 pub fn parse_rss_bytes(raw: &str) -> Option<u64> {
     let raw = raw.trim();
+    // SLURM's per-core qualifier is transparent after a unit letter
+    // (`512Kc`/`512Mc`); a `c` directly after the number is the byte unit
+    // and is handled by the suffix match below.
+    let raw = match raw.as_bytes() {
+        [.., prev, b'c' | b'C'] if prev.is_ascii_alphabetic() => &raw[..raw.len() - 1],
+        _ => raw,
+    };
     // SLURM may qualify a memory figure per node; the unit is unchanged.
     let raw = raw
         .strip_suffix('n')
@@ -5068,8 +5079,11 @@ mod accounting_tests {
             // SLURM's byte unit: `12345C` is 12,345 bytes, not 12 MiB.
             ("12345c", Some(12_345), Some(1)),
             ("12345C", Some(12_345), Some(1)),
-            // Per-node qualifier does not change the unit.
+            // Per-node / per-core qualifiers do not change the unit.
             ("512Mn", Some(512 * 1024 * 1024), Some(512)),
+            ("512Kc", Some(512 * 1024), Some(1)),
+            ("512Mc", Some(512 * 1024 * 1024), Some(512)),
+            ("2048c", Some(2048), Some(1)),
             // PBS writes kilobytes with a unit.
             ("2048kb", Some(2 * 1024 * 1024), Some(2)),
             ("1234K", Some(1_263_616), Some(1)),
@@ -5080,6 +5094,7 @@ mod accounting_tests {
             ("0", None, None),
             ("0K", None, None),
             ("0C", None, None),
+            ("0c", None, None),
             ("0.0G", None, None),
             ("", None, None),
             ("12X", None, None),

@@ -1659,11 +1659,12 @@ fn parse_hms_to_secs(value: &str) -> Option<f64> {
 /// ([`oxo_flow_core::backend::cluster::parse_rss_mb`]) so this importer and
 /// the scheduler adapter cannot disagree about a figure (task-7c M-3).
 /// Accepted forms are documented there: `K`/`KB`, `M`/`MB`, `G`/`GB`,
-/// `T`/`TB` (case-insensitive, base-1024), a trailing `c`/`C` meaning bytes
-/// (SLURM's unit for a value that is not a whole KiB), a trailing `n` as the
-/// per-node qualifier, and a bare number meaning kilobytes (sacct's
-/// convention). Zero (`0`, `0K`, …) is the "not reported" sentinel — unknown,
-/// not a measured zero. MB rounds to the nearest whole MB, with a measured
+/// `T`/`TB` (case-insensitive, base-1024), a trailing `n` as the per-node
+/// qualifier, a positional `c` (`512Kc`/`512Mc` is the per-core qualifier;
+/// directly after the number it is SLURM's byte unit, `2048c` = 2,048
+/// bytes), and a bare number meaning kilobytes (sacct's convention). Zero
+/// (`0`, `0K`, `0c`, …) is the "not reported" sentinel — unknown, not a
+/// measured zero. MB rounds to the nearest whole MB, with a measured
 /// sub-MiB peak reporting as 1 MB so a real measurement is never a
 /// fabricated zero.
 fn parse_maxrss_to_mb(value: &str) -> Option<u64> {
@@ -2370,7 +2371,8 @@ mod tests {
         // answer.
         let cases = [
             "1K", "1KB", "1M", "1MB", "1G", "1GB", "1T", "2048", "12345c", "12345C", "512Mn",
-            "2048kb", "128.2M", "1.5G", "0", "0K", "0C", "0.0G", "", "12X", "abc",
+            "512Kc", "512Mc", "2048c", "0c", "2048kb", "128.2M", "1.5G", "0", "0K", "0C", "0.0G",
+            "", "12X", "abc",
         ];
         for raw in cases {
             assert_eq!(
@@ -2392,6 +2394,11 @@ mod tests {
         assert_eq!(parse_maxrss_to_mb("2048"), Some(2));
         assert_eq!(parse_maxrss_to_mb("123456789c"), Some(118)); // 117.7… rounds to 118
         assert_eq!(parse_maxrss_to_mb("1K"), Some(1)); // never a fabricated 0
+        // Positional `c`: after a unit letter it is the per-core qualifier
+        // (`512Mc` = 512 MiB); directly after the number it is bytes.
+        assert_eq!(parse_maxrss_to_mb("512Kc"), Some(1));
+        assert_eq!(parse_maxrss_to_mb("512Mc"), Some(512));
+        assert_eq!(parse_maxrss_to_mb("2048c"), Some(1));
         // Zero is SLURM's "not reported" sentinel (review I3).
         assert_eq!(parse_maxrss_to_mb("0"), None);
         assert_eq!(parse_maxrss_to_mb("0K"), None);
