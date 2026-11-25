@@ -2620,6 +2620,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Output">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#cluster-image-identity" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cluster image identity
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -4369,6 +4386,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Output">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#cluster-image-identity" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cluster image identity
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -4686,17 +4720,54 @@ re-verified claim.</p>
 </span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>
 </span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>  • workflow git HEAD: 3f2a1c9d8b7e6f5a4c3d2e1f0a9b8c7d6e5f4a3b
 </span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>  • workflow path: /home/user/proj/pipeline.oxoflow
-</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>  • workflow content hash: sha256:e3b0c442...
-</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>  • workflow git tree: clean
-</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>  • workflow content check: verified (sha256:e3b0c442...)
-</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>
-</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>  ✓ output/sample1.vcf sha256:abc123...
-</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a>  ✓ output/sample2.vcf sha256:def456...
-</span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a>  ✗ output/report.html (expected: sha256:xxx, actual: sha256:yyy)
-</span><span id="__span-2-12"><a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a>  ✓ .oxo-flow/chunks/chr/chr1.g.vcf.gz sha256:ccc... (cleaned by design)
-</span><span id="__span-2-13"><a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a>
-</span><span id="__span-2-14"><a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a>Summary: 2 matched, 1 mismatched, 0 missing, 1 cleaned (by design)
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>  • cluster images: 2 rule(s)
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>    • align: image biocontainers/bwa:0.7.17 (biocontainers/bwa:0.7.17) — biocontainers/bwa@sha256:abc123...
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>    • report: system environment (no wrapper), pod base image ubuntu:latest
+</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>  • workflow content hash: sha256:e3b0c442...
+</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>  • workflow git tree: clean
+</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a>  • workflow content check: verified (sha256:e3b0c442...)
+</span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a>
+</span><span id="__span-2-12"><a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a>  ✓ output/sample1.vcf sha256:abc123...
+</span><span id="__span-2-13"><a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a>  ✓ output/sample2.vcf sha256:def456...
+</span><span id="__span-2-14"><a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a>  ✗ output/report.html (expected: sha256:xxx, actual: sha256:yyy)
+</span><span id="__span-2-15"><a id="__codelineno-2-15" name="__codelineno-2-15" href="#__codelineno-2-15"></a>  ✓ .oxo-flow/chunks/chr/chr1.g.vcf.gz sha256:ccc... (cleaned by design)
+</span><span id="__span-2-16"><a id="__codelineno-2-16" name="__codelineno-2-16" href="#__codelineno-2-16"></a>
+</span><span id="__span-2-17"><a id="__codelineno-2-17" name="__codelineno-2-17" href="#__codelineno-2-17"></a>Summary: 2 matched, 1 mismatched, 0 missing, 1 cleaned (by design)
 </span></code></pre></div>
+<p>The <code>cluster images</code> block appears only on checkpoints written by a
+Kubernetes cluster run (see <a href="#cluster-image-identity">Cluster image identity</a>).</p>
+<h3 id="cluster-image-identity">Cluster image identity<a class="headerlink" href="#cluster-image-identity" title="Permanent link">#</a></h3>
+<p>A cluster run on the Kubernetes backend records, per planned rule, the
+container image its job was to run as (issue #1388). The record is written
+before submission (so a crashed driver still leaves it); if the run aborts
+before a job leaves, it names what that job would have run as. The checkpoint
+field is <code>cluster_images</code>; <code>verify</code> prints it and <code>--json</code> carries it verbatim.
+Each record has:</p>
+<ul>
+<li><code>render</code> — <code>image</code> (the rule's container environment WAS the pod image),
+  <code>wrapper-fallback</code> (the local environment wrapper stayed folded into the
+  command; no image identity is claimed for that environment), or <code>system</code>
+  (the rule declares no environment at all, so there is no wrapper to fall
+  back to).</li>
+<li><code>kind</code> — the backend that supplied the environment (<code>docker</code>, <code>singularity</code>,
+  <code>conda</code>, …).</li>
+<li><code>spec</code> — the workflow-declared container reference. Mirror-neutral: it keeps
+  the original spec even when <code>OXO_REGISTRY_MIRRORS</code> rewrote the transport.</li>
+<li><code>image</code> — the reference the Job's <code>image:</code> field carries (mirrors applied;
+  the pod base image for a fallback).</li>
+<li><code>resolved_digest</code> — present <strong>only</strong> when the submit host's local docker
+  daemon could report the image digest offline. Absent means "not resolved on
+  the submit host", which verify states explicitly. It is never an invented
+  digest, and it does not prove what a compute node actually pulled — that
+  requires node-side inspection, which this record deliberately does not
+  claim.</li>
+</ul>
+<p>The record is additive: checkpoints written by local/HPC runs or older
+releases omit the field and load unchanged. It is checkpoint-level evidence;
+the portable attestation (<code>provenance attest</code>) binds the environment through
+<code>environment.env_lock_identity</code>, which is unchanged (a container rule records
+<code>docker|&lt;digest-or-unresolved&gt;</code> there) — <code>cluster_images</code> is not copied into
+the attestation document.</p>
 <h2 id="notes">Notes<a class="headerlink" href="#notes" title="Permanent link">#</a></h2>
 <ul>
 <li>Runs inside a git repository record the workflow's HEAD commit SHA in
@@ -4765,12 +4836,27 @@ carries nothing else):</p>
 </span><span id="__span-4-11"><a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a>      {"file": "output/report.html", "status": "mismatched", "expected": "sha256:xxx", "actual": "sha256:yyy"},
 </span><span id="__span-4-12"><a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a>      {"file": ".oxo-flow/chunks/chr/chr1.g.vcf.gz", "status": "cleaned", "expected": "sha256:ccc..."}
 </span><span id="__span-4-13"><a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a>    ],
-</span><span id="__span-4-14"><a id="__codelineno-4-14" name="__codelineno-4-14" href="#__codelineno-4-14"></a>    "workflow_content_hash": "sha256:e3b0c442...",
-</span><span id="__span-4-15"><a id="__codelineno-4-15" name="__codelineno-4-15" href="#__codelineno-4-15"></a>    "workflow_resolved_hash": "sha256:9f86d081...",
-</span><span id="__span-4-16"><a id="__codelineno-4-16" name="__codelineno-4-16" href="#__codelineno-4-16"></a>    "metadata_digest": "sha256:6b1d3c7f...",
-</span><span id="__span-4-17"><a id="__codelineno-4-17" name="__codelineno-4-17" href="#__codelineno-4-17"></a>    "workflow_content_check": {"status": "matched", "recorded": "sha256:e3b0c442...", "actual": "sha256:e3b0c442..."}
-</span><span id="__span-4-18"><a id="__codelineno-4-18" name="__codelineno-4-18" href="#__codelineno-4-18"></a>  }
-</span><span id="__span-4-19"><a id="__codelineno-4-19" name="__codelineno-4-19" href="#__codelineno-4-19"></a>}
+</span><span id="__span-4-14"><a id="__codelineno-4-14" name="__codelineno-4-14" href="#__codelineno-4-14"></a>    "cluster_images": {
+</span><span id="__span-4-15"><a id="__codelineno-4-15" name="__codelineno-4-15" href="#__codelineno-4-15"></a>      "align": {
+</span><span id="__span-4-16"><a id="__codelineno-4-16" name="__codelineno-4-16" href="#__codelineno-4-16"></a>        "render": "image",
+</span><span id="__span-4-17"><a id="__codelineno-4-17" name="__codelineno-4-17" href="#__codelineno-4-17"></a>        "kind": "docker",
+</span><span id="__span-4-18"><a id="__codelineno-4-18" name="__codelineno-4-18" href="#__codelineno-4-18"></a>        "spec": "busybox:1.36",
+</span><span id="__span-4-19"><a id="__codelineno-4-19" name="__codelineno-4-19" href="#__codelineno-4-19"></a>        "image": "busybox:1.36",
+</span><span id="__span-4-20"><a id="__codelineno-4-20" name="__codelineno-4-20" href="#__codelineno-4-20"></a>        "resolved_digest": "busybox@sha256:abc123..."
+</span><span id="__span-4-21"><a id="__codelineno-4-21" name="__codelineno-4-21" href="#__codelineno-4-21"></a>      },
+</span><span id="__span-4-22"><a id="__codelineno-4-22" name="__codelineno-4-22" href="#__codelineno-4-22"></a>      "qc": {
+</span><span id="__span-4-23"><a id="__codelineno-4-23" name="__codelineno-4-23" href="#__codelineno-4-23"></a>        "render": "wrapper-fallback",
+</span><span id="__span-4-24"><a id="__codelineno-4-24" name="__codelineno-4-24" href="#__codelineno-4-24"></a>        "kind": "conda",
+</span><span id="__span-4-25"><a id="__codelineno-4-25" name="__codelineno-4-25" href="#__codelineno-4-25"></a>        "spec": "",
+</span><span id="__span-4-26"><a id="__codelineno-4-26" name="__codelineno-4-26" href="#__codelineno-4-26"></a>        "image": "ubuntu:latest"
+</span><span id="__span-4-27"><a id="__codelineno-4-27" name="__codelineno-4-27" href="#__codelineno-4-27"></a>      }
+</span><span id="__span-4-28"><a id="__codelineno-4-28" name="__codelineno-4-28" href="#__codelineno-4-28"></a>    },
+</span><span id="__span-4-29"><a id="__codelineno-4-29" name="__codelineno-4-29" href="#__codelineno-4-29"></a>    "workflow_content_hash": "sha256:e3b0c442...",
+</span><span id="__span-4-30"><a id="__codelineno-4-30" name="__codelineno-4-30" href="#__codelineno-4-30"></a>    "workflow_resolved_hash": "sha256:9f86d081...",
+</span><span id="__span-4-31"><a id="__codelineno-4-31" name="__codelineno-4-31" href="#__codelineno-4-31"></a>    "metadata_digest": "sha256:6b1d3c7f...",
+</span><span id="__span-4-32"><a id="__codelineno-4-32" name="__codelineno-4-32" href="#__codelineno-4-32"></a>    "workflow_content_check": {"status": "matched", "recorded": "sha256:e3b0c442...", "actual": "sha256:e3b0c442..."}
+</span><span id="__span-4-33"><a id="__codelineno-4-33" name="__codelineno-4-33" href="#__codelineno-4-33"></a>  }
+</span><span id="__span-4-34"><a id="__codelineno-4-34" name="__codelineno-4-34" href="#__codelineno-4-34"></a>}
 </span></code></pre></div>
 <p><code>entries</code> is byte-stable: stored files first in sorted path order, then
 cleaned files in sorted path order. <code>workflow_content_check</code> is <code>null</code>

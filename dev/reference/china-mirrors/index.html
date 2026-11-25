@@ -4320,15 +4320,29 @@ workflow file</strong>:</p>
   specs — a <code>localhost=…</code> key never matches anything.</li>
 <li>Applies to the singularity/apptainer backend (pull target and <code>exec</code>
   URI), to registry-qualified docker specs, and to the <strong>Kubernetes
-  backend's job manifests</strong> (the container <code>image</code> field is rewritten at
-  render time, so pods on registry-restricted nodes pull from the mirror;
-  bare library names such as <code>ubuntu:22.04</code> pass through — configure the
-  container runtime's own <code>registry-mirrors</code> for those). The Docker
-  backend's bare names still resolve through the daemon's own
-  <code>registry-mirrors</code>.</li>
-<li>The derived local SIF name and the environment cache key keep the
-  <strong>original</strong> spec, so an image keeps one identity whether a box goes
-  through a mirror or not.</li>
+  backend's job manifests</strong>. On Kubernetes a renderable container
+  environment becomes the pod's own image (issue #1388): the rewrite
+  happens when the manifest's <code>image:</code> field is rendered, for both a
+  <code>docker = "&lt;spec&gt;"</code> environment and a <code>singularity = "docker://&lt;spec&gt;"</code>
+  one (the underlying image is what the pod pulls). Bare library names
+  such as <code>ubuntu:22.04</code> pass through — configure the container runtime's
+  own <code>registry-mirrors</code> for those. The Docker backend's bare names still
+  resolve through the daemon's own <code>registry-mirrors</code>.</li>
+<li><strong>When the rewrite happens:</strong> only while building an execution artifact
+  (a pull/exists command, an <code>exec</code> URI, or a Job manifest <code>image:</code>
+  field). Nothing is rewritten in the workflow file, the environment
+  cache key, the environment identity / <code>env_lock_identity</code>, or the
+  Job's <code>oxoflow.io/environment-image</code> annotation — those keep the
+  original spec, so an image keeps one identity whether a box goes
+  through a mirror or not. Changing <code>OXO_REGISTRY_MIRRORS</code> therefore
+  changes where the next pull comes from, never what the run claims it
+  ran.</li>
+<li>The derived local SIF name (last path segment, <code>:</code> → <code>_</code>) and the
+  environment cache key also keep the <strong>original</strong> spec. Do not rewrite
+  the derived SIF name: a mirrored box would then derive a different
+  filename than the one a previous <code>singularity pull</code> produced, the
+  existence guard would never match, and every rule would re-pull the
+  image.</li>
 <li>This is box-local transport configuration — mirror hosts never belong
   in committed workflow files.</li>
 </ul>

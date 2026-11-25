@@ -3216,83 +3216,6 @@
   
 </li>
         
-          <li class="md-nav__item">
-  <a href="#run-logs" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Run logs
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#report-snapshots" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Report snapshots
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#config-changes-and-precise-invalidation" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Config changes and precise invalidation
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#input-changes-and-manifest-invalidation" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Input changes and manifest invalidation
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#temporary-rules-temporary-true" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Temporary rules (temporary = true)
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#disk-pressure-monitoring-engine" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Disk-pressure monitoring ([engine])
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#rule-execution-environment-issue-1108" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Rule execution environment (issue #1108)
-      
-    </span>
-  </a>
-  
-</li>
-        
       </ul>
     </nav>
   
@@ -5167,83 +5090,6 @@
   
 </li>
         
-          <li class="md-nav__item">
-  <a href="#run-logs" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Run logs
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#report-snapshots" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Report snapshots
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#config-changes-and-precise-invalidation" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Config changes and precise invalidation
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#input-changes-and-manifest-invalidation" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Input changes and manifest invalidation
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#temporary-rules-temporary-true" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Temporary rules (temporary = true)
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#disk-pressure-monitoring-engine" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Disk-pressure monitoring ([engine])
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#rule-execution-environment-issue-1108" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Rule execution environment (issue #1108)
-      
-    </span>
-  </a>
-  
-</li>
-        
       </ul>
     </nav>
   
@@ -6571,6 +6417,15 @@ lock from either sentinel. The field is absent when no rule needs it
 <strong>prove or deny</strong> environment-lock equality instead of assuming it; the
 measurement protocol lives in
 <code>docs/superpowers/audits/cross-arch-provenance-2026-11-19.md</code> (§7a).</p>
+<p>A Kubernetes cluster run additionally records <strong>which container image each
+planned rule was to run as</strong> (<code>cluster_images</code>, keyed by rule instance; issue</p>
+<h1 id="1388-written-at-submit-time-the-rendered-image-reference-the">1388), written at submit time: the rendered <code>image:</code> reference, the<a class="headerlink" href="#1388-written-at-submit-time-the-rendered-image-reference-the" title="Permanent link">#</a></h1>
+<p>workflow-declared spec, and a digest only when the submit host's local docker
+daemon could report one offline. A rule whose environment could not be rendered
+as an image is recorded as <code>wrapper-fallback</code>, and a rule with no environment at
+all as <code>system</code>. <code>provenance verify</code> prints the map; see
+<a href="../provenance/#cluster-image-identity">Provenance → Cluster image identity</a>
+for what is and is not bound.</p>
 <h3 id="run-logs">Run logs<a class="headerlink" href="#run-logs" title="Permanent link">#</a></h3>
 <p>Every run — and <code>resume</code>, which re-enters the same path — archives its own
 log under the workdir:</p>

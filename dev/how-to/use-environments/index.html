@@ -1648,6 +1648,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#environments-on-cluster-backends" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Environments on Cluster Backends
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#mixing-backends-in-one-workflow" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4623,6 +4634,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#environments-on-cluster-backends" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Environments on Cluster Backends
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#mixing-backends-in-one-workflow" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4830,6 +4852,80 @@ field (defaults to <code>requirements.txt</code> in the working directory):</p>
 <li>Packages from the requirements file are installed with pip</li>
 <li>The shell command runs with the venv activated (<code>source &lt;dir&gt;/bin/activate &amp;&amp; &lt;command&gt;</code>)</li>
 </ol>
+<hr />
+<h2 id="environments-on-cluster-backends">Environments on Cluster Backends<a class="headerlink" href="#environments-on-cluster-backends" title="Permanent link">#</a></h2>
+<p>Local runs always execute the environment wrapper on the machine running
+oxo-flow (<code>docker run</code>, <code>singularity exec</code>, <code>conda run</code>, …). On the
+<strong>Kubernetes</strong> cluster backend a container environment is instead rendered as
+the pod's own image (issue #1388), so the pod needs no container runtime:</p>
+<table>
+<thead>
+<tr>
+<th>Declared environment</th>
+<th>Kubernetes rendering</th>
+<th>Local run (unchanged)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>docker = "&lt;image&gt;"</code></td>
+<td><strong>Image mode</strong> — pod <code>image:</code> = <code>&lt;image&gt;</code>, no wrapper</td>
+<td><code>docker run</code> wrapper</td>
+</tr>
+<tr>
+<td><code>singularity = "docker://&lt;image&gt;"</code></td>
+<td><strong>Image mode</strong> — pod <code>image:</code> = the underlying <code>&lt;image&gt;</code></td>
+<td><code>singularity exec</code> on the pulled SIF</td>
+</tr>
+<tr>
+<td><code>singularity = "/path/x.sif"</code> or another URI scheme</td>
+<td><strong>Wrapper fallback</strong> — folded <code>singularity exec</code> runs in the pod (cannot get a runtime-bearing base image: adding <code>docker</code> wins <code>kind()</code> → image mode)</td>
+<td><code>singularity exec</code></td>
+</tr>
+<tr>
+<td><code>conda</code> / <code>mamba</code> / <code>pixi</code></td>
+<td><strong>Wrapper fallback</strong> — folded runtime wrapper runs in the pod; declare <code>docker = "&lt;image with the runtime&gt;"</code> too (these rank above <code>docker</code>)</td>
+<td>native wrapper</td>
+</tr>
+<tr>
+<td><code>venv</code></td>
+<td><strong>Wrapper fallback</strong> — activation runs in the pod (adding <code>docker</code> wins <code>kind()</code> → image mode; bake or run locally)</td>
+<td>native wrapper</td>
+</tr>
+<tr>
+<td><code>modules</code></td>
+<td><strong>Wrapper fallback</strong> — <code>module load</code> runs in the pod shell (<code>modules</code> + <code>docker</code> is rejected)</td>
+<td>native <code>module load</code></td>
+</tr>
+<tr>
+<td>no environment</td>
+<td><strong><code>system</code></strong> — no wrapper exists; the command runs in <code>ubuntu:latest</code> (the historical pod base image)</td>
+<td>host shell</td>
+</tr>
+</tbody>
+</table>
+<p>Image mode applies <code>OXO_REGISTRY_MIRRORS</code> when the manifest's <code>image:</code> field is
+rendered; the environment identity (cache key, run provenance) keeps the
+workflow-declared spec, so a mirrored box and a direct box agree. It also keeps
+the local container wrapper's shell contract: the pod starts <code>/bin/sh</code> and runs
+the rule text (and each Indexed-Job command file) with bash when the image has
+it, else with <code>sh</code>, so a bash-less image still starts and a bash-bearing image
+keeps <code>set -euo pipefail</code>/<code>[[ ]]</code> semantics.</p>
+<p>Fallbacks are visible in the Job manifest (<code>oxoflow.io/environment-render:
+wrapper-fallback</code>; a <code>system</code> rule is <code>system</code>) and in one warning per rendered
+Job. <code>OXO_FLOW_K8S_IMAGE_RENDER=0</code> forces the fallback box-wide (the warning
+then says rendering is disabled, not impossible). The fallback pod's base image
+is <code>ubuntu:latest</code> unless the rule also declares <code>docker</code>: <code>mamba</code>/<code>conda</code>/<code>pixi</code>
+rank above <code>docker</code>, so those can pair a runtime-bearing base image with their
+wrapper and run; a local SIF and <code>venv</code> rank below <code>docker</code> (adding an image
+flips to image mode), and <code>modules</code> + <code>docker</code> is rejected — those three are
+rendered and warned about but cannot execute on Kubernetes today: bake an image
+and declare <code>docker = …</code>, or run them on a local/HPC backend. The fallback is
+also functional for a docker rule that opts out (pair it with
+<code>OXO_FLOW_K8S_DOCKER_SOCKET=1</code>) and for a <code>system</code> rule that invokes docker
+itself.</p>
+<p>The full matrix, provenance record, and limits are documented in
+<a href="../run-on-cluster/#container-environments-on-kubernetes">Run on a Cluster → Container environments on Kubernetes</a>.</p>
 <hr />
 <h2 id="mixing-backends-in-one-workflow">Mixing Backends in One Workflow<a class="headerlink" href="#mixing-backends-in-one-workflow" title="Permanent link">#</a></h2>
 <div class="language-toml highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="k">[[rules]]</span>
