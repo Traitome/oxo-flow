@@ -6142,7 +6142,8 @@ API keys and key prefixes are never returned.</p>
   <code>user</code>/<code>viewer</code> callers receive the resolution chain's provider NAMES and
   enabled state, but <code>effective.model</code>, <code>effective.api_url</code>,
   <code>tiers.env_model</code>, <code>tiers.env_url</code>, <code>tiers.server_model</code>,
-  <code>tiers.user_model</code>, and <code>tiers.user_api_url</code> are <code>null</code> — the endpoint
+  <code>tiers.server_api_url</code>, <code>tiers.user_model</code>, and <code>tiers.user_api_url</code>
+  are <code>null</code> — the endpoint
   URL identifies the internal AI proxy/gateway and the model id discloses
   the provider's shape. Admins receive the full chain.</li>
 <li><code>GET /api/ai/config/user</code> returns a row the caller saved themselves in

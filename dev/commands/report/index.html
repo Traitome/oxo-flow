@@ -5812,6 +5812,10 @@ commands — it is only reachable through explicit configuration.</p>
   the requested format (<code>-f md</code> → <code>.md</code>, <code>-f json</code> → <code>.json</code>,
   <code>-f pdf</code> → <code>.pdf</code>, else <code>.html</code>), so the default location is predictable
   and the file never masquerades as HTML</li>
+<li><code>report</code> does not implement the global <code>--json</code> switch; select the JSON
+  document with <code>-f json</code> (and the ledger, likewise, with
+  <code>--resource-ledger -f json</code>). Passing <code>--json</code> is rejected with a usage
+  error that names the right spelling instead of being silently ignored</li>
 <li>HTML reports are self-contained single files: embedded CSS, dark-mode
   support, print styles, semantic landmarks, and HTML-escaped user
   content (rule names, commands, paths are safe to open and share)</li>
