@@ -24,8 +24,9 @@ Arm A `unconstrained`, Arm B `syntax-only`, Arm C `full-contract`
 Environment: `OXO_FLOW_AI_TIMEOUT_SECS=300`, `OXO_FLOW_AI_MAX_TOKENS=16384`,
 `OXO_FLOW_AI_CONTEXT_TOKENS=131072`; proxy keys were passed only through the
 environment. Machine-readable sanitized results:
-`ai-synthesis-ablation-2026-11-26-results.json` (108 runs, `workflow_file`
-paths stripped).
+`ai-synthesis-ablation-2026-11-26-results.json` (108 runs; `workflow_file`
+paths stripped and the harness `binary` field normalized to the repo-relative
+`target/debug/oxo-flow` — no absolute host paths are committed).
 
 ## Results (success = all three gates pass AND fidelity passes)
 

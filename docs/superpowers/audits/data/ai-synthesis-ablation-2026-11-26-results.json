@@ -1,6 +1,6 @@
 {
  "attempts": 1,
- "binary": "/Users/wsx/Documents/GitHub/oxo-flow/target/debug/oxo-flow",
+ "binary": "target/debug/oxo-flow",
  "campaign_note": "Non-governed operational run; 36 intents x 3 arms, one model (qwen3.8-flash-next-nothink via an internal proxy), one seed, temperature default. Not the pre-registered governed ablation.",
  "default_model": "qwen3.8-flash-next-nothink",
  "generated_at": "2026-11-25T18:04:35.744636+00:00",

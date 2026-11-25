@@ -1471,7 +1471,7 @@ fields next to the existing payload:
   "fallback_used": true,
   "attempts": [
     { "provider": "openai", "model": "qwen3.8-flash-next-nothink", "success": false,
-      "reason": "Agent exceeded max rounds (10)" },
+      "reason": "provider error (HTTP 502)" },
     { "provider": "claude", "model": "deepseek-flash[1m]", "success": true, "reason": null }
   ]
 }
@@ -1487,6 +1487,16 @@ orchestrator cause (for example `Agent exceeded max rounds (10)`). A
 provider-side timeout's `504 AI_TIMEOUT` `detail` names the last attempted
 provider; expiry of the whole-route budget returns the generic 504 detail
 (the chain future is dropped before the last attempt is known).
+
+**A billed attempt is terminal.** Failures that may already have billed the
+provider — max-round exhaustion, an empty or invalid response, a tool error
+(`AiError::may_have_billed`) — stop the chain instead of trying the next
+candidate, so a second credential cannot pay twice for one generation. Only
+failures with no completion evidence fall through: network errors,
+authentication failures, rate limiting, HTTP 5xx, and timeouts. This is why
+the example above uses a 502: an `Agent exceeded max rounds` attempt cannot
+be followed by a successful fallback, it ends the request with the exhausted
+chain `400`.
 No API key or endpoint URL is ever included in these fields, attempts, logs,
 or errors. Transport/HTTP failures are reduced to a sanitized category
 (`network error`, `authentication failed`, `provider error (HTTP 502)`,

@@ -45,7 +45,7 @@ auto-discovered — see [Workflow discovery](#workflow-discovery).
 | `--no-timestamps` | — | — | Omit the generation timestamp from the report |
 | `--strict` | — | — | Fail (exit 2) when the checkpoint is missing or the configured template fails to render |
 | `--diff` | — | — | `CHECKPOINT` — print a model-level diff of this report's checkpoint against another checkpoint (stderr, terminal-highlighted; the report still renders, exit code stays 0) |
-| `--acct` | — | — | `PATH` — import sacct-style CSV accounting (JobID,JobName,State,Elapsed,CPUTime,MaxRSS) into a Resource Accounting section; with `--resource-ledger` it becomes the raw scheduler side of reconciliation |
+| `--acct` | — | — | `PATH` — import sacct-style CSV accounting (JobID,JobName,State,Elapsed,CPUTime,MaxRSS) into a Resource Accounting section; with `--resource-ledger` it becomes the raw scheduler side of reconciliation, which requires `-f json` (CSV cannot carry scheduler totals, reconciliation, or conflicts — the combination is a usage error) |
 | `--resource-ledger` | — | — | Emit the normalized `oxo-flow.resource-ledger/v1` document instead of a report: `-f json` (default) or `-f csv` (also inferred from a `.csv` `-o` extension). Requires a checkpoint. See [Resource ledger](#resource-ledger-resource-ledger) |
 | `--r-data` | — | — | `DIR` — write R-friendly TSV files (`sample_table.tsv`, `metrics.tsv`) to DIR |
 | `--versions-yml` | — | — | `PATH` — export an nf-core-style `versions.yml` of **declared** software per rule (docker `image:tag`, module `tool/version`, env files with sha256; `-` writes to stdout) and exit |
@@ -59,7 +59,7 @@ auto-discovered — see [Workflow discovery](#workflow-discovery).
 | Code | Meaning |
 |---|---|
 | `0` | Report generated (including template-only reports without a checkpoint; `--diff` always exits 0) |
-| `1` | Rendering/usage error (e.g. unsupported format, multiple `[report].format` entries under `--strict`, `--diff` without both checkpoints) |
+| `1` | Rendering/usage error (e.g. unsupported format, multiple `[report].format` entries under `--strict`, `--diff` without both checkpoints, `--acct` with `--resource-ledger -f csv`) |
 | `2` | Data source unavailable — under `--strict` when the checkpoint is missing or the configured template fails to render; always when `--resource-ledger` finds no checkpoint (a ledger without execution records is not an empty report) |
 
 The general `run`/`dry-run` exit-code contract (0 success, 1 failure) is
@@ -417,9 +417,16 @@ record. Column detection is header-based and case-insensitive; `JobName`,
 `State`, `Elapsed`, `CPUTime` and `MaxRSS` are required (`JobID` optional,
 used to prefer the batch row over step rows). `Elapsed`/`CPUTime` accept
 `MM:SS`, `HH:MM:SS` or `[D-]HH:MM:SS` (with optional fractional seconds);
-`MaxRSS` accepts `K`/`M`/`G`/`T`/`c` suffixes (case-insensitive, base-1024,
-rounded up so a peak is never under-reported). A missing required column is
-a hard error — silently dropping a column would fake a complete table.
+`MaxRSS` uses the same grammar as the scheduler adapters (one shared
+`oxo_flow_core::backend::cluster::parse_rss_bytes` parser): `K`/`KB`,
+`M`/`MB`, `G`/`GB`, `T`/`TB` suffixes (case-insensitive, base-1024), a
+trailing `c`/`C` meaning bytes (SLURM's unit for a value that is not a
+whole KiB), a trailing `n` as SLURM's per-node qualifier, and a bare number
+meaning kilobytes. The figure is rounded to the nearest whole MB, and a
+measured sub-MiB peak reports as 1 MB — never a fabricated zero; `0` is the
+"not reported" sentinel (unknown, not a measured zero). A missing required
+column is a hard error — silently dropping a column would fake a complete
+table.
 
 ### Resource ledger (`--resource-ledger`)
 
@@ -442,7 +449,11 @@ too (unlike a rendered report, it is never auto-written under
 `.oxo-flow/reports/`). `--resource-ledger` conflicts with the report-only
 flags (`--ai`, `--plan`, `--failed`, `--r-data`, `--diff`,
 `--versions-yml`, `--list-sections`, `--list-templates`,
-`--init-template`). A missing checkpoint exits `2`: the ledger describes an
+`--init-template`). `--acct` reconciliation is available only with
+`-f json`: CSV has no representation for scheduler totals, reconciliation,
+or conflicts, so combining the two is a usage error (exit `1`) raised
+before the export is read — never a clean table that silently dropped the
+comparison. A missing checkpoint exits `2`: the ledger describes an
 executed run, so "no execution records" is a data-source failure, not an
 empty report.
 
@@ -546,6 +557,17 @@ Such rules read `status: "skipped"` with no metrics and a source note naming
 the reason. Without a marker (legacy checkpoints), the pre-boundary behavior
 applies: a completed rule reads as completed with its recorded metrics.
 
+A benchmark only describes the latest attempt. A benchmark survives a
+failure (`mark_failed` keeps it for history), and a synthetic completion can
+leave a `recorded_as` placeholder behind, so the ledger uses a benchmark's
+wall/CPU only when the latest `rule_runs` attempt is `success` — or when the
+record predates attempt status (legacy checkpoints). A failed, cancelled, or
+timed-out re-execution renders its own recorded start/finish duration and its
+`resource_usage` (CPU, peak RSS, I/O, source), and counts in
+`rules_executed` / the `--acct` executed set even if an earlier invocation
+left a synthetic marker. An old success's wall/CPU never describes the
+failed attempt, and the run totals sum only the current attempt.
+
 No supported backend reports GPU-seconds, user/system CPU split, a
 control-plane peak-memory metric, or a price today, so `gpu_seconds`,
 `user_seconds`, `system_seconds`, `peak_memory_bytes`, and `cost` are
@@ -586,10 +608,14 @@ task per job, so the average is the rule's total.
 #### Reconciliation with `--acct`
 
 Passing `--acct <CSV>` to a ledger run treats that export as the raw
-scheduler side of a reconciliation. Rows are first **reduced to the rules
-that actually executed in this run** — a whole-account export (`sacct -a`)
-may contain unrelated jobs, which are ignored rather than allowed to inflate
-the raw side. The note reports them as job names **not matched to an
+scheduler side of a reconciliation. This requires `-f json` (the default):
+`-f csv` combined with `--acct` is a usage error (exit `1`) raised before
+the file is read, because the CSV surface has no scheduler-total,
+reconciliation, or conflict columns — silently dropping the comparison
+would present a clean table for a check that never happened. Rows are first
+**reduced to the rules that actually executed in this run** — a whole-account
+export (`sacct -a`) may contain unrelated jobs, which are ignored rather
+than allowed to inflate the raw side. The note reports them as job names **not matched to an
 executed rule** (not "not executed": a site may truncate job names, or array
 elements may share one base name), with the count and up to five names in
 `run.scheduler_source.note`. The remaining merged batch rows are summed into
@@ -615,19 +641,26 @@ matching the core parser.
 
 #### CSV format
 
-One row per rule plus a `TOTAL` row. Columns are stable:
+One row per rule plus a `TOTAL` row. Column names are stable:
 
 ```text
-record_type,rule,status,wall_time_secs,cpu_seconds,max_rss_bytes,io_read_bytes,
-io_write_bytes,scheduler_wait_secs,nodes,cores,gpu_seconds,cost_amount,
-cost_currency,cost_method,source_backend,source_tool,source_version,source_note,
-recorded_as,incomplete_metrics
+record_type,rule,status,wall_time_secs,cpu_seconds,user_seconds,system_seconds,
+max_rss_bytes,peak_memory_bytes,io_read_bytes,io_write_bytes,
+scheduler_wait_secs,nodes,cores,gpu_seconds,cost_amount,cost_currency,
+cost_method,source_backend,source_tool,source_version,source_note,
+source_raw_fields,recorded_as,incomplete_metrics
 ```
 
 Unknown values are empty cells. Seconds render with millisecond precision
-(`10.000`); bytes are integers. The `TOTAL` row leaves rule-only columns
-empty and lists any partially reported metrics in `incomplete_metrics`
-(the same information as the JSON `*_complete` flags).
+(`10.000`); bytes are integers. The reserved metric columns
+(`user_seconds`, `system_seconds`, `peak_memory_bytes`) mirror the JSON
+schema and stay empty until a backend reports them — they are carried now
+so a future measurement cannot silently reach JSON consumers only.
+`source_raw_fields` is the same key-ordered scheduler field map JSON
+carries, serialized as compact JSON in one quoted cell (empty when the
+source recorded none). The `TOTAL` row leaves rule-only columns empty and
+lists any partially reported metrics in `incomplete_metrics` (the same
+information as the JSON `*_complete` flags).
 
 ### Benchmarks CPU column
 

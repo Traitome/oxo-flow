@@ -304,6 +304,15 @@ provider-side timeout's `504 AI_TIMEOUT` `detail` names the last attempted
 provider; expiry of the whole-route budget returns the generic 504 detail
 (the chain future is dropped before the last attempt is known).
 
+**A billed attempt is terminal.** A failure that may already have billed the
+provider — max-round exhaustion, an empty or invalid response, a tool error
+— stops the chain instead of trying the next candidate, so a second
+credential cannot pay twice for one generation. Only failures with no
+completion evidence (network, authentication, rate limit, HTTP 5xx,
+timeout) fall through to the next provider. An `Agent exceeded max rounds`
+attempt therefore cannot be rescued by a fallback: with `auto` the request
+still ends with the exhausted-chain `400`, naming the max-round cause.
+
 Set `OXO_FLOW_AI_FALLBACK=disabled` to limit the chain to the first usable
 provider (the acting user's, else the runtime). This is the spend-boundary
 switch: an explicit provider pin can then never run on another credential.

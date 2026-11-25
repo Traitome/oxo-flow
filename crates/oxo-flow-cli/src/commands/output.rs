@@ -295,9 +295,15 @@ fn discover_report_workflow_in(dir: &Path, plan: bool) -> Result<PathBuf> {
 /// Load the checkpoint at `path`, honoring `--strict` (exit 2 when the data
 /// source is unavailable, issue #83 P1-17). Returns `None` when absent and
 /// not strict — the report degrades to template-level data.
+///
+/// `quiet_missing` suppresses the "report will show template-level data"
+/// notice for callers that have no template-level fallback (`--resource-ledger`
+/// exits on a missing checkpoint, so announcing a report it will never
+/// produce is misleading — task-7c M-6).
 fn load_checkpoint(
     path: &Path,
     strict: bool,
+    quiet_missing: bool,
 ) -> Result<Option<oxo_flow_core::executor::CheckpointState>> {
     match oxo_flow_core::executor::CheckpointState::load_from_file(path) {
         Ok(cp) => Ok(Some(cp)),
@@ -311,15 +317,17 @@ fn load_checkpoint(
                 );
                 std::process::exit(2);
             }
-            eprintln!(
-                "  {} No checkpoint found at {}",
-                "Note:".yellow(),
-                path.display()
-            );
-            eprintln!(
-                "  {} Report will show template-level data only. Run the workflow first for execution metrics.",
-                "Info:".dimmed()
-            );
+            if !quiet_missing {
+                eprintln!(
+                    "  {} No checkpoint found at {}",
+                    "Note:".yellow(),
+                    path.display()
+                );
+                eprintln!(
+                    "  {} Report will show template-level data only. Run the workflow first for execution metrics.",
+                    "Info:".dimmed()
+                );
+            }
             Ok(None)
         }
     }
@@ -595,7 +603,7 @@ pub async fn handle_report(args: ReportArgs) -> Result<()> {
         // the document's provenance field) — the same precedence the full
         // report path uses below.
         let checkpoint = match checkpoint_path.as_deref() {
-            Some(p) => load_checkpoint(p, strict)?,
+            Some(p) => load_checkpoint(p, strict, false)?,
             None => resolved.checkpoint,
         };
         let doc = oxo_flow_core::software_versions::collect_software_versions(
@@ -694,7 +702,7 @@ pub async fn handle_report(args: ReportArgs) -> Result<()> {
     } else if resolved.checkpoint.is_some() {
         resolved.checkpoint
     } else {
-        load_checkpoint(&checkpoint_path, strict)?
+        load_checkpoint(&checkpoint_path, strict, resource_ledger)?
     };
 
     // ── Normalized resource ledger (issue #1371) ─────────────────────────
@@ -704,6 +712,18 @@ pub async fn handle_report(args: ReportArgs) -> Result<()> {
     // absent, never zero. A ledger without a checkpoint is meaningless, so
     // it is a data-source failure (exit 2, the `--strict` contract).
     if resource_ledger {
+        let ledger_format = resolve_ledger_format(explicit_format.as_deref(), output.as_deref())?;
+        // CSV carries per-rule rows and a TOTAL row only — it cannot
+        // represent scheduler totals, reconciliation, or conflicts, so a
+        // supplied `--acct` would be validated and then silently discarded
+        // (task-7c I-2). Fail closed as a usage error before the export is
+        // read: a missing/malformed file must not mask the format contract.
+        if ledger_format == "csv" && acct.is_some() {
+            anyhow::bail!(
+                "--acct reconciliation is only available with -f json; CSV cannot represent \
+                 scheduler totals, reconciliation, or conflicts — drop --acct or pass -f json"
+            );
+        }
         let Some(cp) = checkpoint.as_ref() else {
             eprintln!(
                 "  {} No checkpoint found at {} — the resource ledger describes an \
@@ -713,7 +733,6 @@ pub async fn handle_report(args: ReportArgs) -> Result<()> {
             );
             std::process::exit(2);
         };
-        let ledger_format = resolve_ledger_format(explicit_format.as_deref(), output.as_deref())?;
         // The raw export is reduced to the rules that actually executed in
         // this checkpoint: a whole-account `sacct -a` export must not
         // inflate the raw side with unrelated jobs (review I2).
@@ -1636,42 +1655,19 @@ fn parse_hms_to_secs(value: &str) -> Option<f64> {
 
 /// Parse an sacct MaxRSS value to MB.
 ///
-/// Accepted forms: `"2048K"`, `"512M"`, `"1.5G"`, `"12345c"` (bytes), or a
-/// bare number (kilobytes — sacct stores bare `MaxRSS` figures in KB, the
-/// same convention the backend TerminalRecord parser applies, so the two
-/// tables agree; they used to disagree 1024×, reporting 2 MB vs 0 MB for
-/// the same job, issue #740); `T` (tebibytes) is also accepted as a
-/// harmless extension beyond sacct's documented K/M/G output. Suffixes are
-/// case-insensitive and base-1024; the result rounds UP so the table never
-/// under-reports a peak. A zero figure (`0`, `0K`, …) is sacct's "not
-/// reported" sentinel — the backend TerminalRecord parser treats it the same
-/// way, so the two sides of a reconciliation agree that it is UNKNOWN, not a
-/// measured zero (issue #1371 review I3).
+/// Delegates to the shared core parser
+/// ([`oxo_flow_core::backend::cluster::parse_rss_mb`]) so this importer and
+/// the scheduler adapter cannot disagree about a figure (task-7c M-3).
+/// Accepted forms are documented there: `K`/`KB`, `M`/`MB`, `G`/`GB`,
+/// `T`/`TB` (case-insensitive, base-1024), a trailing `c`/`C` meaning bytes
+/// (SLURM's unit for a value that is not a whole KiB), a trailing `n` as the
+/// per-node qualifier, and a bare number meaning kilobytes (sacct's
+/// convention). Zero (`0`, `0K`, …) is the "not reported" sentinel — unknown,
+/// not a measured zero. MB rounds to the nearest whole MB, with a measured
+/// sub-MiB peak reporting as 1 MB so a real measurement is never a
+/// fabricated zero.
 fn parse_maxrss_to_mb(value: &str) -> Option<u64> {
-    let value = value.trim();
-    if value.is_empty() {
-        return None;
-    }
-    let (num, mult) = match value.as_bytes().last().copied() {
-        Some(b) if b.is_ascii_alphabetic() => {
-            let (num, suffix) = value.split_at(value.len() - 1);
-            let mult = match suffix.to_ascii_lowercase().as_str() {
-                "k" => 1024u64,
-                "m" => 1024u64.pow(2),
-                "g" => 1024u64.pow(3),
-                "t" => 1024u64.pow(4),
-                "c" => 1u64,
-                _ => return None,
-            };
-            (num, mult)
-        }
-        _ => (value, 1024u64),
-    };
-    let bytes = num.trim().parse::<f64>().ok()? * mult as f64;
-    if bytes <= 0.0 {
-        return None;
-    }
-    Some((bytes / (1024.0 * 1024.0)).ceil() as u64)
+    oxo_flow_core::backend::cluster::parse_rss_mb(value)
 }
 
 /// Format seconds compactly: whole numbers drop the decimal tail.
@@ -2367,7 +2363,24 @@ mod tests {
     }
 
     #[test]
-    fn maxrss_parser_handles_suffixes() {
+    fn maxrss_parser_matches_the_shared_core_parser() {
+        // Task-7c M-3: the --acct surface must not diverge from the
+        // scheduler adapter. `parse_maxrss_to_mb` delegates to the core
+        // parser; this table pins every suffix form on BOTH surfaces to one
+        // answer.
+        let cases = [
+            "1K", "1KB", "1M", "1MB", "1G", "1GB", "1T", "2048", "12345c", "12345C", "512Mn",
+            "2048kb", "128.2M", "1.5G", "0", "0K", "0C", "0.0G", "", "12X", "abc",
+        ];
+        for raw in cases {
+            assert_eq!(
+                parse_maxrss_to_mb(raw),
+                oxo_flow_core::backend::cluster::parse_rss_mb(raw),
+                "surfaces disagree for {raw:?}"
+            );
+        }
+        // Spot-check the shared answers so a simultaneous change to both
+        // surfaces cannot silently move the contract.
         assert_eq!(parse_maxrss_to_mb("2048K"), Some(2));
         assert_eq!(parse_maxrss_to_mb("512M"), Some(512));
         assert_eq!(parse_maxrss_to_mb("1G"), Some(1024));
@@ -2377,9 +2390,9 @@ mod tests {
         // parser agree, so both tables report the same job the same way
         // (issue #740 — they used to disagree 1024×).
         assert_eq!(parse_maxrss_to_mb("2048"), Some(2));
-        assert_eq!(parse_maxrss_to_mb("123456789c"), Some(118)); // 117.7… rounds up
-        // Zero is SLURM's "not reported" sentinel, matching the core
-        // TerminalRecord parser (review I3).
+        assert_eq!(parse_maxrss_to_mb("123456789c"), Some(118)); // 117.7… rounds to 118
+        assert_eq!(parse_maxrss_to_mb("1K"), Some(1)); // never a fabricated 0
+        // Zero is SLURM's "not reported" sentinel (review I3).
         assert_eq!(parse_maxrss_to_mb("0"), None);
         assert_eq!(parse_maxrss_to_mb("0K"), None);
         assert_eq!(parse_maxrss_to_mb("0.0G"), None);

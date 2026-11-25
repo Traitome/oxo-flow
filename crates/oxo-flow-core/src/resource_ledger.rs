@@ -499,19 +499,14 @@ fn rule_names(checkpoint: &CheckpointState) -> Vec<String> {
 /// records — the filter a raw scheduler export must be reduced to before it
 /// can be compared with the per-rule ledger (review I2).
 ///
-/// Excludes skipped attempts (including the common "outputs up-to-date"
-/// re-completion that preserves an older benchmark) and synthetic
-/// `recorded_as` placeholders.
+/// Delegates to `build_rule` so the `--acct` coverage set and the rendered
+/// per-rule records can never disagree about what executed (task-7c I-1:
+/// they used to diverge when an earlier synthetic completion left a
+/// `recorded_as` benchmark behind a failed real attempt).
 pub fn executed_rule_names(checkpoint: &CheckpointState) -> BTreeSet<String> {
     rule_names(checkpoint)
         .into_iter()
-        .filter(|name| {
-            let synthetic = checkpoint
-                .benchmarks
-                .get(name)
-                .is_some_and(|b| b.recorded_as.is_some());
-            is_executed(rule_status(checkpoint, name)) && !synthetic
-        })
+        .filter(|name| actually_executed(&build_rule(checkpoint, name)))
         .collect()
 }
 
@@ -572,13 +567,38 @@ fn rule_status(checkpoint: &CheckpointState, rule: &str) -> &'static str {
     }
 }
 
+/// Whether a surviving benchmark record describes the latest recorded
+/// attempt for this rule (task-7c I-1).
+///
+/// `record_run` writes a `rule_runs` status for every terminal attempt, so a
+/// latest status other than `success` means the benchmark predates this
+/// invocation: `mark_failed`/`mark_completed_quiet` keep it for history while
+/// a re-execution fails or is skipped. A `rule_runs` entry without a status
+/// (or no entry at all) predates status tracking — those legacy checkpoints
+/// keep the documented benchmark-based rendering.
+fn benchmark_describes_latest_attempt(checkpoint: &CheckpointState, rule: &str) -> bool {
+    match checkpoint
+        .rule_runs
+        .get(rule)
+        .and_then(|r| r.status.as_deref())
+    {
+        Some(status) => status == "success",
+        None => true,
+    }
+}
+
 /// Build one rule's record. Every metric is copied only from a real record;
 /// an absent record leaves the field `None`.
 fn build_rule(checkpoint: &CheckpointState, rule: &str) -> LedgerRule {
     let status = rule_status(checkpoint, rule);
+    let benchmark_is_current = benchmark_describes_latest_attempt(checkpoint, rule);
+    // A synthetic marker only describes THIS entry when the benchmark still
+    // describes the latest attempt; a later real (failed) attempt supersedes
+    // it, and presenting the marker would falsely say the rule did not run.
     let recorded_as = checkpoint
         .benchmarks
         .get(rule)
+        .filter(|_| benchmark_is_current)
         .and_then(|b| b.recorded_as.clone());
     let latest_was_skipped = checkpoint.skipped_attempts.contains_key(rule)
         || checkpoint
@@ -599,7 +619,7 @@ fn build_rule(checkpoint: &CheckpointState, rule: &str) -> LedgerRule {
     let benchmark = checkpoint
         .benchmarks
         .get(rule)
-        .filter(|b| b.recorded_as.is_none() && !latest_was_skipped);
+        .filter(|b| b.recorded_as.is_none() && !latest_was_skipped && benchmark_is_current);
 
     let wall_time_secs = match benchmark {
         Some(b) => Some(b.wall_time_secs),

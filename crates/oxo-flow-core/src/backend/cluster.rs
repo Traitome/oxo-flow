@@ -2176,40 +2176,76 @@ fn parse_accounting_duration_secs(raw: &str) -> Option<u64> {
     Some(secs)
 }
 
-/// Parse an accounting memory figure into MB. SLURM suffixes `K`/`M`/`G`/`T`
-/// (optionally `Kn`/`Kc` for per-node/per-core), PBS writes `1234kb`, SGE's
-/// `ru_maxrss` is bare kilobytes. An unsuffixed value is read as kilobytes,
-/// which is what every one of these stores means by a bare number.
-fn parse_rss_mb(raw: &str) -> Option<u64> {
-    let raw = raw.trim().trim_end_matches(['n', 'c']);
-    if raw.is_empty() || raw == "0" {
+/// Parse an accounting memory figure into **bytes**.
+///
+/// One grammar for every scheduler adapter and for the CLI's `--acct`
+/// importer (task-7c M-3 — the two hand-copied parsers used to disagree on
+/// `c`, `KB`, and bare values):
+///
+/// - `K`/`KB`, `M`/`MB`, `G`/`GB`, `T`/`TB` are case-insensitive binary
+///   multiples (SLURM, PBS).
+/// - A trailing `c`/`C` is SLURM's byte unit (`sacct` prints `12345C` for a
+///   value that is not a whole KiB); the figure is bytes as reported.
+/// - A trailing `n`/`N` is SLURM's per-node qualifier and does not change
+///   the unit (`512Mn` = 512 MiB).
+/// - A bare number is kilobytes — what every one of these stores means by a
+///   bare figure (SLURM `MaxRSS`, SGE `ru_maxrss`).
+/// - A zero figure (`0`, `0K`, `0C`, …) is the store's "not reported"
+///   sentinel: `None`, never a measured zero.
+pub fn parse_rss_bytes(raw: &str) -> Option<u64> {
+    let raw = raw.trim();
+    // SLURM may qualify a memory figure per node; the unit is unchanged.
+    let raw = raw
+        .strip_suffix('n')
+        .or_else(|| raw.strip_suffix('N'))
+        .unwrap_or(raw)
+        .trim();
+    if raw.is_empty() {
         return None;
     }
     let lower = raw.to_ascii_lowercase();
-    let (digits, per_mb) = if let Some(v) = lower.strip_suffix("kb") {
-        (v, 1024.0)
+    let (digits, multiplier) = if let Some(v) = lower.strip_suffix("kb") {
+        (v, 1024u64)
     } else if let Some(v) = lower.strip_suffix("mb") {
-        (v, 1.0)
+        (v, 1024u64.pow(2))
     } else if let Some(v) = lower.strip_suffix("gb") {
-        (v, 1.0 / 1024.0)
-    } else if let Some(v) = lower.strip_suffix('k') {
-        (v, 1024.0)
-    } else if let Some(v) = lower.strip_suffix('m') {
-        (v, 1.0)
-    } else if let Some(v) = lower.strip_suffix('g') {
-        (v, 1.0 / 1024.0)
-    } else if let Some(v) = lower.strip_suffix('t') {
-        (v, 1.0 / (1024.0 * 1024.0))
+        (v, 1024u64.pow(3))
+    } else if let Some(v) = lower.strip_suffix("tb") {
+        (v, 1024u64.pow(4))
     } else {
-        (lower.as_str(), 1024.0)
+        match lower.as_bytes().last().copied() {
+            Some(b'k') => (&lower[..lower.len() - 1], 1024u64),
+            Some(b'm') => (&lower[..lower.len() - 1], 1024u64.pow(2)),
+            Some(b'g') => (&lower[..lower.len() - 1], 1024u64.pow(3)),
+            Some(b't') => (&lower[..lower.len() - 1], 1024u64.pow(4)),
+            Some(b'c') => (&lower[..lower.len() - 1], 1u64),
+            Some(b) if b.is_ascii_alphabetic() => return None,
+            _ => (lower.as_str(), 1024u64),
+        }
     };
     let value: f64 = digits.trim().parse().ok()?;
-    let mb = value / per_mb;
-    if mb <= 0.0 {
-        None
-    } else {
-        Some(mb.round() as u64)
+    let bytes = value * multiplier as f64;
+    if !bytes.is_finite() || bytes <= 0.0 {
+        return None;
     }
+    Some(bytes.round() as u64)
+}
+
+/// Convert a measured byte peak to whole mebibytes.
+///
+/// Rounds to the nearest MiB — the granularity every scheduler store already
+/// reports — but a genuine positive peak below half a MiB rounds to **1**,
+/// never to a fabricated `0` (a measured sub-MiB job is not "no memory").
+/// `0` itself only ever means "nothing measured", so it stays `None`.
+pub fn rss_bytes_to_mb(bytes: u64) -> Option<u64> {
+    const MIB: u64 = 1024 * 1024;
+    (bytes > 0).then(|| (bytes.saturating_add(MIB / 2) / MIB).max(1))
+}
+
+/// Parse an accounting memory figure into MB — the shape the scheduler
+/// adapters persist (`TerminalRecord::max_rss_mb`).
+pub fn parse_rss_mb(raw: &str) -> Option<u64> {
+    parse_rss_bytes(raw).and_then(rss_bytes_to_mb)
 }
 
 /// Parse scheduler accounting output into a terminal record, or `None` when
@@ -4775,6 +4811,8 @@ mod accounting_tests {
 12345    COMPLETED      0:0        00:01:22    128.2M   00:02:44\n";
 
         // Act / Assert
+        // 128.2 MiB rounds to the nearest whole MB (128); a sub-MiB
+        // measurement would report as 1 MB, never a fabricated zero.
         assert_eq!(
             stripped(parse_accounting(&ClusterBackend::Slurm, text)),
             Some(TerminalRecord {
@@ -5008,17 +5046,50 @@ mod accounting_tests {
         assert_eq!(parse_accounting_duration_secs("00:00:04.500"), Some(4));
         assert_eq!(parse_accounting_duration_secs(""), None);
         assert_eq!(parse_accounting_duration_secs("UNLIMITED"), None);
+    }
 
-        assert_eq!(parse_rss_mb("1048576K"), Some(1024));
-        assert_eq!(parse_rss_mb("128.2M"), Some(128));
-        assert_eq!(parse_rss_mb("2G"), Some(2048));
-        // SLURM's per-node / per-core suffixes.
-        assert_eq!(parse_rss_mb("512Mn"), Some(512));
-        // PBS writes kilobytes with a unit; SGE's ru_maxrss is bare KB.
-        assert_eq!(parse_rss_mb("2048kb"), Some(2));
-        assert_eq!(parse_rss_mb("4096"), Some(4));
-        assert_eq!(parse_rss_mb(""), None);
-        assert_eq!(parse_rss_mb("0"), None);
+    /// Task-7c M-3: one parser for every scheduler adapter and the CLI's
+    /// `--acct` importer. The table pins every suffix form to a single
+    /// answer; the CLI parity test asserts its surface calls this one.
+    #[test]
+    fn parses_scheduler_memory_figures_to_bytes_and_mebibytes() {
+        // (raw, bytes, MiB) — MiB rounds to nearest, with a positive
+        // sub-MiB peak reported as 1 (never a fabricated zero).
+        let cases: &[(&str, Option<u64>, Option<u64>)] = &[
+            ("1K", Some(1024), Some(1)),
+            ("1KB", Some(1024), Some(1)),
+            ("1M", Some(1024 * 1024), Some(1)),
+            ("1MB", Some(1024 * 1024), Some(1)),
+            ("1G", Some(1024 * 1024 * 1024), Some(1024)),
+            ("1GB", Some(1024 * 1024 * 1024), Some(1024)),
+            ("1T", Some(1024u64.pow(4)), Some(1024 * 1024)),
+            // Bare figures are kilobytes (SLURM MaxRSS, SGE ru_maxrss).
+            ("2048", Some(2 * 1024 * 1024), Some(2)),
+            // SLURM's byte unit: `12345C` is 12,345 bytes, not 12 MiB.
+            ("12345c", Some(12_345), Some(1)),
+            ("12345C", Some(12_345), Some(1)),
+            // Per-node qualifier does not change the unit.
+            ("512Mn", Some(512 * 1024 * 1024), Some(512)),
+            // PBS writes kilobytes with a unit.
+            ("2048kb", Some(2 * 1024 * 1024), Some(2)),
+            ("1234K", Some(1_263_616), Some(1)),
+            ("128.2M", Some(134_427_443), Some(128)),
+            ("1.5G", Some(1_610_612_736), Some(1536)),
+            ("  8G  ", Some(8 * 1024 * 1024 * 1024), Some(8192)),
+            // Zero is every store's "not reported" sentinel.
+            ("0", None, None),
+            ("0K", None, None),
+            ("0C", None, None),
+            ("0.0G", None, None),
+            ("", None, None),
+            ("12X", None, None),
+            ("abc", None, None),
+            ("UNLIMITED", None, None),
+        ];
+        for &(raw, bytes, mb) in cases {
+            assert_eq!(parse_rss_bytes(raw), bytes, "bytes for {raw:?}");
+            assert_eq!(parse_rss_mb(raw), mb, "MiB for {raw:?}");
+        }
     }
 
     #[test]

@@ -775,7 +775,8 @@ Limits worth knowing before comparing numbers:
   therefore reports a cluster no-op as `rules_executed: 0` rather than
   recycling the earlier run's benchmarks.
 - **Reconcile with an independent export.** `--resource-ledger --acct
-  <sacct.csv>` reduces the CSV to the rules that executed in this run (a
+  <sacct.csv>` (JSON only — CSV has no reconciliation columns, so
+  `-f csv` + `--acct` fails closed as a usage error) reduces the CSV to the rules that executed in this run (a
   whole-account `sacct -a` export's unrelated jobs are ignored and counted
   in the source note), sums the remaining batch rows into
   `run.scheduler_totals`, and names that raw side's own provenance in
