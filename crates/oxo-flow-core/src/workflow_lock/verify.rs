@@ -153,27 +153,68 @@ fn verify_includes(lock: &WorkflowLock, state: &LockState, findings: &mut Vec<Lo
     for key in keys {
         let expected = lock.includes.get(key);
         let actual = state.includes.get(key);
-        if expected == actual {
+        let (Some(expected), Some(actual)) = (expected, actual) else {
+            let message = if expected.is_none() {
+                "an include is not pinned by the lock (added since generation)"
+            } else {
+                "an include pinned by the lock is no longer in the workflow's include graph"
+            };
+            findings.push(finding(
+                LOCK_005,
+                key.clone(),
+                expected.map(|include| include.content_sha256.clone()),
+                actual.map(|include| include.content_sha256.clone()),
+                message,
+            ));
+            continue;
+        };
+
+        // Unknown is never a match, including here: an unresolved include
+        // digest must be reported BEFORE the struct-equality shortcut, or
+        // two identical `unresolved` values would verify clean
+        // (issue #1399 review I4).
+        if is_unresolved(&expected.content_sha256) || is_unresolved(&actual.content_sha256) {
+            findings.push(finding(
+                LOCK_005,
+                key.clone(),
+                Some(expected.content_sha256.clone()),
+                Some(actual.content_sha256.clone()),
+                "an include's content digest is unresolved — unknown never matches",
+            ));
             continue;
         }
-        let message = if expected.is_none() {
-            "an include is not pinned by the lock (added since generation)"
-        } else if actual.is_none() {
-            "an include pinned by the lock is no longer in the workflow's include graph"
-        } else if expected.is_some_and(|include| is_unresolved(&include.content_sha256))
-            || actual.is_some_and(|include| is_unresolved(&include.content_sha256))
-        {
-            "an include's content digest is unresolved — unknown never matches"
-        } else {
-            "the include's source or content changed since generation"
+
+        // Field-level comparison (issue #1399 review M5): a moved branch
+        // changes `resolved_sha` while the file content is identical, so
+        // reporting only the content digest would print two equal values.
+        let mut compare = |field: &str, expected: Option<String>, actual: Option<String>| {
+            if expected != actual {
+                findings.push(finding(
+                    LOCK_005,
+                    format!("{key}.{field}"),
+                    expected,
+                    actual,
+                    format!("the include's {field} changed since generation"),
+                ));
+            }
         };
-        findings.push(finding(
-            LOCK_005,
-            key.clone(),
-            expected.map(|include| include.content_sha256.clone()),
-            actual.map(|include| include.content_sha256.clone()),
-            message,
-        ));
+        compare(
+            "source",
+            Some(expected.source.clone()),
+            Some(actual.source.clone()),
+        );
+        compare("repo", expected.repo.clone(), actual.repo.clone());
+        compare("ref", expected.git_ref.clone(), actual.git_ref.clone());
+        compare(
+            "resolved_sha",
+            expected.resolved_sha.clone(),
+            actual.resolved_sha.clone(),
+        );
+        compare(
+            "content_sha256",
+            Some(expected.content_sha256.clone()),
+            Some(actual.content_sha256.clone()),
+        );
     }
 }
 

@@ -859,6 +859,12 @@ Execution flags are forwarded to the CLI executor:
   same merged rule set the run executes.
   There is no per-key content cap beyond the request-body limit (2 MiB by
   default, `body_limit` in the server config).
+  **Workflow-lock staging (issue #1399):** a workflow with
+  `[engine] locked = true` is verified against `oxo-flow.lock` beside the
+  staged workflow, so upload the lock as an `include_files` entry keyed
+  `oxo-flow.lock`. Without it the run is admitted and then fails closed
+  with `LOCK-001` (the lock gate always runs inside the spawned CLI; the
+  web layer never bypasses it). There is no separate `lock_file` field.
 - `config_overrides` (array of strings, optional) passes CLI config
   overrides through to the spawned run as `--arg=KEY=VALUE` entries. Each
   entry must be a non-empty `KEY=VALUE` string (`400

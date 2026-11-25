@@ -288,6 +288,12 @@ fn run_locked_with_valid_lock_executes_and_records_digest() {
         state["workflow_resolved_hash"].is_string(),
         "the folded resolved hash is recorded"
     );
+    // Review M8: the checkpoint reuses the identity the gate verified
+    // instead of recomputing it.
+    assert_eq!(
+        state["env_lock_identity"]["touch"], lock["rules"]["touch"]["environment"],
+        "the checkpoint environment identity is the verified lock identity"
+    );
 }
 
 // 9. `run --locked` fails closed BEFORE any rule executes.
@@ -580,4 +586,291 @@ shell = "echo ran > ran.txt; test {config.threshold} -eq 20"
         "a lock generated with the same --arg must verify: {stderr}"
     );
     assert!(dir.path().join("ran.txt").exists());
+}
+
+// 15. Review C1: the repair verification rerun must inherit `--locked`.
+// The patch rewrites the workflow, so the child's gate fails `LOCK-002` and
+// the run reports `REPAIR_RERUN_FAILED` instead of executing unverified
+// bytes. Covers the flag-only form (the bypass) and the config-key form.
+const FAILING_REPAIR_WORKFLOW: &str = r#"
+[workflow]
+name = "lock-repair"
+version = "1.0"
+
+[[rules]]
+name = "boom"
+shell = "echo original > ran.txt; exit 1"
+"#;
+
+const FIXING_PATCH: &str = r#"
+[workflow]
+name = "lock-repair"
+version = "1.0"
+
+[[rules]]
+name = "boom"
+shell = "echo patched > ran.txt; exit 0"
+"#;
+
+/// A whole-workflow patch that keeps the `[engine] locked = true` section
+/// (the apply guard refuses a replacement that drops a declared section).
+const FIXING_PATCH_WITH_ENGINE_LOCK: &str = r#"
+[workflow]
+name = "lock-repair"
+version = "1.0"
+
+[engine]
+locked = true
+
+[[rules]]
+name = "boom"
+shell = "echo patched > ran.txt; exit 0"
+"#;
+
+fn assert_repair_refused(dir: &Path, extra: &[&str], patch_text: &str) {
+    let workflow = dir.join("wf.oxoflow");
+    let patch = write(dir, "patch.oxoflow", patch_text);
+    let mut args = vec![
+        "run",
+        workflow.to_str().unwrap(),
+        "--workdir",
+        dir.to_str().unwrap(),
+        "--apply-patch",
+        patch.to_str().unwrap(),
+        "-j",
+        "1",
+    ];
+    args.extend_from_slice(extra);
+    let (code, _stdout, stderr) = run_in(dir, &args);
+    assert_ne!(
+        code, 0,
+        "a repair under enforcement must not succeed (extra={extra:?}): {stderr}"
+    );
+    assert!(
+        stderr.contains("REPAIR_APPLIED"),
+        "the patch was applied: {stderr}"
+    );
+    assert!(
+        stderr.contains("REPAIR_RERUN_FAILED"),
+        "the verification rerun must fail closed: {stderr}"
+    );
+    assert!(stderr.contains("LOCK-002"), "{stderr}");
+    assert_eq!(
+        std::fs::read_to_string(dir.join("ran.txt")).unwrap_or_default(),
+        "original\n",
+        "the patched rule must never execute under the lock"
+    );
+    // The workflow still no longer matches its lock: the refusal is real,
+    // not a spurious error.
+    let (check_code, _stdout, _stderr) = run_in(dir, &["lock", "--check", "wf.oxoflow"]);
+    assert_eq!(check_code, 2);
+}
+
+#[test]
+fn flag_only_locked_repair_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "wf.oxoflow", FAILING_REPAIR_WORKFLOW);
+    assert_eq!(run_in(dir.path(), &["lock", "wf.oxoflow"]).0, 0);
+    assert_repair_refused(dir.path(), &["--locked"], FIXING_PATCH);
+}
+
+#[test]
+fn engine_locked_repair_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let workflow_text = FAILING_REPAIR_WORKFLOW.replace(
+        "[workflow]\nname = \"lock-repair\"\nversion = \"1.0\"\n",
+        "[workflow]\nname = \"lock-repair\"\nversion = \"1.0\"\n\n[engine]\nlocked = true\n",
+    );
+    write(dir.path(), "wf.oxoflow", &workflow_text);
+    assert_eq!(run_in(dir.path(), &["lock", "wf.oxoflow"]).0, 0);
+    assert_repair_refused(dir.path(), &[], FIXING_PATCH_WITH_ENGINE_LOCK);
+}
+
+// A patch that flips `[engine] locked` to false must not be able to turn
+// enforcement off for the rerun: the parent captures the effective
+// enforcement at gate time and forwards `--locked`.
+#[test]
+fn repair_cannot_disable_engine_lock_and_continue() {
+    let dir = tempfile::tempdir().unwrap();
+    let workflow_text = FAILING_REPAIR_WORKFLOW.replace(
+        "[workflow]\nname = \"lock-repair\"\nversion = \"1.0\"\n",
+        "[workflow]\nname = \"lock-repair\"\nversion = \"1.0\"\n\n[engine]\nlocked = true\n",
+    );
+    write(dir.path(), "wf.oxoflow", &workflow_text);
+    assert_eq!(run_in(dir.path(), &["lock", "wf.oxoflow"]).0, 0);
+    assert_repair_refused(
+        dir.path(),
+        &[],
+        &FIXING_PATCH_WITH_ENGINE_LOCK.replace("locked = true", "locked = false"),
+    );
+}
+
+// 16. Review I2: the web/queued/remote contract stages `workflow.oxoflow`
+// (plus client-supplied include_files) into a per-run workdir; a
+// `[engine] locked` workflow without `oxo-flow.lock` staged beside it fails
+// closed LOCK-001, and staging the lock (as an include_files entry) makes
+// it run. This exercises the spawned-CLI contract the web server and remote
+// wrapper use.
+#[test]
+fn web_style_staged_workflow_without_lock_fails_closed() {
+    let source = tempfile::tempdir().unwrap();
+    write(
+        source.path(),
+        "wf.oxoflow",
+        &MARKER_WORKFLOW.replace(
+            "[workflow]\nname = \"lock-cli\"\nversion = \"1.0\"\n",
+            "[workflow]\nname = \"lock-cli\"\nversion = \"1.0\"\n\n[engine]\nlocked = true\n",
+        ),
+    );
+    assert_eq!(run_in(source.path(), &["lock", "wf.oxoflow"]).0, 0);
+
+    // Stage-only-the-workflow workdir (what a web create-run writes when the
+    // client does not upload the lock).
+    let staged = tempfile::tempdir().unwrap();
+    std::fs::copy(
+        source.path().join("wf.oxoflow"),
+        staged.path().join("workflow.oxoflow"),
+    )
+    .unwrap();
+    let (code, _stdout, stderr) = run_in(
+        staged.path(),
+        &[
+            "run",
+            staged.path().join("workflow.oxoflow").to_str().unwrap(),
+            "--workdir",
+            staged.path().to_str().unwrap(),
+            "-j",
+            "1",
+        ],
+    );
+    assert_ne!(code, 0);
+    assert!(stderr.contains("LOCK-001"), "{stderr}");
+    assert!(!staged.path().join("ran.txt").exists());
+
+    // Staging the lock beside the workflow (the documented `include_files`
+    // entry) satisfies enforcement.
+    std::fs::copy(
+        source.path().join("oxo-flow.lock"),
+        staged.path().join("oxo-flow.lock"),
+    )
+    .unwrap();
+    let (code, _stdout, stderr) = run_in(
+        staged.path(),
+        &[
+            "run",
+            staged.path().join("workflow.oxoflow").to_str().unwrap(),
+            "--workdir",
+            staged.path().to_str().unwrap(),
+            "-j",
+            "1",
+        ],
+    );
+    assert_eq!(code, 0, "a staged lock verifies: {stderr}");
+    assert!(staged.path().join("ran.txt").exists());
+}
+
+// 17. Review M3: the lock output may never be the workflow itself.
+#[test]
+fn lock_refuses_to_overwrite_the_workflow() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "wf.oxoflow", MARKER_WORKFLOW);
+    let before = std::fs::read_to_string(dir.path().join("wf.oxoflow")).unwrap();
+    let (code, _stdout, stderr) = run_in(dir.path(), &["lock", "wf.oxoflow", "-o", "wf.oxoflow"]);
+    assert_eq!(code, 4, "the guard is a usage error: {stderr}");
+    assert_eq!(
+        before,
+        std::fs::read_to_string(dir.path().join("wf.oxoflow")).unwrap(),
+        "the workflow must be untouched"
+    );
+}
+
+// 18. Review M7: workflow discovery failures are usage errors (4) in both
+// modes, not a bare exit 1.
+#[test]
+fn lock_with_no_workflow_exits_4() {
+    let dir = tempfile::tempdir().unwrap();
+    let (code, _stdout, stderr) = run_in(dir.path(), &["lock", "--check"]);
+    assert_eq!(code, 4, "{stderr}");
+}
+
+// 19. Review I3: credential-shaped config keys are pinned as digests, while
+// a plaintext undeclared override is warned about before commit.
+#[test]
+fn lock_hashes_credential_keys_and_warns_on_plaintext_overrides() {
+    let dir = tempfile::tempdir().unwrap();
+    write(
+        dir.path(),
+        "wf.oxoflow",
+        r#"
+[workflow]
+name = "lock-secrets"
+version = "1.0"
+
+[config]
+token = { default = "declared-default", sensitive = true }
+
+[[rules]]
+name = "touch"
+shell = "echo hi"
+"#,
+    );
+    let (code, _stdout, stderr) = run_in(
+        dir.path(),
+        &[
+            "lock",
+            "--arg",
+            "API_TOKEN=supersecret-value",
+            "--arg",
+            "PLAIN_NOTE=hello",
+            "wf.oxoflow",
+        ],
+    );
+    assert_eq!(code, 0, "{stderr}");
+    let lock_text = std::fs::read_to_string(dir.path().join("oxo-flow.lock")).unwrap();
+    assert!(
+        !lock_text.contains("supersecret-value"),
+        "credential-shaped keys must be hashed: {lock_text}"
+    );
+    assert!(lock_text.contains("sha256:"));
+    assert!(
+        lock_text.contains("PLAIN_NOTE") && lock_text.contains("hello"),
+        "a non-credential undeclared override is pinned verbatim: {lock_text}"
+    );
+    assert!(
+        stderr.contains("pinned in plaintext") && stderr.contains("PLAIN_NOTE"),
+        "the writer must warn about plaintext pins: {stderr}"
+    );
+
+    // The same token verifies; a rotated one is LOCK-003 without leaking it.
+    let (code, _stdout, _stderr) = run_in(
+        dir.path(),
+        &[
+            "lock",
+            "--check",
+            "--arg",
+            "API_TOKEN=supersecret-value",
+            "--arg",
+            "PLAIN_NOTE=hello",
+            "wf.oxoflow",
+        ],
+    );
+    assert_eq!(code, 0);
+    let (code, stdout, _stderr) = run_in(
+        dir.path(),
+        &[
+            "lock",
+            "--check",
+            "--json",
+            "--arg",
+            "API_TOKEN=rotated-value",
+            "--arg",
+            "PLAIN_NOTE=hello",
+            "wf.oxoflow",
+        ],
+    );
+    assert_eq!(code, 2);
+    assert!(
+        !stdout.contains("rotated-value"),
+        "drift output must not leak the value: {stdout}"
+    );
 }

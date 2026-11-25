@@ -1,3 +1,4 @@
+use super::state::is_credential_key;
 use super::*;
 use crate::config::WorkflowConfig;
 use crate::executor::checkpoint::{compute_file_checksum, compute_workflow_resolved_hash};
@@ -71,6 +72,25 @@ fn state_with_rules(environments: &[(&str, &str)]) -> LockState {
             })
             .collect(),
     }
+}
+
+/// One hand-built state with repo-style includes: `(key, content digest,
+/// resolved sha)`.
+fn state_with_includes(entries: &[(&str, &str, Option<&str>)]) -> LockState {
+    let mut state = state_with_rules(&[]);
+    for (key, content, resolved) in entries {
+        state.includes.insert(
+            (*key).to_string(),
+            LockedInclude {
+                source: "repo".to_string(),
+                repo: Some("https://example.com/mod.git".to_string()),
+                git_ref: Some("main".to_string()),
+                resolved_sha: resolved.map(str::to_string),
+                content_sha256: (*content).to_string(),
+            },
+        );
+    }
+    state
 }
 
 // (a) Generation determinism: the same resolved input produces the same
@@ -389,7 +409,7 @@ shell = "echo hi"
     assert!(
         findings
             .iter()
-            .any(|finding| finding.subject == "rules/extra.oxoflow")
+            .any(|finding| finding.subject == "rules/extra.oxoflow.content_sha256")
     );
 }
 
@@ -581,4 +601,140 @@ fn checkpoint_lock_digest_is_legacy_safe() {
         serde_json::from_str(r#"{"completed_rules":[],"failed_rules":[],"benchmarks":{}}"#)
             .unwrap();
     assert!(legacy.lock_digest.is_none());
+}
+
+// (u) Review I4: an unresolved include digest never matches, including
+// against itself.
+#[test]
+fn unresolved_include_never_matches_itself() {
+    let state = state_with_includes(&[("mod.oxoflow", "unresolved", None)]);
+    let lock = WorkflowLock::from_state(&state);
+    let findings = verify_lock(&lock, &state).findings;
+    assert_eq!(codes(&findings), vec![LOCK_005], "{findings:?}");
+    assert!(findings[0].message.contains("unknown never matches"));
+}
+
+// (v) Review M5: a moved repo pin names the differing field, not just the
+// (identical) content digest.
+#[test]
+fn include_field_change_names_the_changed_field() {
+    let locked = state_with_includes(&[("mod.oxoflow", "sha256:aa", Some("sha1"))]);
+    let lock = WorkflowLock::from_state(&locked);
+    let current = state_with_includes(&[("mod.oxoflow", "sha256:aa", Some("sha2"))]);
+    let findings = verify_lock(&lock, &current).findings;
+    assert_eq!(codes(&findings), vec![LOCK_005], "{findings:?}");
+    assert_eq!(findings[0].subject, "mod.oxoflow.resolved_sha");
+    assert_eq!(findings[0].expected.as_deref(), Some("sha1"));
+    assert_eq!(findings[0].actual.as_deref(), Some("sha2"));
+}
+
+// (w) Review M2: unknown fields are malformed documents, never silently
+// ignored outside the digest.
+#[test]
+fn unknown_lock_fields_are_rejected() {
+    let state = state_with_rules(&[("plain", "system|unavailable")]);
+    let lock = WorkflowLock::from_state(&state);
+    let base: serde_json::Value = serde_json::from_str(&lock.canonical_json()).unwrap();
+
+    let mut top = base.clone();
+    top["injected_unknown_field"] = serde_json::json!({"x": 1});
+    assert!(matches!(
+        WorkflowLock::parse(&serde_json::to_string(&top).unwrap()),
+        Err(LockParseError::Malformed(_))
+    ));
+
+    let mut nested = base;
+    nested["workflow"]["injected"] = serde_json::json!(true);
+    assert!(matches!(
+        WorkflowLock::parse(&serde_json::to_string(&nested).unwrap()),
+        Err(LockParseError::Malformed(_))
+    ));
+}
+
+// (x) Review I3: a credential-shaped config key is stored as a digest even
+// when it was never declared `sensitive`, while ordinary keys stay verbatim;
+// verification still compares correctly.
+#[test]
+fn credential_shaped_config_keys_are_hashed() {
+    let workflow_text = r#"
+[workflow]
+name = "secrets"
+version = "1.0"
+
+[config]
+API_TOKEN = "supersecret-value"
+dbPassword = "hunter2"
+hockey = "sticks"
+
+[[rules]]
+name = "hello"
+shell = "echo hi"
+"#;
+    let dir = tempfile::tempdir().unwrap();
+    let workflow = write_workflow(dir.path(), workflow_text);
+    let (lock, state) = generate(&workflow);
+    let json = lock.canonical_json();
+    assert!(
+        !json.contains("supersecret-value") && !json.contains("hunter2"),
+        "credential-shaped values must not land in plaintext: {json}"
+    );
+    assert!(lock.config["API_TOKEN"].starts_with("sha256:"));
+    assert!(lock.config["dbPassword"].starts_with("sha256:"));
+    assert_eq!(lock.config["hockey"], "sticks");
+    assert!(verify_lock(&lock, &state).ok());
+
+    // A different token is drift, reported as digests (never plaintext).
+    let changed = workflow_text.replace("supersecret-value", "rotated-value");
+    std::fs::write(&workflow, changed).unwrap();
+    let findings = findings_for(&lock, &workflow);
+    assert!(codes(&findings).contains(&LOCK_003), "{findings:?}");
+    let finding = findings
+        .iter()
+        .find(|finding| finding.subject == "config.API_TOKEN")
+        .expect("per-key finding");
+    assert!(
+        !finding
+            .actual
+            .as_deref()
+            .unwrap_or_default()
+            .contains("rotated-value"),
+        "drift diagnostics must not leak the value: {finding:?}"
+    );
+}
+
+// (y) A current rule with no lock entry is LOCK-004 (the "rule not pinned"
+// arm of the matrix).
+#[test]
+fn rule_missing_from_lock_reports_lock_004() {
+    let lock = WorkflowLock::from_state(&state_with_rules(&[]));
+    let current = state_with_rules(&[("new_rule", "system|unavailable")]);
+    let findings = verify_lock(&lock, &current).findings;
+    assert_eq!(codes(&findings), vec![LOCK_004], "{findings:?}");
+    assert_eq!(findings[0].subject, "new_rule");
+    assert!(findings[0].message.contains("not pinned"));
+}
+
+#[test]
+fn credential_key_heuristic_is_conservative() {
+    for key in [
+        "API_TOKEN",
+        "apiToken",
+        "api_key",
+        "API-KEY",
+        "db_password",
+        "aws_secret",
+        "mySecret",
+        "github_credentials",
+    ] {
+        assert!(is_credential_key(key), "{key} should be hashed");
+    }
+    for key in [
+        "hockey",
+        "monkey",
+        "threshold",
+        "tokenize_mode",
+        "secretary",
+    ] {
+        assert!(!is_credential_key(key), "{key} should stay verbatim");
+    }
 }

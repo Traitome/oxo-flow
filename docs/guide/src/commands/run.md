@@ -1821,8 +1821,17 @@ the config surface.
 outputs**, and fails closed when the lock is missing (`LOCK-001`), changed
 (`LOCK-002`–`LOCK-005`), unresolved (`LOCK-006`), or malformed
 (`LOCK-007`). The workflow's `[engine] locked = true` key is the persistent
-form and therefore also covers web-spawned and queued runs; `--locked` is
-the explicit per-invocation form and wins.
+form; `--locked` is the explicit per-invocation form and wins. Any workflow
+rewrite after the gate (the in-process type-admission repair, or the
+verified-repair rerun) re-verifies the lock, so patched bytes never execute
+under a lock that does not pin them.
+
+Enforcement always reads `oxo-flow.lock` beside the workflow; there is no
+lock-path override. Runs that execute a **staged copy** of the workflow
+therefore need the lock staged with it: `POST /api/runs` callers upload it
+as an `include_files` entry keyed `oxo-flow.lock`, and remote cluster runs
+ship the same run workdir. Without it the web/queued/cluster run fails
+closed with `LOCK-001` (never a bypass).
 
 ```bash
 oxo-flow lock my_pipeline.oxoflow        # generate once, commit the result
@@ -1852,10 +1861,12 @@ read and the run — including its checkpoint, provenance, and attestation
 bytes — is unchanged.
 
 Limits: a repair loop rewrites the workflow, so an enforced lock refuses the
-verification rerun (`LOCK-002`); review the fix and regenerate the lock.
-`publish` bundles do not include `oxo-flow.lock`, so a bundle of a
-lock-enforced workflow fails closed unless the lock is regenerated in the
-extracted bundle. See [`lock`](lock.md).
+verification rerun (`LOCK-002`, `REPAIR_RERUN_FAILED`) in **both** the
+`--locked` and `[engine]` forms; review the fix and regenerate the lock
+before re-running under enforcement. `publish` bundles do not include
+`oxo-flow.lock`, so a bundle of a lock-enforced workflow fails closed
+unless the lock is regenerated in the extracted bundle. See
+[`lock`](lock.md).
 
 ## AI error recovery (`--ai-recover`)
 

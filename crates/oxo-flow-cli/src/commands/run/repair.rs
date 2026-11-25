@@ -49,6 +49,14 @@ pub(crate) struct RerunContext {
     /// Forward `--provenance` when the parent tracked output checksums, so
     /// the rerun's re-executed rules record them too.
     pub provenance: bool,
+    /// Forward `--locked` when the parent enforced the workflow lock
+    /// (issue #1399 review C1). The rerun executes a PATCHED workflow, so
+    /// the child's gate must re-verify and fail closed (`LOCK-002`) instead
+    /// of executing bytes the lock does not pin. Without this, a flag-only
+    /// `run --locked` repair would silently bypass enforcement (the config
+    /// key form is inherited from the patched file's `[engine]` section
+    /// only when it was already set).
+    pub locked: bool,
     /// Forward `--jobs <n>` when the parent ran with explicit concurrency
     /// other than the default 1.
     pub jobs: Option<usize>,
@@ -144,6 +152,9 @@ pub(crate) fn build_rerun_args(
     }
     if extra.provenance {
         args.push("--provenance".to_string());
+    }
+    if extra.locked {
+        args.push("--locked".to_string());
     }
     if let Some(jobs) = extra.jobs {
         args.push("--jobs".to_string());
@@ -810,6 +821,7 @@ mod tests {
             workdir: Some(PathBuf::from("/data/run")),
             config_args: vec!["threads=8".into(), "--api-token".into(), "secret".into()],
             provenance: true,
+            locked: true,
             jobs: Some(8),
             keep_going: true,
             samples: vec!["first:10".into(), "tumor_1".into()],
@@ -839,6 +851,7 @@ mod tests {
                 "--workdir",
                 "/data/run",
                 "--provenance",
+                "--locked",
                 "--jobs",
                 "8",
                 "--keep-going",

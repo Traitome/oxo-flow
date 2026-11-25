@@ -53,6 +53,24 @@ impl LockState {
             &config_snapshot,
             config.metadata_digest.as_deref(),
         );
+        // The lock is a committed artifact, so a credential-shaped key is
+        // stored as a SHA-256 digest even when the workflow failed to declare
+        // it `sensitive = true` (issue #1399 review I3). Declared sensitive
+        // keys are already digested by `canonical_config_snapshot`; this only
+        // adds the conservative name heuristic. Verification observes the
+        // same way, so equality semantics are unchanged — only the stored
+        // form is.
+        let sensitive = config.sensitive_config_keys();
+        let config_snapshot: BTreeMap<String, String> = config_snapshot
+            .into_iter()
+            .map(|(key, value)| {
+                if sensitive.contains(&key) || !is_credential_key(&key) {
+                    (key, value)
+                } else {
+                    (key, crate::config_impact::digest_config_value(&value))
+                }
+            })
+            .collect();
         let env_identity = compute_env_lock_identity(config, workflow_path);
         let software =
             crate::software_versions::collect_software_versions(config, None, workflow_path);
@@ -111,4 +129,39 @@ impl LockState {
             rules,
         }
     }
+}
+
+/// Conservative credential-name heuristic for the lock's config snapshot
+/// (issue #1399 review I3): a key whose `_`/`-`/camel-case segments name a
+/// credential is stored as a digest even without an explicit
+/// `sensitive = true`. Segment-based equality keeps ordinary keys such as
+/// `hockey` or `monkey` verbatim; `api_token`, `API_KEY`, `dbPassword`,
+/// `aws_secret` and `secret_sauce` match.
+#[must_use]
+pub(crate) fn is_credential_key(key: &str) -> bool {
+    const EXACT: &[&str] = &[
+        "KEY",
+        "TOKEN",
+        "SECRET",
+        "PASSWORD",
+        "PASSWD",
+        "CREDENTIAL",
+        "CREDENTIALS",
+    ];
+    const SUFFIXES: &[&str] = &[
+        "TOKEN",
+        "SECRET",
+        "PASSWORD",
+        "PASSWD",
+        "CREDENTIAL",
+        "CREDENTIALS",
+    ];
+    key.split(|c: char| !c.is_ascii_alphanumeric())
+        .map(str::to_ascii_uppercase)
+        .any(|segment| {
+            EXACT.contains(&segment.as_str())
+                || SUFFIXES
+                    .iter()
+                    .any(|suffix| segment.len() > suffix.len() && segment.ends_with(suffix))
+        })
 }

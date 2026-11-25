@@ -14,6 +14,10 @@ use crate::config::ResolvedIncludeSource;
 /// never requires it to match, so a lock remains checkable by a newer
 /// engine. It is inside `lock_digest`, so a hand edit is still detected.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+// Unknown fields are rejected (issue #1399 review M2): the lock pins a
+// closed set of fields, so an unexpected key is a malformed document
+// (`LOCK-007`), not silently ignored and outside the digest.
+#[serde(deny_unknown_fields)]
 pub struct LockGenerator {
     /// Always `"oxo-flow"`.
     pub tool: String,
@@ -23,6 +27,10 @@ pub struct LockGenerator {
 
 /// The workflow identity a lock pins.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+// Unknown fields are rejected (issue #1399 review M2): the lock pins a
+// closed set of fields, so an unexpected key is a malformed document
+// (`LOCK-007`), not silently ignored and outside the digest.
+#[serde(deny_unknown_fields)]
 pub struct LockedWorkflow {
     /// Workflow name (`[workflow] name`).
     pub name: String,
@@ -40,6 +48,10 @@ pub struct LockedWorkflow {
 
 /// One pinned include source.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+// Unknown fields are rejected (issue #1399 review M2): the lock pins a
+// closed set of fields, so an unexpected key is a malformed document
+// (`LOCK-007`), not silently ignored and outside the digest.
+#[serde(deny_unknown_fields)]
 pub struct LockedInclude {
     /// `"local"` or `"repo"`.
     pub source: String,
@@ -74,6 +86,10 @@ impl LockedInclude {
 
 /// One rule's pinned environment.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+// Unknown fields are rejected (issue #1399 review M2): the lock pins a
+// closed set of fields, so an unexpected key is a malformed document
+// (`LOCK-007`), not silently ignored and outside the digest.
+#[serde(deny_unknown_fields)]
 pub struct LockedRule {
     /// The `"<kind>|<value>"` environment-lock identity from
     /// [`crate::env_lock::compute_env_lock_identity`].
@@ -87,6 +103,10 @@ pub struct LockedRule {
 
 /// The canonical lock document.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+// Unknown fields are rejected (issue #1399 review M2): the lock pins a
+// closed set of fields, so an unexpected key is a malformed document
+// (`LOCK-007`), not silently ignored and outside the digest.
+#[serde(deny_unknown_fields)]
 pub struct WorkflowLock {
     /// Format tag, always [`LOCK_FORMAT`] for a supported document.
     pub format: String,

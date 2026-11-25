@@ -123,13 +123,21 @@ pub fn config_placeholder_map(
 pub fn snapshot_value(value: &toml::Value, sensitive: bool) -> String {
     let canonical = config_value_string(value);
     if sensitive {
-        format!(
-            "sha256:{}",
-            hex::encode(Sha256::digest(canonical.as_bytes()))
-        )
+        digest_config_value(&canonical)
     } else {
         canonical
     }
+}
+
+/// SHA-256 `sha256:<hex>` of a config value's canonical string — the digest
+/// form sensitive snapshot values carry. Shared by the checkpoint snapshot
+/// and the workflow lock's credential-shaped keys (issue #1399).
+#[must_use]
+pub fn digest_config_value(canonical: &str) -> String {
+    format!(
+        "sha256:{}",
+        hex::encode(Sha256::digest(canonical.as_bytes()))
+    )
 }
 
 /// Maps each config key to the rules that reference it, split by channel.

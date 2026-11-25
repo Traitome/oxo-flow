@@ -491,10 +491,20 @@ async fn run_command_inner(
     // `--locked` / `[engine] locked = true`: verify the lock BEFORE any rule
     // executes and before the run creates outputs. Without either switch the
     // lock is never read (legacy behavior, byte-identical). The verified
-    // digest is recorded below and folded into the resolved-workflow
-    // identity only when a lock is in effect.
-    let lock_digest_in_effect = match enforce_workflow_lock(&workflow, &config, locked) {
-        Ok(digest) => digest,
+    // digest + environment identities are recorded below; the digest is
+    // folded into the resolved-workflow identity only when a lock is in
+    // effect. Any post-gate workflow rewrite re-runs this gate
+    // (`revalidate_lock_after_mutation`).
+    //
+    // The *effective* enforcement (flag OR the key present at gate time) is
+    // captured once: a later workflow rewrite must not be able to turn
+    // enforcement off by flipping the key, so every post-gate path forwards
+    // this value, not just the flag (issue #1399 review C1/I1).
+    let lock_enforcement_active =
+        locked || config.engine.as_ref().and_then(|engine| engine.locked) == Some(true);
+    let mut verified_lock = match enforce_workflow_lock(&workflow, &config, lock_enforcement_active)
+    {
+        Ok(verified) => verified,
         Err(error) => {
             json_summary.emit("failed", &RunCounts::default(), vec![]);
             return Err(error);
@@ -538,6 +548,18 @@ async fn run_command_inner(
                 target: repaired_target,
             } => {
                 config = *repaired_config;
+                // The admission repair rewrote the workflow AFTER the lock
+                // gate (issue #1399 review I1): re-verify before executing,
+                // so an enforced lock fails closed on the patched bytes
+                // instead of running a workflow the lock does not pin. With
+                // enforcement off this is a no-op.
+                match revalidate_lock_after_mutation(&workflow, &config, lock_enforcement_active) {
+                    Ok(verified) => verified_lock = verified,
+                    Err(error) => {
+                        json_summary.emit("failed", &RunCounts::default(), vec![]);
+                        return Err(error);
+                    }
+                }
                 (*repaired_dag, repaired_target)
             }
             AdmissionRepair::NotCleared(err) => {
@@ -878,15 +900,25 @@ async fn run_command_inner(
         // bet 4): the resolved container digest / env lock hash / explicit
         // sentinel for each rule's environment. Persisted in the checkpoint so
         // a cross-arch re-run can prove or deny environment-lock equality
-        // rather than assume it. Best-effort — never fails the run.
-        ck.set_env_lock_identity(oxo_flow_core::env_lock::compute_env_lock_identity(
-            &config,
-            Some(&workflow_abs),
-        ));
+        // rather than assume it. Best-effort — never fails the run. A locked
+        // run reuses the identity already computed by the gate (issue #1399
+        // review M8), so the bounded offline docker probe is not repeated.
+        ck.set_env_lock_identity(match &verified_lock {
+            Some(verified) => verified.env_identity.clone(),
+            None => {
+                oxo_flow_core::env_lock::compute_env_lock_identity(&config, Some(&workflow_abs))
+            }
+        });
         // Record the verified workflow-lock digest (issue #1399). `None`
         // when no lock is in effect — the field stays absent from the
-        // serialized checkpoint, so legacy bytes are unchanged.
-        ck.set_lock_digest(lock_digest_in_effect.clone());
+        // serialized checkpoint, so legacy bytes are unchanged. Only a state
+        // that verified end-to-end reaches here (post-repair re-validation
+        // clears it or fails the run).
+        ck.set_lock_digest(
+            verified_lock
+                .as_ref()
+                .map(|verified| verified.digest.clone()),
+        );
     }
     // Same absolutized run workdir, reused by the config-change replay below
     // (issue #282): runtime file functions in `when` resolve their relative
@@ -966,7 +998,9 @@ async fn run_command_inner(
                 raw_hash,
                 &ck.config_snapshot,
                 config.metadata_digest.as_deref(),
-                lock_digest_in_effect.as_deref(),
+                verified_lock
+                    .as_ref()
+                    .map(|verified| verified.digest.as_str()),
             );
         ck.set_workflow_resolved_hash(resolved);
         if let Err(e) = ck.save_to_file(&checkpoint_path) {
@@ -1605,6 +1639,12 @@ async fn run_command_inner(
         workdir: Some((*workdir_actual).clone()),
         config_args: rerun_config_args,
         provenance,
+        // The verification rerun executes the PATCHED workflow; a parent
+        // that enforced the lock (flag OR key) must forward enforcement so
+        // the child re-verifies (and fails closed) instead of silently
+        // bypassing it, even if the patch flips `[engine] locked` off
+        // (review C1).
+        locked: lock_enforcement_active,
         jobs: (jobs != 1).then_some(jobs),
         keep_going,
         samples: samples_filter.clone(),
