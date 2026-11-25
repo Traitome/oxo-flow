@@ -1,0 +1,4126 @@
+{
+ "attempts": 1,
+ "binary": "/Users/wsx/Documents/GitHub/oxo-flow/target/debug/oxo-flow",
+ "campaign_note": "Non-governed operational run; 36 intents x 3 arms, one model (qwen3.8-flash-next-nothink via an internal proxy), one seed, temperature default. Not the pre-registered governed ablation.",
+ "default_model": "qwen3.8-flash-next-nothink",
+ "generated_at": "2026-11-25T18:04:35.744636+00:00",
+ "harness": "eval/frontier/run_eval.py --variants unconstrained,syntax-only,full-contract",
+ "max_retries": null,
+ "profile": "compact",
+ "runs": [
+  {
+   "all_gates_pass": false,
+   "domain": "qc",
+   "error": null,
+   "est_cost_usd": 0.00084,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 1,
+     "pass": false
+    },
+    "lint": {
+     "exit": 1,
+     "n_warnings": null,
+     "pass": false
+    },
+    "validate": {
+     "exit": 1,
+     "n_errors": 1,
+     "n_missing_inputs": 0,
+     "pass": false,
+     "valid": false
+    }
+   },
+   "generated": true,
+   "input_tokens": 210,
+   "intent_id": "qc-fastp-multiqc",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 707,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "success": false,
+   "tier": "easy",
+   "tool_calls": null,
+   "vague": false,
+   "variant": "unconstrained",
+   "wall_s": 16.1
+  },
+  {
+   "all_gates_pass": false,
+   "domain": "qc",
+   "error": null,
+   "est_cost_usd": 0.00036,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 1,
+     "pass": false
+    },
+    "lint": {
+     "exit": 1,
+     "n_warnings": null,
+     "pass": false
+    },
+    "validate": {
+     "exit": 1,
+     "n_errors": 1,
+     "n_missing_inputs": 0,
+     "pass": false,
+     "valid": false
+    }
+   },
+   "generated": true,
+   "input_tokens": 202,
+   "intent_id": "qc-fastqc",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 274,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "success": false,
+   "tier": "easy",
+   "tool_calls": null,
+   "vague": false,
+   "variant": "unconstrained",
+   "wall_s": 6.6
+  },
+  {
+   "all_gates_pass": false,
+   "domain": "qc",
+   "error": null,
+   "est_cost_usd": 0.00066,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 1,
+     "pass": false
+    },
+    "lint": {
+     "exit": 1,
+     "n_warnings": null,
+     "pass": false
+    },
+    "validate": {
+     "exit": 1,
+     "n_errors": 1,
+     "n_missing_inputs": 0,
+     "pass": false,
+     "valid": false
+    }
+   },
+   "generated": true,
+   "input_tokens": 198,
+   "intent_id": "trim-cutadapt",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 550,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "success": false,
+   "tier": "easy",
+   "tool_calls": null,
+   "vague": false,
+   "variant": "unconstrained",
+   "wall_s": 13.4
+  },
+  {
+   "all_gates_pass": false,
+   "domain": "qc",
+   "error": null,
+   "est_cost_usd": 0.00073,
+   "fidelity_pass": false,
+   "gates": {
+    "dry-run": {
+     "exit": 1,
+     "pass": false
+    },
+    "lint": {
+     "exit": 1,
+     "n_warnings": null,
+     "pass": false
+    },
+    "validate": {
+     "exit": 1,
+     "n_errors": 1,
+     "n_missing_inputs": 0,
+     "pass": false,
+     "valid": false
+    }
+   },
+   "generated": true,
+   "input_tokens": 216,
+   "intent_id": "qc-fastq-screen",
+   "missing_required_tools": [
+    "fastq-screen"
+   ],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 609,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "success": false,
+   "tier": "medium",
+   "tool_calls": null,
+   "vague": false,
+   "variant": "unconstrained",
+   "wall_s": 16.6
+  },
+  {
+   "all_gates_pass": false,
+   "domain": "qc",
+   "error": null,
+   "est_cost_usd": 0.00066,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 1,
+     "pass": false
+    },
+    "lint": {
+     "exit": 1,
+     "n_warnings": null,
+     "pass": false
+    },
+    "validate": {
+     "exit": 1,
+     "n_errors": 1,
+     "n_missing_inputs": 0,
+     "pass": false,
+     "valid": false
+    }
+   },
+   "generated": true,
+   "input_tokens": 208,
+   "intent_id": "qc-nanoq",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 548,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "success": false,
+   "tier": "easy",
+   "tool_calls": null,
+   "vague": false,
+   "variant": "unconstrained",
+   "wall_s": 12.8
+  },
+  {
+   "all_gates_pass": false,
+   "domain": "rna-seq",
+   "error": null,
+   "est_cost_usd": 0.00145,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 1,
+     "pass": false
+    },
+    "lint": {
+     "exit": 1,
+     "n_warnings": null,
+     "pass": false
+    },
+    "validate": {
+     "exit": 1,
+     "n_errors": 1,
+     "n_missing_inputs": 0,
+     "pass": false,
+     "valid": false
+    }
+   },
+   "generated": true,
+   "input_tokens": 232,
+   "intent_id": "rnaseq-star",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 1261,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "success": false,
+   "tier": "medium",
+   "tool_calls": null,
+   "vague": false,
+   "variant": "unconstrained",
+   "wall_s": 31.2
+  },
+  {
+   "all_gates_pass": false,
+   "domain": "rna-seq",
+   "error": null,
+   "est_cost_usd": 0.00145,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 1,
+     "pass": false
+    },
+    "lint": {
+     "exit": 1,
+     "n_warnings": null,
+     "pass": false
+    },
+    "validate": {
+     "exit": 1,
+     "n_errors": 1,
+     "n_missing_inputs": 0,
+     "pass": false,
+     "valid": false
+    }
+   },
+   "generated": true,
+   "input_tokens": 232,
+   "intent_id": "rnaseq-hisat2",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 1260,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "success": false,
+   "tier": "medium",
+   "tool_calls": null,
+   "vague": false,
+   "variant": "unconstrained",
+   "wall_s": 25.8
+  },
+  {
+   "all_gates_pass": false,
+   "domain": "rna-seq",
+   "error": null,
+   "est_cost_usd": 0.00218,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 1,
+     "pass": false
+    },
+    "lint": {
+     "exit": 1,
+     "n_warnings": null,
+     "pass": false
+    },
+    "validate": {
+     "exit": 1,
+     "n_errors": 1,
+     "n_missing_inputs": 0,
+     "pass": false,
+     "valid": false
+    }
+   },
+   "generated": true,
+   "input_tokens": 222,
+   "intent_id": "rnaseq-salmon",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 1925,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "success": false,
+   "tier": "medium",
+   "tool_calls": null,
+   "vague": false,
+   "variant": "unconstrained",
+   "wall_s": 43.3
+  },
+  {
+   "all_gates_pass": false,
+   "domain": "rna-seq",
+   "error": null,
+   "est_cost_usd": 0.00419,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 1,
+     "pass": false
+    },
+    "lint": {
+     "exit": 1,
+     "n_warnings": null,
+     "pass": false
+    },
+    "validate": {
+     "exit": 1,
+     "n_errors": 1,
+     "n_missing_inputs": 0,
+     "pass": false,
+     "valid": false
+    }
+   },
+   "generated": true,
+   "input_tokens": 238,
+   "intent_id": "rnaseq-de-deseq2",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 3744,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "success": false,
+   "tier": "hard",
+   "tool_calls": null,
+   "vague": false,
+   "variant": "unconstrained",
+   "wall_s": 81.3
+  },
+  {
+   "all_gates_pass": false,
+   "domain": "single-cell",
+   "error": null,
+   "est_cost_usd": 0.00908,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 1,
+     "pass": false
+    },
+    "lint": {
+     "exit": 1,
+     "n_warnings": null,
+     "pass": false
+    },
+    "validate": {
+     "exit": 1,
+     "n_errors": 1,
+     "n_missing_inputs": 0,
+     "pass": false,
+     "valid": false
+    }
+   },
+   "generated": true,
+   "input_tokens": 246,
+   "intent_id": "scrna-starsolo",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 8192,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "success": false,
+   "tier": "hard",
+   "tool_calls": null,
+   "vague": false,
+   "variant": "unconstrained",
+   "wall_s": 150.5
+  },
+  {
+   "all_gates_pass": false,
+   "domain": "variant-calling",
+   "error": null,
+   "est_cost_usd": 0.00132,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 1,
+     "pass": false
+    },
+    "lint": {
+     "exit": 1,
+     "n_warnings": null,
+     "pass": false
+    },
+    "validate": {
+     "exit": 1,
+     "n_errors": 1,
+     "n_missing_inputs": 0,
+     "pass": false,
+     "valid": false
+    }
+   },
+   "generated": true,
+   "input_tokens": 234,
+   "intent_id": "germline-variant",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 1140,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "success": false,
+   "tier": "medium",
+   "tool_calls": null,
+   "vague": false,
+   "variant": "unconstrained",
+   "wall_s": 23.8
+  },
+  {
+   "all_gates_pass": false,
+   "domain": "variant-calling",
+   "error": null,
+   "est_cost_usd": 0.00102,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 1,
+     "pass": false
+    },
+    "lint": {
+     "exit": 1,
+     "n_warnings": null,
+     "pass": false
+    },
+    "validate": {
+     "exit": 1,
+     "n_errors": 1,
+     "n_missing_inputs": 0,
+     "pass": false,
+     "valid": false
+    }
+   },
+   "generated": true,
+   "input_tokens": 258,
+   "intent_id": "germline-gatk",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 865,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "success": false,
+   "tier": "hard",
+   "tool_calls": null,
+   "vague": false,
+   "variant": "unconstrained",
+   "wall_s": 19.2
+  },
+  {
+   "all_gates_pass": false,
+   "domain": "variant-calling",
+   "error": null,
+   "est_cost_usd": 0.00208,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 1,
+     "pass": false
+    },
+    "lint": {
+     "exit": 1,
+     "n_warnings": null,
+     "pass": false
+    },
+    "validate": {
+     "exit": 1,
+     "n_errors": 1,
+     "n_missing_inputs": 0,
+     "pass": false,
+     "valid": false
+    }
+   },
+   "generated": true,
+   "input_tokens": 248,
+   "intent_id": "somatic-tumor-normal",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 1832,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "success": false,
+   "tier": "hard",
+   "tool_calls": null,
+   "vague": false,
+   "variant": "unconstrained",
+   "wall_s": 38.1
+  },
+  {
+   "all_gates_pass": false,
+   "domain": "variant-calling",
+   "error": null,
+   "est_cost_usd": 0.00141,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 1,
+     "pass": false
+    },
+    "lint": {
+     "exit": 1,
+     "n_warnings": null,
+     "pass": false
+    },
+    "validate": {
+     "exit": 1,
+     "n_errors": 1,
+     "n_missing_inputs": 0,
+     "pass": false,
+     "valid": false
+    }
+   },
+   "generated": true,
+   "input_tokens": 260,
+   "intent_id": "somatic-mutect2",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 1220,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "success": false,
+   "tier": "hard",
+   "tool_calls": null,
+   "vague": false,
+   "variant": "unconstrained",
+   "wall_s": 29.0
+  },
+  {
+   "all_gates_pass": false,
+   "domain": "variant-calling",
+   "error": null,
+   "est_cost_usd": 0.00147,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 1,
+     "pass": false
+    },
+    "lint": {
+     "exit": 1,
+     "n_warnings": null,
+     "pass": false
+    },
+    "validate": {
+     "exit": 1,
+     "n_errors": 1,
+     "n_missing_inputs": 0,
+     "pass": false,
+     "valid": false
+    }
+   },
+   "generated": true,
+   "input_tokens": 246,
+   "intent_id": "cnv-cnvkit",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 1274,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "success": false,
+   "tier": "hard",
+   "tool_calls": null,
+   "vague": false,
+   "variant": "unconstrained",
+   "wall_s": 25.7
+  },
+  {
+   "all_gates_pass": false,
+   "domain": "variant-calling",
+   "error": null,
+   "est_cost_usd": 0.00068,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 1,
+     "pass": false
+    },
+    "lint": {
+     "exit": 1,
+     "n_warnings": null,
+     "pass": false
+    },
+    "validate": {
+     "exit": 1,
+     "n_errors": 1,
+     "n_missing_inputs": 0,
+     "pass": false,
+     "valid": false
+    }
+   },
+   "generated": true,
+   "input_tokens": 228,
+   "intent_id": "variant-annotate",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 558,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "success": false,
+   "tier": "medium",
+   "tool_calls": null,
+   "vague": false,
+   "variant": "unconstrained",
+   "wall_s": 12.7
+  },
+  {
+   "all_gates_pass": false,
+   "domain": "chip-seq",
+   "error": null,
+   "est_cost_usd": 0.00162,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 1,
+     "pass": false
+    },
+    "lint": {
+     "exit": 1,
+     "n_warnings": null,
+     "pass": false
+    },
+    "validate": {
+     "exit": 1,
+     "n_errors": 1,
+     "n_missing_inputs": 0,
+     "pass": false,
+     "valid": false
+    }
+   },
+   "generated": true,
+   "input_tokens": 234,
+   "intent_id": "chipseq-macs2",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 1415,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "success": false,
+   "tier": "medium",
+   "tool_calls": null,
+   "vague": false,
+   "variant": "unconstrained",
+   "wall_s": 30.3
+  },
+  {
+   "all_gates_pass": false,
+   "domain": "chip-seq",
+   "error": null,
+   "est_cost_usd": 0.00908,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 1,
+     "pass": false
+    },
+    "lint": {
+     "exit": 1,
+     "n_warnings": null,
+     "pass": false
+    },
+    "validate": {
+     "exit": 1,
+     "n_errors": 1,
+     "n_missing_inputs": 0,
+     "pass": false,
+     "valid": false
+    }
+   },
+   "generated": true,
+   "input_tokens": 252,
+   "intent_id": "chipseq-broad",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 8192,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "success": false,
+   "tier": "medium",
+   "tool_calls": null,
+   "vague": false,
+   "variant": "unconstrained",
+   "wall_s": 153.8
+  },
+  {
+   "all_gates_pass": false,
+   "domain": "atac-seq",
+   "error": null,
+   "est_cost_usd": 0.00249,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 1,
+     "pass": false
+    },
+    "lint": {
+     "exit": 1,
+     "n_warnings": null,
+     "pass": false
+    },
+    "validate": {
+     "exit": 1,
+     "n_errors": 1,
+     "n_missing_inputs": 0,
+     "pass": false,
+     "valid": false
+    }
+   },
+   "generated": true,
+   "input_tokens": 244,
+   "intent_id": "atacseq",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 2198,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "success": false,
+   "tier": "hard",
+   "tool_calls": null,
+   "vague": false,
+   "variant": "unconstrained",
+   "wall_s": 49.2
+  },
+  {
+   "all_gates_pass": false,
+   "domain": "methylation",
+   "error": null,
+   "est_cost_usd": 0.0017,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 1,
+     "pass": false
+    },
+    "lint": {
+     "exit": 1,
+     "n_warnings": null,
+     "pass": false
+    },
+    "validate": {
+     "exit": 1,
+     "n_errors": 1,
+     "n_missing_inputs": 0,
+     "pass": false,
+     "valid": false
+    }
+   },
+   "generated": true,
+   "input_tokens": 256,
+   "intent_id": "wgbs-bismark",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 1483,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "success": false,
+   "tier": "hard",
+   "tool_calls": null,
+   "vague": false,
+   "variant": "unconstrained",
+   "wall_s": 35.3
+  },
+  {
+   "all_gates_pass": false,
+   "domain": "metagenomics",
+   "error": null,
+   "est_cost_usd": 0.0016,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 1,
+     "pass": false
+    },
+    "lint": {
+     "exit": 1,
+     "n_warnings": null,
+     "pass": false
+    },
+    "validate": {
+     "exit": 1,
+     "n_errors": 1,
+     "n_missing_inputs": 0,
+     "pass": false,
+     "valid": false
+    }
+   },
+   "generated": true,
+   "input_tokens": 236,
+   "intent_id": "amplicon-dada2",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 1393,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "success": false,
+   "tier": "medium",
+   "tool_calls": null,
+   "vague": false,
+   "variant": "unconstrained",
+   "wall_s": 29.1
+  },
+  {
+   "all_gates_pass": false,
+   "domain": "metagenomics",
+   "error": null,
+   "est_cost_usd": 0.00111,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 1,
+     "pass": false
+    },
+    "lint": {
+     "exit": 1,
+     "n_warnings": null,
+     "pass": false
+    },
+    "validate": {
+     "exit": 1,
+     "n_errors": 1,
+     "n_missing_inputs": 0,
+     "pass": false,
+     "valid": false
+    }
+   },
+   "generated": true,
+   "input_tokens": 240,
+   "intent_id": "metagenomics-kraken2",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 947,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "success": false,
+   "tier": "hard",
+   "tool_calls": null,
+   "vague": false,
+   "variant": "unconstrained",
+   "wall_s": 19.7
+  },
+  {
+   "all_gates_pass": false,
+   "domain": "metagenomics",
+   "error": null,
+   "est_cost_usd": 0.00196,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 1,
+     "pass": false
+    },
+    "lint": {
+     "exit": 1,
+     "n_warnings": null,
+     "pass": false
+    },
+    "validate": {
+     "exit": 1,
+     "n_errors": 1,
+     "n_missing_inputs": 0,
+     "pass": false,
+     "valid": false
+    }
+   },
+   "generated": true,
+   "input_tokens": 240,
+   "intent_id": "metag-assembly",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 1725,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "success": false,
+   "tier": "hard",
+   "tool_calls": null,
+   "vague": false,
+   "variant": "unconstrained",
+   "wall_s": 37.0
+  },
+  {
+   "all_gates_pass": false,
+   "domain": "assembly",
+   "error": null,
+   "est_cost_usd": 0.00129,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 1,
+     "pass": false
+    },
+    "lint": {
+     "exit": 1,
+     "n_warnings": null,
+     "pass": false
+    },
+    "validate": {
+     "exit": 1,
+     "n_errors": 1,
+     "n_missing_inputs": 0,
+     "pass": false,
+     "valid": false
+    }
+   },
+   "generated": true,
+   "input_tokens": 214,
+   "intent_id": "assembly-spades",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 1116,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "success": false,
+   "tier": "medium",
+   "tool_calls": null,
+   "vague": false,
+   "variant": "unconstrained",
+   "wall_s": 29.6
+  },
+  {
+   "all_gates_pass": false,
+   "domain": "assembly",
+   "error": null,
+   "est_cost_usd": 0.00113,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 1,
+     "pass": false
+    },
+    "lint": {
+     "exit": 1,
+     "n_warnings": null,
+     "pass": false
+    },
+    "validate": {
+     "exit": 1,
+     "n_errors": 1,
+     "n_missing_inputs": 0,
+     "pass": false,
+     "valid": false
+    }
+   },
+   "generated": true,
+   "input_tokens": 222,
+   "intent_id": "assembly-flye-polish",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 970,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "success": false,
+   "tier": "hard",
+   "tool_calls": null,
+   "vague": false,
+   "variant": "unconstrained",
+   "wall_s": 23.4
+  },
+  {
+   "all_gates_pass": false,
+   "domain": "epigenomics",
+   "error": "Remote end closed connection without response",
+   "est_cost_usd": 0.0,
+   "fidelity_pass": false,
+   "gates": {},
+   "generated": false,
+   "input_tokens": 0,
+   "intent_id": "hic-cooler",
+   "missing_required_tools": [
+    "fastp",
+    "bwa",
+    "cooler"
+   ],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 0,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "success": false,
+   "tier": "hard",
+   "tool_calls": null,
+   "vague": false,
+   "variant": "unconstrained",
+   "wall_s": null
+  },
+  {
+   "all_gates_pass": false,
+   "domain": "spatial-transcriptomics",
+   "error": "Remote end closed connection without response",
+   "est_cost_usd": 0.0,
+   "fidelity_pass": false,
+   "gates": {},
+   "generated": false,
+   "input_tokens": 0,
+   "intent_id": "spatial-visium",
+   "missing_required_tools": [
+    "spaceranger",
+    "seurat",
+    "rctd"
+   ],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 0,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "success": false,
+   "tier": "hard",
+   "tool_calls": null,
+   "vague": false,
+   "variant": "unconstrained",
+   "wall_s": null
+  },
+  {
+   "all_gates_pass": false,
+   "domain": "single-cell",
+   "error": null,
+   "est_cost_usd": 0.00117,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 1,
+     "pass": false
+    },
+    "lint": {
+     "exit": 1,
+     "n_warnings": null,
+     "pass": false
+    },
+    "validate": {
+     "exit": 1,
+     "n_errors": 1,
+     "n_missing_inputs": 0,
+     "pass": false,
+     "valid": false
+    }
+   },
+   "generated": true,
+   "input_tokens": 234,
+   "intent_id": "single-cell-multiome",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 1005,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "success": false,
+   "tier": "hard",
+   "tool_calls": null,
+   "vague": false,
+   "variant": "unconstrained",
+   "wall_s": 21.8
+  },
+  {
+   "all_gates_pass": false,
+   "domain": "metagenomics",
+   "error": null,
+   "est_cost_usd": 0.00908,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 1,
+     "pass": false
+    },
+    "lint": {
+     "exit": 1,
+     "n_warnings": null,
+     "pass": false
+    },
+    "validate": {
+     "exit": 1,
+     "n_errors": 1,
+     "n_missing_inputs": 0,
+     "pass": false,
+     "valid": false
+    }
+   },
+   "generated": true,
+   "input_tokens": 246,
+   "intent_id": "metagenome-humann-pathways",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 8192,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "success": false,
+   "tier": "hard",
+   "tool_calls": null,
+   "vague": false,
+   "variant": "unconstrained",
+   "wall_s": 151.3
+  },
+  {
+   "all_gates_pass": false,
+   "domain": "long-read",
+   "error": null,
+   "est_cost_usd": 0.0014,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 1,
+     "pass": false
+    },
+    "lint": {
+     "exit": 1,
+     "n_warnings": null,
+     "pass": false
+    },
+    "validate": {
+     "exit": 1,
+     "n_errors": 1,
+     "n_missing_inputs": 0,
+     "pass": false,
+     "valid": false
+    }
+   },
+   "generated": true,
+   "input_tokens": 274,
+   "intent_id": "longread-structural-variants",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 1205,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "success": false,
+   "tier": "hard",
+   "tool_calls": null,
+   "vague": false,
+   "variant": "unconstrained",
+   "wall_s": 26.5
+  },
+  {
+   "all_gates_pass": false,
+   "domain": "variant-calling",
+   "error": null,
+   "est_cost_usd": 0.00361,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 1,
+     "pass": false
+    },
+    "lint": {
+     "exit": 1,
+     "n_warnings": null,
+     "pass": false
+    },
+    "validate": {
+     "exit": 1,
+     "n_errors": 1,
+     "n_missing_inputs": 0,
+     "pass": false,
+     "valid": false
+    }
+   },
+   "generated": true,
+   "input_tokens": 274,
+   "intent_id": "gatk-cohort-joint-genotyping",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 3209,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "success": false,
+   "tier": "hard",
+   "tool_calls": null,
+   "vague": false,
+   "variant": "unconstrained",
+   "wall_s": 62.8
+  },
+  {
+   "all_gates_pass": false,
+   "domain": "epigenomics",
+   "error": null,
+   "est_cost_usd": 0.00153,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 1,
+     "pass": false
+    },
+    "lint": {
+     "exit": 1,
+     "n_warnings": null,
+     "pass": false
+    },
+    "validate": {
+     "exit": 1,
+     "n_errors": 1,
+     "n_missing_inputs": 0,
+     "pass": false,
+     "valid": false
+    }
+   },
+   "generated": true,
+   "input_tokens": 270,
+   "intent_id": "cutandtag-epigenomics",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 1318,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "success": false,
+   "tier": "medium",
+   "tool_calls": null,
+   "vague": false,
+   "variant": "unconstrained",
+   "wall_s": 29.1
+  },
+  {
+   "all_gates_pass": false,
+   "domain": "rna-seq",
+   "error": null,
+   "est_cost_usd": 0.00213,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 1,
+     "pass": false
+    },
+    "lint": {
+     "exit": 1,
+     "n_warnings": null,
+     "pass": false
+    },
+    "validate": {
+     "exit": 1,
+     "n_errors": 1,
+     "n_missing_inputs": 0,
+     "pass": false,
+     "valid": false
+    }
+   },
+   "generated": true,
+   "input_tokens": 246,
+   "intent_id": "rnaseq-star-salmon-quant",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 1878,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "success": false,
+   "tier": "medium",
+   "tool_calls": null,
+   "vague": false,
+   "variant": "unconstrained",
+   "wall_s": 46.8
+  },
+  {
+   "all_gates_pass": false,
+   "domain": "qc",
+   "error": null,
+   "est_cost_usd": 0.00034,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 1,
+     "pass": false
+    },
+    "lint": {
+     "exit": 1,
+     "n_warnings": null,
+     "pass": false
+    },
+    "validate": {
+     "exit": 1,
+     "n_errors": 1,
+     "n_missing_inputs": 0,
+     "pass": false,
+     "valid": false
+    }
+   },
+   "generated": true,
+   "input_tokens": 190,
+   "intent_id": "qc-vague",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 258,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "success": false,
+   "tier": "easy",
+   "tool_calls": null,
+   "vague": true,
+   "variant": "unconstrained",
+   "wall_s": 8.8
+  },
+  {
+   "all_gates_pass": false,
+   "domain": "rna-seq",
+   "error": null,
+   "est_cost_usd": 0.00178,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 1,
+     "pass": false
+    },
+    "lint": {
+     "exit": 1,
+     "n_warnings": null,
+     "pass": false
+    },
+    "validate": {
+     "exit": 1,
+     "n_errors": 1,
+     "n_missing_inputs": 0,
+     "pass": false,
+     "valid": false
+    }
+   },
+   "generated": true,
+   "input_tokens": 196,
+   "intent_id": "rnaseq-vague",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 1566,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "success": false,
+   "tier": "medium",
+   "tool_calls": null,
+   "vague": true,
+   "variant": "unconstrained",
+   "wall_s": 42.2
+  },
+  {
+   "all_gates_pass": false,
+   "domain": "variant-calling",
+   "error": null,
+   "est_cost_usd": 0.00141,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 1,
+     "pass": false
+    },
+    "lint": {
+     "exit": 1,
+     "n_warnings": null,
+     "pass": false
+    },
+    "validate": {
+     "exit": 1,
+     "n_errors": 1,
+     "n_missing_inputs": 0,
+     "pass": false,
+     "valid": false
+    }
+   },
+   "generated": true,
+   "input_tokens": 188,
+   "intent_id": "variant-vague",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 1238,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "success": false,
+   "tier": "medium",
+   "tool_calls": null,
+   "vague": true,
+   "variant": "unconstrained",
+   "wall_s": 33.9
+  },
+  {
+   "all_gates_pass": true,
+   "domain": "qc",
+   "error": null,
+   "est_cost_usd": 0.01607,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 0,
+     "pass": true
+    },
+    "lint": {
+     "exit": 0,
+     "n_warnings": null,
+     "pass": true
+    },
+    "validate": {
+     "exit": 0,
+     "n_errors": 0,
+     "n_missing_inputs": 2,
+     "pass": true,
+     "valid": true
+    }
+   },
+   "generated": true,
+   "input_tokens": 47853,
+   "intent_id": "qc-fastp-multiqc",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 2432,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "sessions": 1,
+   "success": true,
+   "tier": "easy",
+   "tool_calls": 9,
+   "vague": false,
+   "variant": "syntax-only",
+   "wall_s": 107.4
+  },
+  {
+   "all_gates_pass": true,
+   "domain": "qc",
+   "error": null,
+   "est_cost_usd": 0.01445,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 0,
+     "pass": true
+    },
+    "lint": {
+     "exit": 0,
+     "n_warnings": null,
+     "pass": true
+    },
+    "validate": {
+     "exit": 0,
+     "n_errors": 0,
+     "n_missing_inputs": 2,
+     "pass": true,
+     "valid": true
+    }
+   },
+   "generated": true,
+   "input_tokens": 44900,
+   "intent_id": "qc-fastqc",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 1709,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "sessions": 1,
+   "success": true,
+   "tier": "easy",
+   "tool_calls": 8,
+   "vague": false,
+   "variant": "syntax-only",
+   "wall_s": 51.7
+  },
+  {
+   "all_gates_pass": true,
+   "domain": "qc",
+   "error": null,
+   "est_cost_usd": 0.01738,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 0,
+     "pass": true
+    },
+    "lint": {
+     "exit": 0,
+     "n_warnings": null,
+     "pass": true
+    },
+    "validate": {
+     "exit": 0,
+     "n_errors": 0,
+     "n_missing_inputs": 1,
+     "pass": true,
+     "valid": true
+    }
+   },
+   "generated": true,
+   "input_tokens": 52434,
+   "intent_id": "trim-cutadapt",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 2454,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "sessions": 1,
+   "success": true,
+   "tier": "easy",
+   "tool_calls": 10,
+   "vague": false,
+   "variant": "syntax-only",
+   "wall_s": 106.4
+  },
+  {
+   "all_gates_pass": true,
+   "domain": "qc",
+   "error": null,
+   "est_cost_usd": 0.01611,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 0,
+     "pass": true
+    },
+    "lint": {
+     "exit": 0,
+     "n_warnings": null,
+     "pass": true
+    },
+    "validate": {
+     "exit": 0,
+     "n_errors": 0,
+     "n_missing_inputs": 2,
+     "pass": true,
+     "valid": true
+    }
+   },
+   "generated": true,
+   "input_tokens": 49299,
+   "intent_id": "qc-fastq-screen",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 2094,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "sessions": 1,
+   "success": true,
+   "tier": "medium",
+   "tool_calls": 11,
+   "vague": false,
+   "variant": "syntax-only",
+   "wall_s": 78.8
+  },
+  {
+   "all_gates_pass": true,
+   "domain": "qc",
+   "error": null,
+   "est_cost_usd": 0.01666,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 0,
+     "pass": true
+    },
+    "lint": {
+     "exit": 0,
+     "n_warnings": null,
+     "pass": true
+    },
+    "validate": {
+     "exit": 0,
+     "n_errors": 0,
+     "n_missing_inputs": 3,
+     "pass": true,
+     "valid": true
+    }
+   },
+   "generated": true,
+   "input_tokens": 49288,
+   "intent_id": "qc-nanoq",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 2603,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "sessions": 1,
+   "success": true,
+   "tier": "easy",
+   "tool_calls": 10,
+   "vague": false,
+   "variant": "syntax-only",
+   "wall_s": 94.2
+  },
+  {
+   "all_gates_pass": true,
+   "domain": "rna-seq",
+   "error": null,
+   "est_cost_usd": 0.01859,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 0,
+     "pass": true
+    },
+    "lint": {
+     "exit": 0,
+     "n_warnings": null,
+     "pass": true
+    },
+    "validate": {
+     "exit": 0,
+     "n_errors": 0,
+     "n_missing_inputs": 2,
+     "pass": true,
+     "valid": true
+    }
+   },
+   "generated": true,
+   "input_tokens": 55870,
+   "intent_id": "rnaseq-star",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 2681,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "sessions": 1,
+   "success": true,
+   "tier": "medium",
+   "tool_calls": 13,
+   "vague": false,
+   "variant": "syntax-only",
+   "wall_s": 150.8
+  },
+  {
+   "all_gates_pass": true,
+   "domain": "rna-seq",
+   "error": null,
+   "est_cost_usd": 0.02209,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 0,
+     "pass": true
+    },
+    "lint": {
+     "exit": 0,
+     "n_warnings": null,
+     "pass": true
+    },
+    "validate": {
+     "exit": 0,
+     "n_errors": 0,
+     "n_missing_inputs": 2,
+     "pass": true,
+     "valid": true
+    }
+   },
+   "generated": true,
+   "input_tokens": 67318,
+   "intent_id": "rnaseq-hisat2",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 2947,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "sessions": 1,
+   "success": true,
+   "tier": "medium",
+   "tool_calls": 11,
+   "vague": false,
+   "variant": "syntax-only",
+   "wall_s": 75.4
+  },
+  {
+   "all_gates_pass": true,
+   "domain": "rna-seq",
+   "error": null,
+   "est_cost_usd": 0.01994,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 0,
+     "pass": true
+    },
+    "lint": {
+     "exit": 0,
+     "n_warnings": null,
+     "pass": true
+    },
+    "validate": {
+     "exit": 0,
+     "n_errors": 0,
+     "n_missing_inputs": 5,
+     "pass": true,
+     "valid": true
+    }
+   },
+   "generated": true,
+   "input_tokens": 55771,
+   "intent_id": "rnaseq-salmon",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 3928,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "sessions": 1,
+   "success": true,
+   "tier": "medium",
+   "tool_calls": 13,
+   "vague": false,
+   "variant": "syntax-only",
+   "wall_s": 97.7
+  },
+  {
+   "all_gates_pass": true,
+   "domain": "rna-seq",
+   "error": null,
+   "est_cost_usd": 0.02229,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 0,
+     "pass": true
+    },
+    "lint": {
+     "exit": 0,
+     "n_warnings": null,
+     "pass": true
+    },
+    "validate": {
+     "exit": 0,
+     "n_errors": 0,
+     "n_missing_inputs": 3,
+     "pass": true,
+     "valid": true
+    }
+   },
+   "generated": true,
+   "input_tokens": 67072,
+   "intent_id": "rnaseq-de-deseq2",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 3193,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "sessions": 1,
+   "success": true,
+   "tier": "hard",
+   "tool_calls": 13,
+   "vague": false,
+   "variant": "syntax-only",
+   "wall_s": 80.4
+  },
+  {
+   "all_gates_pass": true,
+   "domain": "single-cell",
+   "error": null,
+   "est_cost_usd": 0.02153,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 0,
+     "pass": true
+    },
+    "lint": {
+     "exit": 0,
+     "n_warnings": null,
+     "pass": true
+    },
+    "validate": {
+     "exit": 0,
+     "n_errors": 0,
+     "n_missing_inputs": 2,
+     "pass": true,
+     "valid": true
+    }
+   },
+   "generated": true,
+   "input_tokens": 50511,
+   "intent_id": "scrna-starsolo",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 6718,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "sessions": 1,
+   "success": true,
+   "tier": "hard",
+   "tool_calls": 10,
+   "vague": false,
+   "variant": "syntax-only",
+   "wall_s": 155.2
+  },
+  {
+   "all_gates_pass": true,
+   "domain": "variant-calling",
+   "error": null,
+   "est_cost_usd": 0.01969,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 0,
+     "pass": true
+    },
+    "lint": {
+     "exit": 0,
+     "n_warnings": null,
+     "pass": true
+    },
+    "validate": {
+     "exit": 0,
+     "n_errors": 0,
+     "n_missing_inputs": 3,
+     "pass": true,
+     "valid": true
+    }
+   },
+   "generated": true,
+   "input_tokens": 59585,
+   "intent_id": "germline-variant",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 2732,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "sessions": 1,
+   "success": true,
+   "tier": "medium",
+   "tool_calls": 12,
+   "vague": false,
+   "variant": "syntax-only",
+   "wall_s": 67.3
+  },
+  {
+   "all_gates_pass": true,
+   "domain": "variant-calling",
+   "error": null,
+   "est_cost_usd": 0.02495,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 0,
+     "pass": true
+    },
+    "lint": {
+     "exit": 0,
+     "n_warnings": null,
+     "pass": true
+    },
+    "validate": {
+     "exit": 0,
+     "n_errors": 0,
+     "n_missing_inputs": 3,
+     "pass": true,
+     "valid": true
+    }
+   },
+   "generated": true,
+   "input_tokens": 70534,
+   "intent_id": "germline-gatk",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 4725,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "sessions": 1,
+   "success": true,
+   "tier": "hard",
+   "tool_calls": 12,
+   "vague": false,
+   "variant": "syntax-only",
+   "wall_s": 115.6
+  },
+  {
+   "all_gates_pass": true,
+   "domain": "variant-calling",
+   "error": null,
+   "est_cost_usd": 0.02486,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 0,
+     "pass": true
+    },
+    "lint": {
+     "exit": 0,
+     "n_warnings": null,
+     "pass": true
+    },
+    "validate": {
+     "exit": 0,
+     "n_errors": 0,
+     "n_missing_inputs": 4,
+     "pass": true,
+     "valid": true
+    }
+   },
+   "generated": true,
+   "input_tokens": 68859,
+   "intent_id": "somatic-tumor-normal",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 5068,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "sessions": 1,
+   "success": true,
+   "tier": "hard",
+   "tool_calls": 15,
+   "vague": false,
+   "variant": "syntax-only",
+   "wall_s": 118.6
+  },
+  {
+   "all_gates_pass": true,
+   "domain": "variant-calling",
+   "error": null,
+   "est_cost_usd": 0.02835,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 0,
+     "pass": true
+    },
+    "lint": {
+     "exit": 0,
+     "n_warnings": null,
+     "pass": true
+    },
+    "validate": {
+     "exit": 0,
+     "n_errors": 0,
+     "n_missing_inputs": 4,
+     "pass": true,
+     "valid": true
+    }
+   },
+   "generated": true,
+   "input_tokens": 81389,
+   "intent_id": "somatic-mutect2",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 5057,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "sessions": 1,
+   "success": true,
+   "tier": "hard",
+   "tool_calls": 12,
+   "vague": false,
+   "variant": "syntax-only",
+   "wall_s": 114.3
+  },
+  {
+   "all_gates_pass": false,
+   "domain": "variant-calling",
+   "error": "template exited 1",
+   "est_cost_usd": 0.02341,
+   "fidelity_pass": false,
+   "gates": {},
+   "generated": false,
+   "input_tokens": 81507,
+   "intent_id": "cnv-cnvkit",
+   "missing_required_tools": [
+    "bwa",
+    "cnvkit"
+   ],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 535,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "sessions": 1,
+   "success": false,
+   "tier": "hard",
+   "tool_calls": 16,
+   "vague": false,
+   "variant": "syntax-only",
+   "wall_s": 22.2
+  },
+  {
+   "all_gates_pass": false,
+   "domain": "variant-calling",
+   "error": "template exited 1",
+   "est_cost_usd": 0.04945,
+   "fidelity_pass": false,
+   "gates": {},
+   "generated": false,
+   "input_tokens": 139107,
+   "intent_id": "variant-annotate",
+   "missing_required_tools": [
+    "snpeff",
+    "bcftools"
+   ],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 9543,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "sessions": 1,
+   "success": false,
+   "tier": "medium",
+   "tool_calls": 11,
+   "vague": false,
+   "variant": "syntax-only",
+   "wall_s": 209.9
+  },
+  {
+   "all_gates_pass": true,
+   "domain": "chip-seq",
+   "error": null,
+   "est_cost_usd": 0.02353,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 0,
+     "pass": true
+    },
+    "lint": {
+     "exit": 0,
+     "n_warnings": null,
+     "pass": true
+    },
+    "validate": {
+     "exit": 0,
+     "n_errors": 0,
+     "n_missing_inputs": 4,
+     "pass": true,
+     "valid": true
+    }
+   },
+   "generated": true,
+   "input_tokens": 68354,
+   "intent_id": "chipseq-macs2",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 3993,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "sessions": 1,
+   "success": true,
+   "tier": "medium",
+   "tool_calls": 12,
+   "vague": false,
+   "variant": "syntax-only",
+   "wall_s": 97.1
+  },
+  {
+   "all_gates_pass": true,
+   "domain": "chip-seq",
+   "error": null,
+   "est_cost_usd": 0.02443,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 0,
+     "pass": true
+    },
+    "lint": {
+     "exit": 0,
+     "n_warnings": null,
+     "pass": true
+    },
+    "validate": {
+     "exit": 0,
+     "n_errors": 0,
+     "n_missing_inputs": 4,
+     "pass": true,
+     "valid": true
+    }
+   },
+   "generated": true,
+   "input_tokens": 70163,
+   "intent_id": "chipseq-broad",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 4347,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "sessions": 1,
+   "success": true,
+   "tier": "medium",
+   "tool_calls": 13,
+   "vague": false,
+   "variant": "syntax-only",
+   "wall_s": 98.2
+  },
+  {
+   "all_gates_pass": false,
+   "domain": "atac-seq",
+   "error": "template exited 1",
+   "est_cost_usd": 0.03492,
+   "fidelity_pass": false,
+   "gates": {},
+   "generated": false,
+   "input_tokens": 122519,
+   "intent_id": "atacseq",
+   "missing_required_tools": [
+    "fastp",
+    "bwa-mem2",
+    "macs2"
+   ],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 561,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "sessions": 1,
+   "success": false,
+   "tier": "hard",
+   "tool_calls": 18,
+   "vague": false,
+   "variant": "syntax-only",
+   "wall_s": 25.7
+  },
+  {
+   "all_gates_pass": false,
+   "domain": "methylation",
+   "error": "template exited 1",
+   "est_cost_usd": 0.02286,
+   "fidelity_pass": false,
+   "gates": {},
+   "generated": false,
+   "input_tokens": 79119,
+   "intent_id": "wgbs-bismark",
+   "missing_required_tools": [
+    "fastp",
+    "bismark"
+   ],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 641,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "sessions": 1,
+   "success": false,
+   "tier": "hard",
+   "tool_calls": 20,
+   "vague": false,
+   "variant": "syntax-only",
+   "wall_s": 24.1
+  },
+  {
+   "all_gates_pass": true,
+   "domain": "metagenomics",
+   "error": null,
+   "est_cost_usd": 0.02134,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 0,
+     "pass": true
+    },
+    "lint": {
+     "exit": 0,
+     "n_warnings": null,
+     "pass": true
+    },
+    "validate": {
+     "exit": 0,
+     "n_errors": 0,
+     "n_missing_inputs": 2,
+     "pass": true,
+     "valid": true
+    }
+   },
+   "generated": true,
+   "input_tokens": 57366,
+   "intent_id": "amplicon-dada2",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 4798,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "sessions": 1,
+   "success": true,
+   "tier": "medium",
+   "tool_calls": 11,
+   "vague": false,
+   "variant": "syntax-only",
+   "wall_s": 119.2
+  },
+  {
+   "all_gates_pass": true,
+   "domain": "metagenomics",
+   "error": null,
+   "est_cost_usd": 0.02297,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 0,
+     "pass": true
+    },
+    "lint": {
+     "exit": 0,
+     "n_warnings": null,
+     "pass": true
+    },
+    "validate": {
+     "exit": 0,
+     "n_errors": 0,
+     "n_missing_inputs": 2,
+     "pass": true,
+     "valid": true
+    }
+   },
+   "generated": true,
+   "input_tokens": 67599,
+   "intent_id": "metagenomics-kraken2",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 3673,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "sessions": 1,
+   "success": true,
+   "tier": "hard",
+   "tool_calls": 12,
+   "vague": false,
+   "variant": "syntax-only",
+   "wall_s": 94.8
+  },
+  {
+   "all_gates_pass": false,
+   "domain": "metagenomics",
+   "error": "template exited 1",
+   "est_cost_usd": 0.02831,
+   "fidelity_pass": false,
+   "gates": {},
+   "generated": false,
+   "input_tokens": 98898,
+   "intent_id": "metag-assembly",
+   "missing_required_tools": [
+    "fastp",
+    "bowtie2",
+    "megahit",
+    "quast",
+    "prodigal"
+   ],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 558,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "sessions": 1,
+   "success": false,
+   "tier": "hard",
+   "tool_calls": 17,
+   "vague": false,
+   "variant": "syntax-only",
+   "wall_s": 24.5
+  },
+  {
+   "all_gates_pass": true,
+   "domain": "assembly",
+   "error": null,
+   "est_cost_usd": 0.01984,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 0,
+     "pass": true
+    },
+    "lint": {
+     "exit": 0,
+     "n_warnings": null,
+     "pass": true
+    },
+    "validate": {
+     "exit": 0,
+     "n_errors": 0,
+     "n_missing_inputs": 2,
+     "pass": true,
+     "valid": true
+    }
+   },
+   "generated": true,
+   "input_tokens": 57515,
+   "intent_id": "assembly-spades",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 3400,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "sessions": 1,
+   "success": true,
+   "tier": "medium",
+   "tool_calls": 10,
+   "vague": false,
+   "variant": "syntax-only",
+   "wall_s": 83.9
+  },
+  {
+   "all_gates_pass": true,
+   "domain": "assembly",
+   "error": null,
+   "est_cost_usd": 0.01634,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 0,
+     "pass": true
+    },
+    "lint": {
+     "exit": 0,
+     "n_warnings": null,
+     "pass": true
+    },
+    "validate": {
+     "exit": 0,
+     "n_errors": 0,
+     "n_missing_inputs": 2,
+     "pass": true,
+     "valid": true
+    }
+   },
+   "generated": true,
+   "input_tokens": 45743,
+   "intent_id": "assembly-flye-polish",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 3211,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "sessions": 1,
+   "success": true,
+   "tier": "hard",
+   "tool_calls": 10,
+   "vague": false,
+   "variant": "syntax-only",
+   "wall_s": 76.8
+  },
+  {
+   "all_gates_pass": true,
+   "domain": "epigenomics",
+   "error": null,
+   "est_cost_usd": 0.02612,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 0,
+     "pass": true
+    },
+    "lint": {
+     "exit": 0,
+     "n_warnings": null,
+     "pass": true
+    },
+    "validate": {
+     "exit": 0,
+     "n_errors": 0,
+     "n_missing_inputs": 2,
+     "pass": true,
+     "valid": true
+    }
+   },
+   "generated": true,
+   "input_tokens": 66507,
+   "intent_id": "hic-cooler",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 6818,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "sessions": 1,
+   "success": true,
+   "tier": "hard",
+   "tool_calls": 12,
+   "vague": false,
+   "variant": "syntax-only",
+   "wall_s": 162.8
+  },
+  {
+   "all_gates_pass": false,
+   "domain": "spatial-transcriptomics",
+   "error": "template exited 1",
+   "est_cost_usd": 0.03891,
+   "fidelity_pass": false,
+   "gates": {},
+   "generated": false,
+   "input_tokens": 136623,
+   "intent_id": "spatial-visium",
+   "missing_required_tools": [
+    "spaceranger",
+    "seurat",
+    "rctd"
+   ],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 595,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "sessions": 1,
+   "success": false,
+   "tier": "hard",
+   "tool_calls": 19,
+   "vague": false,
+   "variant": "syntax-only",
+   "wall_s": 28.0
+  },
+  {
+   "all_gates_pass": true,
+   "domain": "single-cell",
+   "error": null,
+   "est_cost_usd": 0.02457,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 0,
+     "pass": true
+    },
+    "lint": {
+     "exit": 0,
+     "n_warnings": null,
+     "pass": true
+    },
+    "validate": {
+     "exit": 0,
+     "n_errors": 0,
+     "n_missing_inputs": 1,
+     "pass": true,
+     "valid": true
+    }
+   },
+   "generated": true,
+   "input_tokens": 68038,
+   "intent_id": "single-cell-multiome",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 5017,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "sessions": 1,
+   "success": true,
+   "tier": "hard",
+   "tool_calls": 11,
+   "vague": false,
+   "variant": "syntax-only",
+   "wall_s": 127.3
+  },
+  {
+   "all_gates_pass": true,
+   "domain": "metagenomics",
+   "error": null,
+   "est_cost_usd": 0.0347,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 0,
+     "pass": true
+    },
+    "lint": {
+     "exit": 0,
+     "n_warnings": null,
+     "pass": true
+    },
+    "validate": {
+     "exit": 0,
+     "n_errors": 0,
+     "n_missing_inputs": 5,
+     "pass": true,
+     "valid": true
+    }
+   },
+   "generated": true,
+   "input_tokens": 107069,
+   "intent_id": "metagenome-humann-pathways",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 4288,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "sessions": 1,
+   "success": true,
+   "tier": "hard",
+   "tool_calls": 16,
+   "vague": false,
+   "variant": "syntax-only",
+   "wall_s": 102.4
+  },
+  {
+   "all_gates_pass": true,
+   "domain": "long-read",
+   "error": null,
+   "est_cost_usd": 0.02215,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 0,
+     "pass": true
+    },
+    "lint": {
+     "exit": 0,
+     "n_warnings": null,
+     "pass": true
+    },
+    "validate": {
+     "exit": 0,
+     "n_errors": 0,
+     "n_missing_inputs": 1,
+     "pass": true,
+     "valid": true
+    }
+   },
+   "generated": true,
+   "input_tokens": 63972,
+   "intent_id": "longread-structural-variants",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 3851,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "sessions": 1,
+   "success": true,
+   "tier": "hard",
+   "tool_calls": 11,
+   "vague": false,
+   "variant": "syntax-only",
+   "wall_s": 100.7
+  },
+  {
+   "all_gates_pass": false,
+   "domain": "variant-calling",
+   "error": null,
+   "est_cost_usd": 0.03577,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 0,
+     "pass": true
+    },
+    "lint": {
+     "exit": 1,
+     "n_warnings": null,
+     "pass": false
+    },
+    "validate": {
+     "exit": 1,
+     "n_errors": 1,
+     "n_missing_inputs": 3,
+     "pass": false,
+     "valid": false
+    }
+   },
+   "generated": true,
+   "input_tokens": 93726,
+   "intent_id": "gatk-cohort-joint-genotyping",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 8661,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "sessions": 1,
+   "success": false,
+   "tier": "hard",
+   "tool_calls": 17,
+   "vague": false,
+   "variant": "syntax-only",
+   "wall_s": 202.2
+  },
+  {
+   "all_gates_pass": false,
+   "domain": "epigenomics",
+   "error": "template exited 1",
+   "est_cost_usd": 0.02689,
+   "fidelity_pass": false,
+   "gates": {},
+   "generated": false,
+   "input_tokens": 93643,
+   "intent_id": "cutandtag-epigenomics",
+   "missing_required_tools": [
+    "fastp",
+    "bowtie2",
+    "picard",
+    "macs3",
+    "seacr",
+    "deeptools"
+   ],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 607,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "sessions": 1,
+   "success": false,
+   "tier": "medium",
+   "tool_calls": 18,
+   "vague": false,
+   "variant": "syntax-only",
+   "wall_s": 23.0
+  },
+  {
+   "all_gates_pass": true,
+   "domain": "rna-seq",
+   "error": null,
+   "est_cost_usd": 0.04539,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 0,
+     "pass": true
+    },
+    "lint": {
+     "exit": 0,
+     "n_warnings": null,
+     "pass": true
+    },
+    "validate": {
+     "exit": 0,
+     "n_errors": 0,
+     "n_missing_inputs": 6,
+     "pass": true,
+     "valid": true
+    }
+   },
+   "generated": true,
+   "input_tokens": 143876,
+   "intent_id": "rnaseq-star-salmon-quant",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 4642,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "sessions": 1,
+   "success": true,
+   "tier": "medium",
+   "tool_calls": 17,
+   "vague": false,
+   "variant": "syntax-only",
+   "wall_s": 114.1
+  },
+  {
+   "all_gates_pass": true,
+   "domain": "qc",
+   "error": null,
+   "est_cost_usd": 0.01541,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 0,
+     "pass": true
+    },
+    "lint": {
+     "exit": 0,
+     "n_warnings": null,
+     "pass": true
+    },
+    "validate": {
+     "exit": 0,
+     "n_errors": 0,
+     "n_missing_inputs": 2,
+     "pass": true,
+     "valid": true
+    }
+   },
+   "generated": true,
+   "input_tokens": 46089,
+   "intent_id": "qc-vague",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 2277,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "sessions": 1,
+   "success": true,
+   "tier": "easy",
+   "tool_calls": 9,
+   "vague": true,
+   "variant": "syntax-only",
+   "wall_s": 54.1
+  },
+  {
+   "all_gates_pass": true,
+   "domain": "rna-seq",
+   "error": null,
+   "est_cost_usd": 0.02279,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 0,
+     "pass": true
+    },
+    "lint": {
+     "exit": 0,
+     "n_warnings": null,
+     "pass": true
+    },
+    "validate": {
+     "exit": 0,
+     "n_errors": 0,
+     "n_missing_inputs": 4,
+     "pass": true,
+     "valid": true
+    }
+   },
+   "generated": true,
+   "input_tokens": 57245,
+   "intent_id": "rnaseq-vague",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 6150,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "sessions": 1,
+   "success": true,
+   "tier": "medium",
+   "tool_calls": 11,
+   "vague": true,
+   "variant": "syntax-only",
+   "wall_s": 152.0
+  },
+  {
+   "all_gates_pass": true,
+   "domain": "variant-calling",
+   "error": null,
+   "est_cost_usd": 0.01973,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 0,
+     "pass": true
+    },
+    "lint": {
+     "exit": 0,
+     "n_warnings": null,
+     "pass": true
+    },
+    "validate": {
+     "exit": 0,
+     "n_errors": 0,
+     "n_missing_inputs": 3,
+     "pass": true,
+     "valid": true
+    }
+   },
+   "generated": true,
+   "input_tokens": 50641,
+   "intent_id": "variant-vague",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 5044,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "sessions": 1,
+   "success": true,
+   "tier": "medium",
+   "tool_calls": 12,
+   "vague": true,
+   "variant": "syntax-only",
+   "wall_s": 125.4
+  },
+  {
+   "all_gates_pass": true,
+   "domain": "qc",
+   "error": null,
+   "est_cost_usd": 0.01477,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 0,
+     "pass": true
+    },
+    "lint": {
+     "exit": 0,
+     "n_warnings": null,
+     "pass": true
+    },
+    "validate": {
+     "exit": 0,
+     "n_errors": 0,
+     "n_missing_inputs": 2,
+     "pass": true,
+     "valid": true
+    }
+   },
+   "generated": true,
+   "input_tokens": 43909,
+   "intent_id": "qc-fastp-multiqc",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 2246,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "sessions": 1,
+   "success": true,
+   "tier": "easy",
+   "tool_calls": 8,
+   "vague": false,
+   "variant": "full-contract",
+   "wall_s": 54.4
+  },
+  {
+   "all_gates_pass": true,
+   "domain": "qc",
+   "error": null,
+   "est_cost_usd": 0.00656,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 0,
+     "pass": true
+    },
+    "lint": {
+     "exit": 0,
+     "n_warnings": null,
+     "pass": true
+    },
+    "validate": {
+     "exit": 0,
+     "n_errors": 0,
+     "n_missing_inputs": 2,
+     "pass": true,
+     "valid": true
+    }
+   },
+   "generated": true,
+   "input_tokens": 18301,
+   "intent_id": "qc-fastqc",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 1307,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "sessions": 1,
+   "success": true,
+   "tier": "easy",
+   "tool_calls": 3,
+   "vague": false,
+   "variant": "full-contract",
+   "wall_s": 33.6
+  },
+  {
+   "all_gates_pass": true,
+   "domain": "qc",
+   "error": null,
+   "est_cost_usd": 0.01754,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 0,
+     "pass": true
+    },
+    "lint": {
+     "exit": 0,
+     "n_warnings": null,
+     "pass": true
+    },
+    "validate": {
+     "exit": 0,
+     "n_errors": 0,
+     "n_missing_inputs": 1,
+     "pass": true,
+     "valid": true
+    }
+   },
+   "generated": true,
+   "input_tokens": 52079,
+   "intent_id": "trim-cutadapt",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 2685,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "sessions": 1,
+   "success": true,
+   "tier": "easy",
+   "tool_calls": 9,
+   "vague": false,
+   "variant": "full-contract",
+   "wall_s": 82.0
+  },
+  {
+   "all_gates_pass": true,
+   "domain": "qc",
+   "error": null,
+   "est_cost_usd": 0.03453,
+   "fidelity_pass": false,
+   "gates": {
+    "dry-run": {
+     "exit": 0,
+     "pass": true
+    },
+    "lint": {
+     "exit": 0,
+     "n_warnings": null,
+     "pass": true
+    },
+    "validate": {
+     "exit": 0,
+     "n_errors": 0,
+     "n_missing_inputs": 3,
+     "pass": true,
+     "valid": true
+    }
+   },
+   "generated": true,
+   "input_tokens": 88632,
+   "intent_id": "qc-fastq-screen",
+   "missing_required_tools": [
+    "fastq-screen"
+   ],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 8833,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "sessions": 1,
+   "success": false,
+   "tier": "medium",
+   "tool_calls": 10,
+   "vague": false,
+   "variant": "full-contract",
+   "wall_s": 202.3
+  },
+  {
+   "all_gates_pass": true,
+   "domain": "qc",
+   "error": null,
+   "est_cost_usd": 0.0181,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 0,
+     "pass": true
+    },
+    "lint": {
+     "exit": 0,
+     "n_warnings": null,
+     "pass": true
+    },
+    "validate": {
+     "exit": 0,
+     "n_errors": 0,
+     "n_missing_inputs": 1,
+     "pass": true,
+     "valid": true
+    }
+   },
+   "generated": true,
+   "input_tokens": 55492,
+   "intent_id": "qc-nanoq",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 2330,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "sessions": 1,
+   "success": true,
+   "tier": "easy",
+   "tool_calls": 9,
+   "vague": false,
+   "variant": "full-contract",
+   "wall_s": 59.2
+  },
+  {
+   "all_gates_pass": true,
+   "domain": "rna-seq",
+   "error": null,
+   "est_cost_usd": 0.03598,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 0,
+     "pass": true
+    },
+    "lint": {
+     "exit": 0,
+     "n_warnings": null,
+     "pass": true
+    },
+    "validate": {
+     "exit": 0,
+     "n_errors": 0,
+     "n_missing_inputs": 2,
+     "pass": true,
+     "valid": true
+    }
+   },
+   "generated": true,
+   "input_tokens": 105452,
+   "intent_id": "rnaseq-star",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 5868,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "sessions": 1,
+   "success": true,
+   "tier": "medium",
+   "tool_calls": 16,
+   "vague": false,
+   "variant": "full-contract",
+   "wall_s": 142.8
+  },
+  {
+   "all_gates_pass": false,
+   "domain": "rna-seq",
+   "error": "template exited 1",
+   "est_cost_usd": 0.02534,
+   "fidelity_pass": false,
+   "gates": {},
+   "generated": false,
+   "input_tokens": 88219,
+   "intent_id": "rnaseq-hisat2",
+   "missing_required_tools": [
+    "fastp",
+    "hisat2",
+    "samtools",
+    "stringtie"
+   ],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 577,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "sessions": 1,
+   "success": false,
+   "tier": "medium",
+   "tool_calls": 18,
+   "vague": false,
+   "variant": "full-contract",
+   "wall_s": 22.8
+  },
+  {
+   "all_gates_pass": true,
+   "domain": "rna-seq",
+   "error": null,
+   "est_cost_usd": 0.04377,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 0,
+     "pass": true
+    },
+    "lint": {
+     "exit": 0,
+     "n_warnings": null,
+     "pass": true
+    },
+    "validate": {
+     "exit": 0,
+     "n_errors": 0,
+     "n_missing_inputs": 6,
+     "pass": true,
+     "valid": true
+    }
+   },
+   "generated": true,
+   "input_tokens": 100818,
+   "intent_id": "rnaseq-salmon",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 14129,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "sessions": 1,
+   "success": true,
+   "tier": "medium",
+   "tool_calls": 12,
+   "vague": false,
+   "variant": "full-contract",
+   "wall_s": 301.8
+  },
+  {
+   "all_gates_pass": false,
+   "domain": "rna-seq",
+   "error": "template exited 1",
+   "est_cost_usd": 0.03128,
+   "fidelity_pass": false,
+   "gates": {},
+   "generated": false,
+   "input_tokens": 109640,
+   "intent_id": "rnaseq-de-deseq2",
+   "missing_required_tools": [
+    "fastp",
+    "hisat2",
+    "featurecounts",
+    "deseq2"
+   ],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 526,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "sessions": 1,
+   "success": false,
+   "tier": "hard",
+   "tool_calls": 18,
+   "vague": false,
+   "variant": "full-contract",
+   "wall_s": 23.8
+  },
+  {
+   "all_gates_pass": true,
+   "domain": "single-cell",
+   "error": null,
+   "est_cost_usd": 0.02089,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 0,
+     "pass": true
+    },
+    "lint": {
+     "exit": 0,
+     "n_warnings": null,
+     "pass": true
+    },
+    "validate": {
+     "exit": 0,
+     "n_errors": 0,
+     "n_missing_inputs": 3,
+     "pass": true,
+     "valid": true
+    }
+   },
+   "generated": true,
+   "input_tokens": 56414,
+   "intent_id": "scrna-starsolo",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 4628,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "sessions": 1,
+   "success": true,
+   "tier": "hard",
+   "tool_calls": 10,
+   "vague": false,
+   "variant": "full-contract",
+   "wall_s": 109.8
+  },
+  {
+   "all_gates_pass": true,
+   "domain": "variant-calling",
+   "error": null,
+   "est_cost_usd": 0.04786,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 0,
+     "pass": true
+    },
+    "lint": {
+     "exit": 0,
+     "n_warnings": null,
+     "pass": true
+    },
+    "validate": {
+     "exit": 0,
+     "n_errors": 0,
+     "n_missing_inputs": 3,
+     "pass": true,
+     "valid": true
+    }
+   },
+   "generated": true,
+   "input_tokens": 140991,
+   "intent_id": "germline-variant",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 7620,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "sessions": 1,
+   "success": true,
+   "tier": "medium",
+   "tool_calls": 14,
+   "vague": false,
+   "variant": "full-contract",
+   "wall_s": 177.2
+  },
+  {
+   "all_gates_pass": true,
+   "domain": "variant-calling",
+   "error": null,
+   "est_cost_usd": 0.04803,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 0,
+     "pass": true
+    },
+    "lint": {
+     "exit": 0,
+     "n_warnings": null,
+     "pass": true
+    },
+    "validate": {
+     "exit": 0,
+     "n_errors": 0,
+     "n_missing_inputs": 4,
+     "pass": true,
+     "valid": true
+    }
+   },
+   "generated": true,
+   "input_tokens": 125831,
+   "intent_id": "germline-gatk",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 11632,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "sessions": 1,
+   "success": true,
+   "tier": "hard",
+   "tool_calls": 16,
+   "vague": false,
+   "variant": "full-contract",
+   "wall_s": 257.9
+  },
+  {
+   "all_gates_pass": false,
+   "domain": "variant-calling",
+   "error": null,
+   "est_cost_usd": 0.03581,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 1,
+     "pass": false
+    },
+    "lint": {
+     "exit": 1,
+     "n_warnings": null,
+     "pass": false
+    },
+    "validate": {
+     "exit": 1,
+     "n_errors": 1,
+     "n_missing_inputs": 0,
+     "pass": false,
+     "valid": false
+    }
+   },
+   "generated": true,
+   "input_tokens": 84329,
+   "intent_id": "somatic-tumor-normal",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 11091,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "sessions": 1,
+   "success": false,
+   "tier": "hard",
+   "tool_calls": 12,
+   "vague": false,
+   "variant": "full-contract",
+   "wall_s": 243.9
+  },
+  {
+   "all_gates_pass": true,
+   "domain": "variant-calling",
+   "error": null,
+   "est_cost_usd": 0.03526,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 0,
+     "pass": true
+    },
+    "lint": {
+     "exit": 0,
+     "n_warnings": null,
+     "pass": true
+    },
+    "validate": {
+     "exit": 0,
+     "n_errors": 0,
+     "n_missing_inputs": 5,
+     "pass": true,
+     "valid": true
+    }
+   },
+   "generated": true,
+   "input_tokens": 104618,
+   "intent_id": "somatic-mutect2",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 5424,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "sessions": 1,
+   "success": true,
+   "tier": "hard",
+   "tool_calls": 14,
+   "vague": false,
+   "variant": "full-contract",
+   "wall_s": 124.7
+  },
+  {
+   "all_gates_pass": false,
+   "domain": "variant-calling",
+   "error": "template exited 1",
+   "est_cost_usd": 0.02273,
+   "fidelity_pass": false,
+   "gates": {},
+   "generated": false,
+   "input_tokens": 78703,
+   "intent_id": "cnv-cnvkit",
+   "missing_required_tools": [
+    "bwa",
+    "cnvkit"
+   ],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 634,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "sessions": 1,
+   "success": false,
+   "tier": "hard",
+   "tool_calls": 17,
+   "vague": false,
+   "variant": "full-contract",
+   "wall_s": 21.6
+  },
+  {
+   "all_gates_pass": false,
+   "domain": "variant-calling",
+   "error": "template exited 1",
+   "est_cost_usd": 0.03454,
+   "fidelity_pass": false,
+   "gates": {},
+   "generated": false,
+   "input_tokens": 121507,
+   "intent_id": "variant-annotate",
+   "missing_required_tools": [
+    "snpeff",
+    "bcftools"
+   ],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 474,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "sessions": 1,
+   "success": false,
+   "tier": "medium",
+   "tool_calls": 13,
+   "vague": false,
+   "variant": "full-contract",
+   "wall_s": 23.4
+  },
+  {
+   "all_gates_pass": true,
+   "domain": "chip-seq",
+   "error": null,
+   "est_cost_usd": 0.05369,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 0,
+     "pass": true
+    },
+    "lint": {
+     "exit": 0,
+     "n_warnings": null,
+     "pass": true
+    },
+    "validate": {
+     "exit": 0,
+     "n_errors": 0,
+     "n_missing_inputs": 4,
+     "pass": true,
+     "valid": true
+    }
+   },
+   "generated": true,
+   "input_tokens": 118643,
+   "intent_id": "chipseq-macs2",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 18611,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "sessions": 1,
+   "success": true,
+   "tier": "medium",
+   "tool_calls": 13,
+   "vague": false,
+   "variant": "full-contract",
+   "wall_s": 408.4
+  },
+  {
+   "all_gates_pass": false,
+   "domain": "chip-seq",
+   "error": "template exited 1",
+   "est_cost_usd": 0.03094,
+   "fidelity_pass": false,
+   "gates": {},
+   "generated": false,
+   "input_tokens": 108419,
+   "intent_id": "chipseq-broad",
+   "missing_required_tools": [
+    "fastp",
+    "bowtie2",
+    "samtools",
+    "macs2"
+   ],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 529,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "sessions": 1,
+   "success": false,
+   "tier": "medium",
+   "tool_calls": 17,
+   "vague": false,
+   "variant": "full-contract",
+   "wall_s": 26.0
+  },
+  {
+   "all_gates_pass": false,
+   "domain": "atac-seq",
+   "error": "template exited 1",
+   "est_cost_usd": 0.03152,
+   "fidelity_pass": false,
+   "gates": {},
+   "generated": false,
+   "input_tokens": 109746,
+   "intent_id": "atacseq",
+   "missing_required_tools": [
+    "fastp",
+    "bwa-mem2",
+    "macs2"
+   ],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 722,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "sessions": 1,
+   "success": false,
+   "tier": "hard",
+   "tool_calls": 21,
+   "vague": false,
+   "variant": "full-contract",
+   "wall_s": 27.5
+  },
+  {
+   "all_gates_pass": false,
+   "domain": "methylation",
+   "error": "template exited 1",
+   "est_cost_usd": 0.0233,
+   "fidelity_pass": false,
+   "gates": {},
+   "generated": false,
+   "input_tokens": 80918,
+   "intent_id": "wgbs-bismark",
+   "missing_required_tools": [
+    "fastp",
+    "bismark"
+   ],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 589,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "sessions": 1,
+   "success": false,
+   "tier": "hard",
+   "tool_calls": 18,
+   "vague": false,
+   "variant": "full-contract",
+   "wall_s": 22.9
+  },
+  {
+   "all_gates_pass": false,
+   "domain": "metagenomics",
+   "error": "template exited 1",
+   "est_cost_usd": 0.02392,
+   "fidelity_pass": false,
+   "gates": {},
+   "generated": false,
+   "input_tokens": 83607,
+   "intent_id": "amplicon-dada2",
+   "missing_required_tools": [
+    "cutadapt",
+    "dada2"
+   ],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 468,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "sessions": 1,
+   "success": false,
+   "tier": "medium",
+   "tool_calls": 15,
+   "vague": false,
+   "variant": "full-contract",
+   "wall_s": 22.0
+  },
+  {
+   "all_gates_pass": true,
+   "domain": "metagenomics",
+   "error": null,
+   "est_cost_usd": 0.02792,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 0,
+     "pass": true
+    },
+    "lint": {
+     "exit": 0,
+     "n_warnings": null,
+     "pass": true
+    },
+    "validate": {
+     "exit": 0,
+     "n_errors": 0,
+     "n_missing_inputs": 2,
+     "pass": true,
+     "valid": true
+    }
+   },
+   "generated": true,
+   "input_tokens": 89629,
+   "intent_id": "metagenomics-kraken2",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 2570,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "sessions": 1,
+   "success": true,
+   "tier": "hard",
+   "tool_calls": 16,
+   "vague": false,
+   "variant": "full-contract",
+   "wall_s": 68.7
+  },
+  {
+   "all_gates_pass": true,
+   "domain": "metagenomics",
+   "error": null,
+   "est_cost_usd": 0.03015,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 0,
+     "pass": true
+    },
+    "lint": {
+     "exit": 0,
+     "n_warnings": null,
+     "pass": true
+    },
+    "validate": {
+     "exit": 0,
+     "n_errors": 0,
+     "n_missing_inputs": 3,
+     "pass": true,
+     "valid": true
+    }
+   },
+   "generated": true,
+   "input_tokens": 77136,
+   "intent_id": "metag-assembly",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 7776,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "sessions": 1,
+   "success": true,
+   "tier": "hard",
+   "tool_calls": 15,
+   "vague": false,
+   "variant": "full-contract",
+   "wall_s": 176.8
+  },
+  {
+   "all_gates_pass": false,
+   "domain": "assembly",
+   "error": null,
+   "est_cost_usd": 0.01994,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 1,
+     "pass": false
+    },
+    "lint": {
+     "exit": 1,
+     "n_warnings": null,
+     "pass": false
+    },
+    "validate": {
+     "exit": 1,
+     "n_errors": 1,
+     "n_missing_inputs": 0,
+     "pass": false,
+     "valid": false
+    }
+   },
+   "generated": true,
+   "input_tokens": 59037,
+   "intent_id": "assembly-spades",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 3096,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "sessions": 1,
+   "success": false,
+   "tier": "medium",
+   "tool_calls": 11,
+   "vague": false,
+   "variant": "full-contract",
+   "wall_s": 73.4
+  },
+  {
+   "all_gates_pass": true,
+   "domain": "assembly",
+   "error": null,
+   "est_cost_usd": 0.03352,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 0,
+     "pass": true
+    },
+    "lint": {
+     "exit": 0,
+     "n_warnings": null,
+     "pass": true
+    },
+    "validate": {
+     "exit": 0,
+     "n_errors": 0,
+     "n_missing_inputs": 1,
+     "pass": true,
+     "valid": true
+    }
+   },
+   "generated": true,
+   "input_tokens": 94291,
+   "intent_id": "assembly-flye-polish",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 6475,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "sessions": 1,
+   "success": true,
+   "tier": "hard",
+   "tool_calls": 15,
+   "vague": false,
+   "variant": "full-contract",
+   "wall_s": 154.7
+  },
+  {
+   "all_gates_pass": false,
+   "domain": "epigenomics",
+   "error": null,
+   "est_cost_usd": 0.03056,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 1,
+     "pass": false
+    },
+    "lint": {
+     "exit": 1,
+     "n_warnings": null,
+     "pass": false
+    },
+    "validate": {
+     "exit": 1,
+     "n_errors": 1,
+     "n_missing_inputs": 3,
+     "pass": false,
+     "valid": false
+    }
+   },
+   "generated": true,
+   "input_tokens": 95194,
+   "intent_id": "hic-cooler",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 3551,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "sessions": 1,
+   "success": false,
+   "tier": "hard",
+   "tool_calls": 13,
+   "vague": false,
+   "variant": "full-contract",
+   "wall_s": 95.7
+  },
+  {
+   "all_gates_pass": true,
+   "domain": "spatial-transcriptomics",
+   "error": null,
+   "est_cost_usd": 0.04563,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 0,
+     "pass": true
+    },
+    "lint": {
+     "exit": 0,
+     "n_warnings": null,
+     "pass": true
+    },
+    "validate": {
+     "exit": 0,
+     "n_errors": 0,
+     "n_missing_inputs": 2,
+     "pass": true,
+     "valid": true
+    }
+   },
+   "generated": true,
+   "input_tokens": 139328,
+   "intent_id": "spatial-visium",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 6016,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "sessions": 1,
+   "success": true,
+   "tier": "hard",
+   "tool_calls": 13,
+   "vague": false,
+   "variant": "full-contract",
+   "wall_s": 150.3
+  },
+  {
+   "all_gates_pass": false,
+   "domain": "single-cell",
+   "error": "template exited 1",
+   "est_cost_usd": 0.03891,
+   "fidelity_pass": false,
+   "gates": {},
+   "generated": false,
+   "input_tokens": 136790,
+   "intent_id": "single-cell-multiome",
+   "missing_required_tools": [
+    "cellranger-arc",
+    "signac",
+    "seurat"
+   ],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 550,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "sessions": 1,
+   "success": false,
+   "tier": "hard",
+   "tool_calls": 18,
+   "vague": false,
+   "variant": "full-contract",
+   "wall_s": 28.4
+  },
+  {
+   "all_gates_pass": false,
+   "domain": "metagenomics",
+   "error": "template exited 1",
+   "est_cost_usd": 0.02856,
+   "fidelity_pass": false,
+   "gates": {},
+   "generated": false,
+   "input_tokens": 99675,
+   "intent_id": "metagenome-humann-pathways",
+   "missing_required_tools": [
+    "fastp",
+    "bowtie2",
+    "kraken2",
+    "humann"
+   ],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 596,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "sessions": 1,
+   "success": false,
+   "tier": "hard",
+   "tool_calls": 18,
+   "vague": false,
+   "variant": "full-contract",
+   "wall_s": 27.1
+  },
+  {
+   "all_gates_pass": true,
+   "domain": "long-read",
+   "error": null,
+   "est_cost_usd": 0.03783,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 0,
+     "pass": true
+    },
+    "lint": {
+     "exit": 0,
+     "n_warnings": null,
+     "pass": true
+    },
+    "validate": {
+     "exit": 0,
+     "n_errors": 0,
+     "n_missing_inputs": 2,
+     "pass": true,
+     "valid": true
+    }
+   },
+   "generated": true,
+   "input_tokens": 119577,
+   "intent_id": "longread-structural-variants",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 3957,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "sessions": 1,
+   "success": true,
+   "tier": "hard",
+   "tool_calls": 17,
+   "vague": false,
+   "variant": "full-contract",
+   "wall_s": 98.2
+  },
+  {
+   "all_gates_pass": false,
+   "domain": "variant-calling",
+   "error": null,
+   "est_cost_usd": 0.03974,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 1,
+     "pass": false
+    },
+    "lint": {
+     "exit": 1,
+     "n_warnings": null,
+     "pass": false
+    },
+    "validate": {
+     "exit": 1,
+     "n_errors": 1,
+     "n_missing_inputs": 13,
+     "pass": false,
+     "valid": false
+    }
+   },
+   "generated": true,
+   "input_tokens": 107601,
+   "intent_id": "gatk-cohort-joint-genotyping",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 8734,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "sessions": 1,
+   "success": false,
+   "tier": "hard",
+   "tool_calls": 17,
+   "vague": false,
+   "variant": "full-contract",
+   "wall_s": 203.5
+  },
+  {
+   "all_gates_pass": false,
+   "domain": "epigenomics",
+   "error": "template exited 1",
+   "est_cost_usd": 0.02655,
+   "fidelity_pass": false,
+   "gates": {},
+   "generated": false,
+   "input_tokens": 92969,
+   "intent_id": "cutandtag-epigenomics",
+   "missing_required_tools": [
+    "fastp",
+    "bowtie2",
+    "picard",
+    "macs3",
+    "seacr",
+    "deeptools"
+   ],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 468,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "sessions": 1,
+   "success": false,
+   "tier": "medium",
+   "tool_calls": 15,
+   "vague": false,
+   "variant": "full-contract",
+   "wall_s": 23.6
+  },
+  {
+   "all_gates_pass": false,
+   "domain": "rna-seq",
+   "error": "template exited 1",
+   "est_cost_usd": 0.03871,
+   "fidelity_pass": false,
+   "gates": {},
+   "generated": false,
+   "input_tokens": 136269,
+   "intent_id": "rnaseq-star-salmon-quant",
+   "missing_required_tools": [
+    "fastp",
+    "star",
+    "salmon",
+    "subread"
+   ],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 506,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "sessions": 1,
+   "success": false,
+   "tier": "medium",
+   "tool_calls": 17,
+   "vague": false,
+   "variant": "full-contract",
+   "wall_s": 26.1
+  },
+  {
+   "all_gates_pass": true,
+   "domain": "qc",
+   "error": null,
+   "est_cost_usd": 0.02602,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 0,
+     "pass": true
+    },
+    "lint": {
+     "exit": 0,
+     "n_warnings": null,
+     "pass": true
+    },
+    "validate": {
+     "exit": 0,
+     "n_errors": 0,
+     "n_missing_inputs": 2,
+     "pass": true,
+     "valid": true
+    }
+   },
+   "generated": true,
+   "input_tokens": 82025,
+   "intent_id": "qc-vague",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 2773,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "sessions": 1,
+   "success": true,
+   "tier": "easy",
+   "tool_calls": 11,
+   "vague": true,
+   "variant": "full-contract",
+   "wall_s": 71.1
+  },
+  {
+   "all_gates_pass": true,
+   "domain": "rna-seq",
+   "error": null,
+   "est_cost_usd": 0.03076,
+   "fidelity_pass": true,
+   "gates": {
+    "dry-run": {
+     "exit": 0,
+     "pass": true
+    },
+    "lint": {
+     "exit": 0,
+     "n_warnings": null,
+     "pass": true
+    },
+    "validate": {
+     "exit": 0,
+     "n_errors": 0,
+     "n_missing_inputs": 2,
+     "pass": true,
+     "valid": true
+    }
+   },
+   "generated": true,
+   "input_tokens": 92115,
+   "intent_id": "rnaseq-vague",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 4517,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "sessions": 1,
+   "success": true,
+   "tier": "medium",
+   "tool_calls": 19,
+   "vague": true,
+   "variant": "full-contract",
+   "wall_s": 117.5
+  },
+  {
+   "all_gates_pass": false,
+   "domain": "variant-calling",
+   "error": "template exited 1",
+   "est_cost_usd": 0.02872,
+   "fidelity_pass": true,
+   "gates": {},
+   "generated": false,
+   "input_tokens": 100279,
+   "intent_id": "variant-vague",
+   "missing_required_tools": [],
+   "model": "qwen3.8-flash-next-nothink",
+   "output_tokens": 585,
+   "profile": "compact",
+   "rounds": null,
+   "seed": 1,
+   "sessions": 1,
+   "success": false,
+   "tier": "medium",
+   "tool_calls": 18,
+   "vague": true,
+   "variant": "full-contract",
+   "wall_s": 23.1
+  }
+ ],
+ "seeds": 1,
+ "stamp": "20261125-233732"
+}
