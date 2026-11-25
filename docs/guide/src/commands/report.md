@@ -706,6 +706,10 @@ commands — it is only reachable through explicit configuration.
   the requested format (`-f md` → `.md`, `-f json` → `.json`,
   `-f pdf` → `.pdf`, else `.html`), so the default location is predictable
   and the file never masquerades as HTML
+- `report` does not implement the global `--json` switch; select the JSON
+  document with `-f json` (and the ledger, likewise, with
+  `--resource-ledger -f json`). Passing `--json` is rejected with a usage
+  error that names the right spelling instead of being silently ignored
 - HTML reports are self-contained single files: embedded CSS, dark-mode
   support, print styles, semantic landmarks, and HTML-escaped user
   content (rule names, commands, paths are safe to open and share)
