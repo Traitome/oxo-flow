@@ -267,6 +267,202 @@ fn failed_rules_get_wall_time_from_run_records_only() {
     assert_eq!(ledger.run.totals.wall_time_secs, Some(1.5));
 }
 
+/// Task-7c I-1(a): a prior real success's benchmark must not be attributed
+/// to a later failed re-execution of the same workdir. `mark_failed` leaves
+/// `benchmarks` untouched, so the ledger has to derive usability from the
+/// latest `rule_runs` attempt instead of trusting any recorded benchmark.
+#[test]
+fn failed_attempt_after_real_success_uses_only_the_failed_attempt() {
+    let mut cp = CheckpointState::new();
+    cp.mark_completed(
+        "hello",
+        BenchmarkRecord {
+            max_memory_mb: Some(100),
+            cpu_seconds: Some(0.024),
+            ..benchmark("hello", 3.017)
+        },
+    );
+    let started = Utc.with_ymd_and_hms(2026, 11, 25, 18, 39, 44).unwrap();
+    // The current invocation re-executed the rule and failed: the run
+    // record now describes the failed attempt while the old benchmark
+    // survives.
+    cp.mark_failed("hello");
+    cp.rule_runs.insert(
+        "hello".to_string(),
+        RuleRunRecord {
+            exit_code: Some(9),
+            started_at: Some(started),
+            finished_at: Some(started + chrono::Duration::milliseconds(100)),
+            command: None,
+            stderr_tail: None,
+            stdout_tail: None,
+            caption: None,
+            status: Some("failed".to_string()),
+            skip_reason: None,
+            signal: None,
+        },
+    );
+    cp.resource_usage.insert(
+        "hello".to_string(),
+        ResourceUsage {
+            max_rss_bytes: Some(20 * 1024 * 1024),
+            cpu_seconds: Some(0.002),
+            source: Some(ResourceSource {
+                backend: "local".to_string(),
+                tool: "sysinfo".to_string(),
+                ..ResourceSource::default()
+            }),
+            ..ResourceUsage::default()
+        },
+    );
+
+    let ledger = build_resource_ledger(&cp, None, None, None);
+    let rule = &ledger.rules[0];
+    assert_eq!(rule.status, "failed");
+    assert_eq!(
+        rule.wall_time_secs,
+        Some(0.1),
+        "the prior success's 3.017 s must not describe the failed attempt"
+    );
+    assert_eq!(
+        rule.cpu_seconds,
+        Some(0.002),
+        "the failed attempt's own CPU must not be replaced by the old benchmark"
+    );
+    assert_eq!(
+        rule.max_rss_bytes,
+        Some(20 * 1024 * 1024),
+        "memory comes from the failed attempt, not the old benchmark"
+    );
+    assert_eq!(rule.source.tool, "sysinfo");
+    assert!(rule.recorded_as.is_none());
+    assert_eq!(ledger.run.totals.rules_executed, 1);
+    assert_eq!(ledger.run.totals.wall_time_secs, Some(0.1));
+    assert_eq!(ledger.run.totals.cpu_seconds, Some(0.002));
+    // The run's bounds are its own failed attempt, not the earlier run's.
+    assert_eq!(
+        ledger.run.started_at.as_deref(),
+        Some("2026-11-25T18:39:44Z")
+    );
+    assert_eq!(
+        ledger.run.finished_at.as_deref(),
+        Some("2026-11-25T18:39:44Z")
+    );
+}
+
+/// Task-7c I-1(b): a synthetic "outputs up-to-date" completion from an
+/// earlier invocation must not suppress the current invocation's real
+/// failed attempt — nor its membership in `rules_executed`.
+#[test]
+fn failed_attempt_after_synthetic_completion_counts_as_execution() {
+    let mut cp = CheckpointState::new();
+    // Earlier invocation adopted pre-existing outputs and left a synthetic
+    // benchmark (the only benchmark this rule ever had).
+    cp.mark_completed(
+        "hello",
+        BenchmarkRecord {
+            recorded_as: Some("outputs up-to-date".to_string()),
+            ..benchmark("hello", 0.0)
+        },
+    );
+    cp.record_skipped_attempt("hello", "outputs up-to-date");
+    // The current invocation re-executed the rule for real and failed.
+    // `record_run` clears the skip marker and writes the failed attempt;
+    // `mark_failed` records the outcome while the synthetic benchmark
+    // stays in `benchmarks` (nothing removes it).
+    cp.mark_failed("hello");
+    cp.skipped_attempts.remove("hello");
+    let started = Utc.with_ymd_and_hms(2026, 11, 25, 19, 0, 0).unwrap();
+    cp.rule_runs.insert(
+        "hello".to_string(),
+        RuleRunRecord {
+            exit_code: Some(9),
+            started_at: Some(started),
+            finished_at: Some(started + chrono::Duration::seconds(2)),
+            command: None,
+            stderr_tail: None,
+            stdout_tail: None,
+            caption: None,
+            status: Some("failed".to_string()),
+            skip_reason: None,
+            signal: None,
+        },
+    );
+    cp.resource_usage.insert(
+        "hello".to_string(),
+        ResourceUsage {
+            max_rss_bytes: Some(10 * 1024 * 1024),
+            cpu_seconds: Some(5.0),
+            source: Some(ResourceSource {
+                backend: "local".to_string(),
+                tool: "sysinfo".to_string(),
+                ..ResourceSource::default()
+            }),
+            ..ResourceUsage::default()
+        },
+    );
+
+    let ledger = build_resource_ledger(&cp, None, None, None);
+    let rule = &ledger.rules[0];
+    assert_eq!(rule.status, "failed");
+    assert!(
+        rule.recorded_as.is_none(),
+        "the stale synthetic marker does not describe this failed attempt"
+    );
+    assert_eq!(rule.wall_time_secs, Some(2.0));
+    assert_eq!(rule.cpu_seconds, Some(5.0));
+    assert_eq!(rule.max_rss_bytes, Some(10 * 1024 * 1024));
+    assert_eq!(rule.source.tool, "sysinfo");
+    assert_eq!(
+        ledger.run.totals.rules_executed, 1,
+        "a real failed attempt must count even if a synthetic marker exists"
+    );
+    assert_eq!(ledger.run.totals.wall_time_secs, Some(2.0));
+    assert_eq!(ledger.run.totals.cpu_seconds, Some(5.0));
+    assert_eq!(ledger.run.sources.len(), 1);
+    // The `--acct` executed set must agree: its reconciliation coverage is
+    // computed from these names.
+    assert_eq!(
+        executed_rule_names(&cp).into_iter().collect::<Vec<_>>(),
+        vec!["hello".to_string()]
+    );
+}
+
+/// Legacy preservation (task-7c I-1): checkpoints whose `rule_runs` records
+/// predate status tracking keep the documented benchmark-based rendering.
+#[test]
+fn legacy_rule_runs_without_status_keep_benchmark_metrics() {
+    let mut cp = CheckpointState::new();
+    cp.mark_completed(
+        "legacy",
+        BenchmarkRecord {
+            cpu_seconds: Some(7.0),
+            ..benchmark("legacy", 5.0)
+        },
+    );
+    cp.rule_runs.insert(
+        "legacy".to_string(),
+        RuleRunRecord {
+            exit_code: Some(0),
+            started_at: None,
+            finished_at: None,
+            command: None,
+            stderr_tail: None,
+            stdout_tail: None,
+            caption: None,
+            status: None,
+            skip_reason: None,
+            signal: None,
+        },
+    );
+    let ledger = build_resource_ledger(&cp, None, None, None);
+    let rule = &ledger.rules[0];
+    assert_eq!(rule.status, "completed");
+    assert_eq!(rule.wall_time_secs, Some(5.0));
+    assert_eq!(rule.cpu_seconds, Some(7.0));
+    assert_eq!(ledger.run.totals.rules_executed, 1);
+}
+
 #[test]
 fn run_bounds_come_from_recorded_timestamps() {
     let ledger = build_resource_ledger(&checkpoint(), None, None, None);
@@ -303,16 +499,30 @@ fn csv_has_stable_header_rule_rows_and_a_total_row() {
     assert_eq!(lines[0], CSV_HEADER.join(","));
     assert_eq!(lines.len(), 4, "header + 2 rules + TOTAL");
     assert!(lines[1].starts_with("rule,align,completed,30.000,"));
+    // The reserved metric columns are empty (unknown, never 0), and the
+    // source's raw fields travel with the row as compact key-ordered JSON
+    // (task-7c M-4).
+    assert!(
+        lines[1].contains("MaxRSS") && lines[1].contains("TotalCPU") && lines[1].contains("2G"),
+        "{}",
+        lines[1]
+    );
     // Unknown cells are empty, never 0.
     let call_row: Vec<&str> = lines[2].split(',').collect();
-    assert_eq!(call_row[6], "", "call reported no I/O read bytes");
+    assert_eq!(call_row[5], "", "call reported no user CPU seconds");
+    assert_eq!(call_row[6], "", "call reported no system CPU seconds");
+    assert_eq!(
+        call_row[8], "",
+        "call reported no control-plane peak memory"
+    );
+    assert_eq!(call_row[9], "", "call reported no I/O read bytes");
     let total: Vec<&str> = lines[3].split(',').collect();
     assert_eq!(total[0], "total");
     assert_eq!(total[1], "TOTAL");
     assert_eq!(total[3], "40.000");
     assert_eq!(total[4], "80.000");
     assert_eq!(
-        total[20],
+        total[24],
         "io_read_bytes;io_write_bytes;scheduler_wait_secs"
     );
 }

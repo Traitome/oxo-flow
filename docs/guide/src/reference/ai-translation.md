@@ -56,6 +56,11 @@ provider failed, and `attempts[]` (`{provider, model, success, reason}`)
 records each attempt in order with its failure reason. Every fallback logs a
 warning; an exhausted chain returns a structured error naming the last
 provider/model and the cause (including `Agent exceeded max rounds (N)`).
+The chain stops after a billed attempt (max rounds, empty/invalid response,
+tool error); only network, authentication, rate-limit, 5xx, and timeout
+failures fall through to the next provider — see
+[translate provider attribution and fallback](web-api.md#translate-provider-attribution-and-fallback)
+for the spend guard.
 Failure reasons are sanitized categories (`network error`,
 `authentication failed`, `provider error (HTTP 502)`, …) — no API key,
 endpoint URL, host, path, or upstream body appears in these fields.

@@ -31,34 +31,38 @@ pub(crate) const SIGNATURE_ALG: &str = "ed25519";
 
 /// Load a 32-byte ed25519 seed from `path`.
 ///
-/// Accepted formats: 64 hex characters (with optional trailing newline) or
-/// exactly 32 raw bytes. Hex is the documented format because it survives
-/// copy-paste and editors; raw is accepted so `openssl genpkey`-style key
-/// files can be piped in directly.
+/// Accepted formats: exactly 32 raw bytes, or 64 hex characters with any
+/// leading/trailing ASCII whitespace (the documented
+/// `openssl rand -hex 32 > attest.key` form ends in a newline). Hex is the
+/// documented format because it survives copy-paste and editors; raw is
+/// accepted so `openssl genpkey`-style key files can be piped in directly.
 pub(crate) fn load_signing_key(path: &Path) -> Result<SigningKey> {
     let bytes = std::fs::read(path)
         .with_context(|| format!("failed to read signing key: {}", path.display()))?;
-    let seed: [u8; 32] = match bytes.len() {
-        32 => bytes.try_into().expect("length checked above"),
-        64 => decode_hex_seed(&bytes)
-            .with_context(|| format!("invalid hex signing key in {}", path.display()))?,
-        _ => anyhow::bail!(
-            "signing key '{}' must be 32 raw bytes or 64 hex characters, got {} bytes",
-            path.display(),
-            bytes.len()
-        ),
+    let seed: [u8; 32] = if bytes.len() == 32 {
+        // Exactly one seed's worth of raw bytes — never a hex text.
+        bytes.try_into().expect("length checked above")
+    } else {
+        // Anything else must be the hex form; `decode_hex_seed` trims and
+        // enforces exactly 64 hex characters.
+        decode_hex_seed(&bytes)
+            .with_context(|| format!("invalid hex signing key in {}", path.display()))?
     };
     Ok(SigningKey::from_bytes(&seed))
 }
 
 fn decode_hex_seed(bytes: &[u8]) -> Result<[u8; 32]> {
     let text = std::str::from_utf8(bytes).context("signing key is neither raw 32 bytes nor hex")?;
-    let hex_str = text.trim();
+    let hex_str = text.trim_ascii();
+    if hex_str.len() != 64 {
+        anyhow::bail!(
+            "signing key must be exactly 32 raw bytes or 64 hex characters \
+             (trailing whitespace allowed), got {} character(s) of text",
+            hex_str.len()
+        );
+    }
     let mut seed = [0u8; 32];
     for (i, chunk) in hex_str.as_bytes().chunks(2).enumerate() {
-        if chunk.len() != 2 {
-            anyhow::bail!("odd-length hex key");
-        }
         seed[i] = u8::from_str_radix(std::str::from_utf8(chunk)?, 16)
             .map_err(|e| anyhow::anyhow!("invalid hex in signing key: {e}"))?;
     }
@@ -272,6 +276,29 @@ mod tests {
     }
 
     #[test]
+    fn load_signing_key_accepts_a_newline_terminated_hex_file() {
+        // `openssl rand -hex 32 > attest.key` writes 64 hex characters plus
+        // a newline (65 bytes). The documented form used to fail the exact
+        // 32/64-byte length check (task-7c residual).
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("attest.key");
+        std::fs::write(&path, format!("{}\n", hex::encode(test_seed()))).unwrap();
+        let newline = load_signing_key(&path).unwrap();
+        assert_eq!(
+            newline.verifying_key().to_bytes(),
+            test_signing_key().verifying_key().to_bytes(),
+            "a newline-terminated hex key must yield the same key"
+        );
+        // CRLF line endings and surrounding spaces are accepted too.
+        std::fs::write(&path, format!("  {}\r\n", hex::encode(test_seed()))).unwrap();
+        let padded = load_signing_key(&path).unwrap();
+        assert_eq!(
+            padded.verifying_key().to_bytes(),
+            test_signing_key().verifying_key().to_bytes()
+        );
+    }
+
+    #[test]
     fn load_signing_key_rejects_bad_lengths_and_bad_hex() {
         let dir = tempfile::tempdir().unwrap();
         let short = dir.path().join("short.key");
@@ -281,6 +308,12 @@ mod tests {
         let bad_hex = dir.path().join("bad.hex");
         std::fs::write(&bad_hex, "zz".repeat(32)).unwrap();
         assert!(load_signing_key(&bad_hex).is_err());
+
+        // A hex-looking file must still be exactly 64 characters after
+        // trimming — 63 is an error, not a padded seed.
+        let short_hex = dir.path().join("short.hex");
+        std::fs::write(&short_hex, format!("{}\n", "a".repeat(63))).unwrap();
+        assert!(load_signing_key(&short_hex).is_err());
     }
 
     #[test]

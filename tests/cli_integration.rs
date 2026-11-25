@@ -1927,6 +1927,126 @@ fn cli_run_then_resource_ledger_reflects_collected_measurements() {
     assert!(second["run"]["totals"].get("wall_time_secs").is_none());
 }
 
+/// Task-7c I-1(a), live: a rule that succeeds in one invocation and then
+/// fails on a re-execution must render the FAILED attempt's own timing and
+/// measurements — `mark_failed` keeps the old benchmark, so the ledger must
+/// not present it as this run's work.
+#[test]
+fn cli_failed_reexecution_ledger_uses_only_the_failed_attempt() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = write_workflow(
+        dir.path(),
+        "[[rules]]\nname = \"hello\"\noutput = [\"out.txt\"]\n\
+         shell = \"sleep 0.5; echo hi > out.txt\"\n",
+    );
+    let ledger = || -> serde_json::Value {
+        let out = oxo_flow_cmd()
+            .args([
+                "report",
+                wf.to_str().unwrap(),
+                "--resource-ledger",
+                "-f",
+                "json",
+                "-o",
+                "-",
+            ])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        serde_json::from_str(&String::from_utf8_lossy(&out.stdout))
+            .expect("stdout must be pure JSON")
+    };
+
+    let run = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let first = ledger();
+    let success_wall = first["rules"][0]["wall_time_secs"]
+        .as_f64()
+        .expect("successful rule measured");
+    assert!(success_wall >= 0.4, "{first}");
+
+    // Edit the rule so the checkpoint invalidates it, then fail the
+    // re-execution (the old benchmark survives in `benchmarks`).
+    write_workflow(
+        dir.path(),
+        "[[rules]]\nname = \"hello\"\noutput = [\"out.txt\"]\nshell = \"exit 9\"\n",
+    );
+    let rerun = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        !rerun.status.success(),
+        "the edited rule must fail: {}",
+        String::from_utf8_lossy(&rerun.stderr)
+    );
+
+    let second = ledger();
+    let rule = &second["rules"][0];
+    assert_eq!(rule["status"], "failed", "{second}");
+    let failed_wall = rule["wall_time_secs"]
+        .as_f64()
+        .expect("the failed attempt's start/finish pair is a real duration");
+    // The failed attempt's own duration comes from its recorded
+    // start/finish pair; the surviving success benchmark is a different
+    // number and must not be rendered (this is exact, not a timing bound).
+    let ck: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(dir.path().join(".oxo-flow/checkpoint.json")).unwrap(),
+    )
+    .unwrap();
+    let benchmark_wall = ck["benchmarks"]["hello"]["wall_time_secs"]
+        .as_f64()
+        .expect("a failed re-execution keeps the earlier success's benchmark");
+    assert!(
+        (benchmark_wall - success_wall).abs() < 1e-9,
+        "the pre-fix ledger rendered the benchmark: {benchmark_wall} vs {success_wall}"
+    );
+    let started = chrono::DateTime::parse_from_rfc3339(
+        ck["rule_runs"]["hello"]["started_at"]
+            .as_str()
+            .expect("failed attempt start"),
+    )
+    .unwrap();
+    let finished = chrono::DateTime::parse_from_rfc3339(
+        ck["rule_runs"]["hello"]["finished_at"]
+            .as_str()
+            .expect("failed attempt finish"),
+    )
+    .unwrap();
+    let expected_wall = (finished - started).num_milliseconds() as f64 / 1000.0;
+    assert_eq!(
+        failed_wall, expected_wall,
+        "the ledger must render the failed attempt's own duration"
+    );
+    assert_ne!(
+        failed_wall, benchmark_wall,
+        "the prior success's benchmark leaked into the failed attempt: {second}"
+    );
+    assert_eq!(second["run"]["totals"]["rules_executed"], 1, "{second}");
+    assert_eq!(
+        second["run"]["totals"]["wall_time_secs"].as_f64(),
+        Some(failed_wall),
+        "totals must describe the failed attempt only: {second}"
+    );
+    assert_eq!(rule["source"]["backend"], "local", "{rule}");
+    assert_eq!(rule["source"]["tool"], "sysinfo", "{rule}");
+    assert!(rule.get("recorded_as").is_none(), "{rule}");
+}
+
 /// Issue #1371 re-review N1: a subset invocation (`--target`) preserves the
 /// other rules' checkpoint work, but the ledger must not claim that work ran
 /// in this invocation (benchmarks/timestamps from the earlier run).
@@ -2036,17 +2156,23 @@ fn cli_report_resource_ledger_csv_has_a_total_row() {
     let csv = fs::read_to_string(&out).unwrap();
     let lines: Vec<&str> = csv.lines().collect();
     assert!(
-        lines[0].starts_with("record_type,rule,status,wall_time_secs,cpu_seconds,max_rss_bytes"),
+        lines[0].starts_with(
+            "record_type,rule,status,wall_time_secs,cpu_seconds,user_seconds,system_seconds,\
+             max_rss_bytes,peak_memory_bytes,io_read_bytes"
+        ),
         "{}",
         lines[0]
     );
     assert_eq!(lines.len(), 4, "header + 2 rules + TOTAL");
-    assert!(lines[1].starts_with("rule,hello,completed,10.000,5.000,104857600"));
+    // The reserved user/system columns are empty, never a fabricated 0.
+    assert!(lines[1].starts_with("rule,hello,completed,10.000,5.000,,,104857600"));
+    // task-7c M-4: the scheduler's raw fields travel in CSV too.
+    assert!(lines[1].contains("MaxRSS"), "{}", lines[1]);
     let total: Vec<&str> = lines[3].split(',').collect();
     assert_eq!(total[0], "total");
     assert_eq!(total[1], "TOTAL");
     assert_eq!(total[3], "30.000");
-    assert!(total[20].contains("cpu_seconds"));
+    assert!(total[24].contains("cpu_seconds"));
 }
 
 #[test]
@@ -2060,6 +2186,70 @@ fn cli_report_resource_ledger_requires_a_checkpoint() {
         .args(["report", wf.to_str().unwrap(), "--resource-ledger"])
         .assert()
         .code(2);
+}
+
+#[test]
+fn cli_report_resource_ledger_csv_rejects_acct_before_reading_it() {
+    // Task-7c I-2: CSV cannot carry scheduler totals, reconciliation, or
+    // conflicts, so `--acct` used to be validated and then silently
+    // discarded. The combination is now a usage error (exit 1) raised
+    // BEFORE the export is read — a missing file must not produce the read
+    // error.
+    let dir = tempfile::tempdir().unwrap();
+    let wf = two_rule_workflow(dir.path());
+    write_resource_checkpoint(dir.path());
+    let missing = dir.path().join("does-not-exist.csv");
+
+    let out = oxo_flow_cmd()
+        .args([
+            "report",
+            wf.to_str().unwrap(),
+            "--resource-ledger",
+            "-f",
+            "csv",
+            "--acct",
+            missing.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("--acct"), "{stderr}");
+    assert!(
+        stderr.contains("-f json"),
+        "the error names the supported format: {stderr}"
+    );
+    assert!(
+        !stderr.contains("failed to read sacct CSV"),
+        "the format contract must fail before the file is read: {stderr}"
+    );
+}
+
+#[test]
+fn cli_report_resource_ledger_missing_checkpoint_prints_no_template_info() {
+    // Task-7c M-6: a ledger run has no template-level fallback, so the
+    // shared loader's "template-level data only" info line is misleading.
+    let dir = tempfile::tempdir().unwrap();
+    let wf = two_rule_workflow(dir.path());
+
+    let out = oxo_flow_cmd()
+        .args(["report", wf.to_str().unwrap(), "--resource-ledger"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("template-level data"),
+        "the ledger must not announce a report it will not produce: {stderr}"
+    );
+    assert!(stderr.contains("No checkpoint found"), "{stderr}");
+    assert!(stderr.contains("resource ledger"), "{stderr}");
 }
 
 #[test]

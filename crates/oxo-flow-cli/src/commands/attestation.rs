@@ -596,6 +596,24 @@ mod tests {
     }
 
     #[test]
+    fn newline_terminated_hex_key_signs_and_verifies() {
+        // The documented `openssl rand -hex 32 > attest.key` form ends in a
+        // newline; `provenance attest --sign --key` must accept it
+        // (task-7c residual).
+        let dir = tempfile::tempdir().unwrap();
+        let cp = checkpoint(dir.path());
+        let key = dir.path().join("attest.key");
+        std::fs::write(&key, format!("{}\n", "01".repeat(32))).unwrap();
+
+        let mut doc = build_attestation(&cp).unwrap();
+        sign_document(&mut doc, &key).unwrap();
+        assert_eq!(
+            verify_document(&doc, Some(&key)).unwrap(),
+            SignatureStatus::Valid
+        );
+    }
+
+    #[test]
     fn mismatched_key_is_distinct_from_an_invalid_signature() {
         let dir = tempfile::tempdir().unwrap();
         let cp = checkpoint(dir.path());

@@ -16,7 +16,9 @@ impl ResourceLedger {
     ///
     /// Column order is [`CSV_HEADER`]; unknown values are empty cells (never
     /// `0`), and the `TOTAL` row lists any partially reported metrics in
-    /// `incomplete_metrics`.
+    /// `incomplete_metrics`. The reserved metric columns mirror the JSON
+    /// schema (empty until a backend reports them), and `source_raw_fields`
+    /// carries the same key-ordered raw map as JSON, serialized compactly.
     pub fn to_csv(&self) -> String {
         let mut out = String::new();
         out.push_str(&CSV_HEADER.join(","));
@@ -28,7 +30,10 @@ impl ResourceLedger {
                 rule.status.clone(),
                 opt_f64(rule.wall_time_secs),
                 opt_f64(rule.cpu_seconds),
+                opt_f64(rule.user_seconds),
+                opt_f64(rule.system_seconds),
                 opt_u64(rule.max_rss_bytes),
+                opt_u64(rule.peak_memory_bytes),
                 opt_u64(rule.io_read_bytes),
                 opt_u64(rule.io_write_bytes),
                 opt_u64(rule.scheduler_wait_secs),
@@ -51,6 +56,7 @@ impl ResourceLedger {
                 rule.source.tool.clone(),
                 rule.source.version.clone().unwrap_or_default(),
                 rule.source.note.clone().unwrap_or_default(),
+                raw_fields_cell(&rule.source.raw_fields),
                 rule.recorded_as.clone().unwrap_or_default(),
                 String::new(),
             ];
@@ -65,10 +71,14 @@ impl ResourceLedger {
             String::new(),
             opt_f64(totals.wall_time_secs),
             opt_f64(totals.cpu_seconds),
+            String::new(),
+            String::new(),
             opt_u64(totals.max_rss_bytes),
+            String::new(),
             opt_u64(totals.io_read_bytes),
             opt_u64(totals.io_write_bytes),
             opt_u64(totals.scheduler_wait_secs),
+            String::new(),
             String::new(),
             String::new(),
             String::new(),
@@ -89,14 +99,21 @@ impl ResourceLedger {
 }
 
 /// Stable CSV column order. Documented in `docs/guide/src/commands/report.md`
-/// — changing it is a breaking change for downstream spreadsheets.
-pub const CSV_HEADER: [&str; 21] = [
+/// — changing it is a breaking change for downstream spreadsheets. The three
+/// reserved metric columns (`user_seconds`, `system_seconds`,
+/// `peak_memory_bytes`) keep CSV and JSON shapes aligned even though no
+/// backend reports them yet; `source_raw_fields` is the same key-ordered raw
+/// map JSON carries, serialized as compact JSON (task-7c M-4).
+pub const CSV_HEADER: [&str; 25] = [
     "record_type",
     "rule",
     "status",
     "wall_time_secs",
     "cpu_seconds",
+    "user_seconds",
+    "system_seconds",
     "max_rss_bytes",
+    "peak_memory_bytes",
     "io_read_bytes",
     "io_write_bytes",
     "scheduler_wait_secs",
@@ -110,9 +127,21 @@ pub const CSV_HEADER: [&str; 21] = [
     "source_tool",
     "source_version",
     "source_note",
+    "source_raw_fields",
     "recorded_as",
     "incomplete_metrics",
 ];
+
+/// Raw scheduler fields as one CSV cell: compact JSON with `BTreeMap` key
+/// order (the same bytes JSON rendering uses), empty when the source
+/// recorded none. Serializing a `String`-keyed map cannot fail.
+fn raw_fields_cell(fields: &BTreeMap<String, String>) -> String {
+    if fields.is_empty() {
+        String::new()
+    } else {
+        serde_json::to_string(fields).expect("a string map always serializes")
+    }
+}
 
 /// Metrics whose run total is a partial sum (some executed rules reported
 /// nothing), for the CSV `TOTAL` row.

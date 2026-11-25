@@ -1010,7 +1010,7 @@ GET /api/runs/{id}/report
 ```
 The deterministic report object the report page renders: run identity, node statuses with timings, output file tree. Zero AI — the same object answers `report/ask` and feeds `report/visualize`. Like the diagnostics endpoint, the report summarizes only the newest 256 KiB of `execution.log`; the full log stays on `GET /api/runs/{id}/logs`. The report is **failure-aware**: a failed run's narrative headline names the failed rules and exit codes, and carries `run_status` + `failed_rules: [{rule, exit_code, stderr_tail, stdout_tail}]` from the checkpoint's structured failure data.
 
-The normalized resource/cost ledger (`oxo-flow.resource-ledger/v1`, issue #1371) is a **CLI surface**: `oxo-flow report --run <DIR> --resource-ledger -f json|csv` (optionally with `--acct <sacct.csv>` for reconciliation). This endpoint answers the SPA's report object and does not stream the ledger document; there is no ledger route. See [`report`](../commands/report.md#resource-ledger-resource-ledger) for the schema and unknown-vs-zero semantics, and [`run-on-cluster`](../how-to/run-on-cluster.md#resource-ledger-and-scheduler-limits) for the per-scheduler coverage matrix.
+The normalized resource/cost ledger (`oxo-flow.resource-ledger/v1`, issue #1371) is a **CLI surface**: `oxo-flow report --run <DIR> --resource-ledger -f json|csv` (reconciliation against `--acct <sacct.csv>` is JSON-only — CSV + `--acct` fails closed as a usage error, because CSV cannot carry scheduler totals, reconciliation, or conflicts). This endpoint answers the SPA's report object and does not stream the ledger document; there is no ledger route. See [`report`](../commands/report.md#resource-ledger-resource-ledger) for the schema and unknown-vs-zero semantics, and [`run-on-cluster`](../how-to/run-on-cluster.md#resource-ledger-and-scheduler-limits) for the per-scheduler coverage matrix.
 
 ### Report Q&A
 ```
@@ -1471,7 +1471,7 @@ fields next to the existing payload:
   "fallback_used": true,
   "attempts": [
     { "provider": "openai", "model": "qwen3.8-flash-next-nothink", "success": false,
-      "reason": "Agent exceeded max rounds (10)" },
+      "reason": "provider error (HTTP 502)" },
     { "provider": "claude", "model": "deepseek-flash[1m]", "success": true, "reason": null }
   ]
 }
@@ -1487,6 +1487,16 @@ orchestrator cause (for example `Agent exceeded max rounds (10)`). A
 provider-side timeout's `504 AI_TIMEOUT` `detail` names the last attempted
 provider; expiry of the whole-route budget returns the generic 504 detail
 (the chain future is dropped before the last attempt is known).
+
+**A billed attempt is terminal.** Failures that may already have billed the
+provider — max-round exhaustion, an empty or invalid response, a tool error
+(`AiError::may_have_billed`) — stop the chain instead of trying the next
+candidate, so a second credential cannot pay twice for one generation. Only
+failures with no completion evidence fall through: network errors,
+authentication failures, rate limiting, HTTP 5xx, and timeouts. This is why
+the example above uses a 502: an `Agent exceeded max rounds` attempt cannot
+be followed by a successful fallback, it ends the request with the exhausted
+chain `400`.
 No API key or endpoint URL is ever included in these fields, attempts, logs,
 or errors. Transport/HTTP failures are reduced to a sanitized category
 (`network error`, `authentication failed`, `provider error (HTTP 502)`,

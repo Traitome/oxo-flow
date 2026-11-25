@@ -890,7 +890,7 @@ pub enum Commands {
         #[arg(
             long = "acct",
             value_name = "PATH",
-            help = "Import SLURM sacct-style CSV accounting (JobID,JobName,State,Elapsed,CPUTime,MaxRSS) into a Resource Accounting section; with --resource-ledger it becomes the raw scheduler side of reconciliation"
+            help = "Import SLURM sacct-style CSV accounting (JobID,JobName,State,Elapsed,CPUTime,MaxRSS) into a Resource Accounting section; with --resource-ledger it becomes the raw scheduler side of reconciliation (requires -f json — CSV cannot carry scheduler totals or conflicts)"
         )]
         acct: Option<PathBuf>,
         #[arg(

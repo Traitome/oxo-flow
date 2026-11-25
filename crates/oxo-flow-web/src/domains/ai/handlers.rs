@@ -674,7 +674,11 @@ async fn probe_ai_provider(provider: &crate::ai_provider::AiProvider) -> AiTestR
         },
         Err(e) => AiTestResponse {
             success: false,
-            message: format!("Test failed: {e}"),
+            // `AiError`'s Display can embed the request URL and upstream
+            // response text; the probe contract is that neither is returned
+            // (task-7c M-1). `attribution_reason` keeps the actionable
+            // category (auth, timeout, HTTP status) and drops the rest.
+            message: format!("Test failed: {}", e.attribution_reason()),
             provider: provider.name().to_string(),
             model,
         },
@@ -1295,9 +1299,38 @@ pub async fn knowledge_skills(
 #[cfg(test)]
 mod tests {
     use super::{
-        pinned_test_response, reject_config_update_when_pinned, runtime_api_key, runtime_optional,
+        pinned_test_response, probe_ai_provider, reject_config_update_when_pinned, runtime_api_key,
+        runtime_optional,
     };
     use axum::http::StatusCode;
+
+    /// Task-7c M-1: the probe's documented contract is that no endpoint URL
+    /// (or upstream body) is ever returned. `AiError`'s Display carries both
+    /// (reqwest embeds the request URL), so the failure message must be
+    /// built from the sanitized attribution reason.
+    #[tokio::test]
+    async fn provider_probe_failure_drops_endpoint_urls_and_body_text() {
+        use oxo_flow_ai::scripted::{ScriptedTurn, scripted_provider};
+
+        let provider = scripted_provider(vec![ScriptedTurn::error(
+            "provider: error sending request for url \
+             (https://internal.example.com/v1/chat/completions): upstream body secret",
+        )]);
+        let response = probe_ai_provider(&provider).await;
+        assert!(!response.success);
+        assert!(
+            response.message.contains("Test failed"),
+            "{}",
+            response.message
+        );
+        for leaked in ["https://", "internal.example.com", "upstream body secret"] {
+            assert!(
+                !response.message.contains(leaked),
+                "probe message leaked {leaked:?}: {}",
+                response.message
+            );
+        }
+    }
 
     #[test]
     fn pinned_runtime_config_endpoint_is_refused_with_a_structured_conflict() {
