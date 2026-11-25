@@ -890,9 +890,25 @@ pub enum Commands {
         #[arg(
             long = "acct",
             value_name = "PATH",
-            help = "Import SLURM sacct-style CSV accounting (JobID,JobName,State,Elapsed,CPUTime,MaxRSS) into a Resource Accounting section"
+            help = "Import SLURM sacct-style CSV accounting (JobID,JobName,State,Elapsed,CPUTime,MaxRSS) into a Resource Accounting section; with --resource-ledger it becomes the raw scheduler side of reconciliation"
         )]
         acct: Option<PathBuf>,
+        #[arg(
+            long = "resource-ledger",
+            help = "Emit the normalized oxo-flow.resource-ledger/v1 document instead of a report (one row per rule + TOTAL; -f json default, -f csv; unknown metrics are empty, never 0)",
+            conflicts_with_all = [
+                "ai",
+                "plan",
+                "failed",
+                "r_data",
+                "diff",
+                "versions_yml",
+                "list_sections",
+                "list_templates",
+                "init_template"
+            ]
+        )]
+        resource_ledger: bool,
         #[arg(
             long = "versions-yml",
             value_name = "PATH",
@@ -2291,6 +2307,7 @@ async fn main() -> Result<()> {
             r_data,
             diff,
             acct,
+            resource_ledger,
             versions_yml,
         } => {
             handle_report(crate::commands::output::ReportArgs {
@@ -2312,6 +2329,7 @@ async fn main() -> Result<()> {
                 r_data,
                 diff,
                 acct,
+                resource_ledger,
                 versions_yml,
             })
             .await?

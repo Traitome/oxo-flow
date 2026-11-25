@@ -82,6 +82,7 @@ async fn record_processing_failure(
     tracing::error!(rule = %rule, error = %error, log_message);
     let required = config.get_rule(rule).map(|r| r.required).unwrap_or(true);
     let record = oxo_flow_core::executor::JobRecord {
+        resources: None,
         signal: None,
         rule: rule.to_string(),
         status: oxo_flow_core::executor::JobStatus::Failed,
@@ -144,8 +145,13 @@ enum PreSkipDecision {
 /// synthetic success record, skip counter, narration, and progress bar.
 /// Shared by the existence-only path and the checksum-verified path so
 /// both emit byte-identical accounting.
+///
+/// Also persists a skip marker as the rule's LATEST attempt (issue #1371
+/// review I4): `completed_rules` keeps it for reuse, but without the marker
+/// `report --resource-ledger` would present the previous run's benchmark and
+/// timestamps as this run's work.
 #[allow(clippy::too_many_arguments)]
-fn mark_pre_completed(
+async fn mark_pre_completed(
     rule_name: &str,
     submitted: &mut HashSet<String>,
     sched: &mut oxo_flow_core::scheduler::SchedulerState,
@@ -155,9 +161,18 @@ fn mark_pre_completed(
     is_tty: bool,
     run_log: Option<&SharedRunLog>,
     progress: &indicatif::ProgressBar,
+    checkpoint: &Arc<Mutex<CheckpointState>>,
 ) {
+    {
+        let mut ck = checkpoint.lock().await;
+        // Mark the latest attempt without touching the last real
+        // rule_runs record. The caller saves the checkpoint once after the
+        // whole pre-skip round — one fsync instead of one per rule.
+        ck.record_skipped_attempt(rule_name, "outputs up-to-date");
+    }
     submitted.insert(rule_name.to_string());
     sched.mark_completed(oxo_flow_core::executor::JobRecord {
+        resources: None,
         signal: None,
         rule: rule_name.to_string(),
         status: oxo_flow_core::executor::JobStatus::Success,
@@ -333,19 +348,24 @@ pub(crate) async fn run_scheduler_loop(ctx: SchedulerLoopContext<'_>) -> anyhow:
         }
     }
     // Verdicts after the lock release (bulk hashing on the blocking pool).
+    let had_pre_skip_candidates = !pre_skip_decisions.is_empty();
     for (rule_name, decision) in pre_skip_decisions {
         match decision {
-            PreSkipDecision::Mark => mark_pre_completed(
-                &rule_name,
-                &mut submitted,
-                &mut sched,
-                config,
-                workdir_actual.as_ref(),
-                skipped_count.as_ref(),
-                is_tty,
-                Some(run_log),
-                progress,
-            ),
+            PreSkipDecision::Mark => {
+                mark_pre_completed(
+                    &rule_name,
+                    &mut submitted,
+                    &mut sched,
+                    config,
+                    workdir_actual.as_ref(),
+                    skipped_count.as_ref(),
+                    is_tty,
+                    Some(run_log),
+                    progress,
+                    checkpoint,
+                )
+                .await
+            }
             PreSkipDecision::Verify(rule, scope, submap) => {
                 if oxo_flow_core::executor::checkpoint::should_skip_rule_with_checksums_async(
                     &rule,
@@ -365,12 +385,21 @@ pub(crate) async fn run_scheduler_loop(ctx: SchedulerLoopContext<'_>) -> anyhow:
                         is_tty,
                         Some(run_log),
                         progress,
-                    );
+                        checkpoint,
+                    )
+                    .await;
                 }
                 // else: a recorded hash diverges from the file on disk —
                 // decline the skip and leave the rule unsubmitted so the
                 // executor's freshness gate re-executes it (issue #1013 E6).
             }
+        }
+    }
+    // One save for every skip marker this round (instead of one per rule).
+    if had_pre_skip_candidates {
+        let ck = checkpoint.lock().await;
+        if let Err(e) = ck.save_to_file_async(checkpoint_path).await {
+            tracing::warn!("Failed to save checkpoint (pre-completed skips): {e}");
         }
     }
 
@@ -631,6 +660,7 @@ pub(crate) async fn run_scheduler_loop(ctx: SchedulerLoopContext<'_>) -> anyhow:
                 blocked.lock().await.push((rule_name.clone(), dep));
                 submitted.insert(rule_name.clone());
                 sched.mark_completed(oxo_flow_core::executor::JobRecord {
+                    resources: None,
                     signal: None,
                     rule: rule_name.clone(),
                     status: oxo_flow_core::executor::JobStatus::Skipped,
@@ -1077,6 +1107,7 @@ pub(crate) async fn run_scheduler_loop(ctx: SchedulerLoopContext<'_>) -> anyhow:
                     frs.insert(rule_name.clone());
                 }
                 let record = oxo_flow_core::executor::JobRecord {
+                    resources: None,
                     signal: None,
                     rule: rule_name.clone(),
                     status: oxo_flow_core::executor::JobStatus::Failed,

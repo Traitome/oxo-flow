@@ -12,6 +12,7 @@ use super::{
 };
 use crate::error::{OxoFlowError, Result};
 use crate::executor::{JobRecord, JobStatus};
+use crate::resource_ledger::{ResourceSource, ResourceUsage};
 use chrono::{DateTime, Utc};
 use std::collections::{
     BTreeMap, {HashMap, HashSet},
@@ -454,6 +455,7 @@ impl BackendDriver {
                 if is_blocked {
                     blocked.insert(name.clone());
                     records.push(JobRecord {
+                        resources: None,
                         signal: None,
                         rule: name.clone(),
                         status: JobStatus::Skipped,
@@ -522,6 +524,7 @@ impl BackendDriver {
                         // a declared caption from, so the record's caption is
                         // always None here.
                         records.push(JobRecord {
+                            resources: None,
                             signal: None,
                             rule: name.clone(),
                             status: JobStatus::Skipped,
@@ -1031,7 +1034,10 @@ impl BackendDriver {
                                 let target = f.array_base.as_deref().unwrap_or(id);
                                 if target == probe {
                                     statuses.insert(id.clone(), rec.status);
-                                    accounting.insert(id.clone(), rec);
+                                    // TerminalRecord is no longer Copy (it
+                                    // carries the provenance bundle), so the
+                                    // aggregate is cloned per element.
+                                    accounting.insert(id.clone(), rec.clone());
                                 }
                             }
                         }
@@ -1231,7 +1237,7 @@ impl BackendDriver {
                     // submit-to-settle, so wall time stops absorbing queue
                     // wait (issue #1132 F2). With no duration the record is
                     // `None` and submit-to-settle stays the fallback.
-                    let acct = accounting.get(&job_id).copied().map(|a| {
+                    let acct = accounting.get(&job_id).cloned().map(|a| {
                         if base_only_array.is_some() {
                             TerminalRecord {
                                 status: a.status,
@@ -1239,6 +1245,11 @@ impl BackendDriver {
                                 elapsed_secs: a.elapsed_secs,
                                 max_rss_mb: None,
                                 cpu_seconds: None,
+                                // Per-element I/O, wait, and allocation are the
+                                // aggregate's numbers, not this element's —
+                                // withheld exactly like memory and CPU, with
+                                // the source note saying why.
+                                resources: withheld_array_resources(&a),
                             }
                         } else {
                             a
@@ -1249,6 +1260,7 @@ impl BackendDriver {
                     // recomputed from it so `benchmarks.wall_time_secs`
                     // stops silently including queue wait.
                     let started_at = acct
+                        .as_ref()
                         .and_then(|a| a.elapsed_secs)
                         .and_then(|s| i64::try_from(s).ok())
                         .and_then(|s| observed_at.checked_sub_signed(chrono::Duration::seconds(s)))
@@ -1325,9 +1337,10 @@ impl BackendDriver {
                                 ),
                                 "COMPLETED",
                                 Some((f.submitted_at, observed_at)),
-                                acct,
+                                acct.clone(),
                             ));
                             JobRecord {
+                                resources: terminal_resources(self.backend.name(), acct.as_ref()),
                                 signal: None,
                                 rule: f.rule.clone(),
                                 status: JobStatus::Success,
@@ -1340,7 +1353,7 @@ impl BackendDriver {
                                 // accounting record the code is unknown, not
                                 // 0 — the same rule the Failed branch applies
                                 // below (issue #1132 / ledger RB-06).
-                                exit_code: acct.and_then(|a| a.exit_code),
+                                exit_code: acct.as_ref().and_then(|a| a.exit_code),
                                 stdout: None,
                                 stderr: None,
                                 command: Some(crate::executor::process::mask_sensitive(
@@ -1349,8 +1362,11 @@ impl BackendDriver {
                                 )),
                                 retries: 0,
                                 skip_reason: base_only_array.clone(),
-                                max_rss_mb: acct.and_then(|a| a.max_rss_mb),
-                                cpu_seconds: acct.and_then(|a| a.cpu_seconds).map(|s| s as f64),
+                                max_rss_mb: acct.as_ref().and_then(|a| a.max_rss_mb),
+                                cpu_seconds: acct
+                                    .as_ref()
+                                    .and_then(|a| a.cpu_seconds)
+                                    .map(|s| s as f64),
                                 caption: crate::executor::process::rule_report_caption(
                                     &plan.rules[&f.rule].rule,
                                     &plan.rules[&f.rule].workdir,
@@ -1364,7 +1380,7 @@ impl BackendDriver {
                                 "",
                                 "FAILED",
                                 Some((f.submitted_at, observed_at)),
-                                acct,
+                                acct.clone(),
                             ));
                             // Fail fast, mirroring the local executor's
                             // abort-on-first-failure default (run.rs): the
@@ -1419,6 +1435,7 @@ impl BackendDriver {
                                 );
                             }
                             JobRecord {
+                                resources: terminal_resources(self.backend.name(), acct.as_ref()),
                                 signal: None,
                                 rule: f.rule.clone(),
                                 status: JobStatus::Failed,
@@ -1428,7 +1445,7 @@ impl BackendDriver {
                                 // Without accounting the code is unknown, not
                                 // 1: reporting a rule that exited 7 as 1 is a
                                 // wrong answer where none was available.
-                                exit_code: acct.and_then(|a| a.exit_code),
+                                exit_code: acct.as_ref().and_then(|a| a.exit_code),
                                 stdout: None,
                                 stderr: None,
                                 command: Some(crate::executor::process::mask_sensitive(
@@ -1437,8 +1454,11 @@ impl BackendDriver {
                                 )),
                                 retries: 0,
                                 skip_reason: base_only_array.clone(),
-                                max_rss_mb: acct.and_then(|a| a.max_rss_mb),
-                                cpu_seconds: acct.and_then(|a| a.cpu_seconds).map(|s| s as f64),
+                                max_rss_mb: acct.as_ref().and_then(|a| a.max_rss_mb),
+                                cpu_seconds: acct
+                                    .as_ref()
+                                    .and_then(|a| a.cpu_seconds)
+                                    .map(|s| s as f64),
                                 caption: crate::executor::process::rule_report_caption(
                                     &plan.rules[&f.rule].rule,
                                     &plan.rules[&f.rule].workdir,
@@ -1446,13 +1466,14 @@ impl BackendDriver {
                             }
                         }
                         BackendJobStatus::Cancelled => JobRecord {
+                            resources: terminal_resources(self.backend.name(), acct.as_ref()),
                             signal: None,
                             rule: f.rule.clone(),
                             status: JobStatus::Cancelled,
                             enqueued_at: Some(f.submitted_at),
                             started_at: Some(started_at),
                             finished_at: Some(observed_at),
-                            exit_code: acct.and_then(|a| a.exit_code),
+                            exit_code: acct.as_ref().and_then(|a| a.exit_code),
                             stdout: None,
                             stderr: None,
                             command: Some(crate::executor::process::mask_sensitive(
@@ -1465,8 +1486,11 @@ impl BackendDriver {
                                     .clone()
                                     .unwrap_or_else(|| "cancelled".into()),
                             ),
-                            max_rss_mb: acct.and_then(|a| a.max_rss_mb),
-                            cpu_seconds: acct.and_then(|a| a.cpu_seconds).map(|s| s as f64),
+                            max_rss_mb: acct.as_ref().and_then(|a| a.max_rss_mb),
+                            cpu_seconds: acct
+                                .as_ref()
+                                .and_then(|a| a.cpu_seconds)
+                                .map(|s| s as f64),
                             caption: crate::executor::process::rule_report_caption(
                                 &plan.rules[&f.rule].rule,
                                 &plan.rules[&f.rule].workdir,
@@ -1580,6 +1604,7 @@ impl BackendDriver {
                         Some(&reason),
                     );
                     interrupted.push(JobRecord {
+                        resources: None,
                         signal: Some(sig.signum),
                         rule: f.rule.clone(),
                         // Failed, not a fabricated exit: the job was killed
@@ -1787,7 +1812,7 @@ fn write_status_full(
         let fmt = |t: DateTime<Utc>| t.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
         fields.push(format!(r#""submitted_at":"{}""#, fmt(submitted)));
         fields.push(format!(r#""finished_at":"{}""#, fmt(observed)));
-        if let Some(elapsed) = acct.and_then(|a| a.elapsed_secs) {
+        if let Some(elapsed) = acct.as_ref().and_then(|a| a.elapsed_secs) {
             let wait = (observed - submitted)
                 .num_seconds()
                 .saturating_sub(elapsed as i64)
@@ -1813,6 +1838,70 @@ fn write_status_full(
     write_private(job_dir.join("status.json").as_path(), body.as_bytes())
 }
 
+/// Normalized resource record for a settled rule (issue #1371): the exact
+/// peak-RSS bytes (from the accounting store's MB figure), I/O, scheduler
+/// wait, and node/core allocation, always carrying a source.
+///
+/// With no accounting record at all, the source still names the backend and
+/// says explicitly that nothing was reported — a cloud backend whose API
+/// exposes no usage numbers must not look like a measured zero.
+fn terminal_resources(backend: &str, acct: Option<&TerminalRecord>) -> Option<ResourceUsage> {
+    match acct {
+        Some(record) => {
+            let usage = record.resources.clone().unwrap_or_default();
+            let source = usage.source.unwrap_or_else(|| ResourceSource {
+                backend: backend.to_string(),
+                tool: "none".to_string(),
+                version: None,
+                note: Some(
+                    "the accounting record carried no resource measurements for this job"
+                        .to_string(),
+                ),
+                raw_fields: BTreeMap::new(),
+            });
+            Some(ResourceUsage {
+                max_rss_bytes: record.max_rss_mb.map(|mb| mb.saturating_mul(1024 * 1024)),
+                // Persisted here too so a FAILED/CANCELLED rule keeps the
+                // CPU the scheduler measured (it has no benchmark record).
+                cpu_seconds: record.cpu_seconds.map(|secs| secs as f64),
+                source: Some(source),
+                ..usage
+            })
+        }
+        None => Some(ResourceUsage::source_only(ResourceSource {
+            backend: backend.to_string(),
+            tool: "none".to_string(),
+            version: None,
+            note: Some(
+                "no scheduler accounting record was available for this job; resource \
+                 measurements are unknown, not zero"
+                    .to_string(),
+            ),
+            raw_fields: BTreeMap::new(),
+        })),
+    }
+}
+
+/// Withdraw an array aggregate's per-process resource numbers from one
+/// element's record (issue #1132 / RB-06): the I/O, wait, and allocation
+/// belong to whichever element the store reported as the array, not to this
+/// one. The source is kept with a note naming the aggregate so the ledger
+/// can explain the unknown metrics.
+fn withheld_array_resources(aggregate: &TerminalRecord) -> Option<ResourceUsage> {
+    let usage = aggregate.resources.clone()?;
+    let mut source = usage.source;
+    if let Some(source) = &mut source {
+        source.note = Some(
+            "accounting record is the array aggregate; per-element resource values withheld"
+                .to_string(),
+        );
+    }
+    Some(ResourceUsage {
+        source,
+        ..ResourceUsage::default()
+    })
+}
+
 /// Push a Failed record for a rule whose checkpoint re-entry hook errored
 /// (issue #78): the manifest is unreadable, so the rule counts as failed
 /// even though the backend reported the job Completed. Returns the record
@@ -1824,6 +1913,7 @@ fn return_record_failure(
     e: &OxoFlowError,
 ) -> JobRecord {
     let record = JobRecord {
+        resources: None,
         signal: None,
         rule: f.rule.clone(),
         status: JobStatus::Failed,
@@ -3632,7 +3722,7 @@ shell = "echo asm > out/{assembler}.txt"
             Ok(String::new())
         }
         async fn terminal_status(&self, job_id: &str) -> Option<TerminalRecord> {
-            self.inner.lock().unwrap().accounting.get(job_id).copied()
+            self.inner.lock().unwrap().accounting.get(job_id).cloned()
         }
         fn polls_elements_directly(&self) -> bool {
             self.direct
@@ -3844,6 +3934,21 @@ shell = "echo asm > out/{assembler}.txt"
         // duration survives while the per-process numbers are withheld
         // (issue #1132 F2).
         let base_acct = TerminalRecord {
+            resources: Some(ResourceUsage {
+                io_read_bytes: Some(123),
+                io_write_bytes: Some(456),
+                scheduler_wait_secs: Some(9),
+                nodes: Some(2),
+                cores: Some(16),
+                source: Some(ResourceSource {
+                    backend: "pbs".to_string(),
+                    tool: "qstat -x".to_string(),
+                    version: None,
+                    note: None,
+                    raw_fields: BTreeMap::new(),
+                }),
+                ..ResourceUsage::default()
+            }),
             status: BackendJobStatus::Completed,
             exit_code: Some(0),
             elapsed_secs: Some(7),
@@ -3905,6 +4010,24 @@ shell = "echo asm > out/{assembler}.txt"
             assert_eq!(
                 rec.cpu_seconds, None,
                 "the aggregate's CPU must not be presented as the element's: {rec:?}"
+            );
+            // The aggregate's I/O, wait, and allocation are withheld the
+            // same way, and the source note names the aggregate so the
+            // ledger can explain why they are unknown.
+            let resources = rec.resources.as_ref().expect("source is kept");
+            assert_eq!(resources.io_read_bytes, None, "{rec:?}");
+            assert_eq!(resources.io_write_bytes, None, "{rec:?}");
+            assert_eq!(resources.scheduler_wait_secs, None, "{rec:?}");
+            assert_eq!(resources.nodes, None, "{rec:?}");
+            assert_eq!(resources.cores, None, "{rec:?}");
+            assert!(
+                resources
+                    .source
+                    .as_ref()
+                    .and_then(|s| s.note.as_deref())
+                    .unwrap_or_default()
+                    .contains("aggregate"),
+                "the source must name the aggregate: {rec:?}"
             );
             // ... but its DURATION is the shared array allocation's, which
             // IS how long this element ran. Before the F2 fix the base-only
@@ -3977,6 +4100,69 @@ shell = "echo asm > out/{assembler}.txt"
             records[0].exit_code, None,
             "missing accounting is unknown, not exit code 0"
         );
+        // The ledger's source still names the backend and says explicitly
+        // that nothing was reported — an accounting-less backend (every
+        // cloud backend in this adapter) must not look like a measured zero.
+        let usage = records[0]
+            .resources
+            .as_ref()
+            .expect("the driver always attaches a resource source");
+        assert_eq!(usage.max_rss_bytes, None);
+        let source = usage.source.as_ref().expect("source is attached");
+        assert_eq!(source.backend, "mock");
+        assert_eq!(source.tool, "none");
+        assert!(
+            source
+                .note
+                .as_deref()
+                .unwrap_or_default()
+                .contains("unknown, not zero"),
+            "{source:?}"
+        );
+    }
+
+    #[test]
+    fn terminal_resources_carry_scheduler_cpu_and_source() {
+        // Review I5/I6 + re-review N2: the resource bundle is built for
+        // EVERY terminal status (Completed/Failed/Cancelled), so a
+        // scheduler-measured CPU is never lost on a rule without a
+        // benchmark record.
+        for status in [
+            BackendJobStatus::Completed,
+            BackendJobStatus::Failed,
+            BackendJobStatus::Cancelled,
+        ] {
+            let record = TerminalRecord {
+                status,
+                cpu_seconds: Some(70),
+                max_rss_mb: Some(512),
+                resources: Some(ResourceUsage {
+                    io_read_bytes: Some(123),
+                    source: Some(ResourceSource {
+                        backend: "slurm".to_string(),
+                        tool: "sacct".to_string(),
+                        version: None,
+                        note: None,
+                        raw_fields: BTreeMap::from([(
+                            "TotalCPU".to_string(),
+                            "00:01:10".to_string(),
+                        )]),
+                    }),
+                    ..ResourceUsage::default()
+                }),
+                ..TerminalRecord::default()
+            };
+            let usage = terminal_resources("slurm", Some(&record)).expect("source is attached");
+            assert_eq!(usage.cpu_seconds, Some(70.0), "{status:?}");
+            assert_eq!(usage.max_rss_bytes, Some(512 * 1024 * 1024), "{status:?}");
+            assert_eq!(usage.io_read_bytes, Some(123), "{status:?}");
+            let source = usage.source.expect("source kept");
+            assert_eq!(source.tool, "sacct");
+            assert_eq!(
+                source.raw_fields.get("TotalCPU").map(String::as_str),
+                Some("00:01:10")
+            );
+        }
     }
 
     /// Ledger RB-06: when a backend polls elements directly (SLURM, and the

@@ -11,8 +11,13 @@
 //! - **Peak RSS**: the summed RSS of the subtree in bytes.
 //! - **CPU time**: `Process::cpu_usage()/100 × SAMPLE_INTERVAL_SECS`
 //!   accumulated per tick (integer microseconds, float-free atomics).
+//! - **I/O bytes** (Linux only, issue #1371): `/proc/<pid>/io`'s
+//!   `read_bytes`/`write_bytes` deltas summed over the subtree. A process
+//!   that exits stops being visible, so its last cumulative counters are
+//!   kept per pid and only the deltas between ticks are added — the total
+//!   never shrinks when a child disappears. `None` off Linux.
 //!
-//! Both metrics are **sampled**, not exact `getrusage` values: sub-interval
+//! All metrics are **sampled**, not exact `getrusage` values: sub-interval
 //! spikes can be missed, and CPU seconds assume every tick spanned exactly
 //! `SAMPLE_INTERVAL_SECS`. That is sufficient for bottleneck detection
 //! (sustained pressure), and is documented in the diagnostics API.
@@ -25,8 +30,12 @@ use std::time::Duration;
 use sysinfo::ProcessesToUpdate;
 use tokio::sync::Notify;
 
+/// Sampling cadence in milliseconds. Public so the resource ledger's source
+/// metadata can name the method without duplicating the constant.
+pub const SAMPLE_INTERVAL_MILLIS: u64 = 200;
+
 /// Sample interval for peak detection.
-const SAMPLE_INTERVAL: Duration = Duration::from_millis(200);
+const SAMPLE_INTERVAL: Duration = Duration::from_millis(SAMPLE_INTERVAL_MILLIS);
 
 /// Seconds of wall time between sample ticks — the per-tick basis for
 /// CPU-time accumulation (`cpu_usage()/100 × SAMPLE_INTERVAL_SECS`).
@@ -40,8 +49,14 @@ struct TrackedProcess {
     peak: AtomicU64,
     /// Sampled CPU time in microseconds.
     cpu_micros: AtomicU64,
+    /// Bytes read from disk across the subtree (Linux only).
+    io_read: AtomicU64,
+    /// Bytes written to disk across the subtree (Linux only).
+    io_write: AtomicU64,
     /// Set once the sampler has seen the process alive during a tick.
     seen: AtomicBool,
+    /// Set once at least one `/proc/<pid>/io` read succeeded.
+    io_seen: AtomicBool,
 }
 
 /// Shared background sampler: one per `LocalExecutor` (i.e. one per run
@@ -101,6 +116,17 @@ impl RssSampler {
                             tracing::warn!("sysinfo init failed — peak-RSS metering disabled");
                             return;
                         };
+                        // Per tracked root → per descendant pid → the last
+                        // cumulative `(read_bytes, write_bytes)` read from
+                        // /proc. Deltas are folded into the root's totals;
+                        // keeping the last value lets a disappearing child
+                        // keep its final contribution (its counters vanish
+                        // with it).
+                        #[cfg(target_os = "linux")]
+                        let mut io_last: HashMap<
+                            u32,
+                            HashMap<u32, (u64, u64)>,
+                        > = HashMap::new();
                         loop {
                             tokio::select! {
                                 () = wake.notified() => {}
@@ -117,6 +143,8 @@ impl RssSampler {
                                     .lock()
                                     .unwrap_or_else(|poisoned| poisoned.into_inner());
                                 if guard.is_empty() {
+                                    #[cfg(target_os = "linux")]
+                                    io_last.clear();
                                     continue;
                                 }
                                 guard.iter().map(|(pid, tp)| (*pid, tp.clone())).collect()
@@ -169,6 +197,42 @@ impl RssSampler {
                                     subtree_rss_bytes(&children_of, &system, *pid),
                                     Ordering::Relaxed,
                                 );
+                                #[cfg(target_os = "linux")]
+                                {
+                                    let live = subtree_pids(&children_of, *pid);
+                                    let per_root = io_last.entry(*pid).or_default();
+                                    let mut sampled = false;
+                                    for child in &live {
+                                        if let Some((read, write)) = read_proc_io(*child) {
+                                            let (last_read, last_write) =
+                                                per_root.get(child).copied().unwrap_or((0, 0));
+                                            // A counter that moved backwards is
+                                            // a reused pid, not negative I/O.
+                                            tp.io_read.fetch_add(
+                                                read.saturating_sub(last_read),
+                                                Ordering::Relaxed,
+                                            );
+                                            tp.io_write.fetch_add(
+                                                write.saturating_sub(last_write),
+                                                Ordering::Relaxed,
+                                            );
+                                            per_root.insert(*child, (read, write));
+                                            sampled = true;
+                                        }
+                                    }
+                                    let live: std::collections::HashSet<u32> =
+                                        live.into_iter().collect();
+                                    per_root.retain(|child, _| live.contains(child));
+                                    if sampled {
+                                        tp.io_seen.store(true, Ordering::Relaxed);
+                                    }
+                                }
+                            }
+                            #[cfg(target_os = "linux")]
+                            {
+                                let live_roots: std::collections::HashSet<u32> =
+                                    snapshot.iter().map(|(pid, _)| *pid).collect();
+                                io_last.retain(|root, _| live_roots.contains(root));
                             }
                         }
                     });
@@ -190,7 +254,10 @@ impl RssSampler {
         let tracked_process = Arc::new(TrackedProcess {
             peak: AtomicU64::new(0),
             cpu_micros: AtomicU64::new(0),
+            io_read: AtomicU64::new(0),
+            io_write: AtomicU64::new(0),
             seen: AtomicBool::new(false),
+            io_seen: AtomicBool::new(false),
         });
         // Same poison recovery the tick path documents (issue #194 §3.5):
         // `track` runs on the rule launch path — converting poisoning into
@@ -253,6 +320,25 @@ impl RssHandle {
             .load(Ordering::SeqCst)
             .then(|| self.tracked_process.cpu_micros.load(Ordering::SeqCst) as f64 / 1_000_000.0)
     }
+
+    /// Sampled disk I/O of the process subtree as `(read_bytes,
+    /// write_bytes)`, summed from `/proc/<pid>/io` deltas.
+    ///
+    /// **Linux only.** `None` when no `/proc/<pid>/io` read ever succeeded
+    /// (including every non-Linux platform) — unknown, never zero. The
+    /// counters are deltas between ticks, so a child that exits keeps the
+    /// bytes it already reported.
+    pub fn io_bytes(&self) -> Option<(u64, u64)> {
+        self.tracked_process
+            .io_seen
+            .load(Ordering::Relaxed)
+            .then(|| {
+                (
+                    self.tracked_process.io_read.load(Ordering::Relaxed),
+                    self.tracked_process.io_write.load(Ordering::Relaxed),
+                )
+            })
+    }
 }
 
 impl Drop for RssHandle {
@@ -268,6 +354,44 @@ impl Drop for RssHandle {
 /// `children_of` is the parent→children map over the CURRENT process table,
 /// built once per tick by the caller and shared by every tracked root: the
 /// walk is then O(subtree) instead of a full-table fixpoint per rule.
+#[cfg(target_os = "linux")]
+fn subtree_pids(children_of: &HashMap<u32, Vec<u32>>, root: u32) -> Vec<u32> {
+    let mut pids = Vec::new();
+    let mut stack = vec![root];
+    let mut visited = std::collections::HashSet::new();
+    while let Some(pid) = stack.pop() {
+        if !visited.insert(pid) {
+            continue;
+        }
+        pids.push(pid);
+        if let Some(children) = children_of.get(&pid) {
+            stack.extend_from_slice(children);
+        }
+    }
+    pids
+}
+
+/// Cumulative `(read_bytes, write_bytes)` from `/proc/<pid>/io`.
+///
+/// `read_bytes`/`write_bytes` count bytes that actually reached storage
+/// (page-cache hits are excluded), which is the closest Linux analogue of
+/// the scheduler's disk-accounting fields. Unreadable processes (permission,
+/// race with exit) yield `None` — one missing tick, never a fabricated zero.
+#[cfg(target_os = "linux")]
+fn read_proc_io(pid: u32) -> Option<(u64, u64)> {
+    let text = std::fs::read_to_string(format!("/proc/{pid}/io")).ok()?;
+    let mut read = None;
+    let mut write = None;
+    for line in text.lines() {
+        if let Some(value) = line.strip_prefix("read_bytes:") {
+            read = value.trim().parse::<u64>().ok();
+        } else if let Some(value) = line.strip_prefix("write_bytes:") {
+            write = value.trim().parse::<u64>().ok();
+        }
+    }
+    Some((read?, write?))
+}
+
 fn subtree_rss_bytes(
     children_of: &HashMap<u32, Vec<u32>>,
     system: &sysinfo::System,
@@ -345,5 +469,60 @@ mod tests {
         fn assert_sync<T: Sync>() {}
         assert_send::<RssSampler>();
         assert_sync::<RssSampler>();
+    }
+
+    /// Linux has `/proc/<pid>/io`; the sampler must attribute the child's
+    /// disk writes to the subtree (issue #1371).
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn sampler_reports_subtree_io_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("payload.bin");
+        let mut child = match std::process::Command::new("python3")
+            .args([
+                "-c",
+                // fsync forces the bytes to the storage layer, which is what
+                // `/proc/<pid>/io`'s write_bytes counts.
+                "import os,sys,time; f=open(sys.argv[1],'wb'); f.write(b'x'*(8*1024*1024)); \
+                 f.flush(); os.fsync(f.fileno()); time.sleep(0.6)",
+            ])
+            .arg(&out)
+            .spawn()
+        {
+            Ok(c) => c,
+            Err(_) => {
+                eprintln!("skipped: python3 not available");
+                return;
+            }
+        };
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async {
+            let sampler = RssSampler::new();
+            let handle = sampler.track(child.id());
+            assert!(child.wait().unwrap().success());
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            let (_read, write) = handle
+                .io_bytes()
+                .expect("linux /proc/<pid>/io must be sampled");
+            // Page-cache writes may undercount `write_bytes`, so assert the
+            // direction rather than an exact size.
+            assert!(write > 0, "expected disk writes to be attributed: {write}");
+        });
+    }
+
+    /// Off Linux no `/proc/<pid>/io` exists: I/O is unknown (None), never a
+    /// fabricated zero.
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn sampler_reports_unknown_io_off_linux() {
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async {
+            let sampler = RssSampler::new();
+            let handle = sampler.track(child.id());
+            assert!(child.wait().unwrap().success());
+            tokio::time::sleep(Duration::from_millis(SAMPLE_INTERVAL_MILLIS * 2)).await;
+            assert_eq!(handle.io_bytes(), None);
+        });
     }
 }

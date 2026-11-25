@@ -9,6 +9,10 @@ use oxo_flow_core::config::WorkflowConfig;
 use oxo_flow_core::dag::{MetroGranularity, WorkflowDag};
 use oxo_flow_core::executor::CheckpointState;
 use oxo_flow_core::report::{Report, ReportContent, ReportSection, TemplateEngine};
+use oxo_flow_core::resource_ledger::{
+    LedgerTotals, RawSchedulerTotals, ResourceSource, TotalsSample, build_resource_ledger,
+    executed_rule_names, totals_from_samples,
+};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -246,6 +250,7 @@ pub struct ReportArgs {
     pub r_data: Option<PathBuf>,
     pub diff: Option<PathBuf>,
     pub acct: Option<PathBuf>,
+    pub resource_ledger: bool,
     pub versions_yml: Option<PathBuf>,
 }
 
@@ -528,6 +533,7 @@ pub async fn handle_report(args: ReportArgs) -> Result<()> {
         r_data,
         diff,
         acct,
+        resource_ledger,
         versions_yml,
     } = args;
 
@@ -643,6 +649,10 @@ pub async fn handle_report(args: ReportArgs) -> Result<()> {
         eprintln!("  {} {}", "⚠".yellow(), msg);
     }
 
+    // The resource ledger accepts only json/csv and never falls back to the
+    // report format tiers, so keep the raw -f value before it is resolved.
+    let explicit_format = format.clone();
+
     // Format: explicit -f wins; otherwise infer from the -o extension;
     // otherwise the first [report].format entry; otherwise html
     // (issue #83 P2-2; the config tier added by issue #1013 H2).
@@ -686,6 +696,53 @@ pub async fn handle_report(args: ReportArgs) -> Result<()> {
     } else {
         load_checkpoint(&checkpoint_path, strict)?
     };
+
+    // ── Normalized resource ledger (issue #1371) ─────────────────────────
+    // A read-only view over the checkpoint: one document (JSON or CSV) with
+    // per-rule metrics, run totals, source metadata, and reconciliation
+    // conflicts against an optional raw `--acct` export. Unknown metrics are
+    // absent, never zero. A ledger without a checkpoint is meaningless, so
+    // it is a data-source failure (exit 2, the `--strict` contract).
+    if resource_ledger {
+        let Some(cp) = checkpoint.as_ref() else {
+            eprintln!(
+                "  {} No checkpoint found at {} — the resource ledger describes an \
+                 executed run; run the workflow first.",
+                "✗".red(),
+                checkpoint_path.display()
+            );
+            std::process::exit(2);
+        };
+        let ledger_format = resolve_ledger_format(explicit_format.as_deref(), output.as_deref())?;
+        // The raw export is reduced to the rules that actually executed in
+        // this checkpoint: a whole-account `sacct -a` export must not
+        // inflate the raw side with unrelated jobs (review I2).
+        let executed = executed_rule_names(cp);
+        let raw = acct
+            .as_deref()
+            .map(|path| load_raw_accounting_totals(path, &executed))
+            .transpose()?;
+        let ledger =
+            build_resource_ledger(cp, Some(workflow.display().to_string()), None, raw.as_ref());
+        let rendered = match ledger_format.as_str() {
+            "csv" => ledger.to_csv(),
+            _ => ledger.to_json().map_err(|e| anyhow::anyhow!(e))?,
+        };
+        let to_stdout = output.as_deref().is_none_or(|path| path == Path::new("-"));
+        if to_stdout {
+            print!("{rendered}");
+        } else if let Some(path) = output.as_deref() {
+            std::fs::write(path, &rendered).with_context(|| {
+                format!("failed to write resource ledger to {}", path.display())
+            })?;
+            eprintln!(
+                "  {} Resource ledger written to {}",
+                "✓".green(),
+                path.display()
+            );
+        }
+        return Ok(());
+    }
 
     // AI result interpretation: plain-language summary of outcomes,
     // caveats, and next steps. It goes to stderr (never pollutes the
@@ -1425,6 +1482,114 @@ fn print_checkpoint_diff(
     }
 }
 
+// ── resource ledger helpers (issue #1371) ────────────────────────────────────
+
+/// Resolve the ledger output format from `-f` (or the `-o` extension),
+/// defaulting to JSON. Report-only formats are rejected instead of being
+/// silently reinterpreted — `-f html --resource-ledger` is a usage error.
+fn resolve_ledger_format(explicit: Option<&str>, output: Option<&Path>) -> Result<String> {
+    let format = match explicit {
+        Some(value) => value.to_ascii_lowercase(),
+        None => match output
+            .and_then(|path| path.extension())
+            .and_then(|ext| ext.to_str())
+        {
+            Some("csv") => "csv".to_string(),
+            _ => "json".to_string(),
+        },
+    };
+    match format.as_str() {
+        "json" | "csv" => Ok(format),
+        other => {
+            anyhow::bail!("--resource-ledger emits json or csv (got -f {other}); omit -f for json")
+        }
+    }
+}
+
+/// Raw scheduler totals from an sacct-style CSV export: one merged batch row
+/// per executed rule (step rows are skipped by the shared merge), summed into
+/// the same shape the ledger uses.
+///
+/// This is an INDEPENDENT observation — the checkpoint's numbers came from
+/// `sacct` at settle time, this export is whatever the user collected later —
+/// which is exactly what makes reconciling them meaningful. Rows whose
+/// `JobName` is not an executed rule of this checkpoint (a whole-account
+/// export) are excluded and counted in the source note, so they can neither
+/// inflate `scheduler_totals` nor manufacture conflicts (review I2).
+fn load_raw_accounting_totals(
+    path: &Path,
+    executed: &std::collections::BTreeSet<String>,
+) -> Result<RawSchedulerTotals> {
+    let rows = parse_acct_csv(path)?;
+    let mut ignored: Vec<String> = rows
+        .iter()
+        .filter(|row| !executed.contains(&row.rule))
+        .map(|row| row.rule.clone())
+        .collect();
+    ignored.sort_unstable();
+    ignored.dedup();
+    let rows: Vec<AcctRow> = rows
+        .into_iter()
+        .filter(|row| executed.contains(&row.rule))
+        .collect();
+    let mut names: Vec<String> = rows.iter().map(|row| row.rule.clone()).collect();
+    names.sort_unstable();
+    names.dedup();
+    let merged = merge_acct_rows(rows, &names);
+
+    let mut note = format!("imported from {}", path.display());
+    if !ignored.is_empty() {
+        let shown = ignored
+            .iter()
+            .take(5)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", ");
+        let more = ignored.len().saturating_sub(5);
+        // "Not matched", not "not executed": a legitimately executed rule can
+        // carry a different sacct JobName (site truncation, or array elements
+        // sharing one base name), so the cause is not knowable here
+        // (issue #1371 re-review N3).
+        note.push_str(&format!(
+            "; ignored {} job name(s) not matched to an executed rule: {shown}{}",
+            ignored.len(),
+            if more > 0 {
+                format!(" (+{more} more)")
+            } else {
+                String::new()
+            }
+        ));
+    }
+    Ok(RawSchedulerTotals {
+        totals: acct_rows_totals(&merged),
+        source: ResourceSource {
+            backend: "slurm".to_string(),
+            tool: "sacct-csv".to_string(),
+            version: None,
+            note: Some(note),
+            raw_fields: BTreeMap::new(),
+        },
+        rules: merged.iter().map(|row| row.rule.clone()).collect(),
+    })
+}
+
+/// Totals over raw accounting rows through the ledger's shared accumulator,
+/// so additive/peak/completeness semantics cannot drift from the
+/// checkpoint side (review M4). I/O and scheduler wait are absent because
+/// the sacct CSV columns this importer accepts do not carry them.
+fn acct_rows_totals(rows: &[AcctRow]) -> LedgerTotals {
+    let samples: Vec<TotalsSample> = rows
+        .iter()
+        .map(|row| TotalsSample {
+            wall_time_secs: row.elapsed_secs,
+            cpu_seconds: row.cpu_secs,
+            max_rss_bytes: row.max_rss_mb.map(|mb| mb.saturating_mul(1024 * 1024)),
+            ..TotalsSample::default()
+        })
+        .collect();
+    totals_from_samples(rows.len(), rows.len(), &samples)
+}
+
 // ── sacct CSV accounting import (issue #83 P1-13) ────────────────────────────
 
 /// One parsed sacct row, matched to a workflow rule by JobName.
@@ -1478,7 +1643,10 @@ fn parse_hms_to_secs(value: &str) -> Option<f64> {
 /// the same job, issue #740); `T` (tebibytes) is also accepted as a
 /// harmless extension beyond sacct's documented K/M/G output. Suffixes are
 /// case-insensitive and base-1024; the result rounds UP so the table never
-/// under-reports a peak.
+/// under-reports a peak. A zero figure (`0`, `0K`, …) is sacct's "not
+/// reported" sentinel — the backend TerminalRecord parser treats it the same
+/// way, so the two sides of a reconciliation agree that it is UNKNOWN, not a
+/// measured zero (issue #1371 review I3).
 fn parse_maxrss_to_mb(value: &str) -> Option<u64> {
     let value = value.trim();
     if value.is_empty() {
@@ -1500,6 +1668,9 @@ fn parse_maxrss_to_mb(value: &str) -> Option<u64> {
         _ => (value, 1024u64),
     };
     let bytes = num.trim().parse::<f64>().ok()? * mult as f64;
+    if bytes <= 0.0 {
+        return None;
+    }
     Some((bytes / (1024.0 * 1024.0)).ceil() as u64)
 }
 
@@ -2207,7 +2378,11 @@ mod tests {
         // (issue #740 — they used to disagree 1024×).
         assert_eq!(parse_maxrss_to_mb("2048"), Some(2));
         assert_eq!(parse_maxrss_to_mb("123456789c"), Some(118)); // 117.7… rounds up
-        assert_eq!(parse_maxrss_to_mb("0"), Some(0));
+        // Zero is SLURM's "not reported" sentinel, matching the core
+        // TerminalRecord parser (review I3).
+        assert_eq!(parse_maxrss_to_mb("0"), None);
+        assert_eq!(parse_maxrss_to_mb("0K"), None);
+        assert_eq!(parse_maxrss_to_mb("0.0G"), None);
         assert_eq!(parse_maxrss_to_mb("  8G  "), Some(8192));
         assert_eq!(parse_maxrss_to_mb(""), None);
         assert_eq!(parse_maxrss_to_mb("12X"), None);

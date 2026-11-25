@@ -2023,6 +2023,7 @@ output = ["out/{{sample}}/d.txt"]
 
     fn success_record(rule: String) -> JobRecord {
         JobRecord {
+            resources: None,
             signal: None,
             rule,
             status: JobStatus::Success,
@@ -2229,6 +2230,7 @@ output = ["out/{sample}/{assembler}.txt"]
         // And once `a` completes, `c` becomes ready despite the absent `p`.
         let mut state = state;
         state.mark_completed(JobRecord {
+            resources: None,
             signal: None,
             rule: "a".to_string(),
             status: JobStatus::Success,
@@ -2260,6 +2262,7 @@ output = ["out/{sample}/{assembler}.txt"]
         assert_eq!(state.running_count(), 1);
 
         state.mark_completed(JobRecord {
+            resources: None,
             signal: None,
             rule: "a".to_string(),
             status: JobStatus::Success,
@@ -2328,6 +2331,7 @@ output = ["out/{sample}/{assembler}.txt"]
         // different (stuck) rule — reset only flips the named rule.
         let mut state = SchedulerState::new(&["a", "b"]);
         state.mark_completed(JobRecord {
+            resources: None,
             signal: None,
             rule: "a".to_string(),
             status: JobStatus::Success,
@@ -2888,6 +2892,7 @@ mod reentry_tests {
         let dag = two_rule_dag();
         let mut sched = SchedulerState::new(&["a"]);
         sched.mark_completed(JobRecord {
+            resources: None,
             signal: None,
             rule: "a".to_string(),
             status: JobStatus::Success,
@@ -2925,6 +2930,7 @@ mod reentry_tests {
         );
 
         sched.mark_completed(JobRecord {
+            resources: None,
             signal: None,
             rule: "b".to_string(),
             status: JobStatus::Success,

@@ -153,6 +153,18 @@ async fn execute_records_sampled_cpu_seconds() {
     // Threads sanity: even multi-core overshoot cannot exceed 32× wall time.
     assert!(cpu <= wall_secs * 32.0, "CPU {cpu}s vs wall {wall_secs}s");
 
+    // Issue #1371: a SUCCESSFUL attempt persists the normalized record,
+    // including the CPU the source measured (review I5/I6) — not just the
+    // failure arms.
+    let resources = record
+        .resources
+        .as_ref()
+        .expect("local executions persist a resource record");
+    assert_eq!(resources.cpu_seconds, Some(cpu));
+    let source = resources.source.as_ref().expect("source is recorded");
+    assert_eq!(source.backend, "local");
+    assert_eq!(source.tool, "sysinfo");
+
     let mut skipped = make_rule("skipped", "echo never");
     skipped.when = Some("false".to_string());
     let record = executor
@@ -161,6 +173,99 @@ async fn execute_records_sampled_cpu_seconds() {
         .unwrap();
     assert_eq!(record.status, JobStatus::Skipped);
     assert_eq!(record.cpu_seconds, None);
+    assert!(record.resources.is_none());
+}
+
+/// Issue #1371 review C1: a SUCCESSFUL command's sampled I/O must reach
+/// `record.resources` — the earlier fold only ran on the failure arms, so
+/// every successful local rule silently lost its I/O. Linux-only because
+/// the I/O source is `/proc/<pid>/io`.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn successful_rule_persists_sampled_io_bytes() {
+    if std::process::Command::new("python3")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        eprintln!("skipped: python3 not available");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let config = ExecutorConfig {
+        max_jobs: 1,
+        dry_run: false,
+        workdir: dir.path().to_path_buf(),
+        ..Default::default()
+    };
+    let executor = LocalExecutor::new(config);
+    // A long-lived writer (the sampled pid lives across several 200 ms
+    // ticks) that fsyncs each chunk so `/proc/<pid>/io`'s write_bytes — the
+    // bytes actually sent to storage — are non-zero.
+    let shell = "python3 -c \"import os,time; f=os.open('out.bin', os.O_WRONLY|os.O_CREAT); \
+                 [(os.write(f,b'x'*65536), os.fsync(f), time.sleep(0.1)) for _ in range(10)]; \
+                 time.sleep(0.2)\"";
+    let rule = make_rule("writer", shell);
+    let record = executor.execute_rule(&rule, &HashMap::new()).await.unwrap();
+    assert_eq!(record.status, JobStatus::Success);
+
+    let resources = record.resources.as_ref().expect("resource record");
+    let written = resources
+        .io_write_bytes
+        .expect("a successful attempt must fold its sampled I/O");
+    assert!(written > 0, "expected attributed disk writes: {written}");
+    assert_eq!(
+        resources
+            .source
+            .as_ref()
+            .unwrap()
+            .raw_fields
+            .get("io_source")
+            .map(String::as_str),
+        Some("proc")
+    );
+
+    // The measurement survives the checkpoint → ledger path.
+    let mut ck = CheckpointState::new();
+    ck.record_run(&record, DEFAULT_OUTPUT_TAIL_BYTES);
+    let ledger = crate::resource_ledger::build_resource_ledger(&ck, None, None, None);
+    assert_eq!(ledger.rules[0].status, "completed");
+    assert_eq!(ledger.rules[0].io_write_bytes, Some(written));
+    assert!(ledger.run.totals.io_write_bytes_complete);
+}
+
+/// Issue #1371 review I5/I6: a FAILED attempt has no benchmark record, but
+/// the CPU the sampler measured must still reach the ledger through
+/// `resource_usage`.
+#[tokio::test]
+async fn failed_rule_persists_sampled_cpu() {
+    let config = ExecutorConfig {
+        max_jobs: 1,
+        dry_run: false,
+        workdir: std::env::temp_dir(),
+        ..Default::default()
+    };
+    let executor = LocalExecutor::new(config);
+    let rule = make_rule(
+        "slow_fail",
+        "i=0; while [ $i -lt 800000 ]; do i=$((i+1)); done; exit 3",
+    );
+    let record = executor.execute_rule(&rule, &HashMap::new()).await.unwrap();
+    assert_eq!(record.status, JobStatus::Failed);
+    let cpu = record
+        .cpu_seconds
+        .expect("the busy failing rule spans sampler ticks");
+    let resources = record.resources.as_ref().expect("resource record");
+    assert_eq!(resources.cpu_seconds, Some(cpu));
+
+    let mut ck = CheckpointState::new();
+    ck.record_run(&record, DEFAULT_OUTPUT_TAIL_BYTES);
+    ck.mark_failed("slow_fail");
+    let ledger = crate::resource_ledger::build_resource_ledger(&ck, None, None, None);
+    assert_eq!(ledger.rules[0].status, "failed");
+    assert_eq!(ledger.rules[0].cpu_seconds, Some(cpu));
+    assert_eq!(ledger.run.totals.cpu_seconds, Some(cpu));
+    assert!(ledger.run.totals.cpu_seconds_complete);
 }
 
 #[tokio::test]
@@ -578,6 +683,7 @@ fn checkpoint_json_round_trip() {
 fn checkpoint_record_run_persists_diagnostics() {
     let mut state = CheckpointState::new();
     let record = JobRecord {
+        resources: None,
         signal: None,
         rule: "call".to_string(),
         status: JobStatus::Failed,
@@ -624,6 +730,7 @@ fn checkpoint_stderr_tail_is_bounded() {
     // Above DEFAULT_OUTPUT_TAIL_BYTES so truncation actually engages.
     let long = "x".repeat(DEFAULT_OUTPUT_TAIL_BYTES + 1_000);
     let record = JobRecord {
+        resources: None,
         signal: None,
         rule: "noisy".to_string(),
         status: JobStatus::Failed,
@@ -658,6 +765,7 @@ fn checkpoint_stdout_tail_is_bounded_and_masking_ready() {
     // Above DEFAULT_OUTPUT_TAIL_BYTES so truncation actually engages.
     let long = "y".repeat(DEFAULT_OUTPUT_TAIL_BYTES + 1_000);
     let record = JobRecord {
+        resources: None,
         signal: None,
         rule: "verbose".to_string(),
         status: JobStatus::Success,
@@ -684,6 +792,7 @@ fn checkpoint_stdout_tail_is_bounded_and_masking_ready() {
     // And an empty-stdout rule persists no field.
     let mut quiet = CheckpointState::new();
     let quiet_record = JobRecord {
+        resources: None,
         stdout: None,
         stderr: None,
         rule: "quiet".to_string(),
@@ -711,6 +820,7 @@ fn checkpoint_tail_configurable_small_and_multi_byte() {
     // cut never splits a multi-byte character.
     let mut state = CheckpointState::new();
     let record = JobRecord {
+        resources: None,
         signal: None,
         rule: "unicode".to_string(),
         status: JobStatus::Failed,

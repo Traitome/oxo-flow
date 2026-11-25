@@ -747,6 +747,15 @@ See [What a finished job records](cluster.md#what-a-finished-job-records)
 for the record format, the accounting-variance caveats, and the
 interrupt/re-attach semantics.
 
+Every executed rule — local or cluster — also persists a normalized
+`resource_usage` record into the checkpoint (issue #1371): exact peak-RSS
+bytes, I/O bytes when the source reports them (Linux `/proc/<pid>/io`,
+`sacct` disk averages), scheduler wait, node/core allocation, and the
+backend/tool/raw fields behind each number. It is reused by
+`oxo-flow report --resource-ledger` (see
+[`report`](report.md#resource-ledger-resource-ledger)); values no source
+reported stay absent, never `0`.
+
 ### Failed-rule output rollback
 
 A failed rule's declared outputs are rolled back: files created by the

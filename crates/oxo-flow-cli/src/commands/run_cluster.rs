@@ -809,6 +809,19 @@ pub(crate) async fn run_on_cluster(
         )
     };
     let to_run = submission.to_run;
+    // Issue #1371 review N1: mark preserved checkpoint work as NOT executed
+    // in this invocation before any submission — a cluster re-run with
+    // nothing to submit, or a subset submission, must not look like it
+    // performed the earlier run's work. Rules that settle through
+    // `fold_record` clear their marker on the terminal record; a crashed
+    // invocation keeps it (the rule did not complete there).
+    {
+        let mut ck = args.checkpoint.lock().await;
+        ck.begin_execution_pass();
+        if let Err(e) = ck.save_to_file_async(args.checkpoint_path).await {
+            tracing::warn!("Failed to save checkpoint at run start: {e}");
+        }
+    }
     if !submission.skipped_fresh.is_empty() {
         // Issue #1083 (suggestion 4): output existence is not completion.
         // Say when a rule is skipped on that heuristic alone, so a lost
@@ -1030,6 +1043,7 @@ pub(crate) async fn run_on_cluster(
             ck.mark_running(&rule);
             ck.record_run(
                 &oxo_flow_core::executor::JobRecord {
+                    resources: None,
                     signal: None,
                     rule: rule.clone(),
                     status: oxo_flow_core::executor::JobStatus::Running,
@@ -1922,6 +1936,7 @@ shell = "mkdir -p out/S1 && echo started > out/S1/done.txt && sleep 45 && echo d
         async fn fold_success(&self, provenance: &ClusterProvenance, rule: &str) {
             let now = chrono::Utc::now();
             let record = JobRecord {
+                resources: None,
                 rule: rule.to_string(),
                 status: JobStatus::Success,
                 enqueued_at: Some(now),

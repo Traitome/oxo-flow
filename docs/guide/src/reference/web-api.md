@@ -1010,6 +1010,8 @@ GET /api/runs/{id}/report
 ```
 The deterministic report object the report page renders: run identity, node statuses with timings, output file tree. Zero AI — the same object answers `report/ask` and feeds `report/visualize`. Like the diagnostics endpoint, the report summarizes only the newest 256 KiB of `execution.log`; the full log stays on `GET /api/runs/{id}/logs`. The report is **failure-aware**: a failed run's narrative headline names the failed rules and exit codes, and carries `run_status` + `failed_rules: [{rule, exit_code, stderr_tail, stdout_tail}]` from the checkpoint's structured failure data.
 
+The normalized resource/cost ledger (`oxo-flow.resource-ledger/v1`, issue #1371) is a **CLI surface**: `oxo-flow report --run <DIR> --resource-ledger -f json|csv` (optionally with `--acct <sacct.csv>` for reconciliation). This endpoint answers the SPA's report object and does not stream the ledger document; there is no ledger route. See [`report`](../commands/report.md#resource-ledger-resource-ledger) for the schema and unknown-vs-zero semantics, and [`run-on-cluster`](../how-to/run-on-cluster.md#resource-ledger-and-scheduler-limits) for the per-scheduler coverage matrix.
+
 ### Report Q&A
 ```
 POST /api/runs/{id}/report/ask

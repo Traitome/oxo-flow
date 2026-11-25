@@ -107,6 +107,7 @@ pub(crate) async fn terminate_on_signal(
         // real process exit in rule_runs/reports (the exact inverse of the
         // #498 evidence model, and undemotable).
         let record = oxo_flow_core::executor::JobRecord {
+            resources: None,
             signal: Some(15), // SIGTERM — what kill_process_tree sends first
             rule: rule.clone(),
             status: oxo_flow_core::executor::JobStatus::Failed,

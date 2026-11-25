@@ -11,8 +11,9 @@ use crate::cluster::{
     generate_submit_script_with_secrets,
 };
 use crate::error::{OxoFlowError, Result};
+use crate::resource_ledger::{ResourceSource, ResourceUsage};
 use chrono::Utc;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
 /// Parse the scheduler-assigned job id from a submission's output.
@@ -1991,7 +1992,7 @@ impl super::ExecutorBackend for ClusterExecutor {
                 vec![
                     "-j".to_string(),
                     job_id.to_string(),
-                    "--format=JobID,State,ExitCode,Elapsed,MaxRSS,TotalCPU".to_string(),
+                    format!("--format={SACCT_FORMAT_FIELDS}"),
                 ],
             ),
             ClusterBackend::Pbs => (
@@ -2101,6 +2102,17 @@ impl super::ExecutorBackend for ClusterExecutor {
         }
     }
 }
+
+/// `sacct` field list requested for terminal accounting (issue #1371).
+///
+/// One place, so the parser's header mapping and the query can never drift:
+/// scheduling/limit fields (`Submit`→`Start` wait, `AllocCPUS`, `NNodes`) and
+/// disk accounting (`AveDiskRead`/`AveDiskWrite`) sit beside the historic
+/// state/timing/memory/CPU columns. A store that ignores the request and
+/// prints its own layout is still handled — the parser keys off the header
+/// row, and columns a store omits stay unknown.
+const SACCT_FORMAT_FIELDS: &str = "JobID,State,ExitCode,Elapsed,ElapsedRaw,MaxRSS,TotalCPU,\
+Submit,Start,AllocCPUS,NNodes,AveDiskRead,AveDiskWrite";
 
 /// Split an accounting row on `|` when the store emitted the pipe-separated
 /// form, on whitespace otherwise. Real `sacct` pads columns with spaces; the
@@ -2230,6 +2242,16 @@ fn parse_accounting(backend: &ClusterBackend, text: &str) -> Option<TerminalReco
             if state == "E" && exit_code.is_none() {
                 return None;
             }
+            let mut raw_fields = BTreeMap::new();
+            for (key, value) in [
+                ("resources_used.walltime", field("resources_used.walltime")),
+                ("resources_used.mem", field("resources_used.mem")),
+                ("resources_used.cput", field("resources_used.cput")),
+            ] {
+                if let Some(value) = value {
+                    raw_fields.insert(key.to_string(), value.to_string());
+                }
+            }
             Some(TerminalRecord {
                 status: if exit_code == Some(0) {
                     BackendJobStatus::Completed
@@ -2241,6 +2263,22 @@ fn parse_accounting(backend: &ClusterBackend, text: &str) -> Option<TerminalReco
                     .and_then(parse_accounting_duration_secs),
                 max_rss_mb: field("resources_used.mem").and_then(parse_rss_mb),
                 cpu_seconds: field("resources_used.cput").and_then(parse_accounting_duration_secs),
+                resources: Some(ResourceUsage {
+                    // qstat -x reports resources_used but this adapter does
+                    // not parse queue wait or disk I/O from it.
+                    source: Some(ResourceSource {
+                        backend: "pbs".to_string(),
+                        tool: "qstat -x".to_string(),
+                        version: None,
+                        note: Some(
+                            "qstat -x reports walltime/memory/CPU only; scheduler wait and \
+                             disk I/O are not parsed"
+                                .to_string(),
+                        ),
+                        raw_fields,
+                    }),
+                    ..ResourceUsage::default()
+                }),
             })
         }
         ClusterBackend::Sge => {
@@ -2252,6 +2290,16 @@ fn parse_accounting(backend: &ClusterBackend, text: &str) -> Option<TerminalReco
                     .filter(|v| !v.is_empty())
             };
             let exit_code = field("exit_status").and_then(parse_exit_code)?;
+            let mut raw_fields = BTreeMap::new();
+            for (key, value) in [
+                ("ru_wallclock", field("ru_wallclock")),
+                ("ru_maxrss", field("ru_maxrss")),
+                ("cpu", field("cpu")),
+            ] {
+                if let Some(value) = value {
+                    raw_fields.insert(key.to_string(), value.to_string());
+                }
+            }
             Some(TerminalRecord {
                 status: if exit_code == 0 {
                     BackendJobStatus::Completed
@@ -2262,19 +2310,49 @@ fn parse_accounting(backend: &ClusterBackend, text: &str) -> Option<TerminalReco
                 elapsed_secs: field("ru_wallclock").and_then(parse_accounting_duration_secs),
                 max_rss_mb: field("ru_maxrss").and_then(parse_rss_mb),
                 cpu_seconds: field("cpu").and_then(parse_accounting_duration_secs),
+                resources: Some(ResourceUsage {
+                    source: Some(ResourceSource {
+                        backend: "sge".to_string(),
+                        tool: "qacct".to_string(),
+                        version: None,
+                        note: Some(
+                            "qacct reports wallclock/memory/CPU only; scheduler wait, I/O, \
+                             and allocation are not parsed"
+                                .to_string(),
+                        ),
+                        raw_fields,
+                    }),
+                    ..ResourceUsage::default()
+                }),
             })
         }
         ClusterBackend::Lsf => {
             // bacct: "Job <id>, ..., Status <DONE|EXIT|RUN>, ...". The
             // measurement columns vary too much between LSF versions to
-            // parse blind, so this stays state-only.
-            if text.contains("Status <DONE>") {
-                Some(TerminalRecord::status_only(BackendJobStatus::Completed))
+            // parse blind, so this stays state-only — and says so, instead
+            // of leaving the ledger to guess why every metric is absent.
+            let status = if text.contains("Status <DONE>") {
+                BackendJobStatus::Completed
             } else if text.contains("Status <EXIT>") {
-                Some(TerminalRecord::status_only(BackendJobStatus::Failed))
+                BackendJobStatus::Failed
             } else {
-                None
-            }
+                return None;
+            };
+            Some(TerminalRecord {
+                status,
+                resources: Some(ResourceUsage::source_only(ResourceSource {
+                    backend: "lsf".to_string(),
+                    tool: "bacct".to_string(),
+                    version: None,
+                    note: Some(
+                        "bacct is parsed for terminal state only; elapsed, memory, CPU, \
+                         I/O, and scheduler wait are unknown (they vary by LSF version)"
+                            .to_string(),
+                    ),
+                    raw_fields: BTreeMap::new(),
+                })),
+                ..TerminalRecord::default()
+            })
         }
         ClusterBackend::Kubernetes
         | ClusterBackend::AwsBatch
@@ -2305,25 +2383,90 @@ fn use_base64_decode(input: &str) -> std::result::Result<String, String> {
         .map_err(|e| e.to_string())
 }
 
-/// Parse `sacct --format=JobID,State,ExitCode,Elapsed,MaxRSS,TotalCPU`.
+/// Parse an accounting byte figure (`AveDiskRead`/`AveDiskWrite`) into
+/// bytes. SLURM prints base-1024 suffixes (`K`/`M`/`G`/`T`); an unsuffixed
+/// value is bytes. Unlike [`parse_rss_mb`], a bare `0` is a real measurement
+/// (the job read nothing), not a missing value — an empty cell is the only
+/// unknown.
+fn parse_accounting_bytes(raw: &str) -> Option<u64> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    let lower = raw.to_ascii_lowercase();
+    let (digits, multiplier) = if let Some(v) = lower.strip_suffix('k') {
+        (v, 1024.0)
+    } else if let Some(v) = lower.strip_suffix('m') {
+        (v, 1024.0 * 1024.0)
+    } else if let Some(v) = lower.strip_suffix('g') {
+        (v, 1024.0 * 1024.0 * 1024.0)
+    } else if let Some(v) = lower.strip_suffix('t') {
+        (v, 1024.0 * 1024.0 * 1024.0 * 1024.0)
+    } else {
+        (lower.as_str(), 1.0)
+    };
+    let value: f64 = digits.trim().parse().ok()?;
+    (value >= 0.0).then(|| (value * multiplier).round() as u64)
+}
+
+/// Parse a SLURM accounting timestamp (`Submit`/`Start`) into a naive
+/// datetime. Both fields come from the same site clock, so the difference is
+/// the queue wait regardless of the site's timezone. `Unknown` / `None` /
+/// empty cells are not timestamps.
+fn parse_slurm_timestamp(raw: &str) -> Option<chrono::NaiveDateTime> {
+    let raw = raw.trim();
+    if raw.is_empty() || raw.eq_ignore_ascii_case("unknown") || raw.eq_ignore_ascii_case("none") {
+        return None;
+    }
+    chrono::NaiveDateTime::parse_from_str(raw, "%Y-%m-%dT%H:%M:%S")
+        .or_else(|_| chrono::NaiveDateTime::parse_from_str(raw, "%Y-%m-%dT%H:%M:%S%.f"))
+        .ok()
+}
+
+/// Parse `sacct --format=JobID,State,ExitCode,Elapsed,ElapsedRaw,MaxRSS,
+/// TotalCPU,Submit,Start,AllocCPUS,NNodes,AveDiskRead,AveDiskWrite`.
 ///
 /// A job is several rows: the allocation itself, plus `.batch`, `.extern`,
 /// and one per step. State and exit code come from the allocation row, but
 /// `MaxRSS` is only populated on the step rows, so peak memory is the max
 /// over every row — reading the first row alone (as this did) always
-/// reported no memory at all.
-fn parse_sacct(text: &str) -> Option<TerminalRecord> {
-    // Column meanings come from the header row when the store echoes one
-    // (real `sacct --format=…` prints the requested names); without a
-    // header the fixed `--format` order — State,ExitCode,Elapsed,MaxRSS,
-    // TotalCPU at 1..5 — is the fallback. Assuming the requested order
-    // outright broke against stores that print their own fixed layout: the
-    // tx-ubuntu mock scheduler emits JobID,Elapsed,State,ExitCode,MaxRSS
-    // regardless of the request, so no state ever matched and every
-    // finished job stayed Unknown in `cluster status` even though the
-    // accounting overlay ran.
-    let mut layout = [1usize, 2, 3, 4, 5]; // state, exit, elapsed, maxrss, cpu
-    let mut rows: Vec<Vec<&str>> = Vec::new();
+/// reported no memory at all. `TotalCPU` is resolved the same way (the
+/// allocation row often leaves it blank); the max across rows is the job's
+/// aggregate CPU, never a sum of rows (the allocation and `.batch` rows
+/// describe the same work).
+///
+/// Scheduling fields (`Submit`→`Start`, `AllocCPUS`, `NNodes`) and disk
+/// averages are optional: a store that omits them leaves those values
+/// unknown rather than zero, and every raw cell used is preserved in
+/// `resources.source.raw_fields`.
+fn parse_sacct<'a>(text: &'a str) -> Option<TerminalRecord> {
+    // Sentinel for a column the store did not report. Without any header the
+    // historic 6-column fallback (State,ExitCode,Elapsed,MaxRSS,TotalCPU at
+    // 1..5) applies and the issue-#1371 fields stay unknown — guessing their
+    // positions would misread stores that predate the request.
+    const NO_COL: usize = usize::MAX;
+    // Historic fallback positions, replaced wholesale by the header when one
+    // is present: a header that omits a column must leave it unknown rather
+    // than read whatever occupies that position in the store's own layout.
+    let mut state = 1;
+    let mut exit = 2;
+    let mut elapsed = 3;
+    let mut elapsed_raw = NO_COL;
+    let mut max_rss = 4;
+    let mut total_cpu = 5;
+    let mut header_state = NO_COL;
+    let mut header_exit = NO_COL;
+    let mut header_elapsed = NO_COL;
+    let mut header_max_rss = NO_COL;
+    let mut header_total_cpu = NO_COL;
+    let mut submit = NO_COL;
+    let mut start = NO_COL;
+    let mut cpus = NO_COL;
+    let mut nodes = NO_COL;
+    let mut disk_read = NO_COL;
+    let mut disk_write = NO_COL;
+    let mut saw_header = false;
+    let mut rows: Vec<Vec<&'a str>> = Vec::new();
     for line in text.lines() {
         let trimmed = line.trim();
         if trimmed.is_empty() || trimmed.starts_with('-') {
@@ -2337,16 +2480,38 @@ fn parse_sacct(text: &str) -> Option<TerminalRecord> {
         // `starts_with("JobID")` filter treated all of them as headers, and
         // the tighter check here would have regressed those stores.
         if cells.len() > 1 && cells[0].to_ascii_lowercase().starts_with("jobid") {
+            saw_header = true;
             // Header row: derive the column layout from the names actually
-            // present; a name outside the known set keeps its positional
-            // fallback slot.
+            // present; a name outside the known set is ignored.
             for (i, name) in cells.iter().enumerate() {
                 match name.trim().to_ascii_lowercase().as_str() {
-                    "state" => layout[0] = i,
-                    "exitcode" => layout[1] = i,
-                    "elapsed" => layout[2] = i,
-                    "maxrss" => layout[3] = i,
-                    "totalcpu" => layout[4] = i,
+                    "state" => {
+                        state = i;
+                        header_state = i;
+                    }
+                    "exitcode" => {
+                        exit = i;
+                        header_exit = i;
+                    }
+                    "elapsed" => {
+                        elapsed = i;
+                        header_elapsed = i;
+                    }
+                    "elapsedraw" => elapsed_raw = i,
+                    "maxrss" => {
+                        max_rss = i;
+                        header_max_rss = i;
+                    }
+                    "totalcpu" => {
+                        total_cpu = i;
+                        header_total_cpu = i;
+                    }
+                    "submit" => submit = i,
+                    "start" => start = i,
+                    "alloccpus" => cpus = i,
+                    "nnodes" => nodes = i,
+                    "avediskread" => disk_read = i,
+                    "avediskwrite" => disk_write = i,
                     _ => {}
                 }
             }
@@ -2354,12 +2519,21 @@ fn parse_sacct(text: &str) -> Option<TerminalRecord> {
         }
         rows.push(cells);
     }
+    if saw_header {
+        // Only header-named columns are valid when the store echoed a
+        // header; positions the header did not name stay unknown.
+        state = header_state;
+        exit = header_exit;
+        elapsed = header_elapsed;
+        max_rss = header_max_rss;
+        total_cpu = header_total_cpu;
+    }
     let allocation = rows.first()?;
-    let state = allocation.get(layout[0])?.trim();
+    let state_text = allocation.get(state)?.trim();
     // The same state vocabulary the live poller maps in `parse_status_line`:
     // a job must not settle as Failed through one path and Unknown through
     // the other depending on whether squeue still had it.
-    let status = match state.split_whitespace().next().unwrap_or(state) {
+    let status = match state_text.split_whitespace().next().unwrap_or(state_text) {
         "COMPLETED" => BackendJobStatus::Completed,
         "FAILED" | "TIMEOUT" | "OUT_OF_MEMORY" | "NODE_FAIL" | "BOOT_FAIL" => {
             BackendJobStatus::Failed
@@ -2368,28 +2542,112 @@ fn parse_sacct(text: &str) -> Option<TerminalRecord> {
         "CANCELLED" | "PREEMPTED" => BackendJobStatus::Cancelled,
         _ => return None,
     };
-    let max_rss_mb = rows
-        .iter()
-        .filter_map(|r| r.get(layout[3]).copied().and_then(parse_rss_mb))
-        .max();
-    // TotalCPU is likewise per-step; the allocation row leaves it blank.
-    let cpu_seconds = rows
-        .iter()
-        .filter_map(|r| {
-            r.get(layout[4])
-                .copied()
-                .and_then(parse_accounting_duration_secs)
+    let cell = |row: &[&'a str], index: usize| -> Option<&'a str> {
+        if index == NO_COL {
+            return None;
+        }
+        row.get(index)
+            .copied()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    };
+
+    // MaxRSS / TotalCPU: keep the raw cell that produced the max, so the
+    // ledger's source can show exactly what the store said.
+    let mut rss: Option<(u64, &str)> = None;
+    let mut cpu: Option<(u64, &str)> = None;
+    for row in &rows {
+        if let Some(raw) = cell(row, max_rss)
+            && let Some(mb) = parse_rss_mb(raw)
+            && rss.is_none_or(|(current, _)| mb > current)
+        {
+            rss = Some((mb, raw));
+        }
+        if let Some(raw) = cell(row, total_cpu)
+            && let Some(secs) = parse_accounting_duration_secs(raw)
+            && cpu.is_none_or(|(current, _)| secs > current)
+        {
+            cpu = Some((secs, raw));
+        }
+    }
+
+    // ElapsedRaw is exact seconds; Elapsed is the formatted fallback.
+    let elapsed_secs = match cell(allocation, elapsed_raw) {
+        Some(raw) => raw
+            .parse::<u64>()
+            .ok()
+            .or_else(|| parse_accounting_duration_secs(raw)),
+        None => cell(allocation, elapsed).and_then(parse_accounting_duration_secs),
+    };
+
+    // Queue wait needs both ends from the same store.
+    let scheduler_wait_secs = cell(allocation, submit)
+        .and_then(parse_slurm_timestamp)
+        .zip(cell(allocation, start).and_then(parse_slurm_timestamp))
+        .map(|(submitted, started)| {
+            started
+                .signed_duration_since(submitted)
+                .num_seconds()
+                .max(0) as u64
+        });
+
+    // AveDiskRead/AveDiskWrite are per-task averages; the engine submits one
+    // task per job (arrays are distinct elements), so the average is the
+    // rule's total. First non-empty row wins — the allocation row carries it.
+    let disk_value = |index: usize| {
+        rows.iter().find_map(|row| {
+            cell(row, index).and_then(|raw| parse_accounting_bytes(raw).map(|bytes| (bytes, raw)))
         })
-        .max();
+    };
+    let disk_read_value = disk_value(disk_read);
+    let disk_write_value = disk_value(disk_write);
+
+    let mut raw_fields = BTreeMap::new();
+    if saw_header {
+        let mut keep = |key: &str, value: Option<&str>| {
+            if let Some(value) = value {
+                raw_fields.insert(key.to_string(), value.to_string());
+            }
+        };
+        keep("State", cell(allocation, state));
+        keep("ExitCode", cell(allocation, exit));
+        keep("Elapsed", cell(allocation, elapsed));
+        keep("ElapsedRaw", cell(allocation, elapsed_raw));
+        keep("MaxRSS", rss.map(|(_, raw)| raw));
+        keep("TotalCPU", cpu.map(|(_, raw)| raw));
+        keep("Submit", cell(allocation, submit));
+        keep("Start", cell(allocation, start));
+        keep("AllocCPUS", cell(allocation, cpus));
+        keep("NNodes", cell(allocation, nodes));
+        keep("AveDiskRead", disk_read_value.map(|(_, raw)| raw));
+        keep("AveDiskWrite", disk_write_value.map(|(_, raw)| raw));
+    }
+    let note = (rss.is_none() && cpu.is_none()).then(|| {
+        "sacct reported no MaxRSS/TotalCPU for this job; memory and CPU are unknown".to_string()
+    });
+    let source = ResourceSource {
+        backend: "slurm".to_string(),
+        tool: "sacct".to_string(),
+        version: None,
+        note,
+        raw_fields,
+    };
+
     Some(TerminalRecord {
         status,
-        exit_code: allocation.get(layout[1]).copied().and_then(parse_exit_code),
-        elapsed_secs: allocation
-            .get(layout[2])
-            .copied()
-            .and_then(parse_accounting_duration_secs),
-        max_rss_mb,
-        cpu_seconds,
+        exit_code: cell(allocation, exit).and_then(parse_exit_code),
+        elapsed_secs,
+        max_rss_mb: rss.map(|(mb, _)| mb),
+        cpu_seconds: cpu.map(|(secs, _)| secs),
+        resources: Some(ResourceUsage {
+            io_read_bytes: disk_read_value.map(|(bytes, _)| bytes),
+            io_write_bytes: disk_write_value.map(|(bytes, _)| bytes),
+            scheduler_wait_secs,
+            nodes: cell(allocation, nodes).and_then(|raw| raw.parse().ok()),
+            cores: cell(allocation, cpus).and_then(|raw| raw.parse().ok()),
+            source: Some(source),
+            ..ResourceUsage::default()
+        }),
     })
 }
 
@@ -2426,9 +2684,27 @@ fn parse_scontrol(text: &str) -> Option<TerminalRecord> {
         "CANCELLED" | "PREEMPTED" => BackendJobStatus::Cancelled,
         _ => return None,
     };
+    let mut raw_fields = BTreeMap::new();
+    if let Some(state) = &job_state {
+        raw_fields.insert("JobState".to_string(), state.clone());
+    }
+    if let Some(code) = &exit_code {
+        raw_fields.insert("ExitCode".to_string(), code.clone());
+    }
     Some(TerminalRecord {
         status,
         exit_code: exit_code.as_deref().and_then(parse_exit_code),
+        resources: Some(ResourceUsage::source_only(ResourceSource {
+            backend: "slurm".to_string(),
+            tool: "scontrol".to_string(),
+            version: None,
+            note: Some(
+                "scontrol reports JobState/ExitCode only; elapsed, memory, CPU, I/O, and \
+                 scheduler wait are unavailable without an accounting store (slurmdbd)"
+                    .to_string(),
+            ),
+            raw_fields,
+        })),
         ..TerminalRecord::default()
     })
 }
@@ -4431,6 +4707,16 @@ mod tests {
 mod accounting_tests {
     use super::*;
 
+    /// Drop the resource provenance bundle so historic field-by-field
+    /// expectations stay readable; `sacct_resource_provenance_is_recorded`
+    /// asserts the bundle itself.
+    fn stripped(rec: Option<TerminalRecord>) -> Option<TerminalRecord> {
+        rec.map(|mut r| {
+            r.resources = None;
+            r
+        })
+    }
+
     #[test]
     fn parses_scontrol_completed_record() {
         // Issue #244: the no-slurmdbd fallback. Real `scontrol show job`
@@ -4441,8 +4727,9 @@ mod accounting_tests {
    JobState=COMPLETED Reason=(None) Dependency=(null)\n\
    ExitCode=0:0 RunTime=00:01:22 TimeLimit=02:00:00\n";
         assert_eq!(
-            parse_scontrol(text),
+            stripped(parse_scontrol(text)),
             Some(TerminalRecord {
+                resources: None,
                 status: BackendJobStatus::Completed,
                 exit_code: Some(0),
                 ..TerminalRecord::default()
@@ -4452,8 +4739,9 @@ mod accounting_tests {
         // A failed job reports the signal-aware exit code.
         let failed = "JobId=12346 JobName=align\n   JobState=FAILED Reason=NonZeroExitCode\n   ExitCode=1:0\n";
         assert_eq!(
-            parse_scontrol(failed),
+            stripped(parse_scontrol(failed)),
             Some(TerminalRecord {
+                resources: None,
                 status: BackendJobStatus::Failed,
                 exit_code: Some(1),
                 ..TerminalRecord::default()
@@ -4463,8 +4751,9 @@ mod accounting_tests {
         // A CANCELLED job (state may carry the reason in parentheses).
         let cancelled = "JobId=12347 JobName=x\n   JobState=CANCELLED+(Reason)\n   ExitCode=0:15\n";
         assert_eq!(
-            parse_scontrol(cancelled),
+            stripped(parse_scontrol(cancelled)),
             Some(TerminalRecord {
+                resources: None,
                 status: BackendJobStatus::Cancelled,
                 exit_code: Some(143),
                 ..TerminalRecord::default()
@@ -4487,8 +4776,9 @@ mod accounting_tests {
 
         // Act / Assert
         assert_eq!(
-            parse_accounting(&ClusterBackend::Slurm, text),
+            stripped(parse_accounting(&ClusterBackend::Slurm, text)),
             Some(TerminalRecord {
+                resources: None,
                 status: BackendJobStatus::Completed,
                 exit_code: Some(0),
                 elapsed_secs: Some(82),
@@ -4502,8 +4792,9 @@ mod accounting_tests {
 ------------ ---------- -------- ---------- ---------- ----------\n\
 12345    FAILED         7:0        1-02:00:00  128.2M   00:02:44\n";
         assert_eq!(
-            parse_accounting(&ClusterBackend::Slurm, failed),
+            stripped(parse_accounting(&ClusterBackend::Slurm, failed)),
             Some(TerminalRecord {
+                resources: None,
                 status: BackendJobStatus::Failed,
                 exit_code: Some(7),
                 elapsed_secs: Some(93_600),
@@ -4515,8 +4806,9 @@ mod accounting_tests {
         let piped = "JobID|State|ExitCode|Elapsed|MaxRSS|TotalCPU\n\
 12345|COMPLETED|0:0|00:00:05|1234K|00:00:04\n";
         assert_eq!(
-            parse_accounting(&ClusterBackend::Slurm, piped),
+            stripped(parse_accounting(&ClusterBackend::Slurm, piped)),
             Some(TerminalRecord {
+                resources: None,
                 status: BackendJobStatus::Completed,
                 exit_code: Some(0),
                 elapsed_secs: Some(5),
@@ -4536,8 +4828,9 @@ mod accounting_tests {
         let text = "       JobID    Elapsed      State ExitCode    MaxRSS\n\
 4813        00:01:22  COMPLETED      0:0    128.2M\n";
         assert_eq!(
-            parse_accounting(&ClusterBackend::Slurm, text),
+            stripped(parse_accounting(&ClusterBackend::Slurm, text)),
             Some(TerminalRecord {
+                resources: None,
                 status: BackendJobStatus::Completed,
                 exit_code: Some(0),
                 elapsed_secs: Some(82),
@@ -4552,8 +4845,9 @@ mod accounting_tests {
         let raw = "       JobIDRaw    Elapsed      State ExitCode    MaxRSS\n\
 4813        00:01:22  COMPLETED      0:0    128.2M\n";
         assert_eq!(
-            parse_accounting(&ClusterBackend::Slurm, raw),
+            stripped(parse_accounting(&ClusterBackend::Slurm, raw)),
             Some(TerminalRecord {
+                resources: None,
                 status: BackendJobStatus::Completed,
                 exit_code: Some(0),
                 elapsed_secs: Some(82),
@@ -4561,6 +4855,85 @@ mod accounting_tests {
                 cpu_seconds: None,
             })
         );
+    }
+
+    #[test]
+    fn sacct_resource_provenance_is_recorded() {
+        // Issue #1371: the extended field list carries scheduling and disk
+        // accounting beside the historic columns. A real store emits one
+        // header row, the allocation row, and step rows where MaxRSS/TotalCPU
+        // live.
+        let text = "JobID|State|ExitCode|Elapsed|ElapsedRaw|MaxRSS|TotalCPU|Submit|Start|AllocCPUS|NNodes|AveDiskRead|AveDiskWrite\n\
+12345|COMPLETED|0:0|00:01:22|82|||2026-11-25T10:00:00|2026-11-25T10:02:00|8|2|1.5G|2048K\n\
+12345.batch|COMPLETED|0:0|00:01:22|82|1024M|00:02:44||||||\n";
+
+        let rec = parse_accounting(&ClusterBackend::Slurm, text).unwrap();
+
+        // ElapsedRaw wins over the formatted Elapsed; TotalCPU comes from
+        // the step row; the allocation row supplies the scheduling figures.
+        assert_eq!(rec.elapsed_secs, Some(82));
+        assert_eq!(rec.max_rss_mb, Some(1024));
+        assert_eq!(rec.cpu_seconds, Some(164));
+        let resources = rec.resources.as_ref().unwrap();
+        assert_eq!(resources.scheduler_wait_secs, Some(120));
+        assert_eq!(resources.nodes, Some(2));
+        assert_eq!(resources.cores, Some(8));
+        assert_eq!(resources.io_read_bytes, Some(1_610_612_736));
+        assert_eq!(resources.io_write_bytes, Some(2_097_152));
+
+        let source = resources.source.as_ref().unwrap();
+        assert_eq!(source.backend, "slurm");
+        assert_eq!(source.tool, "sacct");
+        assert_eq!(
+            source.raw_fields.get("MaxRSS").map(String::as_str),
+            Some("1024M")
+        );
+        assert_eq!(
+            source.raw_fields.get("TotalCPU").map(String::as_str),
+            Some("00:02:44")
+        );
+        assert_eq!(
+            source.raw_fields.get("NNodes").map(String::as_str),
+            Some("2")
+        );
+        assert_eq!(
+            source.raw_fields.get("Submit").map(String::as_str),
+            Some("2026-11-25T10:00:00")
+        );
+        assert_eq!(
+            source.raw_fields.get("AveDiskRead").map(String::as_str),
+            Some("1.5G")
+        );
+    }
+
+    #[test]
+    fn sacct_omitted_columns_stay_unknown() {
+        // A store that reports only the historic columns: every new field
+        // is absent, not zero, and the source explains the missing memory.
+        let text = "JobID|State|ExitCode|Elapsed\n\
+12345|COMPLETED|0:0|00:00:05\n";
+        let rec = parse_accounting(&ClusterBackend::Slurm, text).unwrap();
+        assert_eq!(rec.elapsed_secs, Some(5));
+        assert_eq!(rec.max_rss_mb, None);
+        assert_eq!(rec.cpu_seconds, None);
+        let resources = rec.resources.as_ref().unwrap();
+        assert_eq!(resources.scheduler_wait_secs, None);
+        assert_eq!(resources.nodes, None);
+        assert_eq!(resources.cores, None);
+        assert_eq!(resources.io_read_bytes, None);
+        assert_eq!(resources.io_write_bytes, None);
+        let note = resources.source.as_ref().unwrap().note.as_deref().unwrap();
+        assert!(note.contains("unknown"), "{note}");
+    }
+
+    #[test]
+    fn accounting_bytes_read_zero_as_a_measurement_not_unknown() {
+        // Unlike MaxRSS (where bare 0 is SLURM's missing sentinel), disk
+        // accounting's 0 is a measured value; an empty cell is unknown.
+        assert_eq!(parse_accounting_bytes("0"), Some(0));
+        assert_eq!(parse_accounting_bytes(""), None);
+        assert_eq!(parse_accounting_bytes("2048K"), Some(2_097_152));
+        assert_eq!(parse_accounting_bytes("1.5G"), Some(1_610_612_736));
     }
 
     #[test]
@@ -4656,8 +5029,9 @@ mod accounting_tests {
 Exit_status = 0\n    resources_used.walltime = 00:02:00\n    \
 resources_used.mem = 65536kb\n    resources_used.cput = 00:03:30\n";
         assert_eq!(
-            parse_accounting(&ClusterBackend::Pbs, ok),
+            stripped(parse_accounting(&ClusterBackend::Pbs, ok)),
             Some(TerminalRecord {
+                resources: None,
                 status: BackendJobStatus::Completed,
                 exit_code: Some(0),
                 elapsed_secs: Some(120),
@@ -4693,8 +5067,9 @@ resources_used.mem = 65536kb\n    resources_used.cput = 00:03:30\n";
         let ok = "qname        all.q\njobnumber    12345\nexit_status  0\n\
 ru_wallclock 82\nru_maxrss    262144\ncpu          164\n";
         assert_eq!(
-            parse_accounting(&ClusterBackend::Sge, ok),
+            stripped(parse_accounting(&ClusterBackend::Sge, ok)),
             Some(TerminalRecord {
+                resources: None,
                 status: BackendJobStatus::Completed,
                 exit_code: Some(0),
                 elapsed_secs: Some(82),
@@ -4708,6 +5083,86 @@ ru_wallclock 82\nru_maxrss    262144\ncpu          164\n";
         assert_eq!(rec.exit_code, Some(137));
     }
 
+    /// Issue #1371 re-review N2: the per-backend `resources.source`
+    /// provenance (tool, note explaining the gap, raw fields) is asserted
+    /// directly, not stripped away by the historic field-equality helpers.
+    #[test]
+    fn backend_sources_name_their_tool_and_limits() {
+        let pbs = "Job Id: 12345.vm\n    Job_Name = fastqc\n    job_state = C\n    \
+Exit_status = 0\n    resources_used.walltime = 00:02:00\n    \
+resources_used.mem = 65536kb\n    resources_used.cput = 00:03:30\n";
+        let rec = parse_accounting(&ClusterBackend::Pbs, pbs).unwrap();
+        let source = rec.resources.unwrap().source.unwrap();
+        assert_eq!(source.backend, "pbs");
+        assert_eq!(source.tool, "qstat -x");
+        assert!(source.note.as_deref().unwrap().contains("scheduler wait"));
+        assert_eq!(
+            source
+                .raw_fields
+                .get("resources_used.walltime")
+                .map(String::as_str),
+            Some("00:02:00")
+        );
+
+        let sge = "qname all.q\njobnumber 12345\nexit_status 0\nru_wallclock 82\n\
+ru_maxrss 262144\ncpu 164\n";
+        let source = parse_accounting(&ClusterBackend::Sge, sge)
+            .unwrap()
+            .resources
+            .unwrap()
+            .source
+            .unwrap();
+        assert_eq!(source.backend, "sge");
+        assert_eq!(source.tool, "qacct");
+        assert!(source.note.as_deref().unwrap().contains("qacct reports"));
+        assert_eq!(
+            source.raw_fields.get("ru_wallclock").map(String::as_str),
+            Some("82")
+        );
+
+        let lsf = "Job <12345>, User <bioinf>, Status <DONE>, Queue <normal>\n";
+        let source = parse_accounting(&ClusterBackend::Lsf, lsf)
+            .unwrap()
+            .resources
+            .unwrap()
+            .source
+            .unwrap();
+        assert_eq!(source.backend, "lsf");
+        assert_eq!(source.tool, "bacct");
+        assert!(
+            source
+                .note
+                .as_deref()
+                .unwrap()
+                .contains("terminal state only")
+        );
+
+        let scontrol = "JobId=12345 JobName=x\n   JobState=COMPLETED\n   ExitCode=0:0\n";
+        let source = parse_scontrol(scontrol)
+            .unwrap()
+            .resources
+            .unwrap()
+            .source
+            .unwrap();
+        assert_eq!(source.backend, "slurm");
+        assert_eq!(source.tool, "scontrol");
+        assert!(
+            source
+                .note
+                .as_deref()
+                .unwrap()
+                .contains("JobState/ExitCode only")
+        );
+        assert_eq!(
+            source.raw_fields.get("JobState").map(String::as_str),
+            Some("COMPLETED")
+        );
+        assert_eq!(
+            source.raw_fields.get("ExitCode").map(String::as_str),
+            Some("0:0")
+        );
+    }
+
     #[test]
     fn parses_bacct_status_lines() {
         // Arrange — bacct output carries a Status <...> line. LSF's
@@ -4715,12 +5170,12 @@ ru_wallclock 82\nru_maxrss    262144\ncpu          164\n";
         // state-only rather than guessing.
         let done = "Job <12345>, User <bioinf>, Status <DONE>, Queue <normal>, Command <fastqc>\n";
         assert_eq!(
-            parse_accounting(&ClusterBackend::Lsf, done),
+            stripped(parse_accounting(&ClusterBackend::Lsf, done)),
             Some(TerminalRecord::status_only(BackendJobStatus::Completed))
         );
         let exited = done.replace("DONE", "EXIT");
         assert_eq!(
-            parse_accounting(&ClusterBackend::Lsf, &exited),
+            stripped(parse_accounting(&ClusterBackend::Lsf, &exited)),
             Some(TerminalRecord::status_only(BackendJobStatus::Failed))
         );
         let running = done.replace("Status <DONE>", "Status <RUN>");
