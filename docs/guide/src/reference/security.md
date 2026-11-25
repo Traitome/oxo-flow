@@ -204,6 +204,60 @@ app, pinned by the `base_path_mount_headers` integration test.
 
 ---
 
+## Layer 6 — Audit Trail Integrity
+
+The web server's audit trail is tamper-evident, not just append-intended
+(issue #1372). Every state-changing request writes its `pending` audit row
+ahead of the mutation and finalizes it afterwards; each of those writes also
+appends an immutable event to a SHA-256 hash chain (`audit_chain` plus a
+one-row head) **in the same transaction**. Each event links to its
+predecessor; the head names the chain's end (genesis = seq 0, 64 hex zeros).
+Appends serialize on the backend (SQLite `BEGIN IMMEDIATE`, PostgreSQL
+`FOR UPDATE` on the head), so the sequence cannot gap or duplicate under
+concurrent writers or multiple server instances.
+
+Two admin-only endpoints expose it:
+
+- `GET /api/audit/chain/export` — the deterministic
+  `oxo-flow.audit-chain/v1` document (head, events, full audit-row snapshot).
+- `GET /api/audit/chain/verify` — 200 with `ok:false` findings for a deleted,
+  reordered, inserted, or mutated event/row, duplicate phase, bad genesis, or
+  a truncated chain.
+
+`oxo-flow audit verify <export.json>` repeats the whole check offline with no
+database or network access (exit 0 valid, 2 invalid/tampered, 4 malformed
+with `AUDIT_EXPORT_INVALID`). See the
+[`audit` command reference](../commands/audit.md).
+
+### Threat model — what it does and does not prove
+
+- **Detects**: accidental or partial database edits, naive row deletion, a
+  reordered/inserted event, a mutated audit field, a truncated table, and a
+  log row inserted without its chain event. Both the mutable `audit_logs`
+  table and the chain must agree for verification to pass.
+- **Does not detect by itself**: an actor with write access to the entire
+  database who rewrites every event AND the head self-consistently — including
+  deleting the whole chain and resetting the head to genesis. Hash
+  chains are not signatures; there is no secret and no external anchor.
+  Holding a previously exported document (archived off-host, attached to a
+  change record) is what exposes such a rewrite — the attacker cannot edit
+  the copy you already have.
+- **No external notarization, legal compliance, or confidentiality is
+  claimed.** The chain records what the server wrote; it cannot prove an
+  event was truthful, and it is readable by anyone who can read the database.
+- **Historical rows**: `audit_logs` rows older than the first chain event are
+  not covered (the upgrade does not backfill), and deleting a user
+  cascade-deletes their audit rows while their chain events persist — the
+  verifier reports `MISSING_LOG_ROW` so the shrinkage is visible.
+- **Availability**: the export is admin-only and unbounded in size (it grows
+  with the audit trail); treat a very large export as an administrative
+  operation, not a per-request health check.
+
+Backup/restore guidance for the chain is in
+[Deployment Modes](../how-to/deploy-modes.md#mode-2-team).
+
+---
+
 ## Best Practices
 
 1. **Never hardcode secrets** — Use environment variables (`{env.VAR}`) instead
@@ -231,4 +285,5 @@ the same rules so they load with the skill.
 - [Workflow Format](./workflow-format.md) — rule field reference
 - [AI CLI](./ai-cli.md) — AI-powered workflow analysis
 - [Agent Safety & Workspace Discipline](../how-to/agent-safety.md) — operating contract for AI agents
+- [Audit command](../commands/audit.md) — offline verification of the hash-chained audit export
 - [Troubleshooting](../how-to/troubleshooting.md) — common issues

@@ -41,6 +41,7 @@
 
 pub mod archive;
 pub mod atomic_file;
+pub mod audit_chain;
 pub mod backend;
 pub mod cluster;
 pub mod config;

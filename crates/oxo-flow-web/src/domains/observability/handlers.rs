@@ -272,6 +272,82 @@ pub async fn get_audit_logs(
 
 #[utoipa::path(
     get,
+    path = "/api/audit/chain/export",
+    tag = "observability",
+    responses(
+        (status = 200, description = "Deterministic audit-chain export (oxo-flow.audit-chain/v1)", body = serde_json::Value),
+        (status = 403, description = "Forbidden", body = ApiError),
+        (status = 500, description = "Error", body = ApiError),
+        (status = 503, description = "Storage backend unavailable", body = ApiError),
+    )
+)]
+/// GET /api/audit/chain/export — the portable hash-chain audit export.
+///
+/// Admin-only, like the audit listing itself. The response is the canonical
+/// `oxo-flow.audit-chain/v1` document: the current head, every chain event in
+/// sequence order, and the full `audit_logs` snapshot. The bytes are
+/// deterministic for a given database state, so a caller can archive the
+/// export and later compare its head with the live chain — the property that
+/// makes a wholesale rewrite of the database visible even though the chain
+/// itself carries no signature.
+///
+/// No external notarization or legal compliance is claimed (issue #1372).
+pub async fn export_audit_chain(headers: axum::http::HeaderMap) -> ApiResult<serde_json::Value> {
+    crate::domains::auth::handlers::require_admin(&headers).await?;
+    let backend = crate::infra::db::global_backend().ok_or_else(|| {
+        err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "DB_ERROR",
+            "Database not available".into(),
+        )
+    })?;
+    let snapshot = backend
+        .audit_chain_snapshot()
+        .await
+        .map_err(|e| db_err(format!("DB error reading audit chain: {e}")))?;
+    Ok(Json(snapshot.into_export().to_canonical_value()))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/audit/chain/verify",
+    tag = "observability",
+    responses(
+        (status = 200, description = "Verification result; tampering is a 200 finding with ok=false", body = serde_json::Value),
+        (status = 403, description = "Forbidden", body = ApiError),
+        (status = 500, description = "Error", body = ApiError),
+        (status = 503, description = "Storage backend unavailable", body = ApiError),
+    )
+)]
+/// GET /api/audit/chain/verify — verify the stored chain and audit rows.
+///
+/// Admin-only. Returns `{ok, events, head, findings}`. Tampering is a **200**
+/// finding with `ok:false` (a deletion, reorder, insertion, mutation, bad
+/// genesis, duplicate phase, or truncated chain), never an HTTP error — the
+/// audit surface must report evidence, not fail closed on the evidence.
+///
+/// The check is local integrity only: an actor who can rewrite every event
+/// and the head consistently passes. Comparing against a previously exported
+/// document detects that (issue #1372).
+pub async fn verify_audit_chain(headers: axum::http::HeaderMap) -> ApiResult<serde_json::Value> {
+    crate::domains::auth::handlers::require_admin(&headers).await?;
+    let backend = crate::infra::db::global_backend().ok_or_else(|| {
+        err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "DB_ERROR",
+            "Database not available".into(),
+        )
+    })?;
+    let snapshot = backend
+        .audit_chain_snapshot()
+        .await
+        .map_err(|e| db_err(format!("DB error reading audit chain: {e}")))?;
+    let verification = oxo_flow_core::audit_chain::verify_export(&snapshot.into_export());
+    Ok(Json(verification.to_canonical_value()))
+}
+
+#[utoipa::path(
+    get,
     path = "/api/hpc",
     tag = "hpc",
     responses(

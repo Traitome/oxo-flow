@@ -130,6 +130,8 @@ const ALL_ROUTES: &[&str] = &[
     "/api/events",
     "/api/events/ticket",
     "/api/audit",
+    "/api/audit/chain/export",
+    "/api/audit/chain/verify",
     "/api/quota",
     "/api/webhook",
     // hpc

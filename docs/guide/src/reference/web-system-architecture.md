@@ -271,6 +271,54 @@ workflow's declared memory with `RLIMIT_DATA` on the spawned CLI process
 tree; other platforms and remote (cluster) runs remain advisory — see
 [Quota → Declared-resource enforcement](web-api.md#declared-resource-enforcement).
 
+### Hash-chained audit trail (issue #1372)
+
+The audit trail is two layers with different mutability:
+
+- `audit_logs` — the mutable listing surface (`GET /api/audit`, the Audit
+  page). Rows are written ahead of a mutation, finalized after it, and
+  cascade-deleted when their user account is deleted.
+- `audit_chain` + `audit_chain_head` — an append-only SHA-256 chain. Every
+  audit write (pending intent, terminal finalize, legacy post-handler row)
+  appends one immutable event carrying the complete canonical record, in the
+  same transaction as the `audit_logs` write. Each event hashes its fixed
+  field set and names its predecessor's hash; the single head row names the
+  chain's end (genesis = seq 0, 64 zero hex digits). No code path updates or
+  deletes a chain row; a database-level edit is detected by verification
+  rather than prevented (see the limits below).
+
+Append serialization is backend-native: SQLite opens `BEGIN IMMEDIATE` (the
+write lock is taken before the head is read), PostgreSQL takes `SELECT …
+FOR UPDATE` on the head row as the first statement of every chain write. Both
+orders are identical across `begin`/`finalize`/`record`, so appends cannot
+deadlock and cannot produce a gap or duplicate `seq` — including across
+multiple PostgreSQL server instances sharing one database (SQLite serializes
+processes sharing the file on one host; a SQLite file on a network
+filesystem is not a supported deployment). A finalize is idempotent:
+the `(audit_id, phase)` unique index admits one terminal event, a repeated
+finalize is a no-op, and the first terminal outcome wins over a conflicting
+later one (documented behavior, not an error). A snapshot
+(`audit_chain_snapshot`) reads the head, events, and `audit_logs` in one
+transaction — SQLite read snapshot / PostgreSQL `FOR SHARE` on the head — so
+an export can never splice moments.
+
+Exports are canonical (`oxo-flow.audit-chain/v1`: sorted keys, canonical
+metadata JSON, fixed `YYYY-MM-DDTHH:MM:SS.ffffffZ` timestamps for new rows)
+and verify offline with `oxo-flow audit verify` (exit 0 valid, 2
+invalid/tampered, 4 malformed with `AUDIT_EXPORT_INVALID`). The web
+`GET /api/audit/chain/verify` answers 200 with `ok:false` findings for
+deletion, reorder, insertion, mutation, duplicate phase, bad genesis, and
+truncation.
+
+Limits, stated plainly: the chain is not a signature and is not external
+notarization. An actor who can rewrite the whole chain and the head
+consistently — including deleting every event and resetting the head to
+genesis — passes local verification; a previously exported document is what
+exposes a later wholesale rewrite. Audit-row cascade deletes surface as
+`MISSING_LOG_ROW`, by design. The chain does not cover `audit_logs` rows that
+predate the upgrade (the migration does not backfill), and it proves nothing
+about the truthfulness of an event the server itself wrote.
+
 ### Tenant execution boundary (RB-01)
 
 Every locally executed run spawns through one choke point

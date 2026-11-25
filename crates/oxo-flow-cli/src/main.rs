@@ -12,6 +12,7 @@ mod run_status;
 use crate::commands::agent_docs::agent_docs_command;
 use crate::commands::ai_status::{ai_setup_command, ai_status_command, ai_test_command};
 use crate::commands::attestation::{attest_command, attest_verify_command};
+use crate::commands::audit::audit_verify_command;
 use crate::commands::batch::batch_command;
 use crate::commands::clean::clean_command;
 use crate::commands::cluster::cluster_command;
@@ -76,7 +77,7 @@ pub struct Cli {
     /// Implemented by run, dry-run, validate, lint, test, status, wait, batch,
     /// resume, info, knowledge, diagnostics, schema, verify-data, license,
     /// provenance verify, provenance diff, provenance attest, provenance
-    /// attest-verify, ai, graph, runs gc, diff (the
+    /// attest-verify, audit verify, ai, graph, runs gc, diff (the
     /// workflow text diff), import, env list/check,
     /// and the cluster status/cancel/logs monitors;
     /// every other command rejects the flag instead of silently ignoring it.
@@ -1000,6 +1001,11 @@ pub enum Commands {
         #[command(subcommand)]
         action: ProvenanceAction,
     },
+    /// Verify a hash-chained audit export offline (no database access).
+    Audit {
+        #[command(subcommand)]
+        action: AuditAction,
+    },
     /// Verify a data tree against a vendor md5 sidecar (md5sum format).
     VerifyData {
         #[arg(value_name = "TREE", help = "Directory to verify")]
@@ -1417,6 +1423,22 @@ pub enum ProvenanceAction {
     },
 }
 
+#[derive(Subcommand, Debug)]
+pub enum AuditAction {
+    /// Verify an exported audit chain offline: every hash, link, head, and
+    /// audit-row record is re-checked without touching a database.
+    ///
+    /// Exit codes: 0 valid, 2 invalid/tampered, 4 malformed or unreadable
+    /// export.
+    Verify {
+        #[arg(
+            value_name = "EXPORT",
+            help = "Audit-chain JSON export from GET /api/audit/chain/export"
+        )]
+        export: PathBuf,
+    },
+}
+
 /// Emit the single `--json` document for `test`.
 ///
 /// The command runs several sub-commands; each used to print its own JSON
@@ -1494,6 +1516,9 @@ fn json_supported(command: &Commands) -> bool {
                 | ProvenanceAction::AttestVerify { .. }
         ),
         Commands::VerifyData { .. } => true,
+        // `audit verify --json` emits one machine-readable verification
+        // document (issue #1372).
+        Commands::Audit { .. } => true,
         Commands::Runs { .. } => true,
         // `graph --json` emits the machine-readable DAG document (nodes,
         // edges, parallel_groups, critical_path, metrics) shared with the
@@ -1662,7 +1687,7 @@ async fn main() -> Result<()> {
              status, wait, batch, resume, info, knowledge, diagnostics, \
              schema, license, ai, provenance verify, provenance diff, \
              provenance attest, provenance attest-verify, \
-             verify-data, graph, runs gc, import, diff (the workflow text \
+             audit verify, verify-data, graph, runs gc, import, diff (the workflow text \
              diff), env list/check, cluster status/cancel/logs)."
         );
     }
@@ -2351,6 +2376,14 @@ async fn main() -> Result<()> {
             } => attest_command(checkpoint, key, sign, output, cli.json)?,
             ProvenanceAction::AttestVerify { file, key } => {
                 let code = attest_verify_command(file, key, cli.json)?;
+                if code != 0 {
+                    std::process::exit(code);
+                }
+            }
+        },
+        Commands::Audit { action } => match action {
+            AuditAction::Verify { export } => {
+                let code = audit_verify_command(export, cli.json)?;
                 if code != 0 {
                     std::process::exit(code);
                 }

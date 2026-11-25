@@ -76,6 +76,69 @@ impl PostgresBackend {
         chrono::Utc::now().to_rfc3339()
     }
 
+    /// Lock and read the chain cursor at the start of every chain write.
+    ///
+    /// `FOR UPDATE` on the single head row serializes appenders across
+    /// connections and server instances until commit — the PostgreSQL twin of
+    /// SQLite's `BEGIN IMMEDIATE`. Every audit write takes this lock FIRST, so
+    /// all of them share one lock order and cannot deadlock.
+    async fn lock_audit_chain_head(
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    ) -> Result<oxo_flow_core::audit_chain::AuditChainHead, String> {
+        let row: models::AuditChainHeadRow =
+            sqlx::query_as("SELECT seq, hash FROM audit_chain_head WHERE id = 1 FOR UPDATE")
+                .fetch_one(&mut **tx)
+                .await
+                .map_err(|e| format!("lock audit chain head: {e}"))?;
+        row.into_head()
+    }
+
+    /// Append one event and advance the already-locked head.
+    async fn append_audit_chain_event(
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        head: &oxo_flow_core::audit_chain::AuditChainHead,
+        append: oxo_flow_core::audit_chain::AuditChainAppend<'_>,
+    ) -> Result<(), String> {
+        use oxo_flow_core::audit_chain::{AuditChainAppend, build_event};
+        let event = build_event(AuditChainAppend {
+            seq: head.seq + 1,
+            prev_hash: &head.hash,
+            ..append
+        });
+        sqlx::query(
+            "INSERT INTO audit_chain (seq, audit_id, phase, user_id, action, target, result, \
+             metadata, timestamp, prev_hash, hash) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
+        )
+        .bind(event.seq as i64)
+        .bind(&event.audit_id)
+        .bind(&event.phase)
+        .bind(&event.user_id)
+        .bind(&event.action)
+        .bind(&event.target)
+        .bind(&event.result)
+        .bind(event.metadata_text())
+        .bind(&event.timestamp)
+        .bind(&event.prev_hash)
+        .bind(&event.hash)
+        .execute(&mut **tx)
+        .await
+        .map_err(|e| format!("append audit chain event: {e}"))?;
+
+        let advanced = sqlx::query(
+            "UPDATE audit_chain_head SET seq = $1, hash = $2 WHERE id = 1 AND seq = $3",
+        )
+        .bind(event.seq as i64)
+        .bind(&event.hash)
+        .bind(head.seq as i64)
+        .execute(&mut **tx)
+        .await
+        .map_err(|e| format!("advance audit chain head: {e}"))?;
+        if advanced.rows_affected() != 1 {
+            return Err("audit chain head moved under a FOR UPDATE lock".into());
+        }
+        Ok(())
+    }
+
     /// Insert a queued run row only while no live run holds the same value of
     /// `guard_column` — the PostgreSQL twin of the SQLite guarded insert
     /// (audit RB-02). Returns `false` when the guard rejects the insert.
@@ -292,6 +355,38 @@ impl StorageBackend for PostgresBackend {
                 timestamp TEXT NOT NULL
             );
 
+            -- Append-only hash chain over audit_logs (issue #1372), parity
+            -- with the SQLite schema. No foreign key to users on purpose:
+            -- deleting a user cascades the mutable audit_logs rows, and the
+            -- immutable chain must outlive them so verification reports the
+            -- vanished rows instead of silently losing them.
+            CREATE TABLE IF NOT EXISTS audit_chain (
+                seq BIGINT PRIMARY KEY,
+                audit_id TEXT NOT NULL,
+                -- pending | success | failure; no CHECK so the low-level
+                -- writer keeps its historical permissiveness — an unknown
+                -- phase is a verification finding, not a write-time failure.
+                phase TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                action TEXT NOT NULL,
+                target TEXT NOT NULL,
+                result TEXT NOT NULL,
+                metadata TEXT,
+                timestamp TEXT NOT NULL,
+                prev_hash TEXT NOT NULL,
+                hash TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS audit_chain_head (
+                id BIGINT PRIMARY KEY CHECK (id = 1),
+                seq BIGINT NOT NULL,
+                hash TEXT NOT NULL
+            );
+
+            -- Idempotency gate for a retried finalize (one event per phase).
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_audit_chain_audit_phase
+                ON audit_chain(audit_id, phase);
+
             CREATE TABLE IF NOT EXISTS ai_provider_config (
                 id TEXT PRIMARY KEY,
                 user_id TEXT UNIQUE,
@@ -428,6 +523,17 @@ impl StorageBackend for PostgresBackend {
         .execute(&mut *tx)
         .await
         .map_err(|e| format!("PG init schema: {e}"))?;
+
+        // Seed the single audit-chain cursor row. Idempotent on every boot;
+        // an existing head is never reset (that would destroy the chain).
+        sqlx::query(
+            "INSERT INTO audit_chain_head (id, seq, hash) VALUES (1, 0, $1) \
+             ON CONFLICT (id) DO NOTHING",
+        )
+        .bind(oxo_flow_core::audit_chain::GENESIS_HASH)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| format!("PG audit chain head seed: {e}"))?;
 
         // Migration for pre-existing postgres databases: the runs table
         // gained `config_overrides` after #930. Run lifecycle bookkeeping is
@@ -1929,22 +2035,25 @@ impl StorageBackend for PostgresBackend {
         result: &str,
         metadata: Option<&str>,
     ) -> Result<(), String> {
+        use oxo_flow_core::audit_chain::{AuditChainAppend, canonical_metadata_text};
+
         let id = Uuid::new_v4().to_string();
-        let now = Self::now();
+        let now = oxo_flow_core::audit_chain::now_canonical_timestamp();
+        let metadata = canonical_metadata_text(metadata);
         // The audit_logs.user_id FK (REFERENCES users(id)) rejects any id
         // without a users row — and authenticated ids are not limited to the
         // seeded 'default' user (OAuth/env-provisioned users never pass
         // through here). The synthetic viewer row is therefore functionally
-        // required, not bookkeeping garnish; ON CONFLICT (id) DO NOTHING
-        // keeps repeat audits of the same id race-tolerant. (SQLite
-        // record_audit_log mirrors this with INSERT OR IGNORE — keep the
-        // two in step.)
+        // required; ON CONFLICT (id) DO NOTHING keeps repeat audits of the
+        // same id race-tolerant. (SQLite record_audit_log mirrors this with
+        // INSERT OR IGNORE — keep the two in step.)
         //
-        // The synthetic-user seed and the audit row commit together (issue
-        // #1311): a failure can no longer leave a seeded user with no audit
-        // row. `begin_audit_intent`/`finalize_audit_intent` below share this
-        // single-transaction discipline.
+        // The synthetic-user seed, the audit row, and the terminal chain
+        // event commit together (issue #1311 + #1372): a failure can no
+        // longer leave a seeded user with no audit row, and no audit row can
+        // exist without its chain event.
         let mut tx = self.pool.begin().await.map_err(|e| e.to_string())?;
+        let head = Self::lock_audit_chain_head(&mut tx).await?;
         sqlx::query(
             "INSERT INTO users (id, username, role, auth_type, os_user, created_at) VALUES ($1, $2, 'viewer', 'audit', NULL, $3) ON CONFLICT (id) DO NOTHING",
         )
@@ -1963,11 +2072,33 @@ impl StorageBackend for PostgresBackend {
         .bind(action)
         .bind(target)
         .bind(result)
-        .bind(metadata)
+        .bind(metadata.as_deref())
         .bind(&now)
         .execute(&mut *tx)
         .await
         .map_err(|e| e.to_string())?;
+
+        if let Err(error) = Self::append_audit_chain_event(
+            &mut tx,
+            &head,
+            AuditChainAppend {
+                seq: 0, // replaced inside the helper from the locked head
+                prev_hash: "",
+                audit_id: &id,
+                phase: result,
+                user_id,
+                action,
+                target,
+                result,
+                metadata: metadata.as_deref(),
+                timestamp: &now,
+            },
+        )
+        .await
+        {
+            let _ = tx.rollback().await;
+            return Err(error);
+        }
         tx.commit().await.map_err(|e| e.to_string())?;
         Ok(())
     }
@@ -1980,13 +2111,20 @@ impl StorageBackend for PostgresBackend {
         target: &str,
         metadata: Option<&str>,
     ) -> Result<(), String> {
-        // Write-ahead audit intent (issue #1311): the `pending` row is
-        // committed BEFORE the handler runs, so a crash between the mutation
-        // and its outcome write leaves a durable row for the action — the
-        // trail is never shorter than the set of mutations. The synthetic
-        // user seed and the row share one transaction (see record_audit_log).
-        let now = Self::now();
+        use oxo_flow_core::audit_chain::{
+            AuditChainAppend, PHASE_PENDING, canonical_metadata_text,
+        };
+
+        // Write-ahead audit intent (issue #1311): the `pending` row and its
+        // chain event are committed BEFORE the handler runs, so a crash
+        // between the mutation and its outcome write leaves a durable,
+        // chained row for the action — the trail is never shorter than the set
+        // of mutations. One serialized transaction covers the synthetic-user
+        // seed, the row, and the chain event (see record_audit_log).
+        let now = oxo_flow_core::audit_chain::now_canonical_timestamp();
+        let metadata = canonical_metadata_text(metadata);
         let mut tx = self.pool.begin().await.map_err(|e| e.to_string())?;
+        let head = Self::lock_audit_chain_head(&mut tx).await?;
         sqlx::query(
             "INSERT INTO users (id, username, role, auth_type, os_user, created_at) VALUES ($1, $2, 'viewer', 'audit', NULL, $3) ON CONFLICT (id) DO NOTHING",
         )
@@ -2003,11 +2141,32 @@ impl StorageBackend for PostgresBackend {
         .bind(user_id)
         .bind(action)
         .bind(target)
-        .bind(metadata)
+        .bind(metadata.as_deref())
         .bind(&now)
         .execute(&mut *tx)
         .await
         .map_err(|e| e.to_string())?;
+        if let Err(error) = Self::append_audit_chain_event(
+            &mut tx,
+            &head,
+            AuditChainAppend {
+                seq: 0, // replaced inside the helper from the locked head
+                prev_hash: "",
+                audit_id: id,
+                phase: PHASE_PENDING,
+                user_id,
+                action,
+                target,
+                result: PHASE_PENDING,
+                metadata: metadata.as_deref(),
+                timestamp: &now,
+            },
+        )
+        .await
+        {
+            let _ = tx.rollback().await;
+            return Err(error);
+        }
         tx.commit().await.map_err(|e| e.to_string())?;
         Ok(())
     }
@@ -2018,20 +2177,114 @@ impl StorageBackend for PostgresBackend {
         result: &str,
         metadata: Option<&str>,
     ) -> Result<(), String> {
+        use oxo_flow_core::audit_chain::{
+            AuditChainAppend, PHASE_PENDING, canonical_metadata_text,
+        };
+
         // Replace the write-ahead intent's `pending` marker with the observed
-        // outcome. A missing row is an error: the intent was durably written,
-        // so its disappearance means the trail is broken (issue #1311).
-        let rows = sqlx::query("UPDATE audit_logs SET result = $1, metadata = $2 WHERE id = $3")
-            .bind(result)
-            .bind(metadata)
-            .bind(id)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| e.to_string())?;
-        if rows.rows_affected() == 0 {
+        // outcome and append the terminal chain event in the SAME serialized
+        // transaction. Idempotence / first-wins (issue #1372):
+        //
+        // - missing row            → error (the intent was durable; its
+        //                            disappearance means the trail is broken),
+        // - already terminal same  → Ok, no event (a retried finalize),
+        // - already terminal other → Ok, no event (first terminal write wins).
+        //
+        // The head lock serializes concurrent finalizes of one intent.
+        let mut tx = self.pool.begin().await.map_err(|e| e.to_string())?;
+        let head = Self::lock_audit_chain_head(&mut tx).await?;
+        let row: Option<models::AuditLogRow> = sqlx::query_as(
+            "SELECT id, user_id, action, target, result, metadata, timestamp \
+             FROM audit_logs WHERE id = $1 FOR UPDATE",
+        )
+        .bind(id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+        let Some(row) = row else {
+            let _ = tx.rollback().await;
             return Err(format!("audit intent row {id} not found to finalize"));
+        };
+        if row.result != PHASE_PENDING {
+            // A retry or a losing conflicting finalize: nothing to append.
+            tx.commit().await.map_err(|e| e.to_string())?;
+            return Ok(());
         }
+
+        let metadata = canonical_metadata_text(metadata);
+        let updated = sqlx::query(
+            "UPDATE audit_logs SET result = $1, metadata = $2 WHERE id = $3 AND result = 'pending'",
+        )
+        .bind(result)
+        .bind(metadata.as_deref())
+        .bind(id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+        if updated.rows_affected() != 1 {
+            let _ = tx.rollback().await;
+            return Err(format!(
+                "audit intent row {id} changed state inside its finalize transaction"
+            ));
+        }
+
+        if let Err(error) = Self::append_audit_chain_event(
+            &mut tx,
+            &head,
+            AuditChainAppend {
+                seq: 0, // replaced inside the helper from the locked head
+                prev_hash: "",
+                audit_id: id,
+                phase: result,
+                user_id: &row.user_id,
+                action: &row.action,
+                target: &row.target,
+                result,
+                metadata: metadata.as_deref(),
+                timestamp: &row.timestamp,
+            },
+        )
+        .await
+        {
+            let _ = tx.rollback().await;
+            return Err(error);
+        }
+        tx.commit().await.map_err(|e| e.to_string())?;
         Ok(())
+    }
+
+    async fn audit_chain_snapshot(&self) -> Result<models::AuditChainSnapshot, String> {
+        // One transaction with a shared lock on the head row: appenders take
+        // the same row FOR UPDATE, so they wait while this snapshot is read
+        // and the exported head can never lead or lag its events.
+        let mut tx = self.pool.begin().await.map_err(|e| e.to_string())?;
+        let head_row: models::AuditChainHeadRow =
+            sqlx::query_as("SELECT seq, hash FROM audit_chain_head WHERE id = 1 FOR SHARE")
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(|e| format!("lock audit chain head for snapshot: {e}"))?;
+        let head = head_row.into_head()?;
+        let rows: Vec<models::AuditChainEventRow> = sqlx::query_as(
+            "SELECT seq, audit_id, phase, user_id, action, target, result, metadata, \
+             timestamp, prev_hash, hash FROM audit_chain ORDER BY seq ASC",
+        )
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(|e| format!("read audit chain events: {e}"))?;
+        let logs: Vec<models::AuditLogRow> = sqlx::query_as(
+            "SELECT id, user_id, action, target, result, metadata, timestamp \
+             FROM audit_logs ORDER BY id ASC",
+        )
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(|e| format!("read audit_logs snapshot: {e}"))?;
+        tx.commit().await.map_err(|e| e.to_string())?;
+
+        let events = rows
+            .into_iter()
+            .map(models::AuditChainEventRow::into_event)
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(models::AuditChainSnapshot { head, events, logs })
     }
 
     async fn list_audit_logs(

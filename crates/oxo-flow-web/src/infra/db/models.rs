@@ -455,6 +455,102 @@ pub struct AuditLogRow {
     pub timestamp: String,
 }
 
+impl AuditLogRow {
+    /// The export/verification view of this row: the metadata column becomes
+    /// canonical JSON rather than an escaped string.
+    pub fn into_chain_record(self) -> oxo_flow_core::audit_chain::AuditChainLogRecord {
+        oxo_flow_core::audit_chain::AuditChainLogRecord::from_columns(
+            &self.id,
+            &self.user_id,
+            &self.action,
+            &self.target,
+            &self.result,
+            self.metadata.as_deref(),
+            &self.timestamp,
+        )
+    }
+}
+
+/// One stored link of the append-only audit chain (issue #1372).
+#[derive(Debug, Clone, FromRow)]
+pub struct AuditChainEventRow {
+    pub seq: i64,
+    pub audit_id: String,
+    pub phase: String,
+    pub user_id: String,
+    pub action: String,
+    pub target: String,
+    pub result: String,
+    pub metadata: Option<String>,
+    pub timestamp: String,
+    pub prev_hash: String,
+    pub hash: String,
+}
+
+impl AuditChainEventRow {
+    /// Convert the stored row into the shared canonical event type.
+    pub fn into_event(self) -> Result<oxo_flow_core::audit_chain::AuditChainEvent, String> {
+        let seq = u64::try_from(self.seq)
+            .map_err(|_| format!("audit chain row has negative seq {}", self.seq))?;
+        let metadata = oxo_flow_core::audit_chain::metadata_value(self.metadata.as_deref());
+        Ok(oxo_flow_core::audit_chain::AuditChainEvent {
+            seq,
+            audit_id: self.audit_id,
+            phase: self.phase,
+            user_id: self.user_id,
+            action: self.action,
+            target: self.target,
+            result: self.result,
+            metadata: Some(metadata).filter(|value| !value.is_null()),
+            timestamp: self.timestamp,
+            prev_hash: self.prev_hash,
+            hash: self.hash,
+        })
+    }
+}
+
+/// The one-row chain cursor as stored (id is always 1).
+#[derive(Debug, Clone, FromRow)]
+pub struct AuditChainHeadRow {
+    pub seq: i64,
+    pub hash: String,
+}
+
+impl AuditChainHeadRow {
+    pub fn into_head(self) -> Result<oxo_flow_core::audit_chain::AuditChainHead, String> {
+        let seq = u64::try_from(self.seq)
+            .map_err(|_| format!("audit chain head has negative seq {}", self.seq))?;
+        Ok(oxo_flow_core::audit_chain::AuditChainHead {
+            seq,
+            hash: self.hash,
+        })
+    }
+}
+
+/// A consistent read of the whole chain plus the `audit_logs` snapshot it
+/// describes. Read in one transaction so an export cannot splice a head from
+/// one moment with events from another.
+#[derive(Debug, Clone)]
+pub struct AuditChainSnapshot {
+    pub head: oxo_flow_core::audit_chain::AuditChainHead,
+    pub events: Vec<oxo_flow_core::audit_chain::AuditChainEvent>,
+    pub logs: Vec<AuditLogRow>,
+}
+
+impl AuditChainSnapshot {
+    /// Assemble the portable export document from this snapshot.
+    pub fn into_export(self) -> oxo_flow_core::audit_chain::AuditChainExport {
+        oxo_flow_core::audit_chain::AuditChainExport::new(
+            self.head,
+            self.events,
+            self.logs
+                .into_iter()
+                .map(AuditLogRow::into_chain_record)
+                .collect(),
+        )
+    }
+}
+
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct ClusterRow {
     pub id: String,
