@@ -629,7 +629,9 @@ impl BackendDriver {
                             let sensitive_refs: Vec<String> = chunk
                                 .iter()
                                 .flat_map(|(_, sr)| {
-                                    crate::executor::process::sensitive_env_refs(&sr.shell_cmd)
+                                    crate::executor::process::sensitive_env_refs(
+                                        self.backend.submitted_cmd(sr),
+                                    )
                                 })
                                 .collect::<std::collections::BTreeSet<_>>()
                                 .into_iter()
@@ -657,9 +659,14 @@ impl BackendDriver {
                                 .map(|path| format!("{} && ", source_sensitive_env_file(path)));
                             for (i, (_, c_sr)) in chunk.iter().enumerate() {
                                 let cmd_path = job_dir.join(format!("cmd.{}.sh", i + 1));
+                                // Issue #1388: an image-rendering backend
+                                // (Kubernetes) writes the wrapper-free
+                                // command — the pod image IS the environment;
+                                // every other backend keeps the wrapped text.
+                                let submitted = self.backend.submitted_cmd(c_sr);
                                 let mut contents = match env_prefix {
-                                    Some(ref prefix) => format!("{prefix}{}", c_sr.shell_cmd),
-                                    None => c_sr.shell_cmd.clone(),
+                                    Some(ref prefix) => format!("{prefix}{submitted}"),
+                                    None => submitted.to_string(),
                                 };
                                 // [cluster.volume] (issue #1387): the
                                 // per-index command files fold
@@ -838,7 +845,7 @@ impl BackendDriver {
                                     &inst_dir,
                                     &element_id,
                                     &crate::executor::process::mask_sensitive(
-                                        &c_sr.shell_cmd,
+                                        self.backend.submitted_cmd(c_sr),
                                         opts.sensitive_values,
                                     ),
                                     "PENDING",
@@ -866,8 +873,9 @@ impl BackendDriver {
                             // command sources it inside the `env -i` shell
                             // (issue #1120 / RB-12).
                             let env_file = {
-                                let refs =
-                                    crate::executor::process::sensitive_env_refs(&c_sr.shell_cmd);
+                                let refs = crate::executor::process::sensitive_env_refs(
+                                    self.backend.submitted_cmd(c_sr),
+                                );
                                 if self.backend.uses_secret_env_file() && !refs.is_empty() {
                                     let path = job_dir.join(super::SENSITIVE_ENV_FILE_NAME);
                                     cancel_on_error!(write_sensitive_env_file(
@@ -926,7 +934,7 @@ impl BackendDriver {
                                 &job_dir,
                                 &job_id,
                                 &crate::executor::process::mask_sensitive(
-                                    &c_sr.shell_cmd,
+                                    self.backend.submitted_cmd(c_sr),
                                     opts.sensitive_values,
                                 ),
                                 "PENDING",
@@ -1312,7 +1320,7 @@ impl BackendDriver {
                                 &opts.run_dir.join("jobs").join(sanitize(&f.rule)),
                                 &job_id,
                                 &crate::executor::process::mask_sensitive(
-                                    &plan.rules[&f.rule].shell_cmd,
+                                    self.backend.submitted_cmd(&plan.rules[&f.rule]),
                                     opts.sensitive_values,
                                 ),
                                 "COMPLETED",
@@ -1336,7 +1344,7 @@ impl BackendDriver {
                                 stdout: None,
                                 stderr: None,
                                 command: Some(crate::executor::process::mask_sensitive(
-                                    &plan.rules[&f.rule].shell_cmd,
+                                    self.backend.submitted_cmd(&plan.rules[&f.rule]),
                                     opts.sensitive_values,
                                 )),
                                 retries: 0,
@@ -1424,7 +1432,7 @@ impl BackendDriver {
                                 stdout: None,
                                 stderr: None,
                                 command: Some(crate::executor::process::mask_sensitive(
-                                    &plan.rules[&f.rule].shell_cmd,
+                                    self.backend.submitted_cmd(&plan.rules[&f.rule]),
                                     opts.sensitive_values,
                                 )),
                                 retries: 0,
@@ -1448,7 +1456,7 @@ impl BackendDriver {
                             stdout: None,
                             stderr: None,
                             command: Some(crate::executor::process::mask_sensitive(
-                                &plan.rules[&f.rule].shell_cmd,
+                                self.backend.submitted_cmd(&plan.rules[&f.rule]),
                                 opts.sensitive_values,
                             )),
                             retries: 0,
@@ -1585,7 +1593,7 @@ impl BackendDriver {
                         stdout: None,
                         stderr: None,
                         command: Some(crate::executor::process::mask_sensitive(
-                            &plan.rules[&f.rule].shell_cmd,
+                            self.backend.submitted_cmd(&plan.rules[&f.rule]),
                             opts.sensitive_values,
                         )),
                         retries: 0,
@@ -3491,6 +3499,10 @@ shell = "echo asm > out/{assembler}.txt"
     struct MockBackend {
         inner: Arc<std::sync::Mutex<MockState>>,
         direct: bool,
+        /// Model an image-rendering backend (issue #1388): the per-index
+        /// command files must then carry the wrapper-free
+        /// `ScheduledRule::container_image` command.
+        image_rendering: bool,
     }
     #[derive(Default)]
     struct MockState {
@@ -3521,7 +3533,13 @@ shell = "echo asm > out/{assembler}.txt"
                     ..Default::default()
                 })),
                 direct,
+                image_rendering: false,
             }
+        }
+        /// Model the Kubernetes image-rendering mode (issue #1388).
+        fn rendering_images(mut self) -> Self {
+            self.image_rendering = true;
+            self
         }
         fn state(&self) -> Arc<std::sync::Mutex<MockState>> {
             self.inner.clone()
@@ -3618,6 +3636,9 @@ shell = "echo asm > out/{assembler}.txt"
         }
         fn polls_elements_directly(&self) -> bool {
             self.direct
+        }
+        fn renders_container_image(&self, _rule: &crate::rule::Rule) -> bool {
+            self.image_rendering
         }
     }
 
@@ -3718,6 +3739,92 @@ shell = "echo asm > out/{assembler}.txt"
             c1, c2,
             "sibling chunks must not overwrite each other's cmd files"
         );
+    }
+
+    /// Issue #1388: on an image-rendering backend the per-index array command
+    /// files carry the WRAPPER-FREE command — the pod image IS the
+    /// environment, so a folded `docker run` would try to start a container
+    /// runtime inside the job container. The wrapped `shell_cmd` must not
+    /// leak into the files.
+    #[test]
+    fn array_command_files_carry_the_wrapper_free_command_on_an_image_backend() {
+        let fx = setup();
+        let mut plan = sibling_plan(fx.workdir.path(), 2);
+        for (name, sr) in plan.rules.iter_mut() {
+            sr.shell_cmd = format!("echo wrapped-{name}");
+            sr.container_image = Some(crate::backend::ContainerImageRender {
+                kind: "docker",
+                spec: "busybox:1.36".to_string(),
+                command: format!("echo image-{name}"),
+            });
+        }
+        let to_run: HashSet<String> = plan.order.iter().cloned().collect();
+        let backend =
+            Arc::new(MockBackend::new(false, BackendJobStatus::Completed).rendering_images());
+        let d = BackendDriver::new(
+            backend,
+            DriverConfig {
+                max_submitted: 4,
+                max_array_size: 1001,
+                no_arrays: false,
+                poll_interval: std::time::Duration::from_millis(1),
+                poll_timeout: Some(std::time::Duration::from_secs(5)),
+                unknown_settle_grace: std::time::Duration::from_secs(90),
+                cancel: None,
+                keep_going: false,
+            },
+        );
+        let records = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(d.run(
+                &mut plan,
+                &to_run,
+                DriverOptions {
+                    run_dir: fx.run_dir.path(),
+                    on_checkpoint: None,
+                    merge: None,
+                    sensitive_values: &[],
+                    on_submit: None,
+                    on_settle: None,
+                },
+            ))
+            .unwrap();
+        assert_eq!(records.len(), 2, "both siblings settle");
+        for i in [1, 2] {
+            let cmd = std::fs::read_to_string(
+                fx.run_dir
+                    .path()
+                    .join("jobs/sib/chunk-1")
+                    .join(format!("cmd.{i}.sh")),
+            )
+            .unwrap();
+            assert!(
+                cmd.contains("echo image-"),
+                "the wrapper-free command must be written: {cmd}"
+            );
+            assert!(
+                !cmd.contains("wrapped-"),
+                "the local-wrapper text must never reach an image-rendered pod: {cmd}"
+            );
+        }
+        // The status/report record must name what was SUBMITTED, not the
+        // wrapper the pod does not run (issue #1388).
+        for instance in ["sib_01", "sib_02"] {
+            let status = std::fs::read_to_string(
+                fx.run_dir
+                    .path()
+                    .join(format!("jobs/{instance}/status.json")),
+            )
+            .unwrap();
+            assert!(
+                status.contains("echo image-"),
+                "{instance} status must record the submitted command: {status}"
+            );
+            assert!(
+                !status.contains("wrapped-"),
+                "{instance} status must not record the unused wrapper: {status}"
+            );
+        }
     }
 
     #[test]

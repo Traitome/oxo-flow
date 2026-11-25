@@ -1094,6 +1094,20 @@ pub async fn cluster_command(action: ClusterAction, json: bool) -> Result<()> {
                     // expansion templates to consult — an instance maps to
                     // itself.
                     template: rule_name.clone(),
+                    // Issue #1388: pair the rendered environment with the
+                    // wrapper-free command, so `cluster submit -b kubernetes`
+                    // renders an image-renderable environment exactly like
+                    // `run --profile` does. The scratch exports ride both
+                    // forms.
+                    container_image: oxo_flow_core::backend::container_image_render(
+                        rule,
+                        &match tmp_dir.as_deref() {
+                            Some(tmp) => {
+                                oxo_flow_core::backend::with_tmp_dir_exports(&shell_cmd, tmp)
+                            }
+                            None => shell_cmd.clone(),
+                        },
+                    ),
                     shell_cmd: wrapped_cmd,
                     workdir: cluster_workdir.clone(),
                     dependencies: dag.dependencies(rule_name).unwrap_or_default(),
@@ -2058,6 +2072,98 @@ mod tests {
         std::fs::remove_dir_all(&scripts).unwrap();
         run(submit_action(workflow, scripts.clone(), "slurm", false)).unwrap();
         assert!(scripts.join("submit.sh").exists());
+    }
+
+    /// Issue #1388: `cluster submit -b kubernetes` renders a docker /
+    /// singularity-`docker://` environment as the pod image and drops the
+    /// local container wrapper from the job command, exactly like
+    /// `run --profile`. A non-renderable environment keeps the wrapper and is
+    /// marked `wrapper-fallback` in the manifest.
+    #[test]
+    fn submit_renders_container_environments_as_kubernetes_pod_images() {
+        // The text the Job actually executes: behind the bash shim for an
+        // image-rendered rule (`args = [shim, "sh", text]`), bare for the
+        // historical fallback (`args = [text]`). Asserting on `args[0]`
+        // alone would inspect the shim and pass vacuously (review M4).
+        let executed = |manifest: &serde_json::Value| -> String {
+            let args = manifest["spec"]["template"]["spec"]["containers"][0]["args"]
+                .as_array()
+                .expect("container args")
+                .clone();
+            if args.first().and_then(|v| v.as_str())
+                == Some(oxo_flow_core::environment::CONTAINER_BASH_SHIM)
+            {
+                args[2].as_str().expect("shim command text").to_string()
+            } else {
+                args[0].as_str().expect("command text").to_string()
+            }
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let scripts = dir.path().join("scripts");
+        let workflow = dir.path().join("wf.oxoflow");
+        std::fs::write(
+            &workflow,
+            "[workflow]\nname = \"wf\"\n\
+             [[rules]]\nname = \"align\"\nshell = \"bwa mem ref.fa > out.bam\"\n\
+             output = [\"out.bam\"]\nenvironment = { singularity = \"docker://quay.io/x/bwa:1\" }\n",
+        )
+        .unwrap();
+        run(submit_action(workflow, scripts.clone(), "kubernetes", true)).unwrap();
+        let manifest: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(scripts.join("align.sh")).unwrap())
+                .unwrap();
+        let container = &manifest["spec"]["template"]["spec"]["containers"][0];
+        assert_eq!(container["image"], "quay.io/x/bwa:1");
+        assert_eq!(
+            container["command"],
+            serde_json::json!(["/bin/sh", "-c"]),
+            "image mode starts the bash-if-available shim from /bin/sh"
+        );
+        let submitted = executed(&manifest);
+        assert!(
+            !submitted.contains("singularity exec") && !submitted.contains("apptainer exec"),
+            "the executed command must not invoke the local wrapper: {submitted}"
+        );
+        assert!(
+            submitted.contains("bwa mem ref.fa > out.bam"),
+            "the executed text must be the rule command: {submitted}"
+        );
+        assert_eq!(
+            manifest["metadata"]["annotations"]["oxoflow.io/environment-render"],
+            "image"
+        );
+
+        // A conda environment cannot be baked into an image here: the local
+        // wrapper stays and the manifest says so.
+        let conda_dir = tempfile::tempdir().unwrap();
+        let conda_scripts = conda_dir.path().join("scripts");
+        let conda_workflow = conda_dir.path().join("wf.oxoflow");
+        std::fs::write(
+            &conda_workflow,
+            "[workflow]\nname = \"wf\"\n\
+             [[rules]]\nname = \"qc\"\nshell = \"fastqc in.fq\"\n\
+             output = [\"qc.html\"]\nenvironment = { conda = \"envs/qc.yaml\" }\n",
+        )
+        .unwrap();
+        run(submit_action(
+            conda_workflow,
+            conda_scripts.clone(),
+            "kubernetes",
+            true,
+        ))
+        .unwrap();
+        let manifest: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(conda_scripts.join("qc.sh")).unwrap())
+                .unwrap();
+        let submitted = executed(&manifest);
+        assert!(
+            submitted.contains("conda run"),
+            "the fallback must keep the wrapper: {submitted}"
+        );
+        assert_eq!(
+            manifest["metadata"]["annotations"]["oxoflow.io/environment-render"],
+            "wrapper-fallback"
+        );
     }
 
     #[test]

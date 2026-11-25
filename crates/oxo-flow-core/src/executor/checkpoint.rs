@@ -454,6 +454,45 @@ pub enum CheckpointCompat {
     Newer,
 }
 
+/// One rule's container environment as a cluster run rendered it
+/// (issue #1388).
+///
+/// Recorded on the run checkpoint so `provenance verify` can answer "which
+/// image did each rule's job run as, or which rule fell back to the folded
+/// wrapper?" — without claiming a digest the submit host never resolved.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClusterImageRecord {
+    /// [`Self::IMAGE`] when the environment was rendered as the job's own
+    /// image, [`Self::WRAPPER_FALLBACK`] when the local environment wrapper
+    /// stayed folded into the command, or [`Self::SYSTEM`] for a rule that
+    /// declares no environment (no wrapper exists).
+    pub render: String,
+    /// Environment backend kind (`docker`, `singularity`, `conda`, …).
+    pub kind: String,
+    /// The workflow-declared container reference for an image render (the
+    /// mirror-neutral identity). Empty for a fallback with no container spec.
+    pub spec: String,
+    /// The `image:` reference the job body carries — `OXO_REGISTRY_MIRRORS`
+    /// applied at render time. For a fallback this is the base image the
+    /// folded wrapper executes in, not the environment that does the work.
+    pub image: String,
+    /// Digest of [`Self::image`] as the submit host's LOCAL runtime reported
+    /// it offline. `None` means "not resolved here" — never an invented
+    /// digest, and never proof of what a compute node pulled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_digest: Option<String>,
+}
+
+impl ClusterImageRecord {
+    /// The environment was rendered as the job's own image.
+    pub const IMAGE: &'static str = "image";
+    /// The local environment wrapper stayed folded into the job command.
+    pub const WRAPPER_FALLBACK: &'static str = "wrapper-fallback";
+    /// The rule declares no environment at all, so there is no wrapper to
+    /// fall back to; the pod ran the command in its base image.
+    pub const SYSTEM: &'static str = "system";
+}
+
 /// Persistent checkpoint state for resumable workflow execution.
 ///
 /// Tracks which rules have completed or failed so that a restarted workflow
@@ -696,6 +735,18 @@ pub struct CheckpointState {
     #[serde(default)]
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub env_lock_identity: BTreeMap<String, String>,
+
+    /// Container images a cluster run planned for its jobs (issue #1388),
+    /// keyed by rule instance. Recorded on the cluster path only (Kubernetes,
+    /// the one image-rendering backend), before submission: the resolved image
+    /// reference and the offline-resolved digest when the submit host had one,
+    /// an explicit `wrapper-fallback` entry for rules whose environment could
+    /// not be rendered as an image, and `system` for rules with no
+    /// environment. See [`ClusterImageRecord`] for what is and is not bound.
+    /// Legacy checkpoints load with an empty map.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub cluster_images: BTreeMap<String, ClusterImageRecord>,
 }
 
 /// Canonical on-the-wire form: template → combos → key-sorted
@@ -835,6 +886,7 @@ impl CheckpointState {
             env_repro_degraded: false,
             repair_record: None,
             env_lock_identity: BTreeMap::new(),
+            cluster_images: BTreeMap::new(),
         }
     }
 
@@ -1061,6 +1113,14 @@ impl CheckpointState {
     /// map: it is recomputed once at run start from the resolved workflow.
     pub fn set_env_lock_identity(&mut self, identity: BTreeMap<String, String>) {
         self.env_lock_identity = identity;
+    }
+
+    /// Record the per-rule container images a cluster run rendered (issue
+    /// #1388). Merges into the existing map: a resume/retry submits a subset
+    /// of rules, and the images its predecessor already recorded must survive.
+    /// A re-submitted rule's entry is overwritten with its current rendering.
+    pub fn record_cluster_images(&mut self, images: BTreeMap<String, ClusterImageRecord>) {
+        self.cluster_images.extend(images);
     }
 
     /// Resolve the HEAD commit SHA of the git repository containing
@@ -2574,6 +2634,95 @@ mod tests {
     use crate::storage::{RemoteStat, StorageBackend, StoragePath, StorageResolver, StorageScheme};
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn cluster_images_serialize_only_when_recorded() {
+        // Issue #1388: the per-rule image record is additive and legacy-safe
+        // (empty stays out of the JSON), and a recorded digest resolves back
+        // exactly — no sentinel or fabricated value appears.
+        let mut state = CheckpointState::new();
+        assert!(
+            !serde_json::to_string(&state)
+                .unwrap()
+                .contains("cluster_images"),
+            "an empty map must not serialize (legacy-skip convention)"
+        );
+
+        let mut map = BTreeMap::new();
+        map.insert(
+            "align".to_string(),
+            ClusterImageRecord {
+                render: ClusterImageRecord::IMAGE.to_string(),
+                kind: "docker".to_string(),
+                spec: "busybox:1.36".to_string(),
+                image: "mirror.example.com/busybox:1.36".to_string(),
+                resolved_digest: None,
+            },
+        );
+        map.insert(
+            "qc".to_string(),
+            ClusterImageRecord {
+                render: ClusterImageRecord::WRAPPER_FALLBACK.to_string(),
+                kind: "conda".to_string(),
+                spec: String::new(),
+                image: "ubuntu:latest".to_string(),
+                resolved_digest: None,
+            },
+        );
+        state.record_cluster_images(map);
+
+        let json = serde_json::to_string(&state).unwrap();
+        assert!(json.contains("cluster_images"));
+        // An unresolved digest is absent, never a null claim or sentinel.
+        assert!(
+            !json.contains("resolved_digest"),
+            "an unresolved digest must stay out of the artifact: {json}"
+        );
+        let mut back: CheckpointState = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.cluster_images["align"].render, "image");
+        assert_eq!(
+            back.cluster_images["align"].image,
+            "mirror.example.com/busybox:1.36"
+        );
+        assert_eq!(back.cluster_images["qc"].render, "wrapper-fallback");
+
+        // A checkpoint written before this field existed loads with an empty
+        // map (skip-serialized ⇒ absent ⇒ serde default).
+        let legacy_json = serde_json::to_string(&CheckpointState::new()).unwrap();
+        let legacy: CheckpointState = serde_json::from_str(&legacy_json).unwrap();
+        assert!(legacy.cluster_images.is_empty());
+
+        // Re-submission MERGES (a resume submits a subset; the predecessor's
+        // records must survive) and overwrites a re-rendered rule.
+        let mut resumed = BTreeMap::new();
+        resumed.insert(
+            "align".to_string(),
+            ClusterImageRecord {
+                render: ClusterImageRecord::IMAGE.to_string(),
+                kind: "docker".to_string(),
+                spec: "busybox:1.37".to_string(),
+                image: "busybox:1.37".to_string(),
+                resolved_digest: None,
+            },
+        );
+        resumed.insert(
+            "report".to_string(),
+            ClusterImageRecord {
+                render: ClusterImageRecord::SYSTEM.to_string(),
+                kind: "system".to_string(),
+                spec: String::new(),
+                image: "ubuntu:latest".to_string(),
+                resolved_digest: None,
+            },
+        );
+        back.record_cluster_images(resumed);
+        assert_eq!(back.cluster_images.len(), 3, "unsent rules must survive");
+        assert_eq!(back.cluster_images["qc"].render, "wrapper-fallback");
+        assert_eq!(
+            back.cluster_images["align"].spec, "busybox:1.37",
+            "a re-submitted rule's record is refreshed"
+        );
+    }
 
     #[test]
     fn mark_completed_quiet_preserves_measured_benchmark() {

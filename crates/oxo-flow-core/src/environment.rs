@@ -648,8 +648,22 @@ pub(crate) fn spec_content_tag(spec: &str) -> String {
 /// pipefail`, `[[ ]]`); eager 2.5.3 (`set: Illegal option -o pipefail`) and
 /// the nanoseq qcat `[[ ]]` failures were both this mismatch. The script is
 /// passed as `$1` so it is never re-escaped into the shim text.
-const CONTAINER_BASH_SHIM: &str = "if command -v bash >/dev/null 2>&1; \
+///
+/// Public because image-based cluster rendering (issue #1388) removes the
+/// container wrapper but must preserve ITS shell contract: a pod running an
+/// image directly has the same bash-vs-sh uncertainty as a wrapped container.
+pub const CONTAINER_BASH_SHIM: &str = "if command -v bash >/dev/null 2>&1; \
 then exec bash -c \"$1\"; else exec sh -c \"$1\"; fi";
+
+/// File-level counterpart of [`CONTAINER_BASH_SHIM`]: run the script FILE
+/// named by `$1` with bash when the image has it, else `sh`.
+///
+/// The per-index command files of a Kubernetes Indexed Job are scripts, not a
+/// command string, so the shim execs the file interpreter instead of
+/// re-wrapping the text — the same bash-preferred contract as the local
+/// container wrapper (`bash cmd.N.sh` instead of dash reading it).
+pub const CONTAINER_BASH_FILE_SHIM: &str =
+    "if command -v bash >/dev/null 2>&1; then exec bash \"$1\"; else exec sh \"$1\"; fi";
 
 /// Escape a string for safe embedding inside a `sh -c '...'` invocation.
 ///
@@ -923,6 +937,54 @@ pub fn is_unqualified_image_spec(spec: &str) -> bool {
                 None => false,
             }
         }
+    }
+}
+
+/// A rule environment resolved to the container image a cluster backend can
+/// run as its own job image (issue #1388).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContainerImageSpec {
+    /// Backend that supplied the reference: `"docker"`, or `"singularity"`
+    /// for a `docker://` pull URI.
+    pub kind: &'static str,
+    /// The image reference WITHOUT the `docker://` transport prefix and
+    /// WITHOUT `OXO_REGISTRY_MIRRORS` rewriting. This is the identity key
+    /// shared with the environment cache and provenance; apply the registry
+    /// mirror mapping at render/pull time only.
+    pub spec: String,
+}
+
+/// The image a cluster backend can render a rule's environment onto, or
+/// `None` when the environment cannot be rendered as an image (issue #1388).
+///
+/// Renderable:
+///
+/// - `environment.docker = "<spec>"` → `<spec>`.
+/// - `environment.singularity = "docker://<spec>"` → `<spec>`.
+///
+/// Not renderable: a local SIF path, any non-`docker://` singularity URI, and
+/// every other backend (conda/mamba/pixi/venv/system/modules) — materializing
+/// a conda environment into an image needs an explicit bake step, which is out
+/// of scope. The environment's primary [`EnvironmentSpec::kind`] decides, so a
+/// rule that declares several backends resolves the same one the local
+/// executor would wrap.
+#[must_use]
+pub fn renderable_container_image(env_spec: &EnvironmentSpec) -> Option<ContainerImageSpec> {
+    match env_spec.kind() {
+        "docker" => env_spec.docker.as_deref().map(|spec| ContainerImageSpec {
+            kind: "docker",
+            spec: spec.to_string(),
+        }),
+        "singularity" => env_spec
+            .singularity
+            .as_deref()
+            .and_then(|spec| spec.strip_prefix("docker://"))
+            .filter(|spec| !spec.is_empty())
+            .map(|spec| ContainerImageSpec {
+                kind: "singularity",
+                spec: spec.to_string(),
+            }),
+        _ => None,
     }
 }
 
@@ -3568,6 +3630,88 @@ mod tests {
     }
 
     // ── Registry mirror rewriting ────────────────────────────────────
+
+    /// The image a cluster backend can render (issue #1388): docker specs
+    /// verbatim, singularity `docker://` URIs reduced to the underlying
+    /// image, and everything that names a file or another transport left
+    /// un-renderable. The spec stays mirror-neutral — a mirrored transport
+    /// ref is derived at render time, never stored as the identity.
+    #[test]
+    fn renderable_container_image_resolves_only_image_references() {
+        let docker = EnvironmentSpec {
+            docker: Some("biocontainers/bwa:0.7.17".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            renderable_container_image(&docker),
+            Some(ContainerImageSpec {
+                kind: "docker",
+                spec: "biocontainers/bwa:0.7.17".to_string(),
+            })
+        );
+
+        let singularity_uri = EnvironmentSpec {
+            singularity: Some("docker://quay.io/biocontainers/bwa:0.7.17".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            renderable_container_image(&singularity_uri),
+            Some(ContainerImageSpec {
+                kind: "singularity",
+                spec: "quay.io/biocontainers/bwa:0.7.17".to_string(),
+            })
+        );
+
+        // A local SIF and any non-docker transport name no pullable image.
+        for spec in [
+            "/shared/containers/bwa-0.7.17.sif",
+            "./bwa.sif",
+            "library://sylabsed/examples/lolcow",
+            "https://depot.galaxyproject.org/singularity/bwa%3A0.7.17",
+            "docker://",
+        ] {
+            let env = EnvironmentSpec {
+                singularity: Some(spec.to_string()),
+                ..Default::default()
+            };
+            assert_eq!(
+                renderable_container_image(&env),
+                None,
+                "{spec} must not be renderable as an image"
+            );
+        }
+
+        // No container backend: conda/pixi/venv/system need an explicit bake.
+        for env in [
+            EnvironmentSpec {
+                conda: Some("envs/align.yaml".to_string()),
+                ..Default::default()
+            },
+            EnvironmentSpec {
+                pixi: Some("pixi.toml".to_string()),
+                ..Default::default()
+            },
+            EnvironmentSpec {
+                venv: Some("venv/".to_string()),
+                ..Default::default()
+            },
+            EnvironmentSpec::default(),
+        ] {
+            assert_eq!(renderable_container_image(&env), None, "{env:?}");
+        }
+
+        // The primary kind decides: a docker spec wins over a singularity one,
+        // matching the wrapper the local executor would build.
+        let both = EnvironmentSpec {
+            docker: Some("ubuntu:22.04".to_string()),
+            singularity: Some("docker://quay.io/x/y:1".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            renderable_container_image(&both).map(|image| image.spec),
+            Some("ubuntu:22.04".to_string())
+        );
+    }
 
     #[test]
     fn mirrored_spec_rewrites_docker_uri_hosts() {

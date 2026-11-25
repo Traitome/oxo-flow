@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use colored::Colorize;
+use oxo_flow_core::executor::checkpoint::ClusterImageRecord;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
@@ -94,6 +95,15 @@ impl WorkflowContentCheck {
             actual: Some(actual.to_string()),
         }
     }
+}
+
+/// Parse the checkpoint's `cluster_images` map (issue #1388). An absent or
+/// malformed map is empty — checksum verification is unaffected either way.
+fn parse_cluster_images(checkpoint: &serde_json::Value) -> BTreeMap<String, ClusterImageRecord> {
+    checkpoint
+        .get("cluster_images")
+        .and_then(|value| serde_json::from_value(value.clone()).ok())
+        .unwrap_or_default()
 }
 
 /// Re-hash the workflow file the checkpoint names and compare it with the
@@ -573,6 +583,50 @@ pub fn provenance_verify_command(checkpoint_path: PathBuf, json: bool) -> Result
         }
     }
 
+    // Cluster-rendered container images (issue #1388): the image each
+    // planned rule was to run as on an image-rendering cluster backend, an
+    // explicit `wrapper-fallback` entry, or `system` for a rule that declares
+    // no environment. Present only on checkpoints written by the Kubernetes
+    // cluster path. A missing `resolved_digest` is reported as exactly that —
+    // the submit host's local runtime did not have the image; it is never a
+    // claim about what a node pulled.
+    let cluster_images = parse_cluster_images(&checkpoint);
+    if !cluster_images.is_empty() {
+        eprintln!(
+            "  {} cluster images: {} rule(s)",
+            "•".dimmed(),
+            cluster_images.len()
+        );
+        for (rule, record) in &cluster_images {
+            match record.render.as_str() {
+                ClusterImageRecord::IMAGE => eprintln!(
+                    "    {} {}: image {} ({}) — {}",
+                    "•".dimmed(),
+                    rule,
+                    record.image,
+                    record.spec,
+                    record
+                        .resolved_digest
+                        .as_deref()
+                        .unwrap_or("digest not resolved on the submit host")
+                ),
+                ClusterImageRecord::SYSTEM => eprintln!(
+                    "    {} {}: system environment (no wrapper), pod base image {}",
+                    "•".dimmed(),
+                    rule,
+                    record.image
+                ),
+                _ => eprintln!(
+                    "    {} {}: wrapper-fallback ({}), pod base image {}",
+                    "!".yellow(),
+                    rule,
+                    record.kind,
+                    record.image
+                ),
+            }
+        }
+    }
+
     // Content digest of the workflow file as read at run start (issue
     // #1324): the authoritative record when the tree is dirty; HEAD alone
     // cannot distinguish two runs of the same uncommitted file. Covers the
@@ -731,6 +785,7 @@ pub fn provenance_verify_command(checkpoint_path: PathBuf, json: bool) -> Result
                         "cleaned": 0,
                         "entries": [],
                         "env_lock_identity": env_lock_identity,
+                        "cluster_images": &cluster_images,
                         "workflow_git_sha": checkpoint.get("workflow_git_sha").cloned(),
                         "workflow_content_hash": checkpoint.get("workflow_content_hash").cloned(),
                         "workflow_resolved_hash": checkpoint.get("workflow_resolved_hash").cloned(),
@@ -768,6 +823,7 @@ pub fn provenance_verify_command(checkpoint_path: PathBuf, json: bool) -> Result
                     "cleaned": 0,
                     "entries": [],
                     "env_lock_identity": env_lock_identity,
+                    "cluster_images": &cluster_images,
                     "workflow_git_sha": checkpoint.get("workflow_git_sha").cloned(),
                     "workflow_content_hash": checkpoint.get("workflow_content_hash").cloned(),
                     "workflow_resolved_hash": checkpoint.get("workflow_resolved_hash").cloned(),
@@ -860,6 +916,7 @@ pub fn provenance_verify_command(checkpoint_path: PathBuf, json: bool) -> Result
                 "cleaned": cleaned,
                 "entries": entries,
                 "env_lock_identity": env_lock_identity,
+                "cluster_images": &cluster_images,
                 "workflow_git_sha": checkpoint.get("workflow_git_sha").cloned(),
                 "workflow_content_hash": checkpoint.get("workflow_content_hash").cloned(),
                 "workflow_resolved_hash": checkpoint.get("workflow_resolved_hash").cloned(),
@@ -938,6 +995,50 @@ mod tests {
             verify_files(&HashMap::new(), &cleaned, dir.path());
         assert_eq!((matched, mismatched, missing, cleaned_n), (0, 0, 0, 1));
         assert_eq!(entries[0].status, "cleaned");
+    }
+
+    #[test]
+    fn cluster_images_parse_from_the_checkpoint_and_never_fabricate_a_digest() {
+        // Issue #1388: the cluster-image record survives into `provenance
+        // verify` as recorded — a missing digest stays missing (the output
+        // says "not resolved on the submit host"), never a sentinel that
+        // could read as a resolved identity.
+        let checkpoint = serde_json::json!({
+            "cluster_images": {
+                "align": {
+                    "render": "image",
+                    "kind": "docker",
+                    "spec": "busybox:1.36",
+                    "image": "mirror.example.com/busybox:1.36",
+                    "resolved_digest": "busybox@sha256:feedface"
+                },
+                "qc": {
+                    "render": "wrapper-fallback",
+                    "kind": "conda",
+                    "spec": "",
+                    "image": "ubuntu:latest"
+                }
+            }
+        });
+        let parsed = parse_cluster_images(&checkpoint);
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed["align"].render, ClusterImageRecord::IMAGE);
+        assert_eq!(
+            parsed["align"].resolved_digest.as_deref(),
+            Some("busybox@sha256:feedface")
+        );
+        assert_eq!(parsed["qc"].render, ClusterImageRecord::WRAPPER_FALLBACK);
+        assert_eq!(parsed["qc"].resolved_digest, None);
+
+        // Absent (local/HPC checkpoint) and malformed maps are both empty;
+        // checksum verification is unaffected.
+        assert!(parse_cluster_images(&serde_json::json!({})).is_empty());
+        assert!(parse_cluster_images(&serde_json::json!({"cluster_images": "junk"})).is_empty());
+        assert!(
+            parse_cluster_images(&serde_json::json!({"cluster_images": {"x": {"render": 1}}}))
+                .is_empty(),
+            "a record with the wrong shape must not be guessed at"
+        );
     }
 
     #[test]

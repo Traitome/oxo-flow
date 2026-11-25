@@ -180,6 +180,50 @@ shell = "python scripts/plot.py --input results.csv --output plot.png"
 
 ---
 
+## Environments on Cluster Backends
+
+Local runs always execute the environment wrapper on the machine running
+oxo-flow (`docker run`, `singularity exec`, `conda run`, …). On the
+**Kubernetes** cluster backend a container environment is instead rendered as
+the pod's own image (issue #1388), so the pod needs no container runtime:
+
+| Declared environment | Kubernetes rendering | Local run (unchanged) |
+|---|---|---|
+| `docker = "<image>"` | **Image mode** — pod `image:` = `<image>`, no wrapper | `docker run` wrapper |
+| `singularity = "docker://<image>"` | **Image mode** — pod `image:` = the underlying `<image>` | `singularity exec` on the pulled SIF |
+| `singularity = "/path/x.sif"` or another URI scheme | **Wrapper fallback** — folded `singularity exec` runs in the pod (cannot get a runtime-bearing base image: adding `docker` wins `kind()` → image mode) | `singularity exec` |
+| `conda` / `mamba` / `pixi` | **Wrapper fallback** — folded runtime wrapper runs in the pod; declare `docker = "<image with the runtime>"` too (these rank above `docker`) | native wrapper |
+| `venv` | **Wrapper fallback** — activation runs in the pod (adding `docker` wins `kind()` → image mode; bake or run locally) | native wrapper |
+| `modules` | **Wrapper fallback** — `module load` runs in the pod shell (`modules` + `docker` is rejected) | native `module load` |
+| no environment | **`system`** — no wrapper exists; the command runs in `ubuntu:latest` (the historical pod base image) | host shell |
+
+Image mode applies `OXO_REGISTRY_MIRRORS` when the manifest's `image:` field is
+rendered; the environment identity (cache key, run provenance) keeps the
+workflow-declared spec, so a mirrored box and a direct box agree. It also keeps
+the local container wrapper's shell contract: the pod starts `/bin/sh` and runs
+the rule text (and each Indexed-Job command file) with bash when the image has
+it, else with `sh`, so a bash-less image still starts and a bash-bearing image
+keeps `set -euo pipefail`/`[[ ]]` semantics.
+
+Fallbacks are visible in the Job manifest (`oxoflow.io/environment-render:
+wrapper-fallback`; a `system` rule is `system`) and in one warning per rendered
+Job. `OXO_FLOW_K8S_IMAGE_RENDER=0` forces the fallback box-wide (the warning
+then says rendering is disabled, not impossible). The fallback pod's base image
+is `ubuntu:latest` unless the rule also declares `docker`: `mamba`/`conda`/`pixi`
+rank above `docker`, so those can pair a runtime-bearing base image with their
+wrapper and run; a local SIF and `venv` rank below `docker` (adding an image
+flips to image mode), and `modules` + `docker` is rejected — those three are
+rendered and warned about but cannot execute on Kubernetes today: bake an image
+and declare `docker = …`, or run them on a local/HPC backend. The fallback is
+also functional for a docker rule that opts out (pair it with
+`OXO_FLOW_K8S_DOCKER_SOCKET=1`) and for a `system` rule that invokes docker
+itself.
+
+The full matrix, provenance record, and limits are documented in
+[Run on a Cluster → Container environments on Kubernetes](run-on-cluster.md#container-environments-on-kubernetes).
+
+---
+
 ## Mixing Backends in One Workflow
 
 ```toml
