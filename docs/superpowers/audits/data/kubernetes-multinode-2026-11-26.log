@@ -1,0 +1,455 @@
+########## oxo-flow #1387 multi-node k3s + NFS qualification — raw transcript ##########
+captured_at: 2026-11-26T01:20:50+0800
+engine: dedc11210b7c9d1973679b1d2eea5307f1a27231 (v0.32.0), built on VM1 with rustc 1.98.0
+
+### Host (macOS)
+ProductName:		macOS
+ProductVersion:		27.2.1
+BuildVersion:		26B131
+arch: arm64
+cpus: 10
+mem_gib: 24
+limactl: limactl version 2.3.0
+
+### VM1 facts (k3s server, NFS server, submit host)
+lima-vm1
+Linux lima-vm1 6.8.0-147-generic #147-Ubuntu SMP PREEMPT_DYNAMIC Thu Sep 24 11:39:52 UTC 2026 aarch64 aarch64 aarch64 GNU/Linux
+Ubuntu 24.04.5 LTS
+cpus=2
+               total        used        free      shared  buff/cache   available
+Mem:            2899         815        1683           0         567        2083
+2: eth0    inet 192.168.104.1/24 metric 200 brd 192.168.104.255 scope global dynamic eth0\       valid_lft 2587sec preferred_lft 2587sec
+3: flannel.1    inet 10.42.0.0/32 scope global flannel.1\       valid_lft forever preferred_lft forever
+4: cni0    inet 10.42.0.1/24 brd 10.42.0.255 scope global cni0\       valid_lft forever preferred_lft forever
+/srv/oxoflow  	192.168.104.0/24(sync,wdelay,hide,no_subtree_check,sec=sys,rw,secure,no_root_squash,no_all_squash)
+
+### VM2 facts (k3s agent, NFS client)
+lima-vm2
+Linux lima-vm2 6.8.0-147-generic #147-Ubuntu SMP PREEMPT_DYNAMIC Thu Sep 24 11:39:52 UTC 2026 aarch64 aarch64 aarch64 GNU/Linux
+Ubuntu 24.04.5 LTS
+cpus=2
+               total        used        free      shared  buff/cache   available
+Mem:            2899         440        1367           1        1258        2459
+2: eth0    inet 192.168.104.3/24 metric 200 brd 192.168.104.255 scope global dynamic eth0\       valid_lft 2602sec preferred_lft 2602sec
+3: flannel.1    inet 10.42.1.0/32 scope global flannel.1\       valid_lft forever preferred_lft forever
+4: cni0    inet 10.42.1.1/24 brd 10.42.1.255 scope global cni0\       valid_lft forever preferred_lft forever
+192.168.104.1:/srv/oxoflow on /srv/oxoflow type nfs4 (rw,relatime,vers=4.2,rsize=524288,wsize=524288,namlen=255,hard,proto=tcp,timeo=600,retrans=2,sec=sys,clientaddr=192.168.104.3,local_lock=none,addr=192.168.104.1)
+docker.io/library/ubuntu:latest
+-- VM1 image --
+docker.io/library/ubuntu:latest
+
+### VM-to-VM connectivity (user-v2 network)
+PING 192.168.104.3 (192.168.104.3) 56(84) bytes of data.
+64 bytes from 192.168.104.3: icmp_seq=1 ttl=64 time=0.230 ms
+64 bytes from 192.168.104.3: icmp_seq=2 ttl=64 time=0.291 ms
+64 bytes from 192.168.104.3: icmp_seq=3 ttl=64 time=0.214 ms
+
+--- 192.168.104.3 ping statistics ---
+3 packets transmitted, 3 received, 0% packet loss, time 2076ms
+rtt min/avg/max/mdev = 0.214/0.245/0.291/0.033 ms
+
+### k3s / kubectl
+k3s version v1.37.2+k3s1 (f6973cb8)
+go version go1.26.10
+Client Version: v1.37.2+k3s1
+Kustomize Version: v5.8.1
+
+### cluster nodes and taints (post-drill)
+NAME       STATUS   ROLES           AGE     VERSION        INTERNAL-IP     EXTERNAL-IP   OS-IMAGE             KERNEL-VERSION              CONTAINER-RUNTIME
+lima-vm1   Ready    control-plane   12m     v1.37.2+k3s1   192.168.104.1   <none>        Ubuntu 24.04.5 LTS   6.8.0-147-generic (arm64)   containerd://2.3.7-k3s1
+lima-vm2   Ready    <none>          9m49s   v1.37.2+k3s1   192.168.104.3   <none>        Ubuntu 24.04.5 LTS   6.8.0-147-generic (arm64)   containerd://2.3.7-k3s1
+lima-vm1 taints=
+lima-vm2 taints=
+
+### node allocatable
+-- lima-vm1 --
+Allocatable:
+  cpu:                1800m
+  ephemeral-storage:  18698430040
+  hugepages-1Gi:      0
+  hugepages-2Mi:      0
+  hugepages-32Mi:     0
+  hugepages-64Ki:     0
+  memory:             1396516Ki
+  pods:               110
+System Info:
+-- lima-vm2 --
+Allocatable:
+  cpu:                1900m
+  ephemeral-storage:  18698430040
+  hugepages-1Gi:      0
+  hugepages-2Mi:      0
+  hugepages-32Mi:     0
+  hugepages-64Ki:     0
+  memory:             2707236Ki
+  pods:               110
+System Info:
+
+### NFS export (VM1) and mount (VM2)
+/srv/oxoflow  	192.168.104.0/24(sync,wdelay,hide,no_subtree_check,sec=sys,rw,secure,no_root_squash,no_all_squash)
+-- VM2 mount --
+(see VM2 log)
+
+### images
+docker.io/library/ubuntu:latest
+
+### pod volume specs (no hostPath: only NFS + projected serviceaccount)
+-- oxoflow-array-make-808e21fa-0-7fxz8 --
+lima-vm1 volumes=[{"name":"oxoflow-shared","nfs":{"path":"/srv/oxoflow","server":"192.168.104.1"}},{"name":"kube-api-access-cl2fk","projected":{"defaultMode":420,"sources":[{"serviceAccountToken":{"expirationSeconds":3607,"path":"token"}},{"configMap":{"items":[{"key":"ca.crt","path":"ca.crt"}],"name":"kube-root-ca.crt"}},{"downwardAPI":{"items":[{"fieldRef":{"apiVersion":"v1","fieldPath":"metadata.namespace"},"path":"namespace"}]}}]}}] mounts=[{"mountPath":"/oxoflow","name":"oxoflow-shared"},{"mountPath":"/var/run/secrets/kubernetes.io/serviceaccount","name":"kube-api-access-cl2fk","readOnly":true}] args=["INDEX=$((JOB_COMPLETION_INDEX + 1)); sh \"/oxoflow/run1387/.oxo-flow/runs/2026-11-25T17-18-05-279/jobs/make/chunk-1/cmd.${INDEX}.sh\""]
+
+-- oxoflow-array-make-808e21fa-1-9tv59 --
+lima-vm2 volumes=[{"name":"oxoflow-shared","nfs":{"path":"/srv/oxoflow","server":"192.168.104.1"}},{"name":"kube-api-access-9l5sp","projected":{"defaultMode":420,"sources":[{"serviceAccountToken":{"expirationSeconds":3607,"path":"token"}},{"configMap":{"items":[{"key":"ca.crt","path":"ca.crt"}],"name":"kube-root-ca.crt"}},{"downwardAPI":{"items":[{"fieldRef":{"apiVersion":"v1","fieldPath":"metadata.namespace"},"path":"namespace"}]}}]}}] mounts=[{"mountPath":"/oxoflow","name":"oxoflow-shared"},{"mountPath":"/var/run/secrets/kubernetes.io/serviceaccount","name":"kube-api-access-9l5sp","readOnly":true}] args=["INDEX=$((JOB_COMPLETION_INDEX + 1)); sh \"/oxoflow/run1387/.oxo-flow/runs/2026-11-25T17-18-05-279/jobs/make/chunk-1/cmd.${INDEX}.sh\""]
+
+-- oxoflow-fold-bf5aaecc-l9fc2 --
+lima-vm2 volumes=[{"name":"oxoflow-shared","nfs":{"path":"/srv/oxoflow","server":"192.168.104.1"}},{"name":"kube-api-access-blnqq","projected":{"defaultMode":420,"sources":[{"serviceAccountToken":{"expirationSeconds":3607,"path":"token"}},{"configMap":{"items":[{"key":"ca.crt","path":"ca.crt"}],"name":"kube-root-ca.crt"}},{"downwardAPI":{"items":[{"fieldRef":{"apiVersion":"v1","fieldPath":"metadata.namespace"},"path":"namespace"}]}}]}}] mounts=[{"mountPath":"/oxoflow","name":"oxoflow-shared"},{"mountPath":"/var/run/secrets/kubernetes.io/serviceaccount","name":"kube-api-access-blnqq","readOnly":true}] args=["cd '/oxoflow/run1387' \u0026\u0026 { printf 'fold pod=%s kernel=%s at=%s\n' \"$(hostname)\" \"$(uname -r)\" \"$(date -Is)\"\n  printf 'workdir-fs=%s\n' \"$(findmnt -T . -o SOURCE,FSTYPE -n | tr -s ' ')\"\n  cat raw/S1.txt raw/S2.txt\n} \u003e final.txt\n"]
+
+
+################ RUN 1 (VM2 tainted until the first pod was Running) ################
+### run.log
+Info: Using workflow file: wf.oxoflow
+Profile: Applied config values from profile 'k8s'
+2026-11-25T17:18:05.241598Z  INFO workflow run started (log: /srv/oxoflow/run1387/.oxo-flow/logs/oxo-flow.log) workflow=k8s-multinode-1387 version=1.0.0 git_sha="(none)" workdir=/srv/oxoflow/run1387
+2026-11-25T17:18:05.241690Z  INFO {"event":"workflow_started","timestamp":"2026-11-25T17:18:05.241670661+00:00","total_rules":3,"workflow":"k8s-multinode-1387"}
+DAG: 3 rules in dependency order
+  1. make_all_S2
+  2. make_all_S1
+  3. fold
+  Note: checkpoint predates config tracking: recorded a baseline snapshot; future config changes will invalidate affected rules automatically
+Cluster: submitting 3 jobs to kubernetes (max 4 in flight)
+  run directory: /srv/oxoflow/run1387/.oxo-flow/runs/2026-11-25T17-18-05-279
+
+Cluster: 3 succeeded, 0 failed, 0 skipped
+✓ Report snapshot: /srv/oxoflow/run1387/.oxo-flow/reports/report-20261125-171850.json
+### taint window capture
+first Running pod seen after 2s at 2026-11-26T01:18:06+08:00
+NAME                                  READY   STATUS    RESTARTS   AGE   IP          NODE       NOMINATED NODE   READINESS GATES
+oxoflow-array-make-808e21fa-0-7fxz8   1/1     Running   0          1s    10.42.0.5   lima-vm1   <none>           <none>
+oxoflow-array-make-808e21fa-1-9tv59   0/1     Pending   0          1s    <none>      <none>     <none>           <none>
+NAME                          STATUS    COMPLETIONS   DURATION   AGE   CONTAINERS   IMAGES          SELECTOR
+oxoflow-array-make-808e21fa   Running   0/2           1s         1s    make         ubuntu:latest   batch.kubernetes.io/controller-uid=0ac9fd5d-d321-49fd-9a5e-ff7accb7af54
+removing lima-vm2 taint at 2026-11-26T01:18:10+08:00
+node/lima-vm2 untainted
+### post-run cluster
+== nodes after ==
+NAME       STATUS   ROLES           AGE     VERSION        INTERNAL-IP     EXTERNAL-IP   OS-IMAGE             KERNEL-VERSION              CONTAINER-RUNTIME
+lima-vm1   Ready    control-plane   10m     v1.37.2+k3s1   192.168.104.1   <none>        Ubuntu 24.04.5 LTS   6.8.0-147-generic (arm64)   containerd://2.3.7-k3s1
+lima-vm2   Ready    <none>          8m21s   v1.37.2+k3s1   192.168.104.3   <none>        Ubuntu 24.04.5 LTS   6.8.0-147-generic (arm64)   containerd://2.3.7-k3s1
+== node taints after ==
+lima-vm1 
+lima-vm2 
+== jobs ==
+NAME                          STATUS     COMPLETIONS   DURATION   AGE   CONTAINERS   IMAGES          SELECTOR
+oxoflow-array-make-808e21fa   Complete   2/2           39s        46s   make         ubuntu:latest   batch.kubernetes.io/controller-uid=0ac9fd5d-d321-49fd-9a5e-ff7accb7af54
+oxoflow-fold-bf5aaecc         Complete   1/1           3s         5s    fold         ubuntu:latest   batch.kubernetes.io/controller-uid=13ddb442-542e-46e5-b379-4f2a557e6e51
+== pods ==
+NAME                                  READY   STATUS      RESTARTS   AGE   IP          NODE       NOMINATED NODE   READINESS GATES
+oxoflow-array-make-808e21fa-0-7fxz8   0/1     Completed   0          46s   10.42.0.5   lima-vm1   <none>           <none>
+oxoflow-array-make-808e21fa-1-9tv59   0/1     Completed   0          46s   10.42.1.3   lima-vm2   <none>           <none>
+oxoflow-fold-bf5aaecc-l9fc2           0/1     Completed   0          5s    10.42.1.4   lima-vm2   <none>           <none>
+-- job.batch/oxoflow-array-make-808e21fa status --
+oxoflow-array-make-808e21fa completions=2 completedIndexes=0,1 failedIndexes= succeeded=2 failed=
+-- job.batch/oxoflow-fold-bf5aaecc status --
+oxoflow-fold-bf5aaecc completions=1 completedIndexes= failedIndexes= succeeded=1 failed=
+### make element 0 describe (pod on lima-vm1) — selected fields
+Name:             oxoflow-array-make-808e21fa-0-7fxz8
+Node:             lima-vm1/192.168.104.1
+Status:           Succeeded
+    Mounts:
+      /oxoflow from oxoflow-shared (rw)
+  oxoflow-shared:
+    Type:      NFS (an NFS mount that lasts the lifetime of a pod)
+    Server:    192.168.104.1
+    Path:      /srv/oxoflow
+    Type:                    Projected (a volume that contains injected data from multiple sources)
+### make element 1 describe (pod on lima-vm2) — selected fields
+Name:             oxoflow-array-make-808e21fa-1-9tv59
+Node:             lima-vm2/192.168.104.3
+Status:           Succeeded
+    Mounts:
+      /oxoflow from oxoflow-shared (rw)
+  oxoflow-shared:
+    Type:      NFS (an NFS mount that lasts the lifetime of a pod)
+    Server:    192.168.104.1
+    Path:      /srv/oxoflow
+    Type:                    Projected (a volume that contains injected data from multiple sources)
+### fold describe (pod on lima-vm2) — selected fields
+Name:             oxoflow-fold-bf5aaecc-l9fc2
+Node:             lima-vm2/192.168.104.3
+Status:           Succeeded
+    Mounts:
+      /oxoflow from oxoflow-shared (rw)
+  oxoflow-shared:
+    Type:      NFS (an NFS mount that lasts the lifetime of a pod)
+    Server:    192.168.104.1
+    Path:      /srv/oxoflow
+    Type:                    Projected (a volume that contains injected data from multiple sources)
+### per-element job records
+-- /srv/oxoflow/run1387/.oxo-flow/runs/2026-11-25T17-18-05-279/jobs/fold/status.json
+{"state":"COMPLETED","job_id":"oxoflow-fold-bf5aaecc","command":"cd '/srv/oxoflow/run1387' && { printf 'fold pod=%s kernel=%s at=%s\n' \"$(hostname)\" \"$(uname -r)\" \"$(date -Is)\"\n  printf 'workdir-fs=%s\n' \"$(findmnt -T . -o SOURCE,FSTYPE -n | tr -s ' ')\"\n  cat raw/S1.txt raw/S2.txt\n} > final.txt\n","submitted_at":"2026-11-25T17:18:46.778Z","finished_at":"2026-11-25T17:18:50.990Z"}
+-- /srv/oxoflow/run1387/.oxo-flow/runs/2026-11-25T17-18-05-279/jobs/make_all_S1/status.json
+{"state":"COMPLETED","job_id":"oxoflow-array-make-808e21fa_1","command":"cd '/srv/oxoflow/run1387' && mkdir -p 'raw'\nmkdir -p raw\n{ printf 'sample=%s pod=%s kernel=%s at=%s\n' \"S1\" \"$(hostname)\" \"$(uname -r)\" \"$(date -Is)\"\n  printf 'workdir-fs=%s\n' \"$(findmnt -T . -o SOURCE,FSTYPE -n | tr -s ' ')\"\n} > raw/S1.txt\nsleep 30\n","submitted_at":"2026-11-25T17:18:05.411Z","finished_at":"2026-11-25T17:18:40.566Z"}
+-- /srv/oxoflow/run1387/.oxo-flow/runs/2026-11-25T17-18-05-279/jobs/make_all_S2/status.json
+{"state":"COMPLETED","job_id":"oxoflow-array-make-808e21fa_2","command":"cd '/srv/oxoflow/run1387' && mkdir -p 'raw'\nmkdir -p raw\n{ printf 'sample=%s pod=%s kernel=%s at=%s\n' \"S2\" \"$(hostname)\" \"$(uname -r)\" \"$(date -Is)\"\n  printf 'workdir-fs=%s\n' \"$(findmnt -T . -o SOURCE,FSTYPE -n | tr -s ' ')\"\n} > raw/S2.txt\nsleep 30\n","submitted_at":"2026-11-25T17:18:05.411Z","finished_at":"2026-11-25T17:18:44.715Z"}
+-- /srv/oxoflow/run1387/.oxo-flow/runs/latest/jobs/fold/status.json
+{"state":"COMPLETED","job_id":"oxoflow-fold-bf5aaecc","command":"cd '/srv/oxoflow/run1387' && { printf 'fold pod=%s kernel=%s at=%s\n' \"$(hostname)\" \"$(uname -r)\" \"$(date -Is)\"\n  printf 'workdir-fs=%s\n' \"$(findmnt -T . -o SOURCE,FSTYPE -n | tr -s ' ')\"\n  cat raw/S1.txt raw/S2.txt\n} > final.txt\n","submitted_at":"2026-11-25T17:18:46.778Z","finished_at":"2026-11-25T17:18:50.990Z"}
+-- /srv/oxoflow/run1387/.oxo-flow/runs/latest/jobs/make_all_S1/status.json
+{"state":"COMPLETED","job_id":"oxoflow-array-make-808e21fa_1","command":"cd '/srv/oxoflow/run1387' && mkdir -p 'raw'\nmkdir -p raw\n{ printf 'sample=%s pod=%s kernel=%s at=%s\n' \"S1\" \"$(hostname)\" \"$(uname -r)\" \"$(date -Is)\"\n  printf 'workdir-fs=%s\n' \"$(findmnt -T . -o SOURCE,FSTYPE -n | tr -s ' ')\"\n} > raw/S1.txt\nsleep 30\n","submitted_at":"2026-11-25T17:18:05.411Z","finished_at":"2026-11-25T17:18:40.566Z"}
+-- /srv/oxoflow/run1387/.oxo-flow/runs/latest/jobs/make_all_S2/status.json
+{"state":"COMPLETED","job_id":"oxoflow-array-make-808e21fa_2","command":"cd '/srv/oxoflow/run1387' && mkdir -p 'raw'\nmkdir -p raw\n{ printf 'sample=%s pod=%s kernel=%s at=%s\n' \"S2\" \"$(hostname)\" \"$(uname -r)\" \"$(date -Is)\"\n  printf 'workdir-fs=%s\n' \"$(findmnt -T . -o SOURCE,FSTYPE -n | tr -s ' ')\"\n} > raw/S2.txt\nsleep 30\n","submitted_at":"2026-11-25T17:18:05.411Z","finished_at":"2026-11-25T17:18:44.715Z"}
+### array index map
+{
+  "oxoflow-array-make-808e21fa": [
+    "make_all_S1",
+    "make_all_S2"
+  ]
+}{
+  "oxoflow-array-make-808e21fa": [
+    "make_all_S1",
+    "make_all_S2"
+  ]
+}### outputs
+== workdir tree ==
+total 40
+drwxrwxr-x 6 wsx  wsx  4096 Nov 26 01:18 .
+drwxrwxrwx 4 root root 4096 Nov 26 01:12 ..
+drwxrwxr-x 5 wsx  wsx  4096 Nov 26 01:18 .oxo-flow
+drwxrwxr-x 2 wsx  wsx  4096 Nov 26 01:18 evidence
+-rw-r--r-- 1 root root  416 Nov 26 01:18 final.txt
+drwxrwxr-x 2 wsx  wsx  4096 Nov 26 01:12 profiles
+drwxr-xr-x 2 root root 4096 Nov 26 01:18 raw
+-rw-rw-r-- 1 wsx  wsx     2 Nov 26 01:18 run.exit
+-rw-rw-r-- 1 wsx  wsx   934 Nov 26 01:18 run.log
+-rw-r--r-- 1 wsx  wsx   886 Nov 26 01:12 wf.oxoflow
+total 16
+drwxr-xr-x 2 root root 4096 Nov 26 01:18 .
+drwxrwxr-x 6 wsx  wsx  4096 Nov 26 01:18 ..
+-rw-r--r-- 1 root root  141 Nov 26 01:18 S1.txt
+-rw-r--r-- 1 root root  141 Nov 26 01:18 S2.txt
+== raw/S1.txt ==
+sample=S1 pod=oxoflow-array-make-808e21fa-0 kernel=6.8.0-147-generic at=2026-11-25T17:18:06+00:00
+workdir-fs=192.168.104.1:/srv/oxoflow nfs4
+== raw/S2.txt ==
+sample=S2 pod=oxoflow-array-make-808e21fa-1 kernel=6.8.0-147-generic at=2026-11-25T17:18:11+00:00
+workdir-fs=192.168.104.1:/srv/oxoflow nfs4
+== final.txt ==
+fold pod=oxoflow-fold-bf5aaecc-l9fc2 kernel=6.8.0-147-generic at=2026-11-25T17:18:47+00:00
+workdir-fs=192.168.104.1:/srv/oxoflow nfs4
+sample=S1 pod=oxoflow-array-make-808e21fa-0 kernel=6.8.0-147-generic at=2026-11-25T17:18:06+00:00
+workdir-fs=192.168.104.1:/srv/oxoflow nfs4
+sample=S2 pod=oxoflow-array-make-808e21fa-1 kernel=6.8.0-147-generic at=2026-11-25T17:18:11+00:00
+workdir-fs=192.168.104.1:/srv/oxoflow nfs4
+### provenance verify
+== checkpoint provenance verify ==
+Provenance Verify /srv/oxoflow/run1387/.oxo-flow/checkpoint.json
+
+  • workflow path: /srv/oxoflow/run1387/wf.oxoflow
+  • environment-lock identity: 0/3 rule(s) resolved
+    ! fold: system|unavailable
+    ! make_all_S1: system|unavailable
+    ! make_all_S2: system|unavailable
+  • workflow content hash: sha256:181ec75d1ce7c701a793d4509987b7f28df5ef6a10ec66b6765b0322733d6d44
+  • workflow content check: verified (sha256:181ec75d1ce7c701a793d4509987b7f28df5ef6a10ec66b6765b0322733d6d44)
+
+  ✓ final.txt sha256:f1aaa0ff2527ad362ebb1021ba14bc191be6a92474dc79f1c339d15e780bf2bf
+  ✓ raw/S1.txt sha256:762e89cc97802f2e0f643dc48b8e4b45050f02f70dd0719f234861c284d333f4
+  ✓ raw/S2.txt sha256:c6048dcebcfd328cdd4683a82f1cf7db0efd918ecfab136077647a0f306df131
+
+Summary: 3 matched, 0 mismatched, 0 missing
+exit=0
+
+################ RUN 2 (repeat, both nodes untainted from the start) ################
+Info: Using workflow file: wf.oxoflow
+Profile: Applied config values from profile 'k8s'
+2026-11-25T17:19:18.845677Z  INFO workflow run started (log: /srv/oxoflow/run1387b/.oxo-flow/logs/oxo-flow.log) workflow=k8s-multinode-1387 version=1.0.0 git_sha="(none)" workdir=/srv/oxoflow/run1387b
+2026-11-25T17:19:18.845724Z  INFO {"event":"workflow_started","timestamp":"2026-11-25T17:19:18.845720915+00:00","total_rules":3,"workflow":"k8s-multinode-1387"}
+DAG: 3 rules in dependency order
+  1. make_all_S2
+  2. make_all_S1
+  3. fold
+  Note: checkpoint predates config tracking: recorded a baseline snapshot; future config changes will invalidate affected rules automatically
+Cluster: submitting 3 jobs to kubernetes (max 4 in flight)
+  run directory: /srv/oxoflow/run1387b/.oxo-flow/runs/2026-11-25T17-19-18-848
+
+Cluster: 3 succeeded, 0 failed, 0 skipped
+✓ Report snapshot: /srv/oxoflow/run1387b/.oxo-flow/reports/report-20261125-172000.json
+### pre-run cluster
+== nodes before (untainted) ==
+NAME       STATUS   ROLES           AGE     VERSION        INTERNAL-IP     EXTERNAL-IP   OS-IMAGE             KERNEL-VERSION              CONTAINER-RUNTIME
+lima-vm1   Ready    control-plane   11m     v1.37.2+k3s1   192.168.104.1   <none>        Ubuntu 24.04.5 LTS   6.8.0-147-generic (arm64)   containerd://2.3.7-k3s1
+lima-vm2   Ready    <none>          8m48s   v1.37.2+k3s1   192.168.104.3   <none>        Ubuntu 24.04.5 LTS   6.8.0-147-generic (arm64)   containerd://2.3.7-k3s1
+== taints ==
+lima-vm1 
+lima-vm2 
+### post-run cluster
+== jobs ==
+NAME                          STATUS     COMPLETIONS   DURATION   AGE    CONTAINERS   IMAGES          SELECTOR
+oxoflow-array-make-808e21fa   Complete   2/2           39s        115s   make         ubuntu:latest   batch.kubernetes.io/controller-uid=0ac9fd5d-d321-49fd-9a5e-ff7accb7af54
+oxoflow-array-make-94900c15   Complete   2/2           33s        42s    make         ubuntu:latest   batch.kubernetes.io/controller-uid=64d6fd76-5612-442b-acc8-100d69cd1668
+oxoflow-fold-bf5aaecc         Complete   1/1           3s         74s    fold         ubuntu:latest   batch.kubernetes.io/controller-uid=13ddb442-542e-46e5-b379-4f2a557e6e51
+oxoflow-fold-f1657413         Complete   1/1           3s         4s     fold         ubuntu:latest   batch.kubernetes.io/controller-uid=c6bb13b5-5c71-4e7c-9e64-556b7d5e9603
+== pods ==
+NAME                                  READY   STATUS      RESTARTS   AGE    IP          NODE       NOMINATED NODE   READINESS GATES
+oxoflow-array-make-808e21fa-0-7fxz8   0/1     Completed   0          115s   10.42.0.5   lima-vm1   <none>           <none>
+oxoflow-array-make-808e21fa-1-9tv59   0/1     Completed   0          115s   10.42.1.3   lima-vm2   <none>           <none>
+oxoflow-array-make-94900c15-0-5vbph   0/1     Completed   0          42s    10.42.1.5   lima-vm2   <none>           <none>
+oxoflow-array-make-94900c15-1-txgdw   0/1     Completed   0          42s    10.42.0.6   lima-vm1   <none>           <none>
+oxoflow-fold-bf5aaecc-l9fc2           0/1     Completed   0          74s    10.42.1.4   lima-vm2   <none>           <none>
+oxoflow-fold-f1657413-9db7p           0/1     Completed   0          4s     10.42.1.6   lima-vm2   <none>           <none>
+-- job.batch/oxoflow-array-make-808e21fa --
+oxoflow-array-make-808e21fa completions=2 completedIndexes=0,1 failedIndexes= succeeded=2 failed=
+-- job.batch/oxoflow-array-make-94900c15 --
+oxoflow-array-make-94900c15 completions=2 completedIndexes=0,1 failedIndexes= succeeded=2 failed=
+-- job.batch/oxoflow-fold-bf5aaecc --
+oxoflow-fold-bf5aaecc completions=1 completedIndexes= failedIndexes= succeeded=1 failed=
+-- job.batch/oxoflow-fold-f1657413 --
+oxoflow-fold-f1657413 completions=1 completedIndexes= failedIndexes= succeeded=1 failed=
+### per-element job records
+-- .oxo-flow/runs/2026-11-25T17-19-18-848/jobs/make_all_S2/status.json
+{"state":"COMPLETED","job_id":"oxoflow-array-make-94900c15_2","command":"cd '/srv/oxoflow/run1387b' && mkdir -p 'raw'\nmkdir -p raw\n{ printf 'sample=%s pod=%s kernel=%s at=%s\n' \"S2\" \"$(hostname)\" \"$(uname -r)\" \"$(date -Is)\"\n  printf 'workdir-fs=%s\n' \"$(findmnt -T . -o SOURCE,FSTYPE -n | tr -s ' ')\"\n} > raw/S2.txt\nsleep 30\n","submitted_at":"2026-11-25T17:19:18.899Z","finished_at":"2026-11-25T17:19:53.986Z"}-- .oxo-flow/runs/2026-11-25T17-19-18-848/jobs/fold/status.json
+{"state":"COMPLETED","job_id":"oxoflow-fold-f1657413","command":"cd '/srv/oxoflow/run1387b' && { printf 'fold pod=%s kernel=%s at=%s\n' \"$(hostname)\" \"$(uname -r)\" \"$(date -Is)\"\n  printf 'workdir-fs=%s\n' \"$(findmnt -T . -o SOURCE,FSTYPE -n | tr -s ' ')\"\n  cat raw/S1.txt raw/S2.txt\n} > final.txt\n","submitted_at":"2026-11-25T17:19:56.046Z","finished_at":"2026-11-25T17:20:00.275Z"}-- .oxo-flow/runs/2026-11-25T17-19-18-848/jobs/make_all_S1/status.json
+{"state":"COMPLETED","job_id":"oxoflow-array-make-94900c15_1","command":"cd '/srv/oxoflow/run1387b' && mkdir -p 'raw'\nmkdir -p raw\n{ printf 'sample=%s pod=%s kernel=%s at=%s\n' \"S1\" \"$(hostname)\" \"$(uname -r)\" \"$(date -Is)\"\n  printf 'workdir-fs=%s\n' \"$(findmnt -T . -o SOURCE,FSTYPE -n | tr -s ' ')\"\n} > raw/S1.txt\nsleep 30\n","submitted_at":"2026-11-25T17:19:18.899Z","finished_at":"2026-11-25T17:19:53.986Z"}### outputs
+== provenance verify ==
+Provenance Verify /srv/oxoflow/run1387b/.oxo-flow/checkpoint.json
+
+  • workflow path: /srv/oxoflow/run1387b/wf.oxoflow
+  • environment-lock identity: 0/3 rule(s) resolved
+    ! fold: system|unavailable
+    ! make_all_S1: system|unavailable
+    ! make_all_S2: system|unavailable
+  • workflow content hash: sha256:181ec75d1ce7c701a793d4509987b7f28df5ef6a10ec66b6765b0322733d6d44
+  • workflow content check: verified (sha256:181ec75d1ce7c701a793d4509987b7f28df5ef6a10ec66b6765b0322733d6d44)
+
+  ✓ final.txt sha256:daae808540638a34909f7571c94bd205eb88a495d3385fd4b87f71748a60d53f
+  ✓ raw/S1.txt sha256:474868c901f717c84337fceba951b0bd145764ee95378c29b3e48d7db32938de
+  ✓ raw/S2.txt sha256:eb49e96a9cc1bead54c98e44071a0eeca9384e015e78839861c3eb146fdff77f
+
+Summary: 3 matched, 0 mismatched, 0 missing
+exit=0
+== raw/S1.txt ==
+sample=S1 pod=oxoflow-array-make-94900c15-0 kernel=6.8.0-147-generic at=2026-11-25T17:19:19+00:00
+workdir-fs=192.168.104.1:/srv/oxoflow nfs4
+== raw/S2.txt ==
+sample=S2 pod=oxoflow-array-make-94900c15-1 kernel=6.8.0-147-generic at=2026-11-25T17:19:19+00:00
+workdir-fs=192.168.104.1:/srv/oxoflow nfs4
+== final.txt ==
+fold pod=oxoflow-fold-f1657413-9db7p kernel=6.8.0-147-generic at=2026-11-25T17:19:56+00:00
+workdir-fs=192.168.104.1:/srv/oxoflow nfs4
+sample=S1 pod=oxoflow-array-make-94900c15-0 kernel=6.8.0-147-generic at=2026-11-25T17:19:19+00:00
+workdir-fs=192.168.104.1:/srv/oxoflow nfs4
+sample=S2 pod=oxoflow-array-make-94900c15-1 kernel=6.8.0-147-generic at=2026-11-25T17:19:19+00:00
+workdir-fs=192.168.104.1:/srv/oxoflow nfs4
+
+### Scheduler events (from the live pods, captured post-run)
+-- run 1: oxoflow-array-make-808e21fa-1-9tv59 (element 1, the one blocked by the taint) --
+Events:
+  Type     Reason            Age   From               Message
+  ----     ------            ----  ----               -------
+  Warning  FailedScheduling  46s   default-scheduler  0/2 nodes are available: 1 Insufficient cpu, 1 node(s) had untolerated taint(s). preemption: 0/2 nodes are available: 1 No preemption victims found for incoming pod, 1 Preemption is not helpful for scheduling.
+  Normal   Scheduled         40s   default-scheduler  Successfully assigned default/oxoflow-array-make-808e21fa-1-9tv59 to lima-vm2
+  Normal   Pulled            40s   kubelet            spec.containers{make}: Container image "ubuntu:latest" already present on machine and can be accessed by the pod
+  Normal   Created           40s   kubelet            spec.containers{make}: Container created
+  Normal   Started           40s   kubelet            spec.containers{make}: Container started
+-- run 1: oxoflow-fold-bf5aaecc-l9fc2 (dependent rule on lima-vm2) --
+Events:
+  Type    Reason     Age   From               Message
+  ----    ------     ----  ----               -------
+  Normal  Scheduled  4s    default-scheduler  Successfully assigned default/oxoflow-fold-bf5aaecc-l9fc2 to lima-vm2
+  Normal  Pulled     4s    kubelet            spec.containers{fold}: Container image "ubuntu:latest" already present on machine and can be accessed by the pod
+  Normal  Created    4s    kubelet            spec.containers{fold}: Container created
+  Normal  Started    4s    kubelet            spec.containers{fold}: Container started
+-- run 2: oxoflow-array-make-94900c15-1-txgdw (element 1, scheduled to lima-vm1 with both nodes untainted) --
+Events:
+  Type    Reason     Age   From               Message
+  ----    ------     ----  ----               -------
+  Normal  Scheduled  41s   default-scheduler  Successfully assigned default/oxoflow-array-make-94900c15-1-txgdw to lima-vm1
+  Normal  Pulled     41s   kubelet            spec.containers{make}: Container image "ubuntu:latest" already present on machine and can be accessed by the pod
+  Normal  Created    41s   kubelet            spec.containers{make}: Container created
+  Normal  Started    41s   kubelet            spec.containers{make}: Container started
+-- run 2: oxoflow-fold-f1657413-9db7p --
+Events:
+  Type    Reason     Age   From               Message
+  ----    ------     ----  ----               -------
+  Normal  Scheduled  4s    default-scheduler  Successfully assigned default/oxoflow-fold-f1657413-9db7p to lima-vm2
+  Normal  Pulled     4s    kubelet            spec.containers{fold}: Container image "ubuntu:latest" already present on machine and can be accessed by the pod
+  Normal  Created    4s    kubelet            spec.containers{fold}: Container created
+  Normal  Started    4s    kubelet            spec.containers{fold}: Container started
+
+################ OS-level NFS cross-node evidence ################
+-- VM2 OS-level NFS mount --
+192.168.104.1:/srv/oxoflow on /srv/oxoflow type nfs4 (rw,relatime,vers=4.2,rsize=524288,wsize=524288,namlen=255,hard,proto=tcp,timeo=600,retrans=2,sec=sys,clientaddr=192.168.104.3,local_lock=none,addr=192.168.104.1)
+-- VM2 OS-level read of the engine output (written by a pod on lima-vm2 via the NFS volume) --
+fold pod=oxoflow-fold-bf5aaecc-l9fc2 kernel=6.8.0-147-generic at=2026-11-25T17:18:47+00:00
+workdir-fs=192.168.104.1:/srv/oxoflow nfs4
+sample=S1 pod=oxoflow-array-make-808e21fa-0 kernel=6.8.0-147-generic at=2026-11-25T17:18:06+00:00
+workdir-fs=192.168.104.1:/srv/oxoflow nfs4
+sample=S2 pod=oxoflow-array-make-808e21fa-1 kernel=6.8.0-147-generic at=2026-11-25T17:18:11+00:00
+workdir-fs=192.168.104.1:/srv/oxoflow nfs4
+-- VM2 OS-level write into the shared run dir --
+vm2-host-sees-2026-11-26T01:20:47+08:00
+-- VM1 (submit host) sees the VM2 write --
+vm2-host-sees-2026-11-26T01:20:47+08:00
+-- sha256 of final.txt on VM1 (server side) --
+f1aaa0ff2527ad362ebb1021ba14bc191be6a92474dc79f1c339d15e780bf2bf  /srv/oxoflow/run1387/final.txt
+daae808540638a34909f7571c94bd205eb88a495d3385fd4b87f71748a60d53f  /srv/oxoflow/run1387b/final.txt
+-- sha256 of final.txt on VM2 (client side) --
+f1aaa0ff2527ad362ebb1021ba14bc191be6a92474dc79f1c339d15e780bf2bf  /srv/oxoflow/run1387/final.txt
+daae808540638a34909f7571c94bd205eb88a495d3385fd4b87f71748a60d53f  /srv/oxoflow/run1387b/final.txt
+
+### Workflow (wf.oxoflow)
+[workflow]
+name = "k8s-multinode-1387"
+version = "1.0.0"
+description = "Two-node k3s + network NFS [cluster.volume] live qualification (issue #1387)"
+
+[defaults]
+threads = 1
+memory = "256M"
+
+[[sample_groups]]
+name = "all"
+samples = ["S1", "S2"]
+
+[[rules]]
+name = "make"
+output = ["raw/{sample}.txt"]
+shell = """
+mkdir -p raw
+{ printf 'sample=%s pod=%s kernel=%s at=%s\n' "{sample}" "$(hostname)" "$(uname -r)" "$(date -Is)"
+  printf 'workdir-fs=%s\n' "$(findmnt -T . -o SOURCE,FSTYPE -n | tr -s ' ')"
+} > raw/{sample}.txt
+sleep 30
+"""
+
+[[rules]]
+name = "fold"
+input = ["raw/S1.txt", "raw/S2.txt"]
+output = ["final.txt"]
+shell = """
+{ printf 'fold pod=%s kernel=%s at=%s\n' "$(hostname)" "$(uname -r)" "$(date -Is)"
+  printf 'workdir-fs=%s\n' "$(findmnt -T . -o SOURCE,FSTYPE -n | tr -s ' ')"
+  cat raw/S1.txt raw/S2.txt
+} > final.txt
+"""
+
+[rules.resources]
+threads = 1
+memory = "2048M"
+
+### Profile (profiles/k8s.toml)
+[cluster]
+backend = "kubernetes"
+max_submitted = 4
+poll_interval = "2s"
+
+[cluster.volume]
+kind = "nfs"
+server = "192.168.104.1"
+path = "/srv/oxoflow"
+mount_root = "/oxoflow"
+
+### Engine build provenance (VM1)
+dedc11210b7c9d1973679b1d2eea5307f1a27231
+oxo-flow 0.32.0
+    Finished `release` profile [optimized] target(s) in 9m 03s
++ ls -la target/release/oxo-flow
+-rwxrwxr-x 2 wsx wsx 29926208 Nov 26 01:17 target/release/oxo-flow
