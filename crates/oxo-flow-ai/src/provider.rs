@@ -2244,12 +2244,16 @@ fn resolve_provider(
             );
         } else {
             // Empty url/model fields normalize inside the factory itself
-            // ("empty means unset"); no per-tier hand-copy here.
-            let provider = create_provider(
+            // ("empty means unset"); no per-tier hand-copy here. Resolve
+            // against the caller's captured `env` — the process-global
+            // factory would make this tier depend on the operator's shell
+            // (and made `make ci` fail when ANTHROPIC_BASE_URL was set).
+            let provider = create_provider_in(
                 kind,
                 Some(api_key.to_string()),
                 Some(api_url.to_string()),
                 Some(model.to_string()),
+                env,
             );
             tracing::info!("AI provider from saved config: {}", provider.name());
             return provider;
@@ -3804,6 +3808,25 @@ mod tests {
         assert_eq!(
             url, CLAUDE_API_URL,
             "blank url falls to the provider default"
+        );
+    }
+
+    #[test]
+    fn saved_config_uses_the_injected_env_snapshot_not_the_process_env() {
+        // The saved-config tier must resolve against the captured
+        // EnvSnapshot. Reading the process env here made the suite depend on
+        // the operator's shell (make ci failed when ANTHROPIC_BASE_URL was
+        // exported) and let a saved blank config silently pick up a
+        // different environment than the one the resolver was given.
+        let env = EnvSnapshot {
+            anthropic_base_url: Some("http://snapshot.example/v1/messages".into()),
+            ..EnvSnapshot::default()
+        };
+        let provider = resolve_provider("", Some(("claude", "sk-test", "", "")), &env);
+        assert_eq!(
+            provider.api_url().as_deref(),
+            Some("http://snapshot.example/v1/messages"),
+            "the saved tier must read the injected snapshot, not the process env"
         );
     }
 
