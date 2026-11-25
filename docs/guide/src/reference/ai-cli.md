@@ -286,6 +286,32 @@ is fail-closed end to end:
   orchestrator run that pairs Ollama with a non-empty tool registry logs a
   one-time warning.
 
+### Web translate provider fallback
+
+`POST /api/ai/translate` is the only surface with a cross-provider fallback
+chain (the CLI and web chat resolve one provider). By default (`auto`) it
+tries, in order: the acting user's provider, the configured runtime
+provider, then env-discovered Claude/OpenAI/Ollama — the same chain that
+keeps an intent translatable when one credential is exhausted. The response
+is attributable: top-level `provider`, `model`, `fallback_used`, and
+`attempts[]` (`{provider, model, success, reason}`) describe exactly which
+backend produced the pipeline and why earlier attempts failed (a cache hit
+returns the original attribution). Every fallback logs a warning naming the
+from/to provider, model, and the prior failure. When the chain is exhausted
+the structured `400 AI_TRANSLATE_ERROR` names the last provider/model and
+the orchestrator cause (for example `Agent exceeded max rounds (10)`). A
+provider-side timeout's `504 AI_TIMEOUT` `detail` names the last attempted
+provider; expiry of the whole-route budget returns the generic 504 detail
+(the chain future is dropped before the last attempt is known).
+
+Set `OXO_FLOW_AI_FALLBACK=disabled` to limit the chain to the first usable
+provider (the acting user's, else the runtime). This is the spend-boundary
+switch: an explicit provider pin can then never run on another credential.
+An explicit `OXO_FLOW_AI_PROVIDER` alone does NOT disable the chain — the
+default `auto` keeps it for resilience — so set this knob when the pin must
+be absolute. Unrecognized values warn and keep `auto`. Attribution never
+includes an API key or endpoint URL.
+
 ---
 
 ## Configuration
@@ -437,8 +463,9 @@ repository.
 | `OXO_FLOW_AI_MODEL` | Model name override | (provider default) |
 | `OXO_FLOW_AI_CONFIG` | Explicit AI config file path, used for BOTH reads and writes. When set it is authoritative: the legacy `~/.config/oxo-flow/ai_config.json` migration fallback is skipped, so a redirected process can never read or rewrite the `$HOME`-scoped file. An empty value is ignored; a relative path anchors to the process cwd, and parent directories are created on save. This is the hermetic knob for tests and CI (a web integration test once overwrote the operator's real config) | `$HOME/.oxo-flow/ai_config.json` |
 | `OXO_FLOW_AI_SESSION_DIR` | Directory for archived AI sessions (CLI AI commands and web chat/translate agent-loop runs). Empty = unset. Tests and CI set it to a scratch directory for hermetic runs, so a session archive never lands in the operator's real archive | `<cwd>/.oxo-flow/ai_sessions` when a project-local `.oxo-flow` exists, else `$HOME/.oxo-flow/ai_sessions` |
-| `OXO_FLOW_AI_MAX_TOKENS` | Output-token ceiling for the Anthropic Messages backend. Calibrated for thinking-style backends whose reasoning blocks count against `max_tokens` (e.g. DeepSeek or GLM behind an Anthropic-compatible endpoint) — the old 4096 default truncated before any text was produced | `16384` |
-| `OXO_FLOW_AI_CONTEXT_TOKENS` | Declared context window for Anthropic-compatible third-party proxies fronting a smaller model (e.g. `131072`). The Claude backend clamps `max_tokens` per request: estimated input size (safety-factored) is subtracted from the window before the output budget is sent, floored at 1024. Unset = no clamping (real Anthropic models size the window server-side) | unset |
+| `OXO_FLOW_AI_MAX_TOKENS` | Output-token ceiling. The Anthropic Messages backend always sends it; calibrated for thinking-style backends whose reasoning blocks count against `max_tokens` (e.g. DeepSeek or GLM behind an Anthropic-compatible endpoint) — the old 4096 default truncated before any text was produced. OpenAI-compatible requests send it as `max_tokens` ONLY when this variable is explicitly set (unset = omit the field and use the endpoint's default; invalid values warn once and stay omitted). The field is deliberately `max_tokens` — the shape every tested gateway accepts; endpoints that demand `max_completion_tokens` (some OpenAI reasoning models) are not auto-mapped, so leave the knob unset there. Ollama ignores it | `16384` (Claude) / unset (OpenAI-compatible) |
+| `OXO_FLOW_AI_CONTEXT_TOKENS` | Declared context window for third-party proxies fronting a smaller model (e.g. `131072`). The shared estimator/clamp subtracts estimated input size (1.5× safety factor + 4096-token margin, floored at 1024) from the window before the output budget is sent. Applies always on the Claude backend, and on OpenAI-compatible requests only when `OXO_FLOW_AI_MAX_TOKENS` is explicitly set. Unset = no clamping (real Anthropic models size the window server-side). Ollama ignores it | unset |
+| `OXO_FLOW_AI_FALLBACK` | Web `POST /api/ai/translate` provider-fallback policy: `auto` keeps the chain (acting user's provider → configured runtime → env-discovered Claude/OpenAI/Ollama) and logs a warning on every fallback; `disabled` limits the chain to the first usable provider (acting user's, else runtime), so a provider pin cannot spend another credential. Unrecognized values warn and keep `auto`. No effect on the CLI or web chat, which use one resolved provider | `auto` |
 | `OXO_FLOW_AI_TIMEOUT_SECS` | Per-request timeout for AI provider calls. A measured GLM thinking round took 145 s — the old 120 s default killed it mid-round. Raise together with `OXO_FLOW_AI_MAX_TOKENS` on slower endpoints. Also caps the TOTAL budget of the non-streaming web AI JSON routes (`/api/chat/send/json`, `/api/ai/translate`), which answer `504 AI_TIMEOUT` when it expires — the route budget sits one second under the provider timeout and timeout-class provider errors map to the same 504 | `300` |
 | `DEEPSEEK_API_KEY` | DeepSeek (OpenAI-compatible) | — |
 | `DEEPSEEK_BASE_URL` | Custom DeepSeek endpoint | `https://api.deepseek.com/v1/chat/completions` |

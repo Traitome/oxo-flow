@@ -592,7 +592,7 @@ The surfaces differ only in adapter concerns:
 
 | Concern | CLI | Web translate | Web chat |
 |---|---|---|---|
-| Provider resolution | env / `ai_config.json` | per-user → server → env, with Claude/OpenAI/Ollama fallback chain | per-user → server → env |
+| Provider resolution | env / `ai_config.json` | per-user → server → env, with a Claude/OpenAI/Ollama fallback chain (`OXO_FLOW_AI_FALLBACK=disabled` limits it to the first usable provider; responses carry provider/model/fallback attribution) | per-user → server → env |
 | Tools | full registry + MCP; non-read-only needs interactive approval | read-only knowledge registry only | knowledge registry + run-diagnosis tools |
 | Validator | core `WorkflowConfig` parse | workflow service `validate_pipeline` | same as translate |
 | Correction budget | `--ai-max-retries` (default 10) | 10 rounds | 10 rounds |
@@ -601,22 +601,26 @@ The surfaces differ only in adapter concerns:
 
 Two provider-level ceilings matter for thinking-style backends (models
 that emit reasoning blocks counting against the output budget):
-`OXO_FLOW_AI_MAX_TOKENS` (default 16384 — the old 4096 was consumed by
-reasoning blocks before any TOML; 16384 clears thinking with room for the
-draft) and
+`OXO_FLOW_AI_MAX_TOKENS` (default 16384 on the Claude backend — the old 4096
+was consumed by reasoning blocks before any TOML; 16384 clears thinking with
+room for the draft; on OpenAI-compatible requests the field is sent only
+when the variable is explicitly set, so unconfigured deployments keep the
+endpoint's default) and
 `OXO_FLOW_AI_TIMEOUT_SECS` (default 300 — non-thinking generations run
 12–20 s, but a single thinking round routinely passes two minutes; a
 measured GLM round took 145 s, which the old 120 s default killed
 mid-round). A third knob covers third-party Anthropic-compatible proxies
 fronting a *smaller* model: `OXO_FLOW_AI_CONTEXT_TOKENS` declares the
 endpoint's full context window (e.g. 131072 for a GLM/DeepSeek relay that
-rejects overflow with HTTP 400), and the Claude backend then clamps
-`max_tokens` per request — estimated input size (UTF-16-weighted chars/4
-with a 1.5× safety factor and 4096-token margin) is subtracted from the
-window before the configured output budget is sent, floored at 1024 so a
-hopelessly oversized request still reaches the server and its 400 drives
-the transcript-compression retry. Unset, the budget is sent as configured
-(real Anthropic models size their window server-side). Below the
+rejects overflow with HTTP 400), and the backend then clamps `max_tokens`
+per request — estimated input size (UTF-16-weighted chars/4 with a 1.5×
+safety factor and 4096-token margin) is subtracted from the window before
+the configured output budget is sent, floored at 1024 so a hopelessly
+oversized request still reaches the server and its 400 drives the
+transcript-compression retry. Clamping is always on for Claude; on
+OpenAI-compatible requests it applies when `OXO_FLOW_AI_MAX_TOKENS` is
+explicitly set. Unset context, the budget is sent as configured (real
+Anthropic models size their window server-side). Below the
 orchestrator, the
 provider backends retry transient transport failures (dropped or
 reset connections, response bodies that fail to decode), plus the

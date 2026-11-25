@@ -18,6 +18,29 @@ pub struct TranslateResponse {
     pub explanation: TranslateExplanation,
     pub alternatives: Vec<Alternative>,
     pub confidence: f64,
+    /// Provider that actually produced the returned pipeline.
+    pub provider: String,
+    /// Model that produced the returned pipeline (`null` when the provider
+    /// backend has no model id).
+    pub model: Option<String>,
+    /// True when at least one provider was attempted and failed before the
+    /// returned one succeeded. The first attempt is never a fallback.
+    pub fallback_used: bool,
+    /// Every provider attempted, in order, with the failure reason for
+    /// attempts that did not produce the pipeline. Never contains API keys
+    /// or endpoint URLs.
+    pub attempts: Vec<ProviderAttempt>,
+}
+
+/// One provider attempted by `POST /api/ai/translate`.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct ProviderAttempt {
+    pub provider: String,
+    pub model: Option<String>,
+    /// Whether this attempt produced the returned pipeline.
+    pub success: bool,
+    /// Why the attempt produced no pipeline (`null` on the successful one).
+    pub reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
@@ -148,6 +171,8 @@ pub struct AiTestResponse {
     pub success: bool,
     pub message: String,
     pub provider: String,
+    /// The resolved model id that was probed. `null` only when no provider
+    /// is resolved (pinned `disabled`). Never a credential or key prefix.
     pub model: Option<String>,
 }
 
@@ -188,10 +213,22 @@ mod tests {
                 tradeoffs: "slower but more accurate".into(),
             }],
             confidence: 0.95,
+            provider: "openai".into(),
+            model: Some("qwen3.8-flash-next-nothink".into()),
+            fallback_used: false,
+            attempts: vec![ProviderAttempt {
+                provider: "openai".into(),
+                model: Some("qwen3.8-flash-next-nothink".into()),
+                success: true,
+                reason: None,
+            }],
         };
         let json = serde_json::to_string(&resp).unwrap();
         let back: TranslateResponse = serde_json::from_str(&json).unwrap();
         assert_eq!(back.pipeline_id, resp.pipeline_id);
+        assert_eq!(back.provider, "openai");
+        assert!(!back.fallback_used);
+        assert_eq!(back.attempts.len(), 1);
     }
 
     #[test]

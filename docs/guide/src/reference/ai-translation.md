@@ -30,7 +30,8 @@ Process (one harness across all generation surfaces):
      orchestrator: engine-accurate prompt, read-only knowledge tools
      (Bioconda lookup, bioSkills, pipeline graph), and the provider
      fallback chain (the caller's own provider → configured provider →
-     env-discovered Claude → OpenAI → Ollama)
+     env-discovered Claude → OpenAI → Ollama; `OXO_FLOW_AI_FALLBACK=disabled`
+     limits it to the first usable provider)
   2. Requests fail fast with a structured `AI_NOT_CONFIGURED` error when
      no provider is usable
   3. Template names enter the prompt as hints; keyword matching also
@@ -38,7 +39,8 @@ Process (one harness across all generation surfaces):
      ("Try the '{name}' template") — it never produces a pipeline
   4. Every draft is validated by the engine via the web workflow service;
      validation errors feed the orchestrator's correction loop (bounded)
-Output: { pipeline_id, toml_content, explanation, alternatives, confidence }
+Output: { pipeline_id, toml_content, explanation, alternatives, confidence,
+          provider, model, fallback_used, attempts }
 
 **Draft id semantics**: the returned `pipeline_id` is an unsaved draft id —
 the generated TOML lives only in the server's in-memory request cache and is
@@ -47,6 +49,16 @@ returns 404 for it. To keep a translated pipeline, save the returned
 `toml_content` yourself (e.g. `POST /api/pipelines` or `oxo-flow run`), then
 pass the resulting saved id to `POST /api/ai/optimize`.
 ```
+
+The attribution fields are additive: `provider`/`model` name the backend that
+actually produced the pipeline, `fallback_used` says whether an earlier
+provider failed, and `attempts[]` (`{provider, model, success, reason}`)
+records each attempt in order with its failure reason. Every fallback logs a
+warning; an exhausted chain returns a structured error naming the last
+provider/model and the cause (including `Agent exceeded max rounds (N)`).
+Failure reasons are sanitized categories (`network error`,
+`authentication failed`, `provider error (HTTP 502)`, …) — no API key,
+endpoint URL, host, path, or upstream body appears in these fields.
 
 ### POST /api/ai/explain
 

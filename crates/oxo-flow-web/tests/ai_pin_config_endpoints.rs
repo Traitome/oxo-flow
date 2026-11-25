@@ -280,6 +280,10 @@ async fn pinned_test_probe_reports_disabled_without_any_connection() {
     assert_eq!(body["success"], false, "{body:?}");
     assert_eq!(body["provider"], "disabled", "{body:?}");
     assert!(
+        body["model"].is_null(),
+        "no provider/model is resolved under the pin: {body:?}"
+    );
+    assert!(
         body["message"]
             .as_str()
             .is_some_and(|m| m.contains("no connection attempted")),

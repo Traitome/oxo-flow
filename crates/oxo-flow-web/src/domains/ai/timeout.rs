@@ -91,6 +91,32 @@ pub fn timeout_response(budget: Duration) -> (StatusCode, Json<ApiError>) {
     (StatusCode::GATEWAY_TIMEOUT, Json(ai_timeout_error(budget)))
 }
 
+/// Translate-specific 504: same contract, with the last attempted
+/// provider/model appended to `detail` so a timeout is attributable. Never
+/// carries a credential or endpoint URL.
+pub fn ai_timeout_error_with_last_provider(
+    budget: Duration,
+    provider: Option<&str>,
+    model: Option<&str>,
+) -> ApiError {
+    let base = ai_timeout_error(budget);
+    let Some(provider) = provider else {
+        return base;
+    };
+    let target = match model {
+        Some(model) => format!("{provider} ({model})"),
+        None => provider.to_string(),
+    };
+    let detail = match base.detail {
+        Some(detail) => format!("{detail} Last attempted provider: {target}."),
+        None => format!("Last attempted provider: {target}."),
+    };
+    ApiError {
+        detail: Some(detail),
+        ..base
+    }
+}
+
 /// Await `future` under an explicit budget; `None` means it expired. Kept
 /// budget-parameterised so tests prove the bound in milliseconds instead of
 /// sleeping out the production default.
@@ -180,5 +206,20 @@ mod tests {
         let (status, Json(body)) = timeout_response(budget);
         assert_eq!(status, StatusCode::GATEWAY_TIMEOUT);
         assert_eq!(body.code, "AI_TIMEOUT");
+    }
+
+    #[test]
+    fn timeout_error_names_the_last_attempted_provider_without_secrets() {
+        let budget = Duration::from_secs(300);
+        let error =
+            ai_timeout_error_with_last_provider(budget, Some("openai"), Some("qwen3.8-flash"));
+        let detail = error.detail.as_deref().unwrap_or_default();
+        assert_eq!(error.code, "AI_TIMEOUT");
+        assert!(detail.contains("openai (qwen3.8-flash)"), "{detail}");
+        assert!(detail.contains("OXO_FLOW_AI_TIMEOUT_SECS"), "{detail}");
+
+        // No provider attempted: the shared body is unchanged.
+        let bare = ai_timeout_error_with_last_provider(budget, None, None);
+        assert_eq!(bare.detail, ai_timeout_error(budget).detail);
     }
 }

@@ -59,8 +59,16 @@ fn translate_error_parts(
         ),
         // The provider client's own timeout can fire before the route timer
         // (both read the same knob): classify it into the documented 504
-        // instead of a generic 400 (review wave 2 HIGH-1).
-        super::service::TranslateError::TimedOut => super::timeout::timeout_response(budget),
+        // instead of a generic 400 (review wave 2 HIGH-1). The last
+        // attempted provider is named in `detail` (never a key/endpoint).
+        super::service::TranslateError::TimedOut { provider, model } => (
+            StatusCode::GATEWAY_TIMEOUT,
+            Json(super::timeout::ai_timeout_error_with_last_provider(
+                budget,
+                provider.as_deref(),
+                model.as_deref(),
+            )),
+        ),
         super::service::TranslateError::Failed(message) => (
             StatusCode::BAD_REQUEST,
             Json(ApiError {
@@ -164,6 +172,7 @@ fn pinned_test_response(pinned_disabled: bool) -> Option<AiTestResponse> {
     post,
     path = "/api/ai/translate",
     tag = "ai",
+    request_body = TranslateRequest,
     responses(
         (status = 200, description = "Success", body = TranslateResponse),
         (status = 400, description = "Error", body = ApiError),
@@ -237,6 +246,7 @@ pub async fn translate(
     post,
     path = "/api/ai/translate/stream",
     tag = "ai",
+    request_body = TranslateRequest,
     responses(
         (status = 200, description = "Success", content_type = "text/event-stream"),
         (status = 400, description = "Error", body = ApiError),
@@ -336,6 +346,7 @@ pub async fn translate_sse(
     post,
     path = "/api/ai/explain",
     tag = "ai",
+    request_body = ExplainRequest,
     responses(
         (status = 200, description = "Success", body = ExplainResponse),
         (status = 400, description = "Error", body = ApiError),
@@ -430,6 +441,7 @@ fn blocking_dir_walk<T>(op: impl FnOnce() -> T) -> T {
     post,
     path = "/api/ai/interpret",
     tag = "ai",
+    request_body = InterpretRequest,
     responses(
         (status = 200, description = "Success", body = InterpretResponse),
         (status = 400, description = "Error", body = ApiError),
@@ -502,6 +514,7 @@ pub async fn interpret(
     post,
     path = "/api/ai/optimize",
     tag = "ai",
+    request_body = OptimizeRequest,
     responses(
         (status = 200, description = "Success", body = OptimizeResponse),
         (status = 400, description = "Error", body = ApiError),
@@ -588,6 +601,7 @@ pub async fn get_ai_config(
     post,
     path = "/api/ai/config",
     tag = "ai",
+    request_body = AiConfigRequest,
     responses(
         (status = 200, description = "Success", body = AiConfigResponse),
         (status = 403, description = "Error", body = ApiError),
@@ -641,7 +655,13 @@ static AI_TEST_PROBE_CACHE: tokio::sync::Mutex<Option<AiTestProbeCache>> =
     tokio::sync::Mutex::const_new(None);
 
 /// One outbound connectivity probe (the only paid call in this module).
+///
+/// The response names the resolved backend AND its model — the operator
+/// needs to know which model was actually tested (the live campaign saw
+/// `model: null` while a model was configured). No credential, key prefix,
+/// or endpoint URL is ever included.
 async fn probe_ai_provider(provider: &crate::ai_provider::AiProvider) -> AiTestResponse {
+    let model = provider.model();
     match provider
         .chat("You are a helpful assistant.", "Reply with exactly: OK")
         .await
@@ -650,13 +670,13 @@ async fn probe_ai_provider(provider: &crate::ai_provider::AiProvider) -> AiTestR
             success: true,
             message: format!("Test successful: {response}"),
             provider: provider.name().to_string(),
-            model: None,
+            model,
         },
         Err(e) => AiTestResponse {
             success: false,
             message: format!("Test failed: {e}"),
             provider: provider.name().to_string(),
-            model: None,
+            model,
         },
     }
 }
@@ -665,6 +685,7 @@ async fn probe_ai_provider(provider: &crate::ai_provider::AiProvider) -> AiTestR
     post,
     path = "/api/ai/test",
     tag = "ai",
+    request_body = AiConfigRequest,
     responses(
         (status = 200, description = "Success", body = AiTestResponse),
         (status = 400, description = "Error", body = ApiError),

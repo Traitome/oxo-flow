@@ -72,6 +72,17 @@ async fn concurrent_probes_share_one_provider_call() {
         assert_eq!(status, StatusCode::OK, "probe failed: {body}");
         assert_eq!(body["success"], json!(true), "probe body: {body}");
         assert_eq!(body["provider"], json!("scripted"), "probe body: {body}");
+        // The response names the model that was actually probed (it used to
+        // be null even with a configured model); never a key.
+        assert_eq!(
+            body["model"],
+            json!("scripted-test"),
+            "probe must report the resolved model: {body}"
+        );
+        assert!(
+            !body.to_string().contains("api_key"),
+            "probe must never echo credentials: {body}"
+        );
     }
 
     let calls = backend.observed_calls().await;
