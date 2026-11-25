@@ -394,6 +394,13 @@ jobs:
       - name: Build
         run: cargo build --workspace
 
+      # Mirrors `make claims-check`: quantitative and maturity claims in
+      # README.md / ROADMAP.md / AGENTS.md / docs/guide/src must match their
+      # machine-readable sources (docs/claims.json). The gate executes the
+      # just-built CLI and the openapi_counts example, so it runs after Build.
+      - name: Documentation claims drift check
+        run: make claims-check
+
       # Issue #982 P1-2: the feature gates used to be advertised as
       # "minimal-build" support, but --no-default-features rotted (8 compile
       # errors) with zero CI coverage to catch it. s3-storage/gcs-storage are

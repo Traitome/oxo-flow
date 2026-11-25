@@ -1,10 +1,10 @@
-.PHONY: ci fmt clippy build test coverage bench bench-macro bench-compare audit deny aws-legacy-tripwire issue-id-tripwire npmmirror-tripwire truthset-stamp secrets docs docs-lint frontend-lint frontend-test schema-drift skill-drift sync-skill version-check eval-tests eval-lint eval-verify provenance-check reports-regen extension-test extension-integration desktop-smoke contributors frontend-build frontend-dev dev bundle-static bundle-desktop bundle-macos bundle-deb bundle-rpm bundle-appimage help
+.PHONY: ci fmt clippy build test coverage bench bench-macro bench-compare audit deny aws-legacy-tripwire issue-id-tripwire npmmirror-tripwire truthset-stamp claims-check secrets docs docs-lint frontend-lint frontend-test schema-drift skill-drift sync-skill version-check eval-tests eval-lint eval-verify provenance-check reports-regen extension-test extension-integration desktop-smoke contributors frontend-build frontend-dev dev bundle-static bundle-desktop bundle-macos bundle-deb bundle-rpm bundle-appimage help
 
 ## Run all local CI quality-gate checks. Same gates as the "Test" job in
 ## ci.yml, but the invocations are not identical: `test` runs single-threaded
 ## (--test-threads=1, deterministic locally; CI runs the default parallelism)
 ## and `frontend-lint` uses `npm install` where CI uses `npm ci`.
-ci: fmt clippy build test schema-drift skill-drift version-check audit deny aws-legacy-tripwire issue-id-tripwire npmmirror-tripwire truthset-stamp secrets docs docs-lint frontend-lint eval-tests eval-lint provenance-check reports-regen extension-test
+ci: fmt clippy build test schema-drift skill-drift version-check audit deny aws-legacy-tripwire issue-id-tripwire npmmirror-tripwire truthset-stamp claims-check secrets docs docs-lint frontend-lint eval-tests eval-lint provenance-check reports-regen extension-test
 
 fmt:
 	cargo fmt -- --check
@@ -85,6 +85,19 @@ npmmirror-tripwire:
 ## this gate fails.
 truthset-stamp:
 	@bash scripts/check-truthset-stamp.sh
+
+## Documentation-claims drift gate: the quantitative and maturity claims in
+## README.md, ROADMAP.md, AGENTS.md, and docs/guide/src/** must match their
+## machine-readable sources. docs/claims.json names the source for each claim
+## (built CLI help/JSON, core constants, evidence JSON, the generated OpenAPI
+## spec through examples/openapi_counts.rs, or a directory listing) and the
+## assertions the docs must satisfy; scripts/check-doc-claims.py is
+## stdlib-only, no-network, and runs after `build` because it executes the
+## built binary. A stale count or a retired maturity sentence fails the gate
+## instead of surviving until the next audit.
+claims-check: build
+	@cargo build --quiet -p oxo-flow-web --example openapi_counts
+	@python3 -I scripts/check-doc-claims.py
 
 ## Secret-scanning gate over the git history and working tree (config in
 secrets:

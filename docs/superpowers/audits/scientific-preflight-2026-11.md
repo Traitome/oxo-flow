@@ -1,6 +1,6 @@
 # Curated Scientific Preflight Catalog — `SCI-*` (2026-11)
 
-Issue: [#1244](https://github.com/ShixiangWang/oxo-flow/issues/1244) — ROADMAP Stage 12.2
+Issue: [#1244](https://github.com/Traitome/oxo-flow/issues/1244) — ROADMAP Stage 12.2
 "Header inspection and scientific preflight".
 
 Scope: EXIT EVIDENCE for the **51 already-shipped** curated `SCI-*` rules implemented in

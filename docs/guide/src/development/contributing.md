@@ -57,8 +57,10 @@ make ci
 #       cargo build, cargo test, schema-drift, skill-drift, version-check,
 #       cargo audit, cargo-deny, aws-legacy-tripwire (fails if the legacy AWS
 #       TLS stack re-enters the s3-storage graph), issue-id-tripwire (fails if
-#       internal issue IDs leak into user-facing pages), secrets scan, docs
-#       build, frontend-lint, eval-tests, eval-lint, extension-test
+#       internal issue IDs leak into user-facing pages), npmmirror-tripwire,
+#       truthset-stamp, secrets scan, docs build, docs-lint, frontend-lint,
+#       eval-tests, eval-lint, provenance-check, reports-regen, claims-check,
+#       extension-test
 ```
 
 ---
@@ -114,7 +116,7 @@ git checkout -b feat/my-feature
 make ci
 ```
 
-All seventeen checks must pass:
+All required checks must pass:
 
 - [x] `cargo fmt -- --check`
 - [x] `cargo clippy --workspace --all-targets -- -D warnings`
@@ -127,11 +129,17 @@ All seventeen checks must pass:
 - [x] `cargo deny check`
 - [x] `aws-legacy-tripwire` (legacy AWS TLS stack stays out of the s3-storage graph)
 - [x] `issue-id-tripwire` (no internal issue IDs in user-facing pages)
+- [x] `npmmirror-tripwire` (package-lock resolved URLs use the canonical npm registry)
+- [x] `truthset-stamp` (BioType truth-set evidence is reproducible from its stamped commit)
 - [x] `secrets` scan
 - [x] `docs` build (rustdoc with warnings denied)
+- [x] `docs-lint` (MD032 blank-line-before-list gate)
 - [x] `frontend-lint`
 - [x] `eval-tests`
 - [x] `eval-lint`
+- [x] `provenance-check` (publication artifacts carry provenance)
+- [x] `reports-regen` (checked-in reports regenerate from their harnesses)
+- [x] `claims-check` (quantitative and maturity claims in README/ROADMAP/vision match their machine-readable sources, registry in `docs/claims.json`)
 - [x] `extension-test` (VS Code extension fast gate)
 
 ### 4. Commit with Conventional Commits

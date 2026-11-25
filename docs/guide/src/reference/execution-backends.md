@@ -55,7 +55,7 @@ pub trait ExecutorBackend: Send + Sync {
 ```
 
 The first implementation, `ClusterExecutor` (SLURM/PBS/SGE/LSF, extended
-by k8s and the AWS/GCP Batch backends), renders
+by k8s and the AWS/GCP/Tencent Batch backends), renders
 scripts with the existing directive generator (`core/cluster.rs`, unchanged)
 and performs real submission and tracking:
 
@@ -158,11 +158,26 @@ expanded element records carry the aggregate verdict's provenance in
 array-level verdict is never presented as an independently observed
 element outcome. Missing accounting/status data is reported as unknown:
 a Completed job with no accounting record has `exit_code: null`, never
-`0`. Kubernetes, AWS Batch, and GCP Batch remain **Prototype** (CLI
-wrappers with mock/wire tests only): their per-backend live campaigns,
-re-attach to in-flight jobs, cancellation reconciliation across process
-restarts, and crash recovery remain evidence gaps (CL-05 / #1158). See
-the audit ledger before describing any backend as production-ready.
+`0`. Cloud backends remain **Prototype** until the per-backend
+submit/queue/run/cancel/fail/retry/artifact campaign (CL-05 / #1158) is
+complete, and the evidence differs by backend. **Kubernetes** is
+live-qualified for the tested scope: single-node k3s campaigns
+(2026-11-24: submit/status/artifacts/logs/SIGINT cancel and image-based
+environment rendering) and a two-node k3s + NFS campaign (2026-11-26:
+Indexed array settling per element across both nodes, a dependent rule
+forced onto the second node by resource fit, outputs returned through the
+shared volume, `provenance verify` 3/3). Its remaining gaps are PVC
+provisioning, HA/multi-control-plane, cloud-provider volumes, image mode
+combined with a multi-node `[cluster.volume]`, re-attach to in-flight
+jobs, cancellation reconciliation across process restarts, and crash
+recovery. **Tencent Batch** has a live named-env submit smoke
+(2026-11-25): a job reached `SUCCEED` against a pre-created compute
+environment, while poll/log/cancel/array paths remain mock-verified only
+and inline anonymous-env creation failed on the qualification account.
+**AWS Batch** and **GCP Batch** are blocked at CLI wrappers with
+mock/wire tests only (live campaign pending #1390; the GCP endpoint was
+unreachable from the qualification host). See the audit ledger before
+describing any backend as production-ready.
 
 Freshness note (2026-11-07): this evidence is a point-in-time campaign —
 the harness landed 2026-09-23 (#356, #405) and nothing re-runs it on a
