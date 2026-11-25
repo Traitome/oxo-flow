@@ -5299,15 +5299,66 @@ time</strong> on both submission paths (<code>run --profile &lt;name&gt;</code> 
 submit</code>), naming the offending rule and hook field (issue #1340), instead of
 silently dropping the hook on the scheduler. Remove the hooks or run the
 workflow locally (<code>oxo-flow run</code>).</p>
+<h3 id="shared-volume-clustervolume-kubernetes">Shared volume (<code>[cluster.volume]</code>, Kubernetes)<a class="headerlink" href="#shared-volume-clustervolume-kubernetes" title="Permanent link">#</a></h3>
+<p>The default Kubernetes renderer mounts the run workdir (and array command
+directories) as <code>hostPath</code> volumes at their submit-host absolute paths —
+correct only on a <strong>single-node / shared-filesystem</strong> cluster. On a
+multi-node cluster the workdir must live on a filesystem every node sees;
+declare it once in the profile:</p>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-27-1"><a id="__codelineno-27-1" name="__codelineno-27-1" href="#__codelineno-27-1"></a><span class="c1"># profiles/k8s.toml</span>
+</span><span id="__span-27-2"><a id="__codelineno-27-2" name="__codelineno-27-2" href="#__codelineno-27-2"></a><span class="k">[cluster]</span>
+</span><span id="__span-27-3"><a id="__codelineno-27-3" name="__codelineno-27-3" href="#__codelineno-27-3"></a><span class="n">backend</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"kubernetes"</span>
+</span><span id="__span-27-4"><a id="__codelineno-27-4" name="__codelineno-27-4" href="#__codelineno-27-4"></a>
+</span><span id="__span-27-5"><a id="__codelineno-27-5" name="__codelineno-27-5" href="#__codelineno-27-5"></a><span class="k">[cluster.volume]</span>
+</span><span id="__span-27-6"><a id="__codelineno-27-6" name="__codelineno-27-6" href="#__codelineno-27-6"></a><span class="n">kind</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"nfs"</span><span class="w">              </span><span class="c1"># nfs | pvc | hostpath</span>
+</span><span id="__span-27-7"><a id="__codelineno-27-7" name="__codelineno-27-7" href="#__codelineno-27-7"></a><span class="n">server</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"10.0.0.9"</span><span class="w">       </span><span class="c1"># nfs only: NFS server address</span>
+</span><span id="__span-27-8"><a id="__codelineno-27-8" name="__codelineno-27-8" href="#__codelineno-27-8"></a><span class="n">path</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"/exports/oxoflow"</span><span class="w"> </span><span class="c1"># nfs only: the export — this IS the volume root</span>
+</span><span id="__span-27-9"><a id="__codelineno-27-9" name="__codelineno-27-9" href="#__codelineno-27-9"></a><span class="n">mount_root</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"/oxoflow"</span><span class="w">   </span><span class="c1"># optional, default /oxoflow — the in-pod mount</span>
+</span><span id="__span-27-10"><a id="__codelineno-27-10" name="__codelineno-27-10" href="#__codelineno-27-10"></a><span class="w">                          </span><span class="c1"># point of the volume root</span>
+</span><span id="__span-27-11"><a id="__codelineno-27-11" name="__codelineno-27-11" href="#__codelineno-27-11"></a>
+</span><span id="__span-27-12"><a id="__codelineno-27-12" name="__codelineno-27-12" href="#__codelineno-27-12"></a><span class="c1"># pvc shape: kind = "pvc", claim_name = "oxoflow-work",</span>
+</span><span id="__span-27-13"><a id="__codelineno-27-13" name="__codelineno-27-13" href="#__codelineno-27-13"></a><span class="c1">#            volume_root = "/mnt/oxoflow"   # required: the submit-host</span>
+</span><span id="__span-27-14"><a id="__codelineno-27-14" name="__codelineno-27-14" href="#__codelineno-27-14"></a><span class="c1">#                                           # directory the claim is mounted</span>
+</span><span id="__span-27-15"><a id="__codelineno-27-15" name="__codelineno-27-15" href="#__codelineno-27-15"></a><span class="c1">#                                           # at (a PVC has no inherent path)</span>
+</span><span id="__span-27-16"><a id="__codelineno-27-16" name="__codelineno-27-16" href="#__codelineno-27-16"></a><span class="c1"># hostpath shape: kind = "hostpath", host_path = "/srv/oxoflow"</span>
+</span><span id="__span-27-17"><a id="__codelineno-27-17" name="__codelineno-27-17" href="#__codelineno-27-17"></a><span class="c1">#                 (volume_root defaults to host_path)</span>
+</span></code></pre></div>
+<p>The <strong>volume root</strong> is the submit-host directory the volume's contents
+correspond to: the NFS export for <code>kind = "nfs"</code> (<code>path</code>), the claim's
+mount point for <code>kind = "pvc"</code> (the required <code>volume_root</code>), or <code>host_path</code>
+for <code>kind = "hostpath"</code>. <code>mount_root</code> is where the volume ROOT is mounted
+inside the pod, so a workdir nested inside the volume keeps its relative
+position: with <code>path = "/exports/oxoflow"</code>, <code>mount_root = "/oxoflow"</code> and a
+run workdir <code>/exports/oxoflow/lab/rna</code>, the pod sees the workdir at
+<code>/oxoflow/lab/rna</code>.</p>
+<p>What the renderer does with it:</p>
+<ul>
+<li>Pods mount the volume at <code>mount_root</code> (default <code>/oxoflow</code>) — one
+  <code>oxoflow-shared</code> volume mount replaces every per-run <code>hostPath</code>.</li>
+<li>The rendered command's folded <code>cd '&lt;submit-host-workdir&gt;'</code> guard and every
+  workdir-anchored absolute path (docker <code>-v</code> binds, redirections through
+  expanded paths) are rewritten onto the workdir's in-pod path
+  (<code>mount_root/&lt;workdir relative to the volume root&gt;</code>) at manifest-render
+  time. The checkpoint keeps the submit-host path — only the rendered
+  command is mapped.</li>
+<li>Array dispatch paths map the same way: a command directory under the run
+  workdir renders as <code>mount_root/&lt;relative-to-volume-root&gt;/cmd.$N.sh</code>.</li>
+<li><code>run --profile</code> fails at admission when the kind/field combination is
+  incomplete (<code>nfs</code> without <code>server</code>/<code>path</code>, <code>pvc</code> without <code>claim_name</code> or
+  <code>volume_root</code>, <code>hostpath</code> without <code>host_path</code>), when the volume is
+  declared for a backend that would silently ignore it (non-Kubernetes), or
+  — at render time — when the run workdir is not under the volume root
+  (that failure names both paths instead of mounting something wrong).</li>
+</ul>
 <h3 id="job-arrays">Job arrays<a class="headerlink" href="#job-arrays" title="Permanent link">#</a></h3>
 <p>Same-template instances that are ready together and agree on every
 scheduler-visible directive (threads, memory, time limit, partition,
 account, GPU spec, environment, workdir) are grouped into <strong>one scheduler
 array</strong> automatically:</p>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-27-1"><a id="__codelineno-27-1" name="__codelineno-27-1" href="#__codelineno-27-1"></a><span class="k">[cluster]</span>
-</span><span id="__span-27-2"><a id="__codelineno-27-2" name="__codelineno-27-2" href="#__codelineno-27-2"></a><span class="n">backend</span><span class="w">        </span><span class="o">=</span><span class="w"> </span><span class="s2">"slurm"</span>
-</span><span id="__span-27-3"><a id="__codelineno-27-3" name="__codelineno-27-3" href="#__codelineno-27-3"></a><span class="n">max_array_size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1001</span><span class="w">   </span><span class="c1"># optional — the scheduler's MaxArraySize; larger</span>
-</span><span id="__span-27-4"><a id="__codelineno-27-4" name="__codelineno-27-4" href="#__codelineno-27-4"></a><span class="w">                        </span><span class="c1"># scatter groups are chunked into several arrays</span>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-28-1"><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a><span class="k">[cluster]</span>
+</span><span id="__span-28-2"><a id="__codelineno-28-2" name="__codelineno-28-2" href="#__codelineno-28-2"></a><span class="n">backend</span><span class="w">        </span><span class="o">=</span><span class="w"> </span><span class="s2">"slurm"</span>
+</span><span id="__span-28-3"><a id="__codelineno-28-3" name="__codelineno-28-3" href="#__codelineno-28-3"></a><span class="n">max_array_size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1001</span><span class="w">   </span><span class="c1"># optional — the scheduler's MaxArraySize; larger</span>
+</span><span id="__span-28-4"><a id="__codelineno-28-4" name="__codelineno-28-4" href="#__codelineno-28-4"></a><span class="w">                        </span><span class="c1"># scatter groups are chunked into several arrays</span>
 </span></code></pre></div>
 <ul>
 <li>One submission instead of N <code>sbatch</code>/<code>qsub</code> calls — one queue entry that
@@ -5340,34 +5391,34 @@ arrays element-wise (see
 <a href="#element-wise-array-chaining-slurm">Element-wise array chaining (SLURM)</a>).</p>
 <h3 id="run-directory-layout">Run directory layout<a class="headerlink" href="#run-directory-layout" title="Permanent link">#</a></h3>
 <p>Each run leaves a directory you can navigate with ordinary tools:</p>
-<div class="language-console highlight"><pre><span></span><code><span id="__span-28-1"><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a><span class="go">.oxo-flow/runs/2026-08-17T14-30-05/   # `latest` symlinks to the newest</span>
-</span><span id="__span-28-2"><a id="__codelineno-28-2" name="__codelineno-28-2" href="#__codelineno-28-2"></a><span class="go">  events.jsonl                        # append-only submit/complete/fail log</span>
-</span><span id="__span-28-3"><a id="__codelineno-28-3" name="__codelineno-28-3" href="#__codelineno-28-3"></a><span class="go">  index.json                          # array index → instance name</span>
-</span><span id="__span-28-4"><a id="__codelineno-28-4" name="__codelineno-28-4" href="#__codelineno-28-4"></a><span class="go">  jobs/&lt;rule&gt;/job.sh                  # the exact script submitted</span>
-</span><span id="__span-28-5"><a id="__codelineno-28-5" name="__codelineno-28-5" href="#__codelineno-28-5"></a><span class="go">  jobs/&lt;rule&gt;/job.id                  # scheduler job id</span>
-</span><span id="__span-28-6"><a id="__codelineno-28-6" name="__codelineno-28-6" href="#__codelineno-28-6"></a><span class="go">  jobs/&lt;rule&gt;/status.json</span>
+<div class="language-console highlight"><pre><span></span><code><span id="__span-29-1"><a id="__codelineno-29-1" name="__codelineno-29-1" href="#__codelineno-29-1"></a><span class="go">.oxo-flow/runs/2026-08-17T14-30-05/   # `latest` symlinks to the newest</span>
+</span><span id="__span-29-2"><a id="__codelineno-29-2" name="__codelineno-29-2" href="#__codelineno-29-2"></a><span class="go">  events.jsonl                        # append-only submit/complete/fail log</span>
+</span><span id="__span-29-3"><a id="__codelineno-29-3" name="__codelineno-29-3" href="#__codelineno-29-3"></a><span class="go">  index.json                          # array index → instance name</span>
+</span><span id="__span-29-4"><a id="__codelineno-29-4" name="__codelineno-29-4" href="#__codelineno-29-4"></a><span class="go">  jobs/&lt;rule&gt;/job.sh                  # the exact script submitted</span>
+</span><span id="__span-29-5"><a id="__codelineno-29-5" name="__codelineno-29-5" href="#__codelineno-29-5"></a><span class="go">  jobs/&lt;rule&gt;/job.id                  # scheduler job id</span>
+</span><span id="__span-29-6"><a id="__codelineno-29-6" name="__codelineno-29-6" href="#__codelineno-29-6"></a><span class="go">  jobs/&lt;rule&gt;/status.json</span>
 </span></code></pre></div>
 <p>Every <code>events.jsonl</code> line carries an RFC 3339 <code>ts</code>, so the log reconstructs
 a timeline rather than just an ordering:</p>
-<div class="language-json highlight"><pre><span></span><code><span id="__span-29-1"><a id="__codelineno-29-1" name="__codelineno-29-1" href="#__codelineno-29-1"></a><span class="p">{</span><span class="nt">"ts"</span><span class="p">:</span><span class="s2">"2026-08-17T14:30:05.114Z"</span><span class="p">,</span><span class="nt">"t"</span><span class="p">:</span><span class="s2">"SUBMITTED"</span><span class="p">,</span><span class="nt">"rule"</span><span class="p">:</span><span class="s2">"align_S1"</span><span class="p">,</span><span class="nt">"job"</span><span class="p">:</span><span class="s2">"4812345"</span><span class="p">}</span>
-</span><span id="__span-29-2"><a id="__codelineno-29-2" name="__codelineno-29-2" href="#__codelineno-29-2"></a><span class="p">{</span><span class="nt">"ts"</span><span class="p">:</span><span class="s2">"2026-08-17T15:02:44.907Z"</span><span class="p">,</span><span class="nt">"t"</span><span class="p">:</span><span class="s2">"COMPLETED"</span><span class="p">,</span><span class="nt">"rule"</span><span class="p">:</span><span class="s2">"align_S1"</span><span class="p">,</span><span class="nt">"job"</span><span class="p">:</span><span class="s2">"4812345"</span><span class="p">}</span>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-30-1"><a id="__codelineno-30-1" name="__codelineno-30-1" href="#__codelineno-30-1"></a><span class="p">{</span><span class="nt">"ts"</span><span class="p">:</span><span class="s2">"2026-08-17T14:30:05.114Z"</span><span class="p">,</span><span class="nt">"t"</span><span class="p">:</span><span class="s2">"SUBMITTED"</span><span class="p">,</span><span class="nt">"rule"</span><span class="p">:</span><span class="s2">"align_S1"</span><span class="p">,</span><span class="nt">"job"</span><span class="p">:</span><span class="s2">"4812345"</span><span class="p">}</span>
+</span><span id="__span-30-2"><a id="__codelineno-30-2" name="__codelineno-30-2" href="#__codelineno-30-2"></a><span class="p">{</span><span class="nt">"ts"</span><span class="p">:</span><span class="s2">"2026-08-17T15:02:44.907Z"</span><span class="p">,</span><span class="nt">"t"</span><span class="p">:</span><span class="s2">"COMPLETED"</span><span class="p">,</span><span class="nt">"rule"</span><span class="p">:</span><span class="s2">"align_S1"</span><span class="p">,</span><span class="nt">"job"</span><span class="p">:</span><span class="s2">"4812345"</span><span class="p">}</span>
 </span></code></pre></div>
 <h3 id="what-a-finished-job-records">What a finished job records<a class="headerlink" href="#what-a-finished-job-records" title="Permanent link">#</a></h3>
 <p>When a job leaves the queue, oxo-flow reads the scheduler's accounting store
 (<code>sacct</code>, <code>qstat -x -f</code>, <code>qacct</code>, <code>bacct</code>) and writes what it found into
 <code>status.json</code>:</p>
-<div class="language-json highlight"><pre><span></span><code><span id="__span-30-1"><a id="__codelineno-30-1" name="__codelineno-30-1" href="#__codelineno-30-1"></a><span class="p">{</span>
-</span><span id="__span-30-2"><a id="__codelineno-30-2" name="__codelineno-30-2" href="#__codelineno-30-2"></a><span class="w">  </span><span class="nt">"state"</span><span class="p">:</span><span class="w"> </span><span class="s2">"COMPLETED"</span><span class="p">,</span>
-</span><span id="__span-30-3"><a id="__codelineno-30-3" name="__codelineno-30-3" href="#__codelineno-30-3"></a><span class="w">  </span><span class="nt">"job_id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"4812345"</span><span class="p">,</span>
-</span><span id="__span-30-4"><a id="__codelineno-30-4" name="__codelineno-30-4" href="#__codelineno-30-4"></a><span class="w">  </span><span class="nt">"command"</span><span class="p">:</span><span class="w"> </span><span class="s2">"bwa mem ref.fa data/S1.fq &gt; aln/S1.bam"</span><span class="p">,</span>
-</span><span id="__span-30-5"><a id="__codelineno-30-5" name="__codelineno-30-5" href="#__codelineno-30-5"></a><span class="w">  </span><span class="nt">"submitted_at"</span><span class="p">:</span><span class="w"> </span><span class="s2">"2026-08-17T14:30:05.114Z"</span><span class="p">,</span>
-</span><span id="__span-30-6"><a id="__codelineno-30-6" name="__codelineno-30-6" href="#__codelineno-30-6"></a><span class="w">  </span><span class="nt">"finished_at"</span><span class="p">:</span><span class="w"> </span><span class="s2">"2026-08-17T15:02:44.907Z"</span><span class="p">,</span>
-</span><span id="__span-30-7"><a id="__codelineno-30-7" name="__codelineno-30-7" href="#__codelineno-30-7"></a><span class="w">  </span><span class="nt">"queue_wait_secs"</span><span class="p">:</span><span class="w"> </span><span class="mi">65</span><span class="p">,</span>
-</span><span id="__span-30-8"><a id="__codelineno-30-8" name="__codelineno-30-8" href="#__codelineno-30-8"></a><span class="w">  </span><span class="nt">"exit_code"</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span>
-</span><span id="__span-30-9"><a id="__codelineno-30-9" name="__codelineno-30-9" href="#__codelineno-30-9"></a><span class="w">  </span><span class="nt">"elapsed_secs"</span><span class="p">:</span><span class="w"> </span><span class="mi">1894</span><span class="p">,</span>
-</span><span id="__span-30-10"><a id="__codelineno-30-10" name="__codelineno-30-10" href="#__codelineno-30-10"></a><span class="w">  </span><span class="nt">"max_rss_mb"</span><span class="p">:</span><span class="w"> </span><span class="mi">24680</span><span class="p">,</span>
-</span><span id="__span-30-11"><a id="__codelineno-30-11" name="__codelineno-30-11" href="#__codelineno-30-11"></a><span class="w">  </span><span class="nt">"cpu_seconds"</span><span class="p">:</span><span class="w"> </span><span class="mi">14203</span>
-</span><span id="__span-30-12"><a id="__codelineno-30-12" name="__codelineno-30-12" href="#__codelineno-30-12"></a><span class="p">}</span>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-31-1"><a id="__codelineno-31-1" name="__codelineno-31-1" href="#__codelineno-31-1"></a><span class="p">{</span>
+</span><span id="__span-31-2"><a id="__codelineno-31-2" name="__codelineno-31-2" href="#__codelineno-31-2"></a><span class="w">  </span><span class="nt">"state"</span><span class="p">:</span><span class="w"> </span><span class="s2">"COMPLETED"</span><span class="p">,</span>
+</span><span id="__span-31-3"><a id="__codelineno-31-3" name="__codelineno-31-3" href="#__codelineno-31-3"></a><span class="w">  </span><span class="nt">"job_id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"4812345"</span><span class="p">,</span>
+</span><span id="__span-31-4"><a id="__codelineno-31-4" name="__codelineno-31-4" href="#__codelineno-31-4"></a><span class="w">  </span><span class="nt">"command"</span><span class="p">:</span><span class="w"> </span><span class="s2">"bwa mem ref.fa data/S1.fq &gt; aln/S1.bam"</span><span class="p">,</span>
+</span><span id="__span-31-5"><a id="__codelineno-31-5" name="__codelineno-31-5" href="#__codelineno-31-5"></a><span class="w">  </span><span class="nt">"submitted_at"</span><span class="p">:</span><span class="w"> </span><span class="s2">"2026-08-17T14:30:05.114Z"</span><span class="p">,</span>
+</span><span id="__span-31-6"><a id="__codelineno-31-6" name="__codelineno-31-6" href="#__codelineno-31-6"></a><span class="w">  </span><span class="nt">"finished_at"</span><span class="p">:</span><span class="w"> </span><span class="s2">"2026-08-17T15:02:44.907Z"</span><span class="p">,</span>
+</span><span id="__span-31-7"><a id="__codelineno-31-7" name="__codelineno-31-7" href="#__codelineno-31-7"></a><span class="w">  </span><span class="nt">"queue_wait_secs"</span><span class="p">:</span><span class="w"> </span><span class="mi">65</span><span class="p">,</span>
+</span><span id="__span-31-8"><a id="__codelineno-31-8" name="__codelineno-31-8" href="#__codelineno-31-8"></a><span class="w">  </span><span class="nt">"exit_code"</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span>
+</span><span id="__span-31-9"><a id="__codelineno-31-9" name="__codelineno-31-9" href="#__codelineno-31-9"></a><span class="w">  </span><span class="nt">"elapsed_secs"</span><span class="p">:</span><span class="w"> </span><span class="mi">1894</span><span class="p">,</span>
+</span><span id="__span-31-10"><a id="__codelineno-31-10" name="__codelineno-31-10" href="#__codelineno-31-10"></a><span class="w">  </span><span class="nt">"max_rss_mb"</span><span class="p">:</span><span class="w"> </span><span class="mi">24680</span><span class="p">,</span>
+</span><span id="__span-31-11"><a id="__codelineno-31-11" name="__codelineno-31-11" href="#__codelineno-31-11"></a><span class="w">  </span><span class="nt">"cpu_seconds"</span><span class="p">:</span><span class="w"> </span><span class="mi">14203</span>
+</span><span id="__span-31-12"><a id="__codelineno-31-12" name="__codelineno-31-12" href="#__codelineno-31-12"></a><span class="p">}</span>
 </span></code></pre></div>
 <p><code>queue_wait_secs</code> is submit-to-finish minus the scheduler's own elapsed
 time — the driver never observes the moment a job starts, so the split
