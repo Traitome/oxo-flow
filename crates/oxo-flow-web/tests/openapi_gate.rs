@@ -377,6 +377,59 @@ fn post_runs_documents_its_request_body() {
     );
 }
 
+/// The AI-native surfaces parse JSON payloads on every request; each must
+/// document its body schema so generated clients do not have to read the
+/// handler source (issue #324 F-4 follow-up).
+#[test]
+fn ai_routes_document_their_request_bodies() {
+    let spec: serde_json::Value = serde_json::from_str(&oxo_flow_web::openapi::spec_json("hpc"))
+        .expect("generated spec must parse as JSON");
+
+    for (path, expected_schema) in [
+        ("/api/ai/translate", "TranslateRequest"),
+        ("/api/ai/translate/stream", "TranslateRequest"),
+        ("/api/chat/send", "ChatRequest"),
+        ("/api/chat/send/json", "ChatRequest"),
+    ] {
+        let post = &spec["paths"][path]["post"];
+        let schema = &post["requestBody"]["content"]["application/json"]["schema"];
+        let ref_name = schema["$ref"]
+            .as_str()
+            .unwrap_or_else(|| panic!("POST {path} must declare a requestBody schema: {schema}"));
+        assert!(
+            ref_name.ends_with(expected_schema),
+            "POST {path} must reference {expected_schema}, got {ref_name}"
+        );
+        assert!(
+            spec["components"]["schemas"][expected_schema].is_object(),
+            "components.schemas.{expected_schema} must be generated"
+        );
+    }
+
+    // The translate contract's required field is documented, not implicit.
+    assert_eq!(
+        spec["components"]["schemas"]["TranslateRequest"]["properties"]["intent"]["type"], "string",
+        "TranslateRequest.intent must be a documented string"
+    );
+    assert_eq!(
+        spec["components"]["schemas"]["ChatRequest"]["properties"]["message"]["type"], "string",
+        "ChatRequest.message must be a documented string"
+    );
+
+    // Attribution fields are part of the documented response contract.
+    let translate = &spec["components"]["schemas"]["TranslateResponse"]["properties"];
+    assert_eq!(translate["provider"]["type"], "string");
+    assert_eq!(translate["fallback_used"]["type"], "boolean");
+    assert!(
+        translate["attempts"].is_object(),
+        "TranslateResponse.attempts must be documented: {translate}"
+    );
+    assert!(
+        spec["components"]["schemas"]["ProviderAttempt"].is_object(),
+        "ProviderAttempt must be a generated component schema"
+    );
+}
+
 /// #914 review NIT: POST /api/events/ticket must document its response body
 /// (TicketResponse), not just an untyped 200 JSON blob.
 #[test]

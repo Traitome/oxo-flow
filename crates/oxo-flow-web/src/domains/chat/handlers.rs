@@ -65,6 +65,7 @@ async fn persist_assistant_message(user: &CurrentUser, session_id: &str, content
     path = "/api/chat/send",
     tag = "chat",
     security(("bearerAuth" = [])),
+    request_body = ChatRequest,
     responses(
         (status = 200, description = "Success", content_type = "text/event-stream"),
         (status = 400, description = "Error", body = ApiError),
@@ -304,6 +305,7 @@ pub async fn chat_send(
     post,
     path = "/api/chat/send/json",
     tag = "chat",
+    request_body = ChatRequest,
     responses(
         (status = 200, description = "Success", body = serde_json::Value),
         (status = 400, description = "Error", body = ApiError),

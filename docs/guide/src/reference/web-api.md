@@ -1453,6 +1453,47 @@ expires it answers `504 {code: "AI_TIMEOUT"}` with the standard
 Use `POST /api/ai/translate/stream` for generations expected to run longer:
 the SSE route is not capped by this total budget.
 
+### Translate provider attribution and fallback
+
+The translate endpoints are the only web AI surface with a cross-provider
+fallback chain (chat resolves the acting user's provider once). By default
+(`auto`) the chain is: the acting user's provider → the configured runtime
+provider → env-discovered Claude/OpenAI/Ollama. Every successful response
+(JSON body, and the SSE `done` payload) carries additive attribution
+fields next to the existing payload:
+
+```json
+{
+  "provider": "openai",
+  "model": "qwen3.8-flash-next-nothink",
+  "fallback_used": true,
+  "attempts": [
+    { "provider": "openai", "model": "qwen3.8-flash-next-nothink", "success": false,
+      "reason": "Agent exceeded max rounds (10)" },
+    { "provider": "claude", "model": "deepseek-flash[1m]", "success": true, "reason": null }
+  ]
+}
+```
+
+`provider`/`model` name the backend that actually produced the returned
+pipeline, `fallback_used` is true only when an earlier provider failed, and
+`attempts` preserves order and each failure reason. A cache hit returns the
+original generation's attribution. Every fallback logs a WARN naming the
+from/to provider, model, and prior failure. When every attempt fails, the
+`400 AI_TRANSLATE_ERROR` message names the last provider/model and the
+orchestrator cause (for example `Agent exceeded max rounds (10)`); the
+`504 AI_TIMEOUT` `detail` names the last attempted provider.
+No API key or endpoint URL is ever included in these fields, attempts, logs,
+or errors.
+
+Set `OXO_FLOW_AI_FALLBACK=disabled` to limit the chain to the first usable
+provider (the acting user's, else the runtime) — an explicit provider pin
+then cannot spend a different credential. An explicit
+`OXO_FLOW_AI_PROVIDER` alone does NOT disable the chain (the `auto` default
+keeps it for resilience), so this knob is the absolute-pin switch.
+Unrecognized values warn and keep `auto`. The default remains `auto` for
+backward compatibility.
+
 `GET /api/ai/config` stays public for anonymous feature discoverability:
 non-admin callers outside personal mode (team/hpc) — including anonymous
 callers — receive only
@@ -1464,6 +1505,14 @@ valid credential opts the request into normal authentication, so an admin
 sees the configured provider, model, and URL (never the API key); an invalid
 credential is rejected with `401` rather than silently downgraded to the
 masked anonymous payload.
+
+`POST /api/ai/test` reports the resolved backend AND the model that was
+actually probed: `{success, message, provider, model}`. `model` is `null`
+only when no provider is resolved (the pinned-disabled path); it is never
+redacted in personal mode, where the local operator already sees the full
+configuration. The endpoint is admin-only outside personal mode (a probe
+spends money), so the model id is never exposed to an unprivileged caller.
+API keys and key prefixes are never returned.
 
 ### Provider metadata is role-gated (WEB-15 / issue #1140)
 
@@ -1540,8 +1589,9 @@ configuration tier and every runtime update. While it is set:
   usable and the saved configuration applies after an unpinned restart,
   but the pinned runtime is never reconfigured.
 - `POST /api/ai/test` returns `200` with `success: false`,
-  `provider: "disabled"`, and a message stating that no connection was
-  attempted. No provider is resolved and no HTTP client is constructed.
+  `provider: "disabled"`, `model: null`, and a message stating that no
+  connection was attempted. No provider is resolved and no HTTP client is
+  constructed.
 - `GET /api/ai/config` and `GET /api/ai/config/effective` report
   `provider: "disabled"` / `is_configured: false`. The per-user and
   server reads add `disabled_by_env: true` and report the effective

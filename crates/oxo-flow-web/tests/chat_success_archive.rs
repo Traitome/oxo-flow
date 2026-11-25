@@ -148,6 +148,29 @@ async fn successful_agent_runs_are_archived_and_chat_turns_are_not() {
     .await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
 
+    // Translate attribution (fallback transparency): the response names the
+    // provider/model that actually produced the pipeline and records every
+    // attempt, without echoing a credential.
+    let translated: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(translated["provider"], json!("scripted"), "body: {body}");
+    assert_eq!(translated["model"], json!("scripted-test"), "body: {body}");
+    assert_eq!(translated["fallback_used"], json!(false), "body: {body}");
+    assert_eq!(
+        translated["attempts"].as_array().map(Vec::len),
+        Some(1),
+        "one provider attempted: {body}"
+    );
+    assert_eq!(translated["attempts"][0]["provider"], json!("scripted"));
+    assert_eq!(translated["attempts"][0]["success"], json!(true));
+    assert!(
+        translated["attempts"][0]["reason"].is_null(),
+        "a successful attempt carries no failure reason: {body}"
+    );
+    assert!(
+        !body.contains("api_key") && !body.contains("sk-"),
+        "attribution must never echo credentials: {body}"
+    );
+
     let all = archives(&sessions);
     assert_eq!(all.len(), 2, "translate success must be archived: {all:?}");
     let translate_archive = all

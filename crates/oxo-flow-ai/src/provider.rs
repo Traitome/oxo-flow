@@ -861,6 +861,24 @@ impl ClaudeBackend {
     /// Build the Anthropic `/v1/messages` body (extracted so the request
     /// shape — including `temperature` — is unit-testable without network).
     fn build_body(&self, messages: &[Message], tools: &[ToolDef]) -> serde_json::Value {
+        self.build_body_with_budget(
+            messages,
+            tools,
+            max_tokens_from_env(),
+            context_tokens_from_env(),
+        )
+    }
+
+    /// Testable core of [`ClaudeBackend::build_body`]: the same request body
+    /// against an explicit output budget and context window, so the clamp
+    /// contract is provable without reading the process environment.
+    fn build_body_with_budget(
+        &self,
+        messages: &[Message],
+        tools: &[ToolDef],
+        max_tokens: u32,
+        context_limit: Option<u32>,
+    ) -> serde_json::Value {
         let (system, anthropic_msgs) = to_anthropic_messages(messages);
 
         let mut body = serde_json::json!({
@@ -894,9 +912,9 @@ impl ClaudeBackend {
         // window (99073 input + 32000 requested > 131072) and the request
         // died with HTTP 400 before the overflow-recovery path could help.
         body["max_tokens"] = serde_json::json!(clamp_max_tokens(
-            max_tokens_from_env(),
+            max_tokens,
             estimate_request_tokens(&body),
-            context_tokens_from_env(),
+            context_limit,
         ));
 
         body
@@ -1067,13 +1085,42 @@ fn max_tokens_from_env() -> u32 {
 }
 
 fn parse_max_tokens(value: Option<&str>) -> u32 {
-    value
-        .and_then(|v| v.trim().parse::<u32>().ok())
-        .filter(|n| *n > 0)
-        .unwrap_or(16384)
+    parse_positive_tokens(value).unwrap_or(16384)
 }
 
-/// Full-window token budget for Anthropic-compatible third-party models,
+/// Explicit output budget for OpenAI-compatible requests.
+///
+/// Unlike the Claude backend (which always sends a `max_tokens` field,
+/// default 16384), the OpenAI-compatible wire contract leaves the field
+/// optional and endpoints apply their own defaults. Only an explicit, valid
+/// `OXO_FLOW_AI_MAX_TOKENS` makes the engine send it — unset keeps the
+/// historical "omit the field" behavior so existing deployments are
+/// unchanged. An invalid value warns once and stays omitted: a typo must
+/// never silently impose a budget the operator did not choose.
+fn explicit_max_tokens_from_env() -> Option<u32> {
+    let raw = std::env::var("OXO_FLOW_AI_MAX_TOKENS").ok()?;
+    if raw.trim().is_empty() {
+        return None;
+    }
+    match parse_positive_tokens(Some(&raw)) {
+        Some(value) => Some(value),
+        None => {
+            static WARNED: std::sync::Once = std::sync::Once::new();
+            WARNED.call_once(|| {
+                tracing::warn!(
+                    env = "OXO_FLOW_AI_MAX_TOKENS",
+                    value = %raw.trim(),
+                    "ignoring invalid OXO_FLOW_AI_MAX_TOKENS (expected a positive integer); \
+                     no max_tokens field is sent on this OpenAI-compatible request"
+                );
+            });
+            None
+        }
+    }
+}
+
+/// Full-window token budget for Anthropic-compatible third-party models
+/// (and the clamp input for an explicit OpenAI-compatible budget),
 /// overridable via `OXO_FLOW_AI_CONTEXT_TOKENS`. Unset → `None` = clamping
 /// disabled (real Anthropic models size their window server-side; the knob
 /// exists for proxies that front a smaller model and reject the overflow
@@ -1083,53 +1130,53 @@ fn context_tokens_from_env() -> Option<u32> {
 }
 
 fn parse_context_tokens(value: Option<&str>) -> Option<u32> {
+    parse_positive_tokens(value)
+}
+
+/// A token knob value only counts when it is a clean positive integer;
+/// surrounding whitespace is accepted, everything else is absent.
+fn parse_positive_tokens(value: Option<&str>) -> Option<u32> {
     value
         .and_then(|v| v.trim().parse::<u32>().ok())
         .filter(|n| *n > 0)
 }
 
-// ── Claude-only knob warning (audit F7) ────────────────────────────────────
+// ── Ollama token-knob warning (audit F7, narrowed) ────────────────────────
 
-/// `OXO_FLOW_AI_MAX_TOKENS` / `OXO_FLOW_AI_CONTEXT_TOKENS` are Anthropic
-/// Messages-API knobs: only the Claude backend reads them. When they are
-/// set while an OpenAI-compatible or Ollama backend is constructed, they
-/// silently do nothing there — warn once per backend type so a user who
-/// calibrated the knobs for a Claude endpoint knows they do nothing on the
-/// backend actually in use. The knobs are deliberately NOT forwarded: the
-/// OpenAI `max_tokens`/`max_completion_tokens` field has provider-specific
-/// semantics, and inventing a mapping is out of scope.
-fn warn_claude_only_knobs_once(backend: &'static str) {
-    // Keyed by (knob, backend): the `Once` statics this replaced were
-    // process-global, so a user running both a Claude and an OpenAI/Ollama
-    // backend saw the warning only for whichever backend was constructed
-    // first — the `backend` parameter was decorative (audit L-5).
-    static WARNED: std::sync::OnceLock<
-        std::sync::Mutex<std::collections::HashSet<(&'static str, &'static str)>>,
-    > = std::sync::OnceLock::new();
+/// `OXO_FLOW_AI_MAX_TOKENS` / `OXO_FLOW_AI_CONTEXT_TOKENS` are honored by
+/// the Claude backend and (when the max-token knob is explicitly set) by
+/// OpenAI-compatible requests. Ollama keeps its own model/daemon budget and
+/// reads neither, so warn once when a user carries the knobs over to it.
+fn warn_ollama_ignores_token_knobs_once() {
+    // Keyed by knob so each fires once; the function is called from every
+    // Ollama backend construction (a process may build several).
+    static WARNED: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<&'static str>>> =
+        std::sync::OnceLock::new();
     let warned = WARNED.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()));
     // A poisoned mutex (a prior holder panicked) recovers its data — the
     // guarded set is plain diagnostics bookkeeping.
     let mut warned = warned.lock().unwrap_or_else(|e| e.into_inner());
     if let Ok(value) = std::env::var("OXO_FLOW_AI_MAX_TOKENS")
         && !value.trim().is_empty()
-        && warned.insert(("max_tokens", backend))
+        && warned.insert("max_tokens")
     {
         tracing::warn!(
-            provider = backend,
+            provider = "ollama",
             env = "OXO_FLOW_AI_MAX_TOKENS",
-            "OXO_FLOW_AI_MAX_TOKENS only applies to the Claude/Anthropic backend; \
-                 it is ignored on this backend and no max_tokens field is sent"
+            "OXO_FLOW_AI_MAX_TOKENS applies to the Claude/Anthropic backend and to \
+             OpenAI-compatible requests (when explicitly set); it is not applied to \
+             Ollama, which uses the model's own output budget"
         );
     }
     if let Ok(value) = std::env::var("OXO_FLOW_AI_CONTEXT_TOKENS")
         && !value.trim().is_empty()
-        && warned.insert(("context_tokens", backend))
+        && warned.insert("context_tokens")
     {
         tracing::warn!(
-            provider = backend,
+            provider = "ollama",
             env = "OXO_FLOW_AI_CONTEXT_TOKENS",
-            "OXO_FLOW_AI_CONTEXT_TOKENS only applies to the Claude backend's \
-                 context-window clamping; it is ignored on this backend"
+            "OXO_FLOW_AI_CONTEXT_TOKENS clamps Claude requests and OpenAI-compatible \
+             requests with an explicit OXO_FLOW_AI_MAX_TOKENS; it is not applied to Ollama"
         );
     }
 }
@@ -1297,9 +1344,6 @@ impl OpenAiBackend {
         api_url: Option<String>,
         label: &str,
     ) -> Self {
-        // Audit F7: the max-token knobs are Claude-only; say so once when a
-        // user carries them over to an openai-compatible endpoint.
-        warn_claude_only_knobs_once("openai-compatible");
         Self {
             client: provider_http_client(),
             api_key,
@@ -1347,7 +1391,32 @@ impl OpenAiBackend {
     }
 
     /// Build the base request body shared by chat() and chat_with_tools().
+    ///
+    /// `max_tokens` is sent only when `OXO_FLOW_AI_MAX_TOKENS` is explicitly
+    /// set: OpenAI-compatible endpoints have provider-specific defaults, and
+    /// omitting the field is the pre-existing contract for unconfigured
+    /// deployments. When present, the shared estimator/clamp keeps
+    /// `estimated input + max_tokens` inside an operator-declared
+    /// `OXO_FLOW_AI_CONTEXT_TOKENS` window.
     fn build_body(&self, messages: &[Message], tools: &[ToolDef]) -> serde_json::Value {
+        self.build_body_with_budget(
+            messages,
+            tools,
+            explicit_max_tokens_from_env(),
+            context_tokens_from_env(),
+        )
+    }
+
+    /// Testable core of [`OpenAiBackend::build_body`] against an explicit
+    /// output budget and context window (`None` = omit the field / no
+    /// clamping), so the wire contract is provable without process env.
+    fn build_body_with_budget(
+        &self,
+        messages: &[Message],
+        tools: &[ToolDef],
+        max_tokens: Option<u32>,
+        context_limit: Option<u32>,
+    ) -> serde_json::Value {
         let openai_msgs: Vec<serde_json::Value> = messages
             .iter()
             .map(|m| {
@@ -1392,6 +1461,18 @@ impl OpenAiBackend {
             let openai_tools: Vec<serde_json::Value> = tools.iter().map(tool_def_json).collect();
             body["tools"] = serde_json::json!(openai_tools);
             body["tool_choice"] = serde_json::json!("auto");
+        }
+
+        // LAST so the estimate covers every field actually sent. The field
+        // is `max_tokens` (the shape every tested OpenAI-compatible gateway
+        // accepts); endpoints that demand `max_completion_tokens` are not
+        // auto-mapped — documented in the AI CLI reference.
+        if let Some(configured) = max_tokens {
+            body["max_tokens"] = serde_json::json!(clamp_max_tokens(
+                configured,
+                estimate_request_tokens(&body),
+                context_limit,
+            ));
         }
 
         body
@@ -1543,8 +1624,9 @@ pub struct OllamaBackend {
 
 impl OllamaBackend {
     pub fn new(model: Option<String>, api_url: Option<String>) -> Self {
-        // Audit F7: the max-token knobs are Claude-only; say so once.
-        warn_claude_only_knobs_once("ollama");
+        // The token knobs are honored by Claude and OpenAI-compatible
+        // backends, not by Ollama; say so once.
+        warn_ollama_ignores_token_knobs_once();
         Self {
             client: provider_http_client(),
             model: model.unwrap_or_else(|| OLLAMA_DEFAULT_MODEL.to_string()),
@@ -2678,6 +2760,20 @@ mod tests {
     }
 
     #[test]
+    fn explicit_max_tokens_parse_is_none_unless_positive_and_clean() {
+        // The OpenAI-compatible path sends max_tokens only for an explicit,
+        // valid value; invalid text is ignored (with a one-time warning) so
+        // a typo cannot silently impose a budget.
+        assert_eq!(parse_positive_tokens(Some("32000")), Some(32_000));
+        assert_eq!(parse_positive_tokens(Some(" 8192 ")), Some(8192));
+        assert_eq!(parse_positive_tokens(Some("0")), None);
+        assert_eq!(parse_positive_tokens(Some("-1")), None);
+        assert_eq!(parse_positive_tokens(Some("abc")), None);
+        assert_eq!(parse_positive_tokens(Some("")), None);
+        assert_eq!(parse_positive_tokens(None), None);
+    }
+
+    #[test]
     fn clamp_keeps_configured_budget_when_room_allows() {
         // ~99000 estimated input inside a 229376 window leaves ample room
         // for the full 32000 configured budget.
@@ -2734,7 +2830,7 @@ mod tests {
             description: "emit the pipeline".to_string(),
             parameters: serde_json::json!({"type": "object"}),
         }];
-        let body = backend.build_body(&messages, &tools);
+        let body = backend.build_body_with_budget(&messages, &tools, 32_000, Some(131_072));
         let max_tokens = body["max_tokens"].as_u64().unwrap();
         assert!(
             max_tokens < 32_000,
@@ -2745,6 +2841,67 @@ mod tests {
             "budget must stay well-formed, got {max_tokens}"
         );
         assert_eq!(body["tools"].as_array().map(Vec::len), Some(1));
+    }
+
+    #[test]
+    fn openai_body_omits_max_tokens_unless_explicitly_configured() {
+        // The historical contract: unset OXO_FLOW_AI_MAX_TOKENS means no
+        // max_tokens field on an OpenAI-compatible request, even when a
+        // context window is declared (there is no budget to clamp).
+        let backend = OpenAiBackend::new(
+            "test-key".to_string(),
+            Some("qwen3.8-flash-next-nothink".to_string()),
+            Some("http://localhost:1234/v1".to_string()),
+        );
+        let messages = vec![Message::user("generate a pipeline")];
+        let body = backend.build_body_with_budget(&messages, &[], None, Some(131_072));
+        assert!(
+            body.get("max_tokens").is_none(),
+            "unset max-token knob must omit the field: {body}"
+        );
+    }
+
+    #[test]
+    fn openai_body_sends_the_explicit_max_tokens_budget() {
+        // An explicit OXO_FLOW_AI_MAX_TOKENS is honored on the
+        // OpenAI-compatible path instead of being warned away as
+        // Claude-only (the live proxy incident).
+        let backend = OpenAiBackend::new(
+            "test-key".to_string(),
+            Some("qwen3.8-flash-next-nothink".to_string()),
+            Some("http://localhost:1234/v1".to_string()),
+        );
+        let messages = vec![Message::user("generate a pipeline")];
+        let body = backend.build_body_with_budget(&messages, &[], Some(32_000), None);
+        assert_eq!(
+            body["max_tokens"].as_u64(),
+            Some(32_000),
+            "the configured output budget must reach the wire: {body}"
+        );
+    }
+
+    #[test]
+    fn openai_body_clamps_max_tokens_under_declared_window() {
+        // Same estimator/clamp as the Claude path: a large transcript inside
+        // a declared 131072 window shrinks the 32000 budget instead of
+        // sending a request the endpoint rejects with HTTP 400.
+        let backend = OpenAiBackend::new(
+            "test-key".to_string(),
+            Some("qwen3.8-flash-next-nothink".to_string()),
+            Some("http://localhost:1234/v1".to_string()),
+        );
+        let filler = "x".repeat(400_000); // ~100k tokens at 4 chars/token
+        let messages = vec![Message::user(&filler)];
+        let body = backend.build_body_with_budget(&messages, &[], Some(32_000), Some(131_072));
+        let max_tokens = body["max_tokens"].as_u64().unwrap();
+        assert!(
+            max_tokens < 32_000,
+            "expected clamped budget, got {max_tokens}"
+        );
+        assert!(
+            max_tokens >= 1024,
+            "budget must stay well-formed, got {max_tokens}"
+        );
     }
 
     #[test]

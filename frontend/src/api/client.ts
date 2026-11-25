@@ -313,7 +313,7 @@ export const api = {
   aiUpdateConfig: (provider: string, apiKey?: string, apiUrl?: string, model?: string) =>
     post<AiConfig>('/api/ai/config', { provider, api_key: apiKey, api_url: apiUrl, model }),
   aiUpdateConfigUser: (cfg: AiConfigUpdate) => put<{ status: string }>('/api/ai/config/user', cfg),
-  aiTest: () => post<{ success: boolean; message: string; provider: string }>('/api/ai/test', {}),
+  aiTest: () => post<{ success: boolean; message: string; provider: string; model: string | null }>('/api/ai/test', {}),
   aiExplain: (run_id: string, language = 'en') => post<AiExplainResponse>('/api/ai/explain', { run_id, language }),
 
   // ── Chat ──
