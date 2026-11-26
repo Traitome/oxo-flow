@@ -181,6 +181,17 @@ pub enum Commands {
         cache_dir: Option<PathBuf>,
         #[arg(long, help = "Track output file checksums for later verification")]
         provenance: bool,
+        /// Verify recorded output manifests for checkpoint-completed rules and
+        /// re-run mismatches (plus their completed downstream) — the strict
+        /// behavior `resume` applies by default (issue #1426).
+        #[arg(
+            long,
+            help = "Verify recorded output manifests for completed rules and re-run a rule \
+                    whose recorded output is missing, resized, content-changed, or unhashed, \
+                    together with its completed downstream. `resume` applies this by default; \
+                    this flag opts a plain `run` (e.g. a retry) into the same check"
+        )]
+        verify_outputs: bool,
         #[arg(long, help = "Execute from a published .tar.zst/.tar.gz bundle")]
         bundle: Option<PathBuf>,
         #[arg(
@@ -350,6 +361,17 @@ pub enum Commands {
                     rerun continues locally"
         )]
         abandon_jobs: bool,
+        /// Trust size+mtime freshness for completed rules instead of
+        /// verifying their recorded output manifests (issue #1426).
+        #[arg(
+            long,
+            help = "Accept the size+mtime freshness verdict for completed rules instead of \
+                    verifying their recorded output manifests. By default `resume` re-runs a \
+                    completed rule whose outputs are missing, resized, content-changed, \
+                    unhashed (larger than OXO_FLOW_MANIFEST_HASH_MAX_BYTES), or recorded by a \
+                    pre-manifest checkpoint"
+        )]
+        trust_mtime: bool,
         /// Detach the resumed run into a background process: the foreground
         /// invocation spawns a detached child that re-runs `resume` without
         /// the flag, writes its pid to .oxo-flow/background.pid, prints a
@@ -1844,6 +1866,7 @@ async fn main() -> Result<()> {
             skip_ref_build,
             cache_dir,
             provenance,
+            verify_outputs,
             bundle,
             yes,
             args,
@@ -2031,6 +2054,11 @@ async fn main() -> Result<()> {
                 strict_envs,
                 apply_patch,
                 locked,
+                // `run` keeps the historical size+mtime freshness gate by
+                // default (issue #1426); `--verify-outputs` opts into the
+                // strict check `resume` applies, and `resume` itself sets it.
+                verify_outputs,
+                trust_mtime: false,
             })
             .await?
         }
@@ -2045,6 +2073,7 @@ async fn main() -> Result<()> {
             no_report_snapshot,
             profile,
             abandon_jobs,
+            trust_mtime,
             background,
         } => {
             // ── Background resume (issue #158) ───────────────────────────
@@ -2077,6 +2106,7 @@ async fn main() -> Result<()> {
                 no_report_snapshot,
                 profile,
                 abandon_jobs,
+                trust_mtime,
                 cli.json,
             )
             .await?
@@ -2637,6 +2667,10 @@ async fn main() -> Result<()> {
                         // [engine] locked key still enforces through the run
                         // path.
                         locked: false,
+                        // `test` mirrors plain `run`'s size+mtime freshness
+                        // gate (issue #1426) — no strict output verification.
+                        verify_outputs: false,
+                        trust_mtime: false,
                     })
                     .await
                 );

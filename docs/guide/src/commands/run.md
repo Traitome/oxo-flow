@@ -59,6 +59,7 @@ keys matching nothing declared keep the literal spelling.
 | `--profile` | — | — | Execution profile name, loaded from `profiles/<NAME>.toml` or `profiles/<NAME>.oxoflow` (see [Execution profiles](#execution-profiles)) |
 | `--max-submitted` | — | profile default (`50`) | Cluster jobs in flight at once (overrides the profile's `max_submitted`) |
 | `--provenance` | — | — | Track output file checksums for later verification |
+| `--verify-outputs` | — | — | Verify recorded output manifests for checkpoint-completed rules and re-run a rule whose recorded output is missing, resized, content-changed, or unhashed — together with its completed downstream. `resume` applies this by default; the flag opts a plain `run` (e.g. a retry wrapper) into the same check |
 | `--arg` | — | — | Legacy form: set a workflow config value (`KEY=VALUE`). Repeatable. See `[config]` in workflow-format |
 | `--bundle` | — | — | Execute from a published bundle (`.tar.zst` or `.tar.gz`). Extracts, verifies checksums, shows resource requirements, and prompts for confirmation |
 | `--yes` | — | — | Skip the confirmation prompt when running a bundle (required in non-interactive sessions: CI, scripts, redirected input, or `--json`) |
@@ -1117,6 +1118,13 @@ mistaken for finished work (issue #1083). Rules with no checkpoint entry at
 all keep their historical freshness semantics — output existence alone
 decides, as before (issue #77).
 
+Every successful rule also records a declared-output manifest, and `resume`
+verifies it by default — a completed rule whose artifact was truncated or
+rewritten after the run re-executes together with its completed downstream
+instead of being reported up to date (`run --verify-outputs` applies the same
+check to a plain run).
+See [Output manifests and strict resume verification](#output-manifests-and-strict-resume-verification).
+
 On a **cluster** run the checkpoint also carries each accepted scheduler job
 id plus the run's profile/backend, so `oxo-flow resume` does not blindly
 re-run a rule whose job may still be live: it re-attaches through the
@@ -1569,6 +1577,47 @@ their outputs rebuild in the same run.
   current file set as a one-time baseline (the first post-upgrade run
   reuses everything); changes made before that baseline cannot be
   detected.
+
+### Output manifests and strict `resume` verification
+
+Every successful rule also records an **output manifest** in the checkpoint
+(issue #1426): each expanded declared output path with its size and, for
+regular files up to `OXO_FLOW_MANIFEST_HASH_MAX_BYTES` (default 64 MiB), a
+`sha256` content hash. It is written by both the local executor and the
+cluster settle hook and does **not** require `--provenance` — the previous
+default recorded output digests only when the run was explicitly opted in,
+and never for files above 64 MiB, so a plain run → interrupt → resume
+sequence could reuse a truncated artifact.
+
+`oxo-flow run` itself keeps the historical size+mtime freshness gate.
+`run --verify-outputs` opts a plain run (for example a retry wrapper) into
+the same strict check, and
+[`resume`](resume.md#output-verification-strict-by-default) applies it by
+default: a completed rule is reused only when its manifest verifies (every
+declared output present, size match, content-hash match). A failure
+re-executes the rule **and its completed downstream** with a warning naming
+the rule, path, and reason — a dependent whose own output is intact but was
+built from the damaged artifact must not stay skipped. Consequences worth
+knowing before a resume:
+
+- **Legacy checkpoints** (no output manifest) re-run their completed rules
+  once on the next `resume`; the fresh completions record manifests.
+- **Outputs above the hash cap** record size only and count as unverified,
+  so they re-run. `--provenance` does not relax this: its `checksums` map is
+  a separate audit record and the manifest entry still carries no `sha256`.
+  Raise `OXO_FLOW_MANIFEST_HASH_MAX_BYTES` for large BAM/CRAM/VCF artifacts
+  (proportional hashing cost), or pass `resume --trust-mtime`.
+- **Non-regular outputs** (directories) cannot be content-hashed and are
+  treated as unverified under the strict default.
+- `--trust-mtime` restores the historical size+mtime verdict for the whole
+  resume (and cluster adoption).
+
+Same-size corruption of an output above the cap is only detectable once the
+cap is raised. The manifest is a reuse/verification record, not a
+reproducibility guarantee: it proves the file on disk matches what this
+engine recorded, not that the computation was scientifically correct. It is
+also separate from `provenance verify`/`attest`, which audit the
+`--provenance` `checksums` map — the manifest exists to gate reuse.
 
 ### Temporary rules (`temporary = true`)
 

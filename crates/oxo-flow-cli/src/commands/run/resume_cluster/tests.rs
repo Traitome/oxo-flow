@@ -164,6 +164,7 @@ async fn terminal_success_with_outputs_is_adopted_without_resubmission() {
         &config,
         dir.path(),
         false,
+        false,
         zero_poll(),
     )
     .await
@@ -210,6 +211,7 @@ async fn adopted_benchmark_records_only_a_measured_wall_time() {
         &config,
         dir.path(),
         false,
+        false,
         zero_poll(),
     )
     .await
@@ -241,6 +243,7 @@ async fn terminal_success_without_outputs_is_left_for_a_rerun() {
         &route(),
         &config,
         dir.path(),
+        false,
         false,
         zero_poll(),
     )
@@ -277,6 +280,7 @@ async fn terminal_failure_is_recorded_for_the_normal_rerun() {
         &config,
         dir.path(),
         false,
+        false,
         zero_poll(),
     )
     .await
@@ -309,6 +313,7 @@ async fn live_job_is_waited_for_until_it_settles() {
         &config,
         dir.path(),
         false,
+        false,
         zero_poll(),
     )
     .await
@@ -338,6 +343,7 @@ async fn abandon_cancels_live_jobs_then_leaves_them_for_rerun() {
         &config,
         dir.path(),
         true,
+        false,
         zero_poll(),
     )
     .await
@@ -367,6 +373,7 @@ async fn array_elements_cancel_their_base_once() {
         &config,
         dir.path(),
         true,
+        false,
         zero_poll(),
     )
     .await
@@ -402,6 +409,7 @@ async fn scheduler_poll_error_fails_closed_without_clearing_jobs() {
         &config,
         dir.path(),
         false,
+        false,
         zero_poll(),
     )
     .await
@@ -434,6 +442,7 @@ async fn unknown_job_state_fails_closed_unless_abandoned() {
         &config,
         dir.path(),
         false,
+        false,
         zero_poll(),
     )
     .await
@@ -454,6 +463,7 @@ async fn unknown_job_state_fails_closed_unless_abandoned() {
         &config,
         dir.path(),
         true,
+        false,
         zero_poll(),
     )
     .await
@@ -479,6 +489,7 @@ async fn cancel_failure_fails_closed_and_never_reruns() {
         &config,
         dir.path(),
         true,
+        false,
         zero_poll(),
     )
     .await
@@ -507,6 +518,7 @@ async fn accounting_settles_a_job_missing_from_the_live_queue() {
         &route(),
         &config,
         dir.path(),
+        false,
         false,
         zero_poll(),
     )
@@ -598,6 +610,7 @@ async fn no_recorded_jobs_never_touches_the_scheduler() {
         &workflow,
         None,
         false,
+        false,
         dir.path(),
     )
     .await
@@ -629,6 +642,7 @@ async fn recorded_jobs_without_a_profile_fail_closed_before_any_write() {
         &checkpoint_path,
         &workflow,
         None,
+        false,
         false,
         dir.path(),
     )
@@ -691,6 +705,7 @@ async fn mixed_backend_jobs_are_reconciled_through_their_own_scheduler() {
         &config,
         dir.path(),
         true,
+        false,
         zero_poll(),
     )
     .await
@@ -712,6 +727,7 @@ async fn mixed_backend_jobs_are_reconciled_through_their_own_scheduler() {
         &config,
         dir.path(),
         true,
+        false,
         zero_poll(),
     )
     .await
@@ -744,6 +760,7 @@ async fn a_completed_rule_drops_its_stale_job_without_a_profile_or_scheduler() {
         &checkpoint_path,
         &workflow,
         None,
+        false,
         false,
         dir.path(),
     )

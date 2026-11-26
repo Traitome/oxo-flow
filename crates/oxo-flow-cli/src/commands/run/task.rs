@@ -329,6 +329,25 @@ pub(crate) async fn execute_rule_task(
                     }
                 }
 
+                // Declared-output manifest (issue #1426): recorded on EVERY
+                // successful rule, independent of `--provenance`, so a later
+                // `resume` can verify content instead of trusting size+mtime.
+                // Collected before the checkpoint lock is taken; the shared
+                // async helper hashes on the blocking pool, so this never
+                // serializes other rule completions behind the fsync.
+                let mut wildcard_scope: HashMap<String, String> = (*wildcard_values).clone();
+                for (key, value) in &instance_bindings {
+                    wildcard_scope.insert(key.clone(), value.clone());
+                }
+                let output_manifest =
+                    oxo_flow_core::executor::output_checksums::collect_output_manifest_async(
+                        rule.clone(),
+                        ctx.workdir_actual.as_ref().to_path_buf(),
+                        wildcard_scope.clone(),
+                        oxo_flow_core::executor::checkpoint::output_manifest_hash_max_bytes(),
+                    )
+                    .await;
+
                 let mut ck = ctx.checkpoint.lock().await;
                 ck.record_run(&record, output_tail_bytes_from_env());
                 ck.mark_completed(&rule_name, benchmark);
@@ -342,6 +361,7 @@ pub(crate) async fn execute_rule_task(
                 if let Some(ref manifest) = input_manifest {
                     ck.record_input_manifest(&rule_name, manifest.clone());
                 }
+                ck.record_output_manifest(&rule_name, output_manifest);
                 if ctx.provenance || rule.checksum.is_some() {
                     // Collection lives in `executor::output_checksums` so
                     // the cluster path records the SAME entries — same
@@ -353,11 +373,8 @@ pub(crate) async fn execute_rule_task(
                     // without `--provenance`, hashed with the declared
                     // algorithm. Fan-out bindings are merged into the
                     // expansion map — the same merge the executor performs
-                    // for its own path handling.
-                    let mut wildcard_scope: HashMap<String, String> = (*wildcard_values).clone();
-                    for (k, v) in &instance_bindings {
-                        wildcard_scope.insert(k.clone(), v.clone());
-                    }
+                    // for its own path handling (and the same scope the
+                    // output manifest above used).
                     let entries =
                         oxo_flow_core::executor::output_checksums::collect_output_checksums(
                             &rule,

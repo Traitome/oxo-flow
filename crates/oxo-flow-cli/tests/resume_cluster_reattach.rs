@@ -3,7 +3,9 @@
 //! `PATH` pointing at `tests/fixtures/mock-scheduler`, so submission,
 //! polling, accounting, cancellation, and checkpoint bookkeeping all run the
 //! production code paths — no live scheduler is involved.
-use oxo_flow_core::executor::checkpoint::{CheckpointState, ClusterJobRecord, ClusterRunRecord};
+use oxo_flow_core::executor::checkpoint::{
+    CheckpointState, ClusterJobRecord, ClusterRunRecord, OutputManifestEntry, compute_file_checksum,
+};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -265,6 +267,142 @@ fn resume_adopts_a_terminal_success_without_resubmitting() {
     assert_eq!(job_ids(&state), vec!["1".to_string()], "no resubmission");
 }
 
+/// A recorded output manifest that still matches the settled outputs
+/// authorizes adoption (issue #1426) — content, not just existence.
+#[test]
+fn resume_adopts_a_terminal_success_whose_manifest_verifies() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("w.oxoflow");
+    std::fs::write(&wf, ONE_STEP).unwrap();
+    write_profile(dir.path());
+    let state = dir.path().join("state");
+    seed_job(&state, "1", "COMPLETED", 0);
+    std::fs::write(dir.path().join("out.txt"), "ok").unwrap();
+    let mut ck = base_checkpoint(&wf, dir.path());
+    ck.record_output_manifest(
+        "work",
+        vec![OutputManifestEntry {
+            path: "out.txt".to_string(),
+            size: 2,
+            sha256: compute_file_checksum(&dir.path().join("out.txt")).ok(),
+        }],
+    );
+    record_job(&mut ck, "work", "1", None);
+    let cp = save_checkpoint(&ck, dir.path());
+
+    let (ok, stdout, stderr) = run_resume(
+        dir.path(),
+        &["resume", cp.to_str().unwrap(), "--json"],
+        Some(&state),
+    );
+    assert!(ok, "adoption succeeds; stderr:\n{stderr}");
+    let doc = json(&stdout);
+    assert_eq!(doc["adopted"], 1, "the verified job was adopted: {doc}");
+    assert_eq!(
+        job_ids(&state),
+        vec!["1".to_string()],
+        "no resubmission for verified outputs"
+    );
+}
+
+/// A recorded manifest that no longer matches refuses adoption: the rule is
+/// re-run instead of being marked complete with a damaged artifact.
+#[test]
+fn resume_does_not_adopt_a_terminal_success_whose_manifest_fails() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("w.oxoflow");
+    std::fs::write(&wf, ONE_STEP).unwrap();
+    write_profile(dir.path());
+    let state = dir.path().join("state");
+    seed_job(&state, "1", "COMPLETED", 0);
+    std::fs::write(dir.path().join("out.txt"), "ok").unwrap();
+    let mut ck = base_checkpoint(&wf, dir.path());
+    // The recorded size no longer matches the file (truncated artifact).
+    ck.record_output_manifest(
+        "work",
+        vec![OutputManifestEntry {
+            path: "out.txt".to_string(),
+            size: 99,
+            sha256: compute_file_checksum(&dir.path().join("out.txt")).ok(),
+        }],
+    );
+    record_job(&mut ck, "work", "1", None);
+    let cp = save_checkpoint(&ck, dir.path());
+
+    let (ok, stdout, stderr) = run_resume(
+        dir.path(),
+        &["resume", cp.to_str().unwrap(), "--json"],
+        Some(&state),
+    );
+    assert!(ok, "the rerun succeeds; stderr:\n{stderr}");
+    let doc = json(&stdout);
+    assert_eq!(
+        doc["adopted"], 0,
+        "a failing manifest is not adopted: {doc}"
+    );
+    assert_eq!(
+        job_ids(&state),
+        vec!["1".to_string(), "2".to_string()],
+        "the rule was resubmitted instead of adopted"
+    );
+    assert!(
+        stderr.contains("strict output verification failed"),
+        "the refusal must be narrated:\n{stderr}"
+    );
+    let after = CheckpointState::load_from_file(&cp).unwrap();
+    assert!(
+        after.completed_rules.contains("work"),
+        "the rerun completed"
+    );
+}
+
+/// MEDIUM-1: `--trust-mtime` reaches cluster adoption. An already-successful
+/// scheduler job whose output manifest is unverifiable (over-cap/directory)
+/// must be adopted instead of resubmitted, matching the flag's documented
+/// size+mtime verdict.
+#[test]
+fn resume_trust_mtime_adopts_an_unverified_terminal_success() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("w.oxoflow");
+    std::fs::write(&wf, ONE_STEP).unwrap();
+    write_profile(dir.path());
+    let state = dir.path().join("state");
+    seed_job(&state, "1", "COMPLETED", 0);
+    std::fs::write(dir.path().join("out.txt"), "ok").unwrap();
+    let mut ck = base_checkpoint(&wf, dir.path());
+    // A size-only (unverified) entry — what an over-cap or non-regular
+    // output records.
+    ck.record_output_manifest(
+        "work",
+        vec![OutputManifestEntry {
+            path: "out.txt".to_string(),
+            size: 2,
+            sha256: None,
+        }],
+    );
+    record_job(&mut ck, "work", "1", None);
+    let cp = save_checkpoint(&ck, dir.path());
+
+    let (ok, stdout, stderr) = run_resume(
+        dir.path(),
+        &["resume", cp.to_str().unwrap(), "--trust-mtime", "--json"],
+        Some(&state),
+    );
+    assert!(ok, "trust-mtime adoption succeeds; stderr:\n{stderr}");
+    let doc = json(&stdout);
+    assert_eq!(
+        doc["adopted"], 1,
+        "--trust-mtime must adopt the completed job: {doc}"
+    );
+    assert_eq!(
+        job_ids(&state),
+        vec!["1".to_string()],
+        "no compute was resubmitted under --trust-mtime"
+    );
+    let after = CheckpointState::load_from_file(&cp).unwrap();
+    assert!(after.completed_rules.contains("work"));
+}
+
 /// A terminal failure is recorded and re-run through the cluster: the
 /// scheduler receives exactly one new submission and the rule completes.
 #[test]
@@ -411,6 +549,17 @@ fn resume_without_a_profile_keeps_the_recorded_cluster_route() {
             retries: 0,
             recorded_as: None,
         },
+    );
+    // Strict resume (issue #1426) verifies the recorded output manifest: this
+    // pre-completed rule's artifact is intact, so only the pending rule is
+    // submitted and the route assertion below stays about routing.
+    ck.record_output_manifest(
+        "done",
+        vec![OutputManifestEntry {
+            path: "done.txt".to_string(),
+            size: 4,
+            sha256: compute_file_checksum(&dir.path().join("done.txt")).ok(),
+        }],
     );
     let cp = save_checkpoint(&ck, dir.path());
 

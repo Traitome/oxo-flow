@@ -1,4 +1,5 @@
-//! Output checksum collection shared by both execution paths (issue #1093).
+//! Output checksum/manifest collection shared by both execution paths
+//! (issues #1093, #1426).
 //!
 //! `--provenance` and per-rule `checksum = "sha256" | "md5"` record output
 //! digests into the checkpoint's `checksums` map. The local executor and
@@ -8,9 +9,14 @@
 //! the workflow ran. This module owns that one collection routine; callers
 //! only persist what it returns (inside whatever checkpoint lock they
 //! already hold).
+//!
+//! [`collect_output_manifest`] is the always-on companion (issue #1426):
+//! every successful rule records its declared outputs with size and a
+//! capped `sha256`, so `resume` can verify content without `--provenance`.
 
 use crate::executor::checkpoint::{
-    OutputChecksumAlgorithm, compute_file_checksum, expand_config_in_path, hash_file_with_algorithm,
+    OutputChecksumAlgorithm, OutputManifestEntry, compute_file_checksum, expand_config_in_path,
+    hash_file_with_algorithm,
 };
 use crate::rule::Rule;
 use std::collections::HashMap;
@@ -63,9 +69,80 @@ pub fn collect_output_checksums(
     entries
 }
 
+/// Snapshot a rule's declared outputs for the checkpoint's
+/// `output_manifests` map (issue #1426) — recorded on every successful
+/// rule, independent of `--provenance`.
+///
+/// Same expansion as [`collect_output_checksums`]: `wildcard_scope` carries
+/// the run's `{config.*}` values plus the instance's fan-out bindings, and
+/// paths that still contain `{` after expansion are skipped (a per-instance
+/// template never names a file that exists here). Missing/unreadable
+/// outputs record no entry — strict resume then reports the declared output
+/// as unverified and re-runs the rule, which is the safe verdict.
+///
+/// A regular file at or under `hash_max_bytes` records its
+/// `sha256:<hex>`; larger or non-regular outputs record size only, and
+/// strict resume treats such an entry as unverified.
+pub fn collect_output_manifest(
+    rule: &Rule,
+    workdir: &Path,
+    wildcard_scope: &HashMap<String, String>,
+    hash_max_bytes: u64,
+) -> Vec<OutputManifestEntry> {
+    let mut entries = Vec::new();
+    for output in &rule.output {
+        let expanded = expand_config_in_path(output, wildcard_scope);
+        if expanded.contains('{') {
+            continue; // per-instance wildcard: resolved only at fan-out
+        }
+        let output_path = workdir.join(&expanded);
+        let Ok(md) = std::fs::metadata(&output_path) else {
+            continue; // missing/unreadable: no verifiable entry to record
+        };
+        let sha256 = if md.is_file() && md.len() <= hash_max_bytes {
+            compute_file_checksum(&output_path).ok()
+        } else {
+            None
+        };
+        entries.push(OutputManifestEntry {
+            path: expanded,
+            size: md.len(),
+            sha256,
+        });
+    }
+    entries
+}
+
+/// Blocking-pool wrapper for [`collect_output_manifest`] (issue #1426 LOW-5):
+/// rule completion and cluster adoption run on async workers and must not
+/// hash up to the cap inline. A panicked/failed blocking task degrades to an
+/// empty manifest with a warning — strict resume then re-runs the rule
+/// (never silently accepts it).
+pub async fn collect_output_manifest_async(
+    rule: Rule,
+    workdir: std::path::PathBuf,
+    wildcard_scope: HashMap<String, String>,
+    hash_max_bytes: u64,
+) -> Vec<OutputManifestEntry> {
+    match tokio::task::spawn_blocking(move || {
+        collect_output_manifest(&rule, &workdir, &wildcard_scope, hash_max_bytes)
+    })
+    .await
+    {
+        Ok(manifest) => manifest,
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "output manifest collection task failed — this rule will have no recorded output manifest"
+            );
+            Vec::new()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::collect_output_checksums;
+    use super::{collect_output_checksums, collect_output_manifest};
     use crate::config::WorkflowConfig;
     use std::collections::HashMap;
 
@@ -160,5 +237,98 @@ mod tests {
         let entries = collect_output_checksums(&rule, dir.path(), &scope);
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].0, "results/out.txt");
+    }
+
+    // ── Output manifest (issue #1426) ────────────────────────────────────
+
+    #[test]
+    fn manifest_hashes_regular_outputs_and_records_size() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("out.txt"), "hello").unwrap();
+        let rule = rule_from(
+            "[workflow]\nname = \"t\"\n[[rules]]\nname = \"a\"\n\
+             output = [\"out.txt\"]\nshell = \"true\"\n",
+            "a",
+        );
+        let entries = collect_output_manifest(&rule, dir.path(), &HashMap::new(), 64);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].path, "out.txt");
+        assert_eq!(entries[0].size, 5);
+        assert!(
+            entries[0]
+                .sha256
+                .as_deref()
+                .is_some_and(|h| h.starts_with("sha256:")),
+            "a small regular file must record a sha256: {entries:?}"
+        );
+    }
+
+    #[test]
+    fn manifest_records_size_only_above_the_cap() {
+        // Above the cap the entry is deliberately UNVERIFIED (size only) —
+        // strict resume then re-runs unless --trust-mtime.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("big.bin"), [0u8; 16]).unwrap();
+        let rule = rule_from(
+            "[workflow]\nname = \"t\"\n[[rules]]\nname = \"a\"\n\
+             output = [\"big.bin\"]\nshell = \"true\"\n",
+            "a",
+        );
+        let entries = collect_output_manifest(&rule, dir.path(), &HashMap::new(), 8);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].size, 16);
+        assert_eq!(
+            entries[0].sha256, None,
+            "over-cap output must record size only"
+        );
+
+        // A cap at/above the size records the hash (boundary: <=).
+        let entries = collect_output_manifest(&rule, dir.path(), &HashMap::new(), 16);
+        assert!(entries[0].sha256.is_some());
+    }
+
+    #[test]
+    fn manifest_skips_unresolved_templates_and_missing_outputs() {
+        let dir = tempfile::tempdir().unwrap();
+        let rule = rule_from(
+            "[workflow]\nname = \"t\"\n[[rules]]\nname = \"a\"\n\
+             output = [\"aln/{sample}.bam\", \"absent.txt\"]\nshell = \"true\"\n",
+            "a",
+        );
+        let entries = collect_output_manifest(&rule, dir.path(), &HashMap::new(), 64);
+        assert!(
+            entries.iter().all(|e| !e.path.contains('{')),
+            "an unresolved template must never become a recorded key: {entries:?}"
+        );
+
+        // With the binding in scope the same output resolves and hashes.
+        std::fs::create_dir_all(dir.path().join("aln")).unwrap();
+        std::fs::write(dir.path().join("aln/S1.bam"), "bam").unwrap();
+        let mut scope = HashMap::new();
+        scope.insert("sample".to_string(), "S1".to_string());
+        let entries = collect_output_manifest(&rule, dir.path(), &scope, 64);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].path, "aln/S1.bam");
+    }
+
+    #[test]
+    fn manifest_uses_the_shared_expansion_before_recording() {
+        // Same expansion contract as collect_output_checksums: config values
+        // (and fan-out bindings merged by the caller) expand before the key
+        // is derived.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("results")).unwrap();
+        std::fs::write(dir.path().join("results/out.txt"), "hello").unwrap();
+        let rule = rule_from(
+            "[workflow]\nname = \"t\"\n[config]\noutdir = \"results\"\n\
+             [[rules]]\nname = \"a\"\noutput = [\"{config.outdir}/out.txt\"]\n\
+             shell = \"true\"\n",
+            "a",
+        );
+        let mut scope = HashMap::new();
+        scope.insert("config.outdir".to_string(), "results".to_string());
+        let entries = collect_output_manifest(&rule, dir.path(), &scope, 64);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].path, "results/out.txt");
     }
 }

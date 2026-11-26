@@ -418,6 +418,20 @@ pub struct ExecutorConfig {
     /// default) resolves from `[engine] strict_placeholders` and
     /// `OXO_FLOW_STRICT_PLACEHOLDERS`; tests and embedders pin it explicitly.
     pub strict_placeholders: Option<bool>,
+    /// Strict output verification (issue #1426): when set, a completed rule
+    /// may pass the freshness gate only if its recorded
+    /// [`super::checkpoint::OutputManifest`] verifies — every currently
+    /// expanded declared output has an entry, exists, matches its recorded
+    /// size, and (when the entry carries one) its recomputed content hash.
+    /// An unhashed (large/non-regular) entry or a missing manifest forces a
+    /// re-run. `resume` sets this; plain `run` keeps the historical
+    /// size+mtime behavior.
+    pub verify_outputs: bool,
+    /// Escape hatch for [`Self::verify_outputs`] (issue #1426, `resume
+    /// --trust-mtime`): accept the existing size+mtime freshness verdict
+    /// without requiring the content manifest. Ignored when
+    /// `verify_outputs` is false.
+    pub trust_mtime: bool,
 }
 
 impl Default for ExecutorConfig {
@@ -453,6 +467,8 @@ impl Default for ExecutorConfig {
             storage_tiers: None,
             strict_envs: false,
             strict_placeholders: None,
+            verify_outputs: false,
+            trust_mtime: false,
         }
     }
 }
@@ -2606,8 +2622,10 @@ impl LocalExecutor {
         // instead of deep-copying every recorded checksum per rule (#268
         // item 4). Consistency across the handful of queries below is all
         // that matters, and the small view is enough.
-        let (freshness_checksums, interrupted_before_start): (
+        let strict_output_verification = self.config.verify_outputs && !self.config.trust_mtime;
+        let (freshness_checksums, recorded_output_manifest, interrupted_before_start): (
             Option<BTreeMap<String, String>>,
+            Option<super::checkpoint::OutputManifest>,
             bool,
         ) = match &self.config.checkpoint {
             Some(ck) => {
@@ -2634,11 +2652,17 @@ impl LocalExecutor {
                     // degrades to the mtime path either way.
                     None
                 };
-                (checksums, interrupted)
+                // Strict resume (issue #1426): clone only this rule's
+                // manifest (small), not the whole map. Verification hashes
+                // outputs on the blocking pool below.
+                let manifest = strict_output_verification
+                    .then(|| guard.output_manifests.get(&rule.name).cloned())
+                    .flatten();
+                (checksums, manifest, interrupted)
             }
-            None => (None, false),
+            None => (None, None, false),
         };
-        if !self.config.force_rerun
+        let freshness_gate_passes = !self.config.force_rerun
             && !self.config.force_rules.contains(&rule.name)
             && !interrupted_before_start
             && super::checkpoint::should_skip_rule_with_checksums_async(
@@ -2648,8 +2672,23 @@ impl LocalExecutor {
                 freshness_checksums.as_ref(),
             )
             .await
-            && self.remote_outputs_present(&uploads).await
-        {
+            && self.remote_outputs_present(&uploads).await;
+        // Strict resume (issue #1426): size+mtime evidence is not enough.
+        // A completed rule may be reused only when its recorded output
+        // manifest also verifies; otherwise re-execute and say why. This
+        // never weakens the existing gate — it only adds a requirement.
+        let manifest_verdict = if freshness_gate_passes && strict_output_verification {
+            super::checkpoint::verify_output_manifest_async(
+                rule.clone(),
+                self.config.workdir.clone(),
+                wildcard_values.clone(),
+                recorded_output_manifest,
+            )
+            .await
+        } else {
+            Ok(())
+        };
+        if freshness_gate_passes && manifest_verdict.is_ok() {
             // A 0-byte "up to date" output is usually a failed attempt's
             // leftover, not a legitimate result — warn loudly so the user
             // knows the skip may be serving an empty file (live: a 0-byte
@@ -2674,6 +2713,19 @@ impl LocalExecutor {
             record.skip_reason = Some("outputs up-to-date".to_string());
             record.finished_at = Some(Utc::now());
             return Ok(record);
+        }
+        if freshness_gate_passes && let Err(failure) = &manifest_verdict {
+            // Strict verification forced this re-run (issue #1426). Name the
+            // rule, path, and reason — a silent re-run would hide both the
+            // defect (the artifact no longer matched) and the cost.
+            tracing::warn!(
+                rule = %rule.name,
+                path = failure.path().unwrap_or("<rule>"),
+                reason = %failure.describe(),
+                "strict output verification failed — re-executing the rule instead of trusting \
+                 size+mtime evidence (resume default; pass --trust-mtime to accept mtime \
+                 evidence instead)"
+            );
         }
 
         // Scratch rules run in an isolated directory. The path is decided

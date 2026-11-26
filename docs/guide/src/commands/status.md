@@ -318,6 +318,11 @@ The checkpoint file is JSON with the following structure:
         "is_symlink": false, "link_target": null }
     ]
   },
+  "output_manifests": {
+    "align": [
+      { "path": "aligned/S1.bam", "size": 1048576, "sha256": "sha256:7c1d…" }
+    ]
+  },
   "tombstones": {
     "align": ["aligned/S1.bam"]
   },
@@ -356,10 +361,19 @@ symlinked files) — display-only facts: they never influence invalidation
 by themselves, but a symlinked input is announced once per run and a
 size collapse through the link surfaces as `(TRUNCATED)` in the
 [invalidation diff](run.md#input-changes-and-manifest-invalidation).
+`output_manifests` records, per successful rule, each expanded declared
+output with its size and, for regular files up to
+`OXO_FLOW_MANIFEST_HASH_MAX_BYTES` (default 64 MiB), a `sha256` content
+hash — recorded independently of `--provenance`. `resume` verifies this
+manifest before reusing a completed rule; an entry without a `sha256`
+(over-cap or non-regular output) is unverified. See
+[Output manifests and strict resume verification](run.md#output-manifests-and-strict-resume-verification).
 `tombstones` lists
 outputs of [`temporary`](run.md#temporary-rules-temporary-true)
-rules that were deleted after a successful run — the rule stays skipped until
-a dependent needs those outputs again. `reentries` records checkpoint
+rules — and of transform map rules whose chunk files a
+`transform.cleanup = true` combine deleted — that were deleted after a
+successful run. The rule stays skipped until a dependent needs those outputs
+again (then it regenerates via cascade-up). `reentries` records checkpoint
 re-entry contributions (round, checkpoint rule, group, samples, pairs) so resumes
 replay them deterministically and revoke them when the rule is invalidated
 (see [Checkpoint re-entry](../reference/workflow-format.md#checkpoint-re-entry)).

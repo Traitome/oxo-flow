@@ -1323,7 +1323,7 @@ oxo-flow automatically cleans up temporary outputs:
 | Success + `temp_output` | Kept — no success-path cleanup runs; mark `temporary = true` instead if you want outputs deleted after the run |
 | Failure + `temp_output` | Cleaned to prevent stale partial files |
 | Failure + declared `output` | Partial outputs created by the failed attempt are deleted; **all** pre-existing declared outputs are moved aside as `<name>.oxo-failed` (modified or untouched — a stale file from an earlier run era would otherwise block the re-execution the recorded failure schedules with `File exists` errors) |
-| Transform with `cleanup=true` | Chunk files cleaned after the whole run finishes successfully (kept on failed runs for debugging; re-runs recompute the map rules) |
+| Transform with `cleanup=true` | Chunk files cleaned after the whole run finishes successfully (kept on failed runs for debugging). The map rules are tombstoned like `temporary` outputs: a re-run skips them while the combine stays complete, and regenerates them via cascade-up when the combine needs them again |
 | Success + `temporary = true` | Outputs deleted after the run once every dependent rule has completed; a tombstone is recorded in the checkpoint so a later run that needs the outputs regenerates the rule first (lazy cascade-up). Leaf rules (no dependents) keep their outputs. With `[engine]` thresholds configured, this post-run deletion only fires when free space is below `reclaim_free_disk` at run end — with disk comfortable the outputs are kept so later runs skip the producer (see the [engine] notes). For `output_pattern` rules, deletion is per recorded instance (only the concrete paths that ran and completed); patterns that cannot be expanded produce a warning naming the rule instead of a silent no-op. If a dependent has not completed yet, the outputs are kept and a warning names the rule and its pending dependents — a later run (or resume) cleans them up once the dependents finish |
 
 `temporary` is for whole intermediates (e.g. multi-GB per-sample BAMs kept
@@ -3538,7 +3538,13 @@ When `cleanup = true`, chunk files are automatically deleted after the whole run
 cleanup = true
 ```
 
-Failed runs keep their chunks for debugging. Because chunk deletion makes the map outputs "missing", a re-run always recomputes the map rules — that is the disk-space trade-off of `cleanup = true`.
+Failed runs keep their chunks for debugging. Cleanup records a **tombstone**
+on each chunk-producing map rule (the same deleted-by-design marker
+`temporary = true` uses): a later run skips the map rules while the combine
+stays complete, and regenerates them via cascade-up when the combine has to
+run again (its output was deleted, inputs changed, etc.), cleaning them up
+afterwards. This keeps strict `resume` output verification from treating the
+engine-deleted chunks as missing artifacts.
 
 ### Failure and Retry Logic
 

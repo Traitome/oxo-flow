@@ -91,8 +91,139 @@ pub struct RemoteManifestEntry {
 /// than the invalidation precision buys — those keep the size+mtime policy.
 pub const MANIFEST_HASH_MAX_BYTES: u64 = 64 * 1024 * 1024;
 
+/// Override for the output-manifest content-hash cap (issue #1426). Read on
+/// every completion (see [`output_manifest_hash_max_bytes`]) so one run can
+/// raise/lower the cap without a rebuild.
+pub const MANIFEST_HASH_MAX_BYTES_ENV: &str = "OXO_FLOW_MANIFEST_HASH_MAX_BYTES";
+
+/// Resolve the output-manifest content-hash cap from
+/// [`MANIFEST_HASH_MAX_BYTES_ENV`] (issue #1426).
+///
+/// A missing variable yields the [`MANIFEST_HASH_MAX_BYTES`] default; an
+/// unparsable or zero value falls back to the default with a warning — a
+/// typo must never silently disable content hashing, because an unhashed
+/// entry is treated as unverified by strict resume.
+pub fn output_manifest_hash_max_bytes() -> u64 {
+    static RESOLVED: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *RESOLVED.get_or_init(|| {
+        match std::env::var(MANIFEST_HASH_MAX_BYTES_ENV) {
+            Ok(raw) => match raw.trim().parse::<u64>() {
+                Ok(0) | Err(_) => {
+                    // Resolved once per process: an invalid value warns once,
+                    // not once per completed rule.
+                    tracing::warn!(
+                        value = %raw,
+                        "invalid {MANIFEST_HASH_MAX_BYTES_ENV}, using the default output-manifest hash cap"
+                    );
+                    MANIFEST_HASH_MAX_BYTES
+                }
+                Ok(bytes) => bytes,
+            },
+            Err(_) => MANIFEST_HASH_MAX_BYTES,
+        }
+    })
+}
+
 /// Sorted, deduplicated snapshot of a rule's resolved input files.
 pub type InputManifest = Vec<InputManifestEntry>;
+
+/// One declared output of a rule, recorded when the rule completed
+/// successfully (issue #1426).
+///
+/// The manifest is written on EVERY successful rule, independent of
+/// `--provenance`, so `resume` can verify that a completed rule's artifacts
+/// still match what the rule produced before trusting a size+mtime
+/// freshness verdict. `sha256` is present only for regular files at or
+/// under [`output_manifest_hash_max_bytes`]; a `None` entry (large file,
+/// directory, or a disk that failed mid-hash) is UNVERIFIED — strict resume
+/// re-runs the rule unless `--trust-mtime` explicitly accepts mtime
+/// evidence.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OutputManifestEntry {
+    /// Path relative to the working directory, after config/wildcard
+    /// expansion (the same expanded key `checksums` records).
+    pub path: String,
+    /// File size in bytes at completion time.
+    pub size: u64,
+    /// `sha256:<hex>` content hash for regular files up to the configured
+    /// cap. `None` for larger/special files — see the type-level docs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sha256: Option<String>,
+}
+
+/// The declared-output snapshot recorded for one rule instance.
+pub type OutputManifest = Vec<OutputManifestEntry>;
+
+/// Why strict output verification refused to reuse a completed rule
+/// (issue #1426). The first mismatch in declaration order is reported; the
+/// caller names the rule and re-executes it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ManifestFailure {
+    /// The checkpoint has no output manifest for this rule — a legacy
+    /// checkpoint, or a completion recorded before manifests existed.
+    MissingManifest,
+    /// A declared output has no entry in the recorded manifest (the output
+    /// was declared after the record was written, or the rule declares a
+    /// path the collector could not record).
+    MissingEntry { path: String },
+    /// The recorded output file is gone.
+    MissingFile { path: String },
+    /// The file's size no longer matches the manifest.
+    SizeMismatch {
+        path: String,
+        recorded: u64,
+        actual: u64,
+    },
+    /// The recomputed content hash differs from the manifest's.
+    HashMismatch { path: String },
+    /// The entry has no recorded hash (large or non-regular output), so its
+    /// content cannot be verified.
+    Unverified { path: String },
+    /// Internal failure while hashing — never treated as verification.
+    VerificationUnavailable,
+}
+
+impl ManifestFailure {
+    /// The output path this failure concerns, when it names one.
+    pub fn path(&self) -> Option<&str> {
+        match self {
+            Self::MissingManifest | Self::VerificationUnavailable => None,
+            Self::MissingEntry { path }
+            | Self::MissingFile { path }
+            | Self::SizeMismatch { path, .. }
+            | Self::HashMismatch { path }
+            | Self::Unverified { path } => Some(path),
+        }
+    }
+
+    /// Human-readable reason for the warning emitted when verification
+    /// forces a re-run.
+    pub fn describe(&self) -> String {
+        match self {
+            Self::MissingManifest => {
+                "no output manifest is recorded for this rule (legacy checkpoint)".to_string()
+            }
+            Self::MissingEntry { path } => {
+                format!("declared output '{path}' has no manifest entry")
+            }
+            Self::MissingFile { path } => format!("recorded output '{path}' is missing"),
+            Self::SizeMismatch {
+                path,
+                recorded,
+                actual,
+            } => format!("output '{path}' is {actual} bytes but the manifest recorded {recorded}"),
+            Self::HashMismatch { path } => {
+                format!("output '{path}' content hash does not match the manifest")
+            }
+            Self::Unverified { path } => format!(
+                "output '{path}' has no recorded content hash (large or non-regular file) — unverified"
+            ),
+            Self::VerificationUnavailable => {
+                "the output-manifest verification task failed".to_string()
+            }
+        }
+    }
+}
 
 /// Whether a recorded manifest still matches the current file set —
 /// the hash-aware version of plain equality (see [`InputManifestEntry`]).
@@ -656,6 +787,16 @@ pub struct CheckpointState {
     #[serde(default)]
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub checksums: BTreeMap<String, String>,
+    /// Declared-output manifests recorded on every successful rule (issue
+    /// #1426), independent of `--provenance`. Maps rule instance name →
+    /// expanded outputs with size and (capped) sha256. Strict `resume`
+    /// verifies these before trusting a size+mtime freshness verdict, so a
+    /// truncated or rewritten artifact re-executes instead of being silently
+    /// reused. Absent in legacy checkpoints — their completed rules re-run on
+    /// the next strict `resume` unless `--trust-mtime` is passed.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub output_manifests: BTreeMap<String, OutputManifest>,
     /// Checksums of outputs the engine deletes by design at the end of a
     /// successful run (transform chunk intermediates with `cleanup = true`,
     /// issue #315 F2). Preserved for the audit trail; `provenance verify`
@@ -705,10 +846,13 @@ pub struct CheckpointState {
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub when_verdicts: BTreeMap<String, bool>,
 
-    /// Tombstones for `temporary = true` rules whose outputs were deleted
-    /// after a fully successful run. Maps rule name → deleted output paths;
-    /// a future run regenerates them via cascade-up (the completed producer
-    /// is re-executed when a dependent needs the missing inputs).
+    /// Tombstones for outputs the engine deletes by design after a fully
+    /// successful run: `temporary = true` rules' outputs, and transform
+    /// map-rule outputs consumed by a `transform.cleanup = true` combine
+    /// (issue #1426 LOW-4). Maps rule name → deleted output paths; a future
+    /// run skips the producer while every dependent stays complete, and
+    /// regenerates it via cascade-up when a dependent needs the missing
+    /// inputs again.
     #[serde(default)]
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub tombstones: BTreeMap<String, Vec<String>>,
@@ -977,6 +1121,7 @@ impl CheckpointState {
             env_store_refs: BTreeMap::new(),
             workdir: None,
             checksums: BTreeMap::new(),
+            output_manifests: BTreeMap::new(),
             cleaned_checksums: BTreeMap::new(),
             config_snapshot: BTreeMap::new(),
             rule_fingerprints: BTreeMap::new(),
@@ -1055,6 +1200,76 @@ impl CheckpointState {
         self.checksums.insert(path.to_string(), checksum);
     }
 
+    /// Record the declared-output manifest for a rule (issue #1426). Written
+    /// on every successful rule, independent of `--provenance`. An EMPTY
+    /// manifest is never stored: a successful rule that produced no
+    /// recordable output (no declared outputs, or only unresolved templates)
+    /// must not serialize `"rule": []`, and strict verification treats both
+    /// "absent" and "empty" as no evidence anyway.
+    pub fn record_output_manifest(&mut self, rule: &str, manifest: OutputManifest) {
+        if manifest.is_empty() {
+            self.output_manifests.remove(rule);
+            return;
+        }
+        self.output_manifests.insert(rule.to_string(), manifest);
+    }
+
+    /// Drop manifest entries for outputs the engine removed (temporary
+    /// tombstone, mid-run reclaim, issue #1426). Called beside the existing
+    /// checksum→cleaned migration so a later strict `resume` never treats a
+    /// deliberately deleted file as a verified output; entries for outputs
+    /// that remain on disk stay verifiable.
+    pub fn clear_output_manifest_paths(&mut self, rule: &str, paths: &[String]) {
+        let Some(manifest) = self.output_manifests.get_mut(rule) else {
+            return;
+        };
+        manifest.retain(|entry| !paths.iter().any(|path| path == &entry.path));
+        if manifest.is_empty() {
+            self.output_manifests.remove(rule);
+        }
+    }
+
+    /// Remove manifest entries for `paths` from EVERY rule's manifest,
+    /// returning the manifests that changed so a failed persistence can roll
+    /// them back (issue #1426 LOW-4).
+    ///
+    /// Used by transform-chunk cleanup: the deleted chunk files are the
+    /// combine rule's *inputs*, declared as outputs of a DIFFERENT producer
+    /// rule, so the cleanup site cannot name the manifest owner. The removed
+    /// files are engine-managed intermediates; keeping their entries would
+    /// make a later strict `resume` report them missing and re-run the
+    /// producer needlessly.
+    pub fn take_output_manifest_paths(
+        &mut self,
+        paths: &[String],
+    ) -> BTreeMap<String, OutputManifest> {
+        let mut previous = BTreeMap::new();
+        let mut emptied = Vec::new();
+        for (rule, manifest) in self.output_manifests.iter_mut() {
+            if !manifest
+                .iter()
+                .any(|entry| paths.iter().any(|path| path == &entry.path))
+            {
+                continue;
+            }
+            previous.insert(rule.clone(), manifest.clone());
+            manifest.retain(|entry| !paths.iter().any(|path| path == &entry.path));
+            if manifest.is_empty() {
+                emptied.push(rule.clone());
+            }
+        }
+        for rule in emptied {
+            self.output_manifests.remove(&rule);
+        }
+        previous
+    }
+
+    /// Restore manifests captured by [`Self::take_output_manifest_paths`]
+    /// (rollback path when their persistence failed).
+    pub fn restore_output_manifests(&mut self, previous: BTreeMap<String, OutputManifest>) {
+        self.output_manifests.extend(previous);
+    }
+
     /// Record a checksum for an output the engine deletes by design
     /// (transform chunk intermediates with `cleanup = true`, issue #315 F2).
     /// Kept out of `checksums` so `provenance verify` reports these as
@@ -1124,6 +1339,7 @@ impl CheckpointState {
         self.running.clear();
         self.benchmarks.clear();
         self.checksums.clear();
+        self.output_manifests.clear();
         self.config_snapshot.clear();
         self.rule_fingerprints.clear();
         self.rule_fingerprints_no_input.clear();
@@ -1171,6 +1387,7 @@ impl CheckpointState {
             self.running.remove(rule);
             self.benchmarks.remove(rule);
             self.checksums.remove(rule);
+            self.output_manifests.remove(rule);
             self.rule_fingerprints.remove(rule);
             self.rule_fingerprints_no_input.remove(rule);
             self.input_manifests.remove(rule);
@@ -2690,6 +2907,91 @@ pub fn should_skip_rule_with_checksums(
             file_is_newer(&output_path, &input_path)
         })
     })
+}
+
+/// Verify a rule's currently expanded declared outputs against its recorded
+/// output manifest (issue #1426) — the strict-`resume` content check.
+///
+/// Semantics:
+/// - a rule with no declared outputs has nothing to verify (`Ok`);
+/// - outputs that still carry a `{...}` template after config/wildcard
+///   expansion are exempt — the freshness gate never skips such a rule, so
+///   no unverified path can be accepted;
+/// - every remaining declared output must have a manifest entry, exist on
+///   disk, and match its recorded size;
+/// - an entry WITH a `sha256` has its content recomputed in FULL (regardless
+///   of the recording cap) and compared;
+/// - an entry WITHOUT a `sha256` (large or non-regular output) is unverified
+///   and reports [`ManifestFailure::Unverified`];
+/// - a completed rule with declared outputs but no manifest reports
+///   [`ManifestFailure::MissingManifest`].
+pub fn verify_output_manifest(
+    rule: &Rule,
+    workdir: &Path,
+    wildcard_values: &HashMap<String, String>,
+    manifest: Option<&[OutputManifestEntry]>,
+) -> std::result::Result<(), ManifestFailure> {
+    if rule.output.is_empty() {
+        return Ok(());
+    }
+    let expanded: Vec<String> = rule
+        .output
+        .iter()
+        .map(|output| expand_config_in_path(output, wildcard_values))
+        .filter(|output| !output.contains('{'))
+        .collect();
+    if expanded.is_empty() {
+        return Ok(());
+    }
+    let entries = manifest.ok_or(ManifestFailure::MissingManifest)?;
+    for path in expanded {
+        let Some(entry) = entries.iter().find(|entry| entry.path == path) else {
+            return Err(ManifestFailure::MissingEntry { path });
+        };
+        let resolved = workdir.join(&path);
+        let md = std::fs::metadata(&resolved)
+            .map_err(|_| ManifestFailure::MissingFile { path: path.clone() })?;
+        if md.len() != entry.size {
+            return Err(ManifestFailure::SizeMismatch {
+                path,
+                recorded: entry.size,
+                actual: md.len(),
+            });
+        }
+        match &entry.sha256 {
+            Some(recorded) => {
+                let current = compute_file_checksum(&resolved)
+                    .map_err(|_| ManifestFailure::HashMismatch { path: path.clone() })?;
+                if &current != recorded {
+                    return Err(ManifestFailure::HashMismatch { path });
+                }
+            }
+            None => return Err(ManifestFailure::Unverified { path }),
+        }
+    }
+    Ok(())
+}
+
+/// Blocking-pool wrapper for [`verify_output_manifest`]: hashing a large
+/// output must not stall a runtime worker. A panicked/failed blocking task
+/// is never treated as verified.
+pub async fn verify_output_manifest_async(
+    rule: Rule,
+    workdir: PathBuf,
+    wildcard_values: HashMap<String, String>,
+    manifest: Option<OutputManifest>,
+) -> std::result::Result<(), ManifestFailure> {
+    match tokio::task::spawn_blocking(move || {
+        verify_output_manifest(&rule, &workdir, &wildcard_values, manifest.as_deref())
+    })
+    .await
+    {
+        Ok(verdict) => verdict,
+        Err(e) => {
+            tracing::warn!(error = %e, "output-manifest verification task failed");
+            Err(ManifestFailure::VerificationUnavailable)
+        }
+    }
 }
 
 /// Compare two recorded workflow paths for identity: canonicalized when both
@@ -5642,5 +5944,303 @@ mod optional_tests {
         );
         ck.invalidate_closure(&[]);
         assert!(ck.is_completed("x"));
+    }
+
+    // ── Output manifests (issue #1426) ───────────────────────────────────
+
+    fn manifest_rule(outputs: &[&str]) -> Rule {
+        Rule {
+            name: "r".to_string(),
+            output: FilePatterns::List(outputs.iter().map(|o| o.to_string()).collect()),
+            ..Default::default()
+        }
+    }
+
+    fn manifest_entry(path: &str, workdir: &Path) -> OutputManifestEntry {
+        let resolved = workdir.join(path);
+        let md = std::fs::metadata(&resolved).unwrap();
+        OutputManifestEntry {
+            path: path.to_string(),
+            size: md.len(),
+            sha256: compute_file_checksum(&resolved).ok(),
+        }
+    }
+
+    #[test]
+    fn verify_output_manifest_accepts_matching_size_and_hash() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("out.txt"), "hello").unwrap();
+        let rule = manifest_rule(&["out.txt"]);
+        let manifest = vec![manifest_entry("out.txt", dir.path())];
+        assert_eq!(
+            verify_output_manifest(&rule, dir.path(), &HashMap::new(), Some(&manifest)),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn verify_output_manifest_rejects_size_and_hash_mismatch() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("out.txt"), "hello").unwrap();
+        let rule = manifest_rule(&["out.txt"]);
+        let mut manifest = vec![manifest_entry("out.txt", dir.path())];
+
+        // Size mismatch.
+        manifest[0].size = 4;
+        match verify_output_manifest(&rule, dir.path(), &HashMap::new(), Some(&manifest)) {
+            Err(ManifestFailure::SizeMismatch {
+                path,
+                recorded,
+                actual,
+            }) => {
+                assert_eq!(path, "out.txt");
+                assert_eq!(recorded, 4);
+                assert_eq!(actual, 5);
+            }
+            other => panic!("expected SizeMismatch, got {other:?}"),
+        }
+
+        // Hash mismatch at the same size.
+        std::fs::write(dir.path().join("out.txt"), "HELLO").unwrap();
+        manifest[0].size = 5;
+        assert_eq!(
+            verify_output_manifest(&rule, dir.path(), &HashMap::new(), Some(&manifest)),
+            Err(ManifestFailure::HashMismatch {
+                path: "out.txt".to_string()
+            })
+        );
+    }
+
+    #[test]
+    fn verify_output_manifest_rejects_missing_entry_file_and_manifest() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("out.txt"), "hello").unwrap();
+        let rule = manifest_rule(&["out.txt"]);
+
+        // No manifest recorded at all (legacy checkpoint).
+        assert_eq!(
+            verify_output_manifest(&rule, dir.path(), &HashMap::new(), None),
+            Err(ManifestFailure::MissingManifest)
+        );
+
+        // Manifest exists but does not cover the declared output.
+        assert_eq!(
+            verify_output_manifest(&rule, dir.path(), &HashMap::new(), Some(&[])),
+            Err(ManifestFailure::MissingEntry {
+                path: "out.txt".to_string()
+            })
+        );
+
+        // Entry exists but the file is gone.
+        let manifest = vec![manifest_entry("out.txt", dir.path())];
+        std::fs::remove_file(dir.path().join("out.txt")).unwrap();
+        assert_eq!(
+            verify_output_manifest(&rule, dir.path(), &HashMap::new(), Some(&manifest)),
+            Err(ManifestFailure::MissingFile {
+                path: "out.txt".to_string()
+            })
+        );
+    }
+
+    #[test]
+    fn verify_output_manifest_rejects_unhashed_entry() {
+        // A large (size-only) entry is UNVERIFIED — strict resume must not
+        // accept it without --trust-mtime.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("big.bin"), [0u8; 16]).unwrap();
+        let rule = manifest_rule(&["big.bin"]);
+        let manifest = vec![OutputManifestEntry {
+            path: "big.bin".to_string(),
+            size: 16,
+            sha256: None,
+        }];
+        assert_eq!(
+            verify_output_manifest(&rule, dir.path(), &HashMap::new(), Some(&manifest)),
+            Err(ManifestFailure::Unverified {
+                path: "big.bin".to_string()
+            })
+        );
+    }
+
+    #[test]
+    fn verify_output_manifest_hashes_beyond_the_recording_cap() {
+        // Verification recomputes in full: an entry recorded with a hash is
+        // checked even when the file is now above the current cap.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("big.bin"), [7u8; 32]).unwrap();
+        let rule = manifest_rule(&["big.bin"]);
+        let manifest = vec![manifest_entry("big.bin", dir.path())];
+        assert_eq!(
+            verify_output_manifest(&rule, dir.path(), &HashMap::new(), Some(&manifest)),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn verify_output_manifest_expands_scope_and_skips_unresolved_templates() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("aln")).unwrap();
+        std::fs::write(dir.path().join("aln/S1.bam"), "bam").unwrap();
+        let rule = manifest_rule(&["aln/{sample}.bam"]);
+
+        // Unresolved template: exempt (the freshness gate never skips it).
+        assert_eq!(
+            verify_output_manifest(&rule, dir.path(), &HashMap::new(), None),
+            Ok(())
+        );
+
+        let mut scope = HashMap::new();
+        scope.insert("sample".to_string(), "S1".to_string());
+        let manifest = vec![manifest_entry("aln/S1.bam", dir.path())];
+        assert_eq!(
+            verify_output_manifest(&rule, dir.path(), &scope, Some(&manifest)),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn output_manifests_roundtrip_serialize_only_when_recorded_and_legacy_stable() {
+        let empty = CheckpointState::new();
+        let json = serde_json::to_string(&empty).unwrap();
+        assert!(
+            !json.contains("output_manifests"),
+            "an empty manifest map must not serialize"
+        );
+
+        // Pre-#1426 checkpoint bytes survive a load/serialize round-trip.
+        let legacy = r#"{"checkpoint_format_version":1,"completed_rules":["a"],"failed_rules":[],"benchmarks":{},"workflow_path":"/wf/p.oxoflow"}"#;
+        let loaded: CheckpointState = serde_json::from_str(legacy).unwrap();
+        assert!(loaded.output_manifests.is_empty());
+        assert_eq!(serde_json::to_string(&loaded).unwrap(), legacy);
+
+        // Recorded manifests round-trip with key-ordered rule entries.
+        let mut ck = CheckpointState::new();
+        ck.record_output_manifest(
+            "b_rule",
+            vec![OutputManifestEntry {
+                path: "b.txt".to_string(),
+                size: 1,
+                sha256: Some("sha256:aa".to_string()),
+            }],
+        );
+        ck.record_output_manifest(
+            "a_rule",
+            vec![OutputManifestEntry {
+                path: "a.txt".to_string(),
+                size: 0,
+                sha256: None,
+            }],
+        );
+        let json = serde_json::to_string(&ck).unwrap();
+        assert!(
+            json.find("a_rule").unwrap() < json.find("b_rule").unwrap(),
+            "manifest keys must be sorted: {json}"
+        );
+        let back: CheckpointState = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.output_manifests, ck.output_manifests);
+        // An unhashed entry omits the field entirely (no null claim).
+        assert!(!json.contains("\"sha256\":null"));
+    }
+
+    #[test]
+    fn invalidation_clears_output_manifests() {
+        let mut ck = CheckpointState::new();
+        for rule in ["a", "b"] {
+            ck.record_output_manifest(
+                rule,
+                vec![OutputManifestEntry {
+                    path: format!("{rule}.txt"),
+                    size: 1,
+                    sha256: Some("sha256:aa".to_string()),
+                }],
+            );
+        }
+
+        // --from-rule closure invalidation drops the rule's manifest.
+        ck.invalidate_closure(&["b".to_string()]);
+        assert!(ck.output_manifests.contains_key("a"));
+        assert!(!ck.output_manifests.contains_key("b"));
+
+        // Foreign-checkpoint adoption clears every reuse record.
+        ck.invalidate_reuse_records();
+        assert!(ck.output_manifests.is_empty());
+    }
+
+    #[test]
+    fn clearing_tombstoned_paths_keeps_remaining_entries() {
+        let mut ck = CheckpointState::new();
+        ck.record_output_manifest(
+            "r",
+            vec![
+                OutputManifestEntry {
+                    path: "keep.txt".to_string(),
+                    size: 1,
+                    sha256: Some("sha256:aa".to_string()),
+                },
+                OutputManifestEntry {
+                    path: "gone.txt".to_string(),
+                    size: 1,
+                    sha256: Some("sha256:bb".to_string()),
+                },
+            ],
+        );
+        ck.clear_output_manifest_paths("r", &["gone.txt".to_string()]);
+        let remaining = &ck.output_manifests["r"];
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].path, "keep.txt");
+
+        // The last removed entry drops the rule's empty manifest entirely.
+        ck.clear_output_manifest_paths("r", &["keep.txt".to_string()]);
+        assert!(!ck.output_manifests.contains_key("r"));
+    }
+
+    #[test]
+    fn empty_output_manifest_is_never_stored_or_serialized() {
+        // A successful rule with no recordable outputs must not serialize
+        // `"rule": []` (issue #1426 review LOW-7), and a fresh success
+        // replaces/clears a previous record.
+        let mut ck = CheckpointState::new();
+        ck.record_output_manifest(
+            "r",
+            vec![OutputManifestEntry {
+                path: "out.txt".to_string(),
+                size: 1,
+                sha256: None,
+            }],
+        );
+        ck.record_output_manifest("r", Vec::new());
+        assert!(!ck.output_manifests.contains_key("r"));
+        ck.record_output_manifest("r", Vec::new());
+        assert!(
+            !serde_json::to_string(&ck)
+                .unwrap()
+                .contains("output_manifests")
+        );
+    }
+
+    #[test]
+    fn take_output_manifest_paths_clears_across_rules_and_restores() {
+        // Transform-chunk cleanup deletes files produced by a DIFFERENT rule
+        // than the cleanup owner (issue #1426 LOW-4): the path-based sweep
+        // must clear the entries wherever they live, and the returned map
+        // must roll the state back intact.
+        let entry = |path: &str| OutputManifestEntry {
+            path: path.to_string(),
+            size: 1,
+            sha256: Some("sha256:aa".to_string()),
+        };
+        let mut ck = CheckpointState::new();
+        ck.record_output_manifest("chunk_producer", vec![entry("chunks/1.txt")]);
+        ck.record_output_manifest("mixed", vec![entry("chunks/1.txt"), entry("keep.txt")]);
+
+        let previous = ck.take_output_manifest_paths(&["chunks/1.txt".to_string()]);
+        assert_eq!(previous.len(), 2, "both owning rules are captured");
+        assert!(!ck.output_manifests.contains_key("chunk_producer"));
+        assert_eq!(ck.output_manifests["mixed"].len(), 1);
+        assert_eq!(ck.output_manifests["mixed"][0].path, "keep.txt");
+
+        ck.restore_output_manifests(previous);
+        assert_eq!(ck.output_manifests["chunk_producer"].len(), 1);
+        assert_eq!(ck.output_manifests["mixed"].len(), 2);
     }
 }
