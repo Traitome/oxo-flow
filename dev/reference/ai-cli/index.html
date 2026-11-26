@@ -5475,6 +5475,11 @@ in a manuscript or release claim.</p>
 <li>Selects tools from the reference table, verifying current versions via the Bioconda database</li>
 <li>Designs a DAG with proper dependencies (optionally consulting the pipeline graph for topology)</li>
 <li>Sets resource allocations based on tool requirements</li>
+<li>Chooses each rule's environment: a version-pinned conda/container environment
+   for rules invoking external tools, and the system environment (no
+   <code>[rules.environment]</code> table) for rules that use only shell builtins or
+   standard POSIX utilities — never a conda pin just to provide <code>echo</code> or
+   <code>coreutils</code></li>
 <li>Generates valid <code>.oxoflow</code> TOML</li>
 <li>Validates against the engine schema; on failure the errors feed back
    into the correction loop (bounded by <code>--ai-max-retries</code>), so
