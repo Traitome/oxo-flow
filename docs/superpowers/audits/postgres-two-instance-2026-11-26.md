@@ -261,6 +261,15 @@ rolling upgrade cannot misclassify an old instance's live run.
   `TCP_USER_TIMEOUT` tuning remains a follow-up.
 - **Database media corruption was not attempted** (see above). The clean
   restart and the `SIGKILL` crash/WAL-recovery path are covered.
+- **Concurrent schema bootstrap during a rolling upgrade was not probed.**
+  Running the PostgreSQL smoke tests in parallel reproduced a lock-order
+  deadlock: the init transaction's `CREATE INDEX ON audit_logs` waited on a
+  runtime audit write holding `audit_logs`, while that write waited on
+  `audit_chain` held by init. Production initializes the schema once before
+  serving (the in-crate tests now do the same via a process-local
+  `OnceCell`), so the measured probes are unaffected; a new instance
+  initializing while old instances are writing has no production retry and
+  remains unmeasured.
 - **No production-scale measurement**: row counts, sustained load, a large
   pool, multi-instance admission on separate hosts, and long-running
   transactions are unmeasured.

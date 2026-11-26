@@ -2977,6 +2977,16 @@ mod tests {
 
     /// Connect to the smoke-test database, or skip the test cleanly when
     /// `OXO_PG_TEST_URL` is unset (local `make ci` has no PostgreSQL).
+    /// The schema is initialized exactly once per test process.
+    ///
+    /// Every smoke test used to call `init()` and then immediately write
+    /// rows, so parallel tests could interleave `CREATE INDEX ON audit_logs`
+    /// (init) with an audit-chain write. PostgreSQL aborted one side with a
+    /// lock-order deadlock (`audit_logs` vs `audit_chain`). Production
+    /// initializes once before serving; this cell gives the tests the same
+    /// shape and keeps the parallel smoke run deterministic.
+    static SCHEMA_READY: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
+
     async fn connect() -> Option<PostgresBackend> {
         let url = match std::env::var("OXO_PG_TEST_URL") {
             Ok(u) if !u.trim().is_empty() => u.trim().to_string(),
@@ -2988,7 +2998,11 @@ mod tests {
         let backend = PostgresBackend::new(&url)
             .await
             .expect("connect to live PostgreSQL");
-        backend.init().await.expect("schema bootstrap");
+        SCHEMA_READY
+            .get_or_init(|| async {
+                backend.init().await.expect("schema bootstrap");
+            })
+            .await;
         Some(backend)
     }
 
