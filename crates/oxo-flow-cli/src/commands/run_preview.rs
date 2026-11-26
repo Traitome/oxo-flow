@@ -1126,11 +1126,31 @@ fn available_profiles(workflow_dir: &Path) -> Vec<String> {
     names
 }
 
+/// Whether a profile name is a plain file stem.
+///
+/// Profile files live directly under `<workflow-dir>/profiles/`. A name with
+/// a path separator, a drive/stream colon, or `.`/`..` traversal would let a
+/// `--profile` value read a file outside that directory — `run` always
+/// joined the name, but `resume` now takes the profile from a checkpoint and
+/// exposes the same lookup, so the boundary is enforced in one place.
+fn is_valid_profile_name(profile_name: &str) -> bool {
+    !profile_name.is_empty()
+        && profile_name != "."
+        && profile_name != ".."
+        && !profile_name.contains(['/', '\\', ':'])
+        && profile_name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
+}
+
 /// Resolve a profile name to its file under `<workflow_dir>/profiles/`
 /// (`.toml` before `.oxoflow`) — the single lookup both `merge_profile` and
 /// `resume`'s cluster re-attach use, so "is this profile available?" can
 /// never be answered differently by the two paths (issue #1427).
 pub(crate) fn profile_file(workflow_dir: &Path, profile_name: &str) -> Option<std::path::PathBuf> {
+    if !is_valid_profile_name(profile_name) {
+        return None;
+    }
     [
         workflow_dir
             .join("profiles")
@@ -1173,6 +1193,24 @@ pub(crate) fn merge_profile(
 ) -> Result<()> {
     use colored::Colorize;
 
+    merge_profile_silent(config, profile_name, workflow_dir)?;
+    eprintln!(
+        "{} Applied config values from profile '{}'",
+        "Profile:".bold().cyan(),
+        profile_name
+    );
+    Ok(())
+}
+
+/// [`merge_profile`] without the narration line — callers that will re-merge
+/// the same profile through another surface (`resume` delegates to `run`,
+/// which prints once) use this so the operator sees one "Profile: Applied…"
+/// line, not two.
+pub(crate) fn merge_profile_silent(
+    config: &mut WorkflowConfig,
+    profile_name: &str,
+    workflow_dir: &Path,
+) -> Result<()> {
     let Some(path) = profile_file(workflow_dir, profile_name) else {
         return Err(profile_not_found(workflow_dir, profile_name));
     };
@@ -1190,11 +1228,6 @@ pub(crate) fn merge_profile(
     config
         .merge_profile(&profile_toml)
         .map_err(|e| anyhow::anyhow!("profile '{}' merge failed: {e}", profile_name))?;
-    eprintln!(
-        "{} Applied config values from profile '{}'",
-        "Profile:".bold().cyan(),
-        profile_name
-    );
     Ok(())
 }
 
@@ -1557,6 +1590,39 @@ threshold = 5
             Some("fast"),
             "missing keys are filled in"
         );
+    }
+
+    #[test]
+    fn profile_names_cannot_escape_the_profiles_directory() {
+        // Issue #1427 review (minor): `resume --profile ../x` must not read
+        // outside `<workflow>/profiles/`.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("profiles")).unwrap();
+        std::fs::write(dir.path().join("profiles/batch.toml"), "[config]\n").unwrap();
+        std::fs::write(dir.path().join("evil.toml"), "[config]\n").unwrap();
+
+        assert!(profile_file(dir.path(), "batch").is_some());
+        for bad in [
+            "../evil",
+            "a/b",
+            "a\\b",
+            "..",
+            ".",
+            "",
+            "C:evil",
+            "with space",
+        ] {
+            assert!(
+                profile_file(dir.path(), bad).is_none(),
+                "profile name {bad:?} must be rejected"
+            );
+        }
+        let mut config =
+            WorkflowConfig::parse("[workflow]\nname = \"t\"\nversion = \"1.0\"\n").unwrap();
+        let error = merge_profile(&mut config, "../evil", dir.path())
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("not found"), "{error}");
     }
 
     #[test]

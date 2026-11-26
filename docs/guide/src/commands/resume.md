@@ -93,12 +93,17 @@ clears the persisted in-flight set or re-plans execution (issue #1427):
       accounting store → fail closed with the job named.
 - **`--abandon-jobs`** — cancel the recorded live jobs through the backend
   that owns them (`scancel`/`qdel`/`bkill`/…), clear their records, and
-  re-run the rules. A cancellation the scheduler does not confirm also fails
-  closed: a job that may still be running is never reported as abandoned.
+  re-run the rules. With a usable profile the rerun keeps the cluster route;
+  without one it continues **locally** (announced on stderr). A cancellation
+  the scheduler does not confirm also fails closed: a job that may still be
+  running is never reported as abandoned.
 
-Reconciliation always uses the backend recorded in the checkpoint, not the
-backend a (possibly edited) profile resolves to today. A resume with no
-recorded cluster jobs still routes through the recorded profile (when its
+Reconciliation always uses the backend recorded **on each job**, never the
+backend a (possibly edited) profile resolves to today. A checkpoint whose
+unsettled jobs span more than one scheduler (a crash on one backend followed
+by a run on another) is reconciled group by group, each through the scheduler
+that owns it — a job id is never handed to a different backend. A resume with
+no recorded cluster jobs still routes through the recorded profile (when its
 file still exists), so the remaining rules keep running on the scheduler
 instead of silently falling back to the local executor.
 
@@ -106,6 +111,13 @@ Checkpoints written before this feature carry no job ids; their resume
 behavior is unchanged (their rules re-run), and `run` deliberately never
 consults `cluster_jobs` — after a crashed cluster driver, use `resume`
 (not a fresh `run`) to re-attach.
+
+A recorded job whose rule an intervening invocation already completed is
+treated as **settled**: `resume` drops the stale id (and persists the cleanup)
+instead of polling a scheduler record that may since have been purged. If
+that superseded job was in fact still live, the intervening completion
+already raced it — reconciling an id the checkpoint's completion set no
+longer needs cannot undo that, and refusing to resume forever would be worse.
 
 ## Options
 
@@ -119,7 +131,7 @@ consults `cluster_jobs` — after a crashed cluster driver, use `resume`
 | `--timeout <SECS>` | — | Timeout per job in seconds (0 = disabled), or a duration like `1h`/`30m` |
 | `--no-report-snapshot` | — | Skip the automatic report snapshot after the resumed run (same flag as `run`) |
 | `--profile <NAME>` | — | Re-attach recorded cluster jobs through this profile (and run the remaining rules on that scheduler). Defaults to the profile the checkpoint records; without either, a checkpoint holding unsettled cluster jobs fails closed |
-| `--abandon-jobs` | — | Cancel the scheduler jobs recorded in the checkpoint instead of re-attaching and waiting, then re-run their rules |
+| `--abandon-jobs` | — | Cancel the scheduler jobs recorded in the checkpoint instead of re-attaching and waiting, then re-run their rules (locally when no usable profile exists) |
 | `--background` / `--detach` | — | Detach the resumed run into a background process and exit 0 immediately (see [Background runs (--background)](run.md#background-runs-background)); `--detach` is an alias |
 | `--json` | — | Emit one machine-readable JSON document to stdout (human logs stay on stderr); see [JSON output](#json-output) |
 
@@ -158,11 +170,15 @@ family ([`run`](run.md#json-output)).
 | `adopted` | Present when a cluster reconciliation ran: how many recorded scheduler jobs were adopted as completed (their declared outputs were verified first) |
 | `cancelled_jobs` | Present when a cluster reconciliation ran: how many recorded scheduler jobs `--abandon-jobs` cancelled before re-running |
 
-The non-`--json` path is unchanged: exit codes and output are byte-identical
-to prior releases. A malformed checkpoint or a missing workflow still fails
-with a non-zero exit and, under `--json`, the shared structured error
-envelope (`{"command":"resume","errors":[{"code":...,"message":...}]}`)
-instead of empty stdout.
+For a **local** checkpoint the non-`--json` path is unchanged: exit codes and
+output are byte-identical to prior releases. A cluster checkpoint that records
+scheduler jobs additionally narrates the re-attach (one line per reconciled
+job) and may wait for live jobs before the run loop starts — that narration is
+new (issue #1427), and a fail-closed reconciliation exits non-zero. A
+malformed checkpoint or a missing workflow still fails with a non-zero exit
+and, under `--json`, the shared structured error envelope
+(`{"command":"resume","errors":[{"code":...,"message":...}]}`) instead of
+empty stdout.
 
 ## Examples
 

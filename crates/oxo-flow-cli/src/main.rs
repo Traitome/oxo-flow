@@ -346,7 +346,8 @@ pub enum Commands {
         #[arg(
             long,
             help = "Cancel the scheduler jobs recorded in the checkpoint, then re-run their rules \
-                    (instead of re-attaching and waiting for them)"
+                    (instead of re-attaching and waiting for them). Without a usable profile the \
+                    rerun continues locally"
         )]
         abandon_jobs: bool,
         /// Detach the resumed run into a background process: the foreground

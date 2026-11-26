@@ -51,6 +51,23 @@ output = ["out.txt"]
 shell = "echo ok > out.txt"
 "#;
 
+/// Two independent rules: enough to record a mixed-backend pair or an array's
+/// two elements without any dependency between them.
+const TWO_RULES: &str = r#"
+[workflow]
+name = "reattach-two"
+
+[[rules]]
+name = "r0"
+output = ["out0.txt"]
+shell = "echo ok > out0.txt"
+
+[[rules]]
+name = "r1"
+output = ["out1.txt"]
+shell = "echo ok > out1.txt"
+"#;
+
 fn write_profile(dir: &Path) {
     std::fs::create_dir_all(dir.join("profiles")).unwrap();
     std::fs::write(
@@ -399,4 +416,166 @@ fn resume_without_a_profile_keeps_the_recorded_cluster_route() {
         1,
         "the pending rule was submitted to the scheduler, not run locally"
     );
+}
+
+/// Issue #1427 review I2: a finished SLURM array element is accounted for by
+/// its element id (`7_1`), not its array parent (`7`).
+#[test]
+fn resume_adopts_array_elements_by_element_id() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("w.oxoflow");
+    std::fs::write(&wf, TWO_RULES).unwrap();
+    write_profile(dir.path());
+    let state = dir.path().join("state");
+    seed_job(&state, "7_1", "COMPLETED", 0);
+    seed_job(&state, "7_2", "COMPLETED", 0);
+    std::fs::write(dir.path().join("out0.txt"), "ok").unwrap();
+    std::fs::write(dir.path().join("out1.txt"), "ok").unwrap();
+    let mut ck = base_checkpoint(&wf, dir.path());
+    record_job(&mut ck, "r0", "7_1", Some("7"));
+    record_job(&mut ck, "r1", "7_2", Some("7"));
+    let cp = save_checkpoint(&ck, dir.path());
+
+    let (ok, stdout, stderr) = run_resume(
+        dir.path(),
+        &["resume", cp.to_str().unwrap(), "--json"],
+        Some(&state),
+    );
+    assert!(
+        ok,
+        "array elements must be adopted by element id; stderr:\n{stderr}"
+    );
+    let doc = json(&stdout);
+    assert_eq!(doc["adopted"], 2, "{doc}");
+    let after = CheckpointState::load_from_file(&cp).unwrap();
+    assert!(after.completed_rules.contains("r0"));
+    assert!(after.completed_rules.contains("r1"));
+    assert!(after.cluster_jobs.is_empty());
+    assert_eq!(
+        after.rule_runs["r0"].exit_code,
+        Some(0),
+        "the element's accounting row supplies its own exit code"
+    );
+    assert_eq!(
+        job_ids(&state),
+        vec!["7_1".to_string(), "7_2".to_string()],
+        "adoption must not resubmit the array"
+    );
+}
+
+/// Issue #1427 review I1: a checkpoint whose jobs span two schedulers polls
+/// and cancels each group through the backend that owns it. The PBS probe
+/// must never see the SLURM id (and vice versa).
+#[test]
+fn resume_reconciles_a_mixed_backend_checkpoint_through_each_scheduler() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("w.oxoflow");
+    std::fs::write(&wf, TWO_RULES).unwrap();
+    write_profile(dir.path());
+    let state = dir.path().join("state");
+    seed_job(&state, "1", "RUNNING", 0);
+
+    // Minimal PBS mock: `qstat -x <id>` reports a running row; `qdel <id>`
+    // records the id it was asked to cancel.
+    let pbs_bin = dir.path().join("pbs-bin");
+    std::fs::create_dir_all(&pbs_bin).unwrap();
+    let pbs_state = dir.path().join("pbs-state");
+    std::fs::create_dir_all(&pbs_state).unwrap();
+    std::fs::write(
+        pbs_bin.join("qstat"),
+        "#!/bin/sh\nfor a in \"$@\"; do\n  case \"$a\" in -x) ;; *) echo \"$a rule user 00:00 R batch\" ;; esac\ndone\n",
+    )
+    .unwrap();
+    std::fs::write(
+        pbs_bin.join("qdel"),
+        "#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"${MOCK_PBS_DIR:?}/qdel_calls\"\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        for program in ["qstat", "qdel"] {
+            let path = pbs_bin.join(program);
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+    }
+
+    let mut ck = base_checkpoint(&wf, dir.path());
+    record_job(&mut ck, "r0", "1", None);
+    record_job(&mut ck, "r1", "2", None);
+    ck.cluster_jobs.get_mut("r1").unwrap().backend = "pbs".to_string();
+    let cp = save_checkpoint(&ck, dir.path());
+
+    let path = format!(
+        "{}:{}:{}",
+        pbs_bin.display(),
+        mock_scheduler_dir().display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let out = Command::new(oxo_bin())
+        .args(["resume", cp.to_str().unwrap(), "--abandon-jobs", "--json"])
+        .current_dir(dir.path())
+        .env("PATH", path)
+        .env("MOCK_SCHEDULER_DIR", &state)
+        .env("MOCK_PBS_DIR", &pbs_state)
+        .env("MOCK_SQUEUE_HIDE_TERMINAL", "1")
+        .output()
+        .unwrap();
+    let ok = out.status.success();
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(ok, "mixed-backend abandon succeeds; stderr:\n{stderr}");
+    let doc = json(&stdout);
+    assert_eq!(doc["cancelled_jobs"], 2, "{doc}");
+    assert_eq!(
+        std::fs::read_to_string(pbs_state.join("qdel_calls")).unwrap(),
+        "2\n",
+        "PBS may only be asked to cancel the PBS id"
+    );
+    assert_eq!(job_state(&state, "1"), "CANCELLED");
+    assert!(dir.path().join("out0.txt").exists());
+    assert!(dir.path().join("out1.txt").exists());
+    assert!(
+        stderr.contains("each group is reconciled through the scheduler that owns it"),
+        "the mixed routes must be narrated:\n{stderr}"
+    );
+    let after = CheckpointState::load_from_file(&cp).unwrap();
+    assert!(after.cluster_jobs.is_empty());
+}
+
+/// `--abandon-jobs` without a usable profile is explicit: cancel through the
+/// recorded backend, then run LOCALLY (issue #1427 review, minor).
+#[test]
+fn resume_abandon_without_a_profile_cancels_then_runs_locally() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("w.oxoflow");
+    std::fs::write(&wf, ONE_STEP).unwrap();
+    // No profiles/ directory: the recorded profile name resolves to nothing.
+    let state = dir.path().join("state");
+    seed_job(&state, "1", "RUNNING", 0);
+    let mut ck = base_checkpoint(&wf, dir.path());
+    record_job(&mut ck, "work", "1", None);
+    let cp = save_checkpoint(&ck, dir.path());
+
+    let (ok, stdout, stderr) = run_resume(
+        dir.path(),
+        &["resume", cp.to_str().unwrap(), "--abandon-jobs", "--json"],
+        Some(&state),
+    );
+    assert!(ok, "abandon + local rerun succeeds; stderr:\n{stderr}");
+    let doc = json(&stdout);
+    assert_eq!(doc["cancelled_jobs"], 1, "{doc}");
+    assert_eq!(job_state(&state, "1"), "CANCELLED");
+    assert!(
+        stderr.contains("run LOCALLY"),
+        "the local fallback must be explicit:\n{stderr}"
+    );
+    assert!(dir.path().join("out.txt").exists(), "the rule ran locally");
+    assert_eq!(
+        job_ids(&state),
+        vec!["1".to_string()],
+        "a local rerun submits nothing to the scheduler"
+    );
+    let after = CheckpointState::load_from_file(&cp).unwrap();
+    assert!(after.completed_rules.contains("work"));
 }

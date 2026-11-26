@@ -756,8 +756,11 @@ profile/backend/queue and every accepted job id, all removed as jobs settle.
 explicit `--profile`), polls the recorded jobs to a terminal state, adopts a
 success only after verifying the rule's declared outputs, records failures for
 a normal re-run, and fails closed when the scheduler cannot confirm a job.
-`--abandon-jobs` cancels the recorded live jobs through the backend that owns
-them, then reruns their rules. See
+Each job is polled/cancelled through the backend recorded on that job, so a
+checkpoint whose jobs span two schedulers is reconciled group by group rather
+than sending an id to the wrong scheduler. `--abandon-jobs` cancels the
+recorded live jobs through the backend that owns them, then reruns their
+rules. See
 [resume → Cluster runs](../commands/resume.md#cluster-runs-reattach-or-abandon).
 
 A plain `run` is NOT a re-attach path: `run --profile` re-plans from the
