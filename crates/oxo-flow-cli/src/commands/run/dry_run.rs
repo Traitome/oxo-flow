@@ -286,6 +286,9 @@ async fn dry_run_command_inner(
         budget_caps.max_threads,
         budget_caps.max_memory_mb,
     )?;
+    // A malformed [resource_budget].max_cost (issue #1400) fails the preview
+    // the same way `run` rejects it before executing anything.
+    super::preflight::validate_cost_budget(config.resource_budget.as_ref())?;
 
     // All config values (including CLI --arg overrides) become {config.key} in templates.
     let wildcard_values = config_placeholder_values(&config.config);
@@ -669,6 +672,30 @@ async fn dry_run_command_inner(
                 .map_or_else(|| "auto".to_string(), |mb| format!("{mb} MB")),
         );
     }
+    // Issue #1400: a declared cost cap is reported at plan time as declared,
+    // with its accrual explicitly UNESTIMABLE — no rule has executed yet, so no
+    // number is fabricated. The rate that will be applied is named so the plan
+    // and the run-time dispatcher agree on the method.
+    if let Some(cost) = config
+        .resource_budget
+        .as_ref()
+        .and_then(|b| b.max_cost.as_ref())
+    {
+        let mut rates = Vec::new();
+        if let Some(r) = cost.cpu_second_rate {
+            rates.push(format!("cpu_second_rate = {r}"));
+        }
+        if let Some(r) = cost.gb_second_rate {
+            rates.push(format!("gb_second_rate = {r}"));
+        }
+        eprintln!(
+            "         cost cap from [resource_budget]: max_cost = {} {} ({})",
+            cost.amount,
+            cost.currency,
+            rates.join(", "),
+        );
+        eprintln!("         cost accrual is unestimable at plan time — no rule has executed yet",);
+    }
     if !config.sample_groups.is_empty() {
         eprintln!(
             "         {}, {}",
@@ -857,7 +884,7 @@ async fn dry_run_command_inner(
             })
             .collect();
 
-        let output = serde_json::json!({
+        let mut output = serde_json::json!({
             "command": "dry-run",
             "schema_version": 1,
             "workflow": workflow.display().to_string(),
@@ -936,6 +963,19 @@ async fn dry_run_command_inner(
             "metadata": crate::commands::quality::metadata_findings_json(&metadata_report.findings),
             "metadata_digest": &config.metadata_digest,
         });
+        // Issue #1400: the declared `[resource_budget] max_cost` cap, at plan
+        // time. No rule has executed, so the run-time accrual is unestimable
+        // (accrued is null, estimate_available false) — never a fabricated
+        // estimate. Inserted ONLY when `max_cost` is declared, so a workflow
+        // without it keeps its exact prior bytes. The same JSON the report
+        // surfaces.
+        if let Some(budget) = config
+            .resource_budget
+            .as_ref()
+            .and_then(|b| b.max_cost.as_ref())
+        {
+            output["budget"] = oxo_flow_core::cost_budget::plan_time_budget_json(budget);
+        }
         println!("{}", serde_json::to_string_pretty(&output)?);
         *json_written = true;
     }

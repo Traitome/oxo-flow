@@ -2172,7 +2172,9 @@ fn cli_report_resource_ledger_csv_has_a_total_row() {
     assert_eq!(total[0], "total");
     assert_eq!(total[1], "TOTAL");
     assert_eq!(total[3], "30.000");
-    assert!(total[24].contains("cpu_seconds"));
+    // #1400 appended the four cost-budget columns before `incomplete_metrics`,
+    // so the partial-metric list is now the last (29th) column.
+    assert!(total[28].contains("cpu_seconds"), "{}", lines[3]);
 }
 
 #[test]

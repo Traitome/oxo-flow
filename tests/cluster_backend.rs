@@ -174,6 +174,7 @@ fn run_driver_with_env(
                 sensitive_values: &[],
                 on_submit: None,
                 on_settle: None,
+                cost_gate: None,
                 run_dir,
                 on_checkpoint: None,
                 merge: None,

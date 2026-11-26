@@ -1,5 +1,25 @@
 {
   "artifacts": {
+    "docs/superpowers/plans/2026-11-26-cost-budget-enforcement.md": {
+      "generator_command": "oxo-flow run cb1400-minimal.oxoflow --profile fr-test (SLURM partition TEST; control without max_cost, treatment with amount = 1e-7 USD + gb_second_rate = 1.0)",
+      "host": {
+        "cpu": "fr cluster, partition TEST",
+        "note": "fr @ 202.197.87.243:8808, user wangsx, 2026-11-26",
+        "os": "Linux (SLURM cluster)"
+      },
+      "inputs": [
+        {
+          "path": "docs/superpowers/audits/cost-budget-enforcement-2026-11-26.md",
+          "sha256": "ec73bf0ee628697209ed47514406ca643bd0b893b879deef87b11065bc38eeed"
+        }
+      ],
+      "note": "Pins the cluster-verification row (control completed 3/3; treatment cost_budget_exceeded with only step1.txt written). Attribution provenance only: the raw run artifacts and their numbers live in the audit file above and are not re-derived here.",
+      "source_commit": "8e6abda9",
+      "tool_versions": {
+        "oxo-flow": "0.32.0",
+        "python3": "3.12.4"
+      }
+    },
     "docs/superpowers/plans/cohort-scaling-report.md": {
       "generator_command": "OXO_FLOW_BIN=target/release/oxo-flow python3 eval/benchmarks/cohort_driver.py --samples 10",
       "host": {

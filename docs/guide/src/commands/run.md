@@ -98,7 +98,9 @@ It is emitted on **every** exit path — completed, failed, and aborted
 (preflight failures, budget breaches, cluster runs, plain-failure aborts) —
 so `--json` consumers never get zero bytes. `status` is `"completed"` only
 when the run finished with zero required failures and was not interrupted;
-every other exit is `"failed"`.
+every other exit is `"failed"`. A run stopped by a `[resource_budget]
+max_cost` cap reports the structured status `cost_budget_exceeded` in this
+summary (see [Limit resource usage](#limit-resource-usage)).
 
 Human progress and result output on stderr is **not** suppressed — this flag
 appends the summary, it does not switch the run to machine-only mode.
@@ -414,6 +416,27 @@ file is bounded without an external wrapper (issue #1080):
 max_threads = 16
 max_memory = "32G"
 ```
+
+The same section can cap **spend** with an optional `max_cost` table
+(issue #1400): it accrues cost from the resource ledger using user-declared
+rates and stops scheduling new ready rules once the cap is reached.
+
+```toml
+[resource_budget]
+max_cost = { amount = 10.0, currency = "USD", cpu_second_rate = 0.0001, gb_second_rate = 0.00002 }
+```
+
+`amount` and `currency` are required; at least one of `cpu_second_rate` /
+`gb_second_rate` must be present. When accrued cost reaches `amount`, the run
+dispatches no new rules, lets in-flight rules settle honestly (they are not
+killed or rolled back), and — once nothing is in flight — aborts with the
+structured run status `cost_budget_exceeded`, naming the method, the accrued
+amount (or "unknown"), the cap, and any unknown residual. Because the ledger
+never reports a metric a rule did not produce, an accrual that depends on a
+missing metric is `null`, never `0`; the default `on_unknown = "refuse"` then
+fails closed, while `on_unknown = "report"` keeps running and reports the
+unbounded residual. A workflow with no `max_cost` behaves exactly as before.
+See [Resource budgets](../how-to/resource-tuning.md#resource-budgets).
 
 ### Cache environment setup
 
@@ -755,7 +778,10 @@ bytes, I/O bytes when the source reports them (Linux `/proc/<pid>/io`,
 backend/tool/raw fields behind each number. It is reused by
 `oxo-flow report --resource-ledger` (see
 [`report`](report.md#resource-ledger-resource-ledger)); values no source
-reported stay absent, never `0`.
+reported stay absent, never `0`. The same records feed `[resource_budget]
+max_cost` enforcement (issue #1400): a declared budget accrues cost from
+this ledger's CPU-seconds and GB-seconds and stops dispatching new rules at
+the cap — see [Limit resource usage](#limit-resource-usage).
 
 ### Failed-rule output rollback
 
@@ -2006,6 +2032,7 @@ and [`test`](test.md#exit-codes).
 - A timeout of `0` means no timeout
 - Resource constraints (`threads`, `memory`) in rules are checked against available resources before execution
 - **Pre-flight budget check:** When `--max-threads`/`--max-memory` is explicitly set — or the workflow declares `[resource_budget] max_threads`/`max_memory` (issue #1080) — the engine checks all rules *before* execution starts. Any rule whose requirements exceed the effective cap is reported immediately (fast-fail), preventing mid-pipeline failures. The workflow budget is a hard, versioned cap: it clamps a larger CLI request, a tighter CLI request still wins, and a silent CLI inherits it.
+- **Cost budget (`[resource_budget] max_cost`, issue #1400):** a workflow may declare a spend cap as `max_cost = { amount = 10.0, currency = "USD", cpu_second_rate = 0.0001 }`. Unlike the pre-flight caps above, this is a **run-time** gate: cost accrues from the resource ledger (issue #1371) as rules complete, and once accrued cost reaches `amount` — or accrual is unknown under the default `on_unknown = "refuse"` — the scheduler dispatches no new ready rules. In-flight rules settle honestly: they run to completion and are not killed or rolled back. When nothing remains in flight, the run aborts with the structured status `cost_budget_exceeded` (checkpoint saved, message naming the method, the accrued amount or "unknown", the cap, and any unknown residual, non-zero exit). Accrual depends on per-rule CPU-seconds and GB-seconds; a metric no rule reported makes the accrual `null`, never `0`. `on_unknown = "report"` keeps the run going and records the unbounded residual instead. A currency mismatch is always fail-closed. A workflow with no `max_cost` is unchanged. See [Resource budgets](../how-to/resource-tuning.md#resource-budgets).
 - **Backend preflight:** before any rule executes, every unique environment spec of the pending rules is validated once — a missing backend (`conda`, `mamba`, `pixi`, `docker`, `singularity`, `modules`) aborts the run with one collapsed entry per root cause and "no rules were run" (see [Backend preflight](#backend-preflight-fail-fast-on-a-missing-environment-backend)).
 - **Auto-detected capacity is soft:** Rules whose declared requests exceed the machine's detected threads/memory are not rejected — the declared request is the tool's upper bound (often an upstream HPC label), not a scheduling requirement. The engine warns and clamps the pool reservation, so an over-capacity rule runs alone (serialized) instead of blocking the workflow.
 - **CPU-oversubscription warning:** the engine compares each scheduled parallel wave's worst-case demand (`min(-j, wave width) × heaviest rule threads`, both clamped to the effective pool ceiling) with the detected CPUs and warns at ≥ 80 % — the analogue of the memory clamp warning. The estimate covers only the rules the run will execute (`-t`/`--module` filtering included). A ceiling that leaves headroom silences it; a cap at or above the host still warns. See [CPU Oversubscription Warning](../how-to/resource-tuning.md#cpu-oversubscription-warning).

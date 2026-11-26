@@ -167,6 +167,10 @@ pub(crate) struct RunJsonSummary {
     json: bool,
     workflow: PathBuf,
     repair: Option<RunRepairSummary>,
+    /// Enforced cost-budget detail (issue #1400), present only when the cost
+    /// gate fired. Left unset on every other run so those `--json` documents
+    /// stay byte-identical to a run without `[resource_budget] max_cost`.
+    cost_budget: Option<serde_json::Value>,
     emitted: bool,
 }
 
@@ -179,6 +183,7 @@ impl RunJsonSummary {
             // path (a repository spec resolves to a checkout path).
             workflow: workflow.unwrap_or_else(|| Path::new("")).to_path_buf(),
             repair: None,
+            cost_budget: None,
             emitted: false,
         }
     }
@@ -194,6 +199,13 @@ impl RunJsonSummary {
         self.repair = Some(repair);
     }
 
+    /// Attach the enforced cost-budget detail (issue #1400). Emitted as the
+    /// `cost_budget` key only when set, so a run without `[resource_budget]`
+    /// `max_cost` produces byte-identical JSON to a pre-#1400 build.
+    pub(crate) fn set_cost_budget(&mut self, detail: serde_json::Value) {
+        self.cost_budget = Some(detail);
+    }
+
     pub(crate) fn emit(
         &mut self,
         status: &str,
@@ -204,7 +216,7 @@ impl RunJsonSummary {
             return;
         }
         self.emitted = true;
-        let output = serde_json::json!({
+        let mut output = serde_json::json!({
             "command": "run",
             "status": status,
             "workflow": self.workflow.to_string_lossy(),
@@ -223,6 +235,13 @@ impl RunJsonSummary {
             })),
             "resources": resources,
         });
+        // The cost-budget detail is added ONLY when the gate fired, so a run
+        // without `[resource_budget] max_cost` keeps its exact JSON bytes.
+        if let Some(detail) = self.cost_budget.take()
+            && let Some(obj) = output.as_object_mut()
+        {
+            obj.insert("cost_budget".to_string(), detail);
+        }
         match serde_json::to_string_pretty(&output) {
             Ok(json) => println!("{}", json),
             Err(error) => {

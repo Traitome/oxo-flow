@@ -521,8 +521,17 @@ fn csv_has_stable_header_rule_rows_and_a_total_row() {
     assert_eq!(total[1], "TOTAL");
     assert_eq!(total[3], "40.000");
     assert_eq!(total[4], "80.000");
+    // Cost-budget columns are a run-level view (issue #1400): empty on every
+    // row for a workflow with no `[resource_budget] max_cost`.
+    assert_eq!(total[24], "", "no budget declared -> empty budget_amount");
+    assert_eq!(total[25], "", "no budget declared -> empty budget_currency");
+    assert_eq!(total[26], "", "no budget declared -> empty accrued_cost");
     assert_eq!(
-        total[24],
+        total[27], "",
+        "no budget declared -> empty cost_unknown_rules"
+    );
+    assert_eq!(
+        total[28],
         "io_read_bytes;io_write_bytes;scheduler_wait_secs"
     );
 }
@@ -811,4 +820,69 @@ fn cost_and_gpu_stay_absent_without_a_source() {
     assert!(!json.contains("\"cost\""));
     assert!(!json.contains("\"gpu_seconds\""));
     assert!(!json.contains("\"currency\""));
+}
+
+#[test]
+fn no_cost_budget_leaves_the_document_budget_free() {
+    // A workflow without `[resource_budget] max_cost` renders the exact
+    // pre-#1400 document: neither `budget` nor `cost_accrual` appears.
+    let ledger = build_resource_ledger(&checkpoint(), None, None, None).with_cost_budget(None);
+    assert!(ledger.budget.is_none());
+    assert!(ledger.cost_accrual.is_none());
+    let json = ledger.to_json().unwrap();
+    assert!(!json.contains("\"budget\""));
+    assert!(!json.contains("\"cost_accrual\""));
+}
+
+#[test]
+fn cost_budget_accrues_over_executed_rules() {
+    // cpu 60 + 20 = 80 CPU-seconds; gb-seconds = (2.0 * 30) + (0.512 * 10).
+    let budget = CostBudget {
+        amount: 100.0,
+        currency: "USD".to_string(),
+        cpu_second_rate: Some(0.5),
+        gb_second_rate: Some(0.01),
+        on_unknown: None,
+    };
+    let ledger =
+        build_resource_ledger(&checkpoint(), None, None, None).with_cost_budget(Some(&budget));
+    assert_eq!(ledger.budget.as_ref().map(|b| b.amount), Some(100.0));
+    let accrual = ledger.cost_accrual.as_ref().expect("accrual present");
+    assert_eq!(accrual.cpu_seconds, 80.0);
+    // 0.5 * 80 = 40; GB-seconds = 2.147483648*30 + 0.536870912*10 = 64.42450944
+    // + 5.36870912 = 69.79321856 -> 0.6979321856.
+    let accrued = accrual.accrued.expect("both rates are satisfiable");
+    assert!(
+        (accrued - 40.6979321856).abs() < 1e-9,
+        "accrued = {accrued}"
+    );
+    assert!(!accrual.must_stop(), "accrued is below the cap");
+    // JSON carries both fields.
+    let json = ledger.to_json().unwrap();
+    assert!(json.contains("\"budget\""));
+    assert!(json.contains("\"cost_accrual\""));
+}
+
+#[test]
+fn cost_budget_csv_carries_budget_and_accrual_on_the_total_row() {
+    let budget = CostBudget {
+        amount: 1.0,
+        currency: "USD".to_string(),
+        cpu_second_rate: Some(0.5),
+        gb_second_rate: None,
+        on_unknown: None,
+    };
+    let csv = build_resource_ledger(&checkpoint(), None, None, None)
+        .with_cost_budget(Some(&budget))
+        .to_csv();
+    let lines: Vec<&str> = csv.lines().collect();
+    let total: Vec<&str> = lines[3].split(',').collect();
+    assert_eq!(total[24], "1.000", "budget_amount");
+    assert_eq!(total[25], "USD", "budget_currency");
+    assert_eq!(total[26], "40.000", "accrued_cost = 0.5 * 80");
+    assert_eq!(total[27], "", "no unknown rules");
+    // Per-rule rows leave the cost-budget columns empty.
+    let rule_row: Vec<&str> = lines[1].split(',').collect();
+    assert_eq!(rule_row[24], "");
+    assert_eq!(rule_row[25], "");
 }

@@ -787,6 +787,13 @@ Limits worth knowing before comparing numbers:
   submission, or a rule blocked behind a failure stays marked. The ledger
   therefore reports a cluster no-op as `rules_executed: 0` rather than
   recycling the earlier run's benchmarks.
+- **CPU accounting is whole seconds, so a `cpu_second_rate` budget is
+  coarse here.** The schedulers' CPU fields (`TotalCPU`, `resources_used.cput`,
+  `cpu`) carry whole-second resolution — sub-second precision truncates — so a
+  rule whose CPU time is under a second reports `0` and contributes nothing to
+  a `cpu_second_rate` budget, even under a microscopic cap. Price a cluster
+  budget with `gb_second_rate` (`MaxRSS` × wall time) when short rules must be
+  counted (see [Cost budgets](resource-tuning.md#cost-budgets-max_cost)).
 - **Reconcile with an independent export.** `--resource-ledger --acct
   <sacct.csv>` (JSON only — CSV has no reconciliation columns, so
   `-f csv` + `--acct` fails closed as a usage error) reduces the CSV to the rules that executed in this run (a
@@ -833,6 +840,16 @@ prints a warning and the run proceeds (`-j` is dropped silently):
 | `--max-threads` / `--max-memory` | Warned and dropped — per-rule `[resources]` and the `[cluster]` profile drive scheduler limits; `[resource_budget]` performs the pre-submit check. |
 | `-j` / `--jobs` | Silently inapplicable — cluster concurrency is governed by `max_submitted` (the profile key or `--max-submitted`), clamped by `[resource_budget] max_jobs`. |
 | `--skip-env-setup`, `--ai-recover` | Accepted for command-line parity (warned, issue #136): environments are prepared inside each job script, and AI recovery does not run on the cluster path. |
+
+A declared `[resource_budget] max_cost` table **is** enforced on the cluster
+path (issue #1400): it does not consume a `run` flag, so it is neither warned
+nor dropped. The same ledger-based accrual that stops local dispatch stops
+**new** cluster submissions once the accrued cost reaches the cap — jobs
+already submitted run to completion, and the run ends with the structured
+status `cost_budget_exceeded` (see [Resource Budgets](../how-to/resource-tuning.md#cost-budgets-max_cost)
+and [`report` → Cost accrual](../commands/report.md#cost-accrual)). The
+`max_threads`/`max_memory`/`max_jobs` caps keep their separate pre-submit
+check.
 
 `--skip-ref-build` is accepted on the cluster path and is a no-op there by
 construction: the reference-build step runs only on the local execution

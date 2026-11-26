@@ -58,6 +58,12 @@ impl ResourceLedger {
                 rule.source.note.clone().unwrap_or_default(),
                 raw_fields_cell(&rule.source.raw_fields),
                 rule.recorded_as.clone().unwrap_or_default(),
+                // Cost-budget columns are a run-level view (issue #1400):
+                // per-rule rows leave them empty, the TOTAL row carries them.
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
                 String::new(),
             ];
             out.push_str(&csv_row(&row));
@@ -90,6 +96,20 @@ impl ResourceLedger {
             String::new(),
             String::new(),
             String::new(),
+            opt_f64(self.budget.as_ref().map(|b| b.amount)),
+            self.budget
+                .as_ref()
+                .map(|b| b.currency.clone())
+                .unwrap_or_default(),
+            self.cost_accrual
+                .as_ref()
+                .and_then(|a| a.accrued)
+                .map(|v| format!("{v:.3}"))
+                .unwrap_or_default(),
+            self.cost_accrual
+                .as_ref()
+                .map(|a| a.unknown_rules.join(";"))
+                .unwrap_or_default(),
             incomplete_metrics(totals).join(";"),
         ];
         out.push_str(&csv_row(&total_row));
@@ -104,7 +124,14 @@ impl ResourceLedger {
 /// `peak_memory_bytes`) keep CSV and JSON shapes aligned even though no
 /// backend reports them yet; `source_raw_fields` is the same key-ordered raw
 /// map JSON carries, serialized as compact JSON (task-7c M-4).
-pub const CSV_HEADER: [&str; 25] = [
+///
+/// The four cost-budget columns (`budget_amount`, `budget_currency`,
+/// `accrued_cost`, `cost_unknown_rules`) are a run-level view (issue #1400):
+/// per-rule rows leave them empty and the `TOTAL` row carries them. They are
+/// empty unless the workflow declared `[resource_budget] max_cost`, and
+/// `accrued_cost` stays empty (never `0`) when a rate's input metric is
+/// missing — `cost_unknown_rules` names the executed rules it could not cost.
+pub const CSV_HEADER: [&str; 29] = [
     "record_type",
     "rule",
     "status",
@@ -129,6 +156,10 @@ pub const CSV_HEADER: [&str; 25] = [
     "source_note",
     "source_raw_fields",
     "recorded_as",
+    "budget_amount",
+    "budget_currency",
+    "accrued_cost",
+    "cost_unknown_rules",
     "incomplete_metrics",
 ];
 

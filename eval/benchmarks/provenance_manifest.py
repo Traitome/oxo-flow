@@ -529,6 +529,46 @@ def _implementation_plan_entry() -> dict:
     }
 
 
+def _cost_budget_plan_entry() -> dict:
+    """Provenance for the measured cluster row in the cost-budget plan (#1400).
+
+    The plan's "Cluster verification" section quotes the fr-cluster control /
+    treatment runs. The measured table of record is
+    ``docs/superpowers/audits/cost-budget-enforcement-2026-11-26.md``; this
+    entry names the branch base that added those numbers and SHA-256-pins the
+    committed evidence artifact they live in.
+    """
+    return {
+        "source_commit": "8e6abda9",
+        "generator_command": (
+            "oxo-flow run cb1400-minimal.oxoflow --profile fr-test "
+            "(SLURM partition TEST; control without max_cost, treatment with "
+            "amount = 1e-7 USD + gb_second_rate = 1.0)"
+        ),
+        "host": {
+            "os": "Linux (SLURM cluster)",
+            "cpu": "fr cluster, partition TEST",
+            "note": "fr @ 202.197.87.243:8808, user wangsx, 2026-11-26",
+        },
+        "tool_versions": {
+            "python3": "3.12.4",
+            "oxo-flow": "0.32.0",
+        },
+        "inputs": [
+            {
+                "path": "docs/superpowers/audits/cost-budget-enforcement-2026-11-26.md",
+                "sha256": "ec73bf0ee628697209ed47514406ca643bd0b893b879deef87b11065bc38eeed",
+            }
+        ],
+        "note": (
+            "Pins the cluster-verification row (control completed 3/3; treatment "
+            "cost_budget_exceeded with only step1.txt written). Attribution "
+            "provenance only: the raw run artifacts and their numbers live in "
+            "the audit file above and are not re-derived here."
+        ),
+    }
+
+
 def build_manifest() -> dict:
     """Build the manifest from the recorded (pinned) provenance of this wave."""
     cohort_entry = {
@@ -601,6 +641,9 @@ def build_manifest() -> dict:
                 {"synthetic_fixture_rng": 999},
                 "eval/benchmarks/snapshots/sus_survey_harness_check.md",
             )
+        ),
+        "docs/superpowers/plans/2026-11-26-cost-budget-enforcement.md": (
+            _cost_budget_plan_entry()
         ),
     }
     return {

@@ -50,7 +50,7 @@ reference_dir = "..."   # Optional: base directory for auto-derived reference pa
 [[values]]          # Optional: named value lists for parameter wildcards
 [metadata]          # Optional: per-sample metadata columns ({meta.<column>})
 [workflow.metadata_schema] # Optional: validated contract for the metadata table (META-*)
-[resource_budget]   # Optional: resource caps (max_jobs clamps concurrency; max_threads/max_memory cap both local runs and cluster submissions)
+[resource_budget]   # Optional: resource caps (max_jobs clamps concurrency; max_threads/max_memory cap both local runs and cluster submissions; max_cost stops new dispatch at a spend cap)
 [env_groups]        # Optional: named reusable environment specs
 [resource_groups]   # Optional: shared resource pools (API limits, DB connections)
 [wildcard_constraints] # Optional: regex patterns to constrain wildcard values
@@ -1229,6 +1229,72 @@ oxo-flow tracks declared resources for scheduling but does not strictly enforce 
 - Scheduler enforces limits - jobs requesting more than allocated will fail
 - No submit-host capacity warnings: the job runs on a scheduler node, so the
   submit host's RAM/thread count is not the relevant ceiling
+
+### Cost budget (`[resource_budget] max_cost`)
+
+`[resource_budget]` also carries an optional spend cap that turns the
+resource ledger (issue #1371) from accounting into enforcement (issue
+#1400). `max_cost` stops scheduling **new** ready rules once the run's
+accrued cost reaches the declared amount — it never kills or rolls back a
+rule that is already in flight.
+
+```toml
+[resource_budget]
+max_cost = { amount = 10.0, currency = "USD", cpu_second_rate = 0.0001, gb_second_rate = 0.00002 }
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `amount` | Number | Yes | The spend cap, in `currency`. Must be greater than `0` |
+| `currency` | String | Yes | A non-empty label (ISO-ish, e.g. `"USD"`). Compared for **equality only** — there is no FX conversion |
+| `cpu_second_rate` | Number | No | Cost per accrued CPU-second |
+| `gb_second_rate` | Number | No | Cost per accrued GB-second (`max_rss_bytes / 1e9 * wall_time_secs`, summed per rule) |
+| `on_unknown` | String | No | Behavior when accrual cannot be computed — `"refuse"` (the default, fail-closed) or `"report"` |
+
+At least one rate must be present and **strictly positive** when `max_cost` is
+declared. A rate of `0` is allowed *alongside* a positive one (that metric
+contributes `0` to the accrual), but an absent rate means that metric is
+simply **not priced**, and a budget whose only rates are `0` is rejected — it
+would accrue a constant `0` and never trip.
+
+Cost is accrued from user-declared rates — never vendor billing — over the
+rules that actually executed in the current invocation:
+
+```text
+accrued = cpu_second_rate * sum(rule.cpu_seconds)
+        + gb_second_rate   * sum(max_rss_bytes/1e9 * wall_time_secs)
+```
+
+**Unknown is never zero.** If a configured rate depends on a metric that any
+executed rule did not report, the accrual is `null` (never `0`) and the
+offending rule names are listed. A budgeted run then either refuses
+(`on_unknown = "refuse"`, the fail-closed default) or keeps running and
+reports the unbounded residual (`on_unknown = "report"`). Under `"report"`
+the cap does **not** bind while the accrual is unknown — the run continues to
+dispatch, and the unknown residual is surfaced only in the ledger and the run
+summary, so it is never silently ignored but is also not enforced. A currency
+mismatch between the budget and a rule's own reported cost is **always**
+fail-closed.
+
+Enforcement happens at the scheduler dispatch gate — the same place the
+disk-pressure guard withholds new work:
+
+- When `accrued >= limit` (or accrual is unknown under `refuse`), no new
+  ready rule is dispatched. In-flight rules run to completion; they are not
+  killed or rolled back.
+- Once nothing is in flight and no new work may dispatch, the run aborts
+  observably with the structured run status `cost_budget_exceeded` — the
+  same shape as the disk-pressure Hold abort: the checkpoint is saved, a
+  message names the method, the accrued amount (or "unknown"), the cap, and
+  any unknown residual, then the run exits non-zero.
+- A workflow with no `max_cost` behaves byte-identically to before.
+- The cluster path (`run --profile`) enforces the same accrual and stops new
+  submissions at the cap.
+
+See [Resource budgets](../how-to/resource-tuning.md#resource-budgets) for
+the operational walk-through and
+[`report` → Resource ledger](../commands/report.md#resource-ledger-resource-ledger)
+for the `budget` / `cost_accrual` fields the ledger surfaces.
 
 ### Platform Detection
 

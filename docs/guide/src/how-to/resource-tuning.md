@@ -196,6 +196,71 @@ The per-rule sentence above applies only to `max_threads`/`max_memory`: a
 cap on jobs is a total, so there is no "single rule exceeds it" condition —
 the budget throttles how much runs at once instead.
 
+### Cost budgets (`max_cost`)
+
+`max_threads`, `max_memory`, and `max_jobs` all cap a rule's *capability* —
+how many threads, how much memory, how many jobs at once. The optional
+`max_cost` table caps *spend* instead: it stops the engine from scheduling
+**new** ready rules once the run's accrued cost reaches the declared amount
+(issue #1400). It is built on the normalized resource ledger (issue #1371)
+using **user-declared rates** — never vendor billing, and never a price
+catalog.
+
+```toml
+[resource_budget]
+max_cost = { amount = 10.0, currency = "USD", cpu_second_rate = 0.0001, gb_second_rate = 0.00002 }
+```
+
+- `amount` (number, required, > 0) — the cap, in `currency`.
+- `currency` (string, required, non-empty) — a label; compared for
+  **equality only**, with no FX conversion.
+- `cpu_second_rate` (number, optional) — cost per accrued CPU-second.
+- `gb_second_rate` (number, optional) — cost per accrued GB-second
+  (`max_rss_bytes / 1e9 * wall_time_secs`, summed per rule).
+- `on_unknown` (string, optional, default `"refuse"`) — behavior when
+  accrual cannot be computed: `"refuse"` (fail-closed) or `"report"`.
+
+At least one rate must be present and strictly positive; a rate of `0` is
+allowed alongside a positive one (that metric contributes `0`), while a
+missing rate means that metric is not priced. A budget whose only rates are
+`0` is rejected — it would accrue a constant `0` and never trip.
+Cost is accrued over the rules that actually executed in this invocation:
+
+```text
+accrued = cpu_second_rate * sum(rule.cpu_seconds)
+        + gb_second_rate   * sum(max_rss_bytes/1e9 * wall_time_secs)
+```
+
+**Unknown is never zero.** If a configured rate depends on a metric that any
+executed rule did not report, `accrued` is `null` (never `0`) and the
+offending rule names are listed. A budgeted run then either refuses
+(`on_unknown = "refuse"`, the fail-closed default) or keeps running and
+reports the unbounded residual (`"report"`). Under `"report"` the cap does
+**not** bind while accrual is unknown — dispatch continues, and the unknown
+residual is surfaced in the ledger and run summary rather than enforced. A
+currency mismatch between the budget and a rule's own reported cost is
+**always** fail-closed.
+
+- **Local** (`oxo-flow run`): enforcement happens at the scheduler dispatch
+  gate — the same place the disk-pressure guard withholds new work. When
+  `accrued >= limit` (or accrual is unknown under `refuse`), no new ready
+  rule is dispatched. In-flight rules run to completion; they are **not**
+  killed or rolled back. Once nothing is in flight and no new work may
+  dispatch, the run aborts observably with the structured run status
+  `cost_budget_exceeded`, naming the method, the accrued amount (or
+  "unknown"), the cap, and any unknown residual, then exits non-zero.
+- **Cluster** (`oxo-flow run --profile <name>`): the same accrual stops new
+  submissions at the cap.
+- A workflow with no `max_cost` behaves byte-identically to before.
+
+Because no run metrics exist before execution, plan-time cost is
+**unestimable**: `dry-run`/`validate` report the declared budget but never
+fabricate an estimate. See
+[Workflow Format → Cost budget](../reference/workflow-format.md#cost-budget-resource_budget-max_cost)
+for the field table and
+[`report` → Resource ledger](../commands/report.md#resource-ledger-resource-ledger)
+for the ledger's `budget`/`cost_accrual` fields.
+
 ## CPU Oversubscription Warning
 
 Thread auto-detection is intentionally generous: the scheduling pool can

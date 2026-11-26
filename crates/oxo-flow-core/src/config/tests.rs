@@ -11232,6 +11232,7 @@ fn resource_budget_caps_are_a_hard_local_ceiling() {
         max_threads: Some(16),
         max_memory: Some("64G".to_string()),
         max_jobs: None,
+        max_cost: None,
     };
     let caps = budget.effective_caps(Some(32), Some(131072)).unwrap();
     assert_eq!(caps.max_threads, Some(16));
@@ -11265,6 +11266,7 @@ fn resource_budget_rejects_unreadable_or_zero_caps() {
         max_threads: None,
         max_memory: Some("lots".to_string()),
         max_jobs: None,
+        max_cost: None,
     };
     let err = bad.effective_caps(None, None).unwrap_err().to_string();
     assert!(

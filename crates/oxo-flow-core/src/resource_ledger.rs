@@ -70,6 +70,8 @@
 //! state renders byte-identical JSON/CSV. No timestamp is minted at render
 //! time: `started_at`/`finished_at` come from the recorded rule runs.
 
+use crate::config::CostBudget;
+use crate::cost_budget::CostAccrual;
 use crate::error::{OxoFlowError, Result};
 use crate::executor::checkpoint::CheckpointState;
 use serde::{Deserialize, Serialize};
@@ -423,6 +425,17 @@ pub struct ResourceLedger {
     pub run: LedgerRun,
     /// Per-rule records, sorted by rule name.
     pub rules: Vec<LedgerRule>,
+    /// The workflow's declared `[resource_budget] max_cost`, when present
+    /// (issue #1400). Absent for every workflow that declares none, so the
+    /// JSON document is byte-identical to a pre-#1400 ledger.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget: Option<CostBudget>,
+    /// Cost accrual against `budget`, computed from the same per-rule records
+    /// (issue #1400). `accrued` is `None` (never `0`) when a configured
+    /// rate's input metric is missing; `unknown_rules` names the executed
+    /// rules it could not cost. Present only alongside `budget`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_accrual: Option<CostAccrual>,
 }
 
 /// Build the ledger from a checkpoint.
@@ -474,6 +487,27 @@ pub fn build_resource_ledger(
             conflicts,
         },
         rules,
+        budget: None,
+        cost_accrual: None,
+    }
+}
+
+impl ResourceLedger {
+    /// Attach the workflow's declared cost budget and the cost accrued
+    /// against it (issue #1400).
+    ///
+    /// `None` leaves both fields unset, so a workflow without
+    /// `[resource_budget] max_cost` renders the exact pre-#1400 document.
+    /// Per-rule accrual reuses the canonical [`crate::cost_budget::accrue_cost`]
+    /// over this ledger's own rule records (reuse, never retype), and only
+    /// rules that actually executed contribute — unknown is never zero, so an
+    /// executed rule missing a rate's input metric leaves `accrued` `None`
+    /// and names itself in `unknown_rules`.
+    #[must_use]
+    pub fn with_cost_budget(mut self, budget: Option<&CostBudget>) -> Self {
+        self.budget = budget.cloned();
+        self.cost_accrual = budget.map(|b| crate::cost_budget::accrue_cost(&self.rules, b));
+        self
     }
 }
 
@@ -520,6 +554,16 @@ fn is_executed(status: &str) -> bool {
 /// so it does not participate in executed-rule counts or completeness.
 fn actually_executed(rule: &LedgerRule) -> bool {
     is_executed(&rule.status) && rule.recorded_as.is_none()
+}
+
+/// Public predicate exposing `actually_executed` so other modules (the cost
+/// budget in [`crate::cost_budget`], issue #1400) that must count the *same*
+/// set of executed rules share the one definition instead of retyping the
+/// status/`recorded_as` check (engineering invariant: don't mirror semantics —
+/// share them).
+#[must_use]
+pub fn rule_actually_executed(rule: &LedgerRule) -> bool {
+    actually_executed(rule)
 }
 
 /// Terminal status for one rule, preferring the recorded run status (it can

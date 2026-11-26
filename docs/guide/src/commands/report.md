@@ -495,6 +495,24 @@ the run directory no longer contains one.
       {"backend": "slurm", "tool": "sacct", "raw_fields": {"MaxRSS": "1G"}}
     ]
   },
+  "budget": {
+    "amount": 10.0,
+    "currency": "USD",
+    "cpu_second_rate": 0.0001,
+    "gb_second_rate": 0.00002
+  },
+  "cost_accrual": {
+    "currency": "USD",
+    "limit": 10.0,
+    "cpu_seconds": 5700.0,
+    "gb_seconds": 772.8,
+    "cpu_cost": 0.57,
+    "gb_cost": 0.015456,
+    "accrued": 0.585456,
+    "unknown_rules": [],
+    "method": "cpu_second_rate * cpu_seconds + gb_second_rate * (max_rss_bytes/1e9 * wall_time_secs)",
+    "on_unknown": "refuse"
+  },
   "rules": [
     {
       "rule": "align",
@@ -519,7 +537,9 @@ the run directory no longer contains one.
 Unknown fields are omitted from JSON (`run.conflicts` is omitted when
 empty; `run.scheduler_totals`, `run.scheduler_source`, and
 `run.reconciliation` when no raw export was given); the example shows only
-recorded values.
+recorded values. `budget` and `cost_accrual` appear only when the
+checkpoint's workflow declared a `[resource_budget] max_cost` table (see
+[Cost accrual](#cost-accrual) below).
 
 Per rule: `rule`, `status` (`completed`, `failed`, `cancelled`,
 `timed_out`, `skipped`, or `unknown` for an interrupted attempt),
@@ -573,10 +593,14 @@ left a synthetic marker. An old success's wall/CPU never describes the
 failed attempt, and the run totals sum only the current attempt.
 
 No supported backend reports GPU-seconds, user/system CPU split, a
-control-plane peak-memory metric, or a price today, so `gpu_seconds`,
-`user_seconds`, `system_seconds`, `peak_memory_bytes`, and `cost` are
-always absent. The schema reserves their shape; it never invents an amount
-or a currency.
+control-plane peak-memory metric, or a price, so `gpu_seconds`,
+`user_seconds`, `system_seconds`, `peak_memory_bytes`, and the per-rule
+`cost` are always absent. The schema reserves their shape; it never invents
+an amount or a currency. A *declared* rate is a different thing: when a
+workflow sets `[resource_budget] max_cost`, the ledger derives an
+**accrued** amount from the recorded metrics using the operator's own rates
+(see [Cost accrual](#cost-accrual)) — that is the run's own declaration
+priced against its own measurements, not a vendor-billing figure.
 
 #### Additive vs peak
 
@@ -590,6 +614,40 @@ same bytes. `rules_total` counts every rule the checkpoint mentions;
 up-to-date skip are excluded (completion bookkeeping, not execution). A
 `*_complete` flag says whether every executed rule reported the metric, so a
 partial sum is never presented as a full one.
+
+#### Cost accrual
+
+When the checkpoint's workflow declared a `[resource_budget] max_cost` table
+(issue #1400), the ledger prices its own recorded metrics against the
+operator's declared rates and adds two objects to the JSON document (and a
+column group to the CSV — see [CSV format](#csv-format)):
+
+- `budget` echoes the declaration: `amount`, `currency`,
+  `cpu_second_rate` and/or `gb_second_rate`, and `on_unknown`.
+- `cost_accrual` is the derived result: `currency`, `limit` (the `amount`),
+  the summed `cpu_seconds` and `gb_seconds`, the per-rate contributions
+  `cpu_cost`/`gb_cost`, the total `accrued`, `method` (a stable string
+  naming the rates used), `on_unknown`, and `unknown_rules` — the names of
+  executed rules whose metric a configured rate depends on but which did not
+  report it.
+
+The accrual formula is exactly:
+
+```text
+accrued = cpu_second_rate * sum(rule.cpu_seconds)
+        + gb_second_rate   * sum(max_rss_bytes/1e9 * wall_time_secs)
+```
+
+`gb_seconds` needs both `max_rss_bytes` and `wall_time_secs` for every
+executed rule; `cpu_seconds` needs the CPU metric. **Unknown is never
+zero:** when a configured rate depends on a metric some executed rule did
+not report, `accrued` is `null` (never `0`) and `unknown_rules` names the
+offenders — the ledger reports the unbounded residual rather than a
+fictitious number. `currency` is compared for equality only; a mismatch
+between the budget and a rule's own reported cost is fail-closed, never a
+converted figure. A legacy checkpoint without `resource_usage` has no
+measured metrics at all, so accrual is unknown and `unknown_rules` lists
+every executed rule.
 
 #### Per-backend sources
 
@@ -657,8 +715,19 @@ record_type,rule,status,wall_time_secs,cpu_seconds,user_seconds,system_seconds,
 max_rss_bytes,peak_memory_bytes,io_read_bytes,io_write_bytes,
 scheduler_wait_secs,nodes,cores,gpu_seconds,cost_amount,cost_currency,
 cost_method,source_backend,source_tool,source_version,source_note,
-source_raw_fields,recorded_as,incomplete_metrics
+source_raw_fields,recorded_as,budget_amount,budget_currency,accrued_cost,
+cost_unknown_rules,incomplete_metrics
 ```
+
+The four cost-budget columns (`budget_amount,budget_currency,accrued_cost,
+cost_unknown_rules`, issue #1400) sit between `recorded_as` and
+`incomplete_metrics`. Like the other run-level fields they are filled on the
+`TOTAL` row and empty on per-rule rows. They are empty unless the workflow
+declared a `[resource_budget] max_cost` table. `accrued_cost` is empty when
+accrual is not computable (the JSON `accrued` is `null`; see
+[Cost accrual](#cost-accrual)) and `cost_unknown_rules` is a compact list of
+the offending rule names. A workflow without `max_cost` emits the same
+columns, all four empty.
 
 Unknown values are empty cells. Seconds render with millisecond precision
 (`10.000`); bytes are integers. The reserved metric columns
