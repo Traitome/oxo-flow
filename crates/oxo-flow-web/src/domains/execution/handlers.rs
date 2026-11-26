@@ -1347,6 +1347,11 @@ pub async fn create_run(
                 config_overrides: validated_overrides,
                 allow_protected_drift: req.allow_protected_drift.unwrap_or(false),
                 provenance: req.provenance.unwrap_or(false),
+                // Create is a plain `run`, not a continuation: it keeps the
+                // historical size+mtime freshness gate by design (issue
+                // #1426). Strict manifest verification belongs to the retry
+                // path, which reuses another run's checkpoint.
+                verify_outputs: false,
                 // Create never carries a from-rule origin: a fresh run has
                 // no checkpoint to invalidate. Mid-chain re-entry lives on
                 // the retry path only (issue #1017).
@@ -2188,12 +2193,14 @@ pub async fn retry_run(
     // subsumes them (the from-rule itself is always re-executed, and every
     // transitive dependent is invalidated before the freshness gate runs).
     //
-    // Without `from_rule`, the spawn must match the plan `compute_retry_plan`
-    // returned: `will_skip` is non-empty exactly when `skip_succeeded` is
-    // set, and `--rerun` force-re-executes every rule (force_rerun in the
-    // CLI), silently contradicting that promise — a retry of one failed
+    // Without `from_rule`, the spawn must follow the reuse decision
+    // `compute_retry_plan` returned: `will_skip` is non-empty exactly when
+    // `skip_succeeded` is set, so `--rerun` (which force-re-executes every
+    // rule) would silently contradict that skip set — a retry of one failed
     // rule re-ran all succeeded ones too (live-verified). The mapping lives
-    // in `retry_spawn_flags` so the promise and the spawn share one source.
+    // in `retry_spawn_flags` so the plan and the spawn share one decision.
+    // The skip set is advisory: the spawn always carries `--verify-outputs`,
+    // so strict manifest verification can only expand the executed set.
     let (resume_failed, rerun) = service::retry_spawn_flags(from_rule.is_some(), skip_succeeded);
 
     // Same workdir → checkpoint-driven partial re-execution.
@@ -2224,6 +2231,14 @@ pub async fn retry_run(
             // Checksums are recorded by the original create request only;
             // resume inherits whatever the checkpoint carries.
             provenance: false,
+            // Issue #1426: a retry is a continuation of the predecessor run
+            // in its workdir, so the rules the plan keeps (will_skip) must
+            // still have their recorded output manifests verified before
+            // reuse — a retry of a run whose output was damaged after
+            // completion must not silently reuse it. Unconditional on the
+            // path: with --rerun every rule executes (the flag is a no-op),
+            // while --resume-failed and --from-rule reuse checkpointed rules.
+            verify_outputs: true,
             // Issue #1017: forward the from-rule origin so the CLI's
             // closure invalidation runs before the freshness gate.
             from_rule,
