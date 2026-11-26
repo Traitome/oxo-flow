@@ -12,6 +12,10 @@ theme:
   name: material
   logo: assets/logo.svg
   favicon: assets/logo.svg
+  # Local partial overrides (docs/guide/overrides/). Currently just
+  # partials/source.html, which renders the header version/stars from
+  # build-time values instead of a fragile per-visitor api.github.com call.
+  custom_dir: overrides
 
   font:
     text: Inter
@@ -108,6 +112,19 @@ extra:
     # frozen version, `latest` aliases the newest release, main pushes
     # update `dev`. The Material theme renders the version selector.
     provider: mike
+  # Header source-widget facts (see overrides/partials/source.html). Rendered
+  # at BUILD time from these values so readers never depend on a per-visitor
+  # anonymous api.github.com call (which 403s on a busy network and is frozen
+  # for the tab session by Material's `__source` sessionStorage cache).
+  #
+  # The docs deploy job (ci.yml -> deploy-pages) exports both variables from an
+  # AUTHENTICATED `gh api` call before running mike. The `!ENV` defaults are
+  # deliberately EMPTY (never hard-coded numbers that would silently drift):
+  # an unset value simply omits that fact, so a local or fork build shows only
+  # the icon + repo name.
+  source:
+    version: !ENV [OXO_FLOW_DOCS_SOURCE_VERSION, ""]
+    stars: !ENV [OXO_FLOW_DOCS_SOURCE_STARS, ""]
   social:
     - icon: fontawesome/brands/github
       link: https://github.com/Traitome/oxo-flow
