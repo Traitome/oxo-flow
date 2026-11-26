@@ -83,9 +83,12 @@ verified `ok: true` with 42 events. The orphaned rule process was terminated
 and the test row marked failed manually for cleanup.
 
 This is a measured crash-recovery gap, not a correctness failure of the
-chain. Fixing it needs an owner lease/heartbeat (or an explicit
-single-instance startup reconciliation) so a second live instance's runs are
-not misclassified; that is a design follow-up, not implemented here.
+chain. The restarted instance can still cancel the ghost through
+`POST /api/runs/{id}/cancel` (200, status `cancelled` in a follow-up probe),
+so it is recoverable manually. Automatic reconciliation is what is missing:
+fixing it needs an owner lease/heartbeat (or an explicit single-instance
+startup reconciliation) so a second live instance's runs are not
+misclassified; that is a design follow-up, not implemented here.
 
 ## Multi-user team mode probe (single host)
 
