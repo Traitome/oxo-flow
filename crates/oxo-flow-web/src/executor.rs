@@ -1070,6 +1070,10 @@ const FINALIZE_PREVIEW_TIMEOUT: std::time::Duration = std::time::Duration::from_
 /// because the preview write precedes the terminal commit and a competing
 /// finalizer may write the same path. The unique temp name also keeps a
 /// planted symlink or FIFO in the rule-writable workdir from being opened.
+///
+/// A caller-side timeout may drop this future mid-write, leaving the hidden
+/// temp file behind; it is never renamed into place, so the endpoint still
+/// sees the previous complete document or none at all.
 async fn persist_preview_atomically(run_id: &str, dir: &std::path::Path, json: String) {
     let final_path = dir.join("dry-run-preview.json");
     let tmp_path = dir.join(format!(
