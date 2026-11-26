@@ -1053,14 +1053,14 @@ const EXIT_RECORD_MAX_BYTES: u64 = 64;
 /// run started).
 const EXIT_RECORD_MTIME_TOLERANCE_MS: i64 = 2_000;
 
-/// Bound on reading the run's log head during finalization.
+/// Bound on the finalization-time log read and preview write.
 ///
-/// The read precedes the terminal DB commit (the dry-run preview must exist
+/// Both steps precede the terminal DB commit (the dry-run preview must exist
 /// before the run is observable as terminal), so a hung workdir must not be
-/// able to park the run forever. A 16 MiB local read is well under a second;
-/// on expiry the preview and invalidation summary are skipped and the
-/// terminal write proceeds.
-const LOG_HEAD_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+/// able to park the run forever. A 16 MiB local read and a KB-scale write
+/// are well under a second; on expiry the preview and invalidation summary
+/// are skipped with a warning and the terminal write proceeds.
+const FINALIZE_PREVIEW_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// Atomically persist the dry-run preview in `dir`.
 ///
@@ -1072,13 +1072,10 @@ const LOG_HEAD_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_sec
 /// planted symlink or FIFO in the rule-writable workdir from being opened.
 async fn persist_preview_atomically(run_id: &str, dir: &std::path::Path, json: String) {
     let final_path = dir.join("dry-run-preview.json");
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or_default();
     let tmp_path = dir.join(format!(
-        ".dry-run-preview.json.{}.{nanos}.tmp",
-        std::process::id()
+        ".dry-run-preview.json.{}.{}.tmp",
+        std::process::id(),
+        uuid::Uuid::new_v4()
     ));
     if let Err(e) = tokio::fs::write(&tmp_path, json).await {
         // Not fatal: the run's state and log are unaffected, but the
@@ -1087,6 +1084,8 @@ async fn persist_preview_atomically(run_id: &str, dir: &std::path::Path, json: S
             "Run {run_id}: failed to write dry-run preview temp file {}: {e}",
             tmp_path.display()
         );
+        // `fs::write` can fail after creating the file (partial write).
+        let _ = tokio::fs::remove_file(&tmp_path).await;
         return;
     }
     if let Err(e) = tokio::fs::rename(&tmp_path, &final_path).await {
@@ -1213,7 +1212,7 @@ pub(crate) async fn finalize_run(run_id: &str, exit_code: Option<i32>, log_path:
     // proceed without the preview/summary instead of parking the run.
     let head_path = log_path.to_path_buf();
     let log_content = match tokio::time::timeout(
-        LOG_HEAD_READ_TIMEOUT,
+        FINALIZE_PREVIEW_TIMEOUT,
         tokio::task::spawn_blocking(move || {
             checkpoint_status::read_head_bounded(&head_path, 16 * 1024 * 1024)
         }),
@@ -1225,7 +1224,7 @@ pub(crate) async fn finalize_run(run_id: &str, exit_code: Option<i32>, log_path:
             tracing::warn!(
                 "Run {run_id}: timed out after {}s reading the log head; \
                  the dry-run preview and invalidation summary are unavailable",
-                LOG_HEAD_READ_TIMEOUT.as_secs()
+                FINALIZE_PREVIEW_TIMEOUT.as_secs()
             );
             String::new()
         }
@@ -1248,7 +1247,20 @@ pub(crate) async fn finalize_run(run_id: &str, exit_code: Option<i32>, log_path:
         && let Some(preview) = log.as_deref().and_then(extract_dry_run_preview)
     {
         match serde_json::to_string_pretty(&preview) {
-            Ok(json) => persist_preview_atomically(run_id, dir, json).await,
+            Ok(json) => {
+                if tokio::time::timeout(
+                    FINALIZE_PREVIEW_TIMEOUT,
+                    persist_preview_atomically(run_id, dir, json),
+                )
+                .await
+                .is_err()
+                {
+                    tracing::warn!(
+                        "Run {run_id}: timed out persisting the dry-run preview; \
+                         the terminal write proceeds"
+                    );
+                }
+            }
             Err(e) => {
                 tracing::warn!("Run {run_id}: failed to serialize dry-run preview: {e}");
             }
@@ -2218,5 +2230,42 @@ mod preview_tests {
         let log = "{\"checkpoint_preview\":{\"summary\":{\"will_run\":1,\"will_skip\":0,\"protected_outside\":0},\"plan\":[{\"name\":\"a\",\"status\":\"run-never-completed\",\"cascaded_from\":null}],\"cascade_chains\":[]},\"command\":\"dry-run\",\"execution_order\":[\"a\"]}";
         let preview = extract_dry_run_preview(log).expect("nested preview must parse");
         assert_eq!(preview["command"], "dry-run");
+    }
+
+    /// The workdir is rule-writable: a planted symlink at the final preview
+    /// path must be replaced, not written through, and no temp file may
+    /// linger after a successful persist.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn persists_preview_atomically_replacing_a_planted_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        let victim = dir.path().join("victim.txt");
+        std::fs::write(&victim, "keep me").unwrap();
+        let final_path = dir.path().join("dry-run-preview.json");
+        std::os::unix::fs::symlink(&victim, &final_path).unwrap();
+
+        persist_preview_atomically("run-test", dir.path(), "{\"ok\":true}".to_string()).await;
+
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep me");
+        assert!(
+            std::fs::symlink_metadata(&final_path)
+                .unwrap()
+                .file_type()
+                .is_file()
+        );
+        assert_eq!(
+            std::fs::read_to_string(&final_path).unwrap(),
+            "{\"ok\":true}"
+        );
+        let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.ends_with(".tmp"))
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "temp files left behind: {leftovers:?}"
+        );
     }
 }
