@@ -87,6 +87,21 @@ chain. Fixing it needs an owner lease/heartbeat (or an explicit
 single-instance startup reconciliation) so a second live instance's runs are
 not misclassified; that is a design follow-up, not implemented here.
 
+## Multi-user team mode probe (single host)
+
+Team mode against PostgreSQL (`oxo_users`), fixed admin/user/viewer
+accounts:
+
+- user created 3 runs (all 200), admin created 1 (200), viewer's create was
+  denied (403).
+- The user's run list showed its own 3; the admin's list showed all 4.
+- Audit chain verified `ok: true`, 0 findings, 13 events; the export's
+  distinct `user_id` values were the admin UUID, `user`, and `viewer` (the
+  denied viewer request is audited).
+
+Limits: three fixed accounts, one host, no per-user quota/concurrent-login
+campaign, and no OAuth/API-key path in this probe.
+
 ## Limits
 
 - One host, two processes, one database; no separate hosts or network
