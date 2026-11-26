@@ -601,6 +601,23 @@ pub fn build_cli_args(
     args
 }
 
+/// The exact CLI invocation and the lease guard that monitors it.
+///
+/// Bundled because the executor entry point is already wide (task identity
+/// plus workdir); adding the vector, the memory ceiling, and the guard as
+/// three more parameters exceeds clippy's arity bound. The guard is the one
+/// created at **claim time** by the request handler.
+pub struct RunInvocation {
+    /// The complete CLI argument vector (after the binary).
+    pub cli_args: Vec<std::ffi::OsString>,
+    /// The run's declared total memory (0 = none): the executor turns it
+    /// into an OS ceiling on the spawned process tree where the platform
+    /// supports one (RB-09 / issue #1133).
+    pub memory_limit_mb: u64,
+    /// Claim-time lease guard, moved into the spawn task.
+    pub monitor: crate::infra::run_lease::RunMonitorGuard,
+}
+
 /// Spawns a background task to execute the workflow in a sandboxed workspace.
 ///
 /// `workdir` is the directory the CLI executes in: a persistent per-pipeline
@@ -614,6 +631,7 @@ pub fn spawn_background_run(
     os_user: String,
     workdir: Option<PathBuf>,
     flags: RunFlags,
+    monitor: crate::infra::run_lease::RunMonitorGuard,
 ) {
     // The CLI invocation is derived from RunFlags + the workflow file the
     // caller wrote into the workdir.
@@ -638,30 +656,42 @@ pub fn spawn_background_run(
         auth_type,
         os_user,
         workdir,
-        args,
-        memory_limit_mb,
+        RunInvocation {
+            cli_args: args,
+            memory_limit_mb,
+            monitor,
+        },
     );
 }
 
 /// Spawn a background CLI run with an explicit argument vector (used by
 /// the checkpoint-resume path, issue #81 web exposure).
 ///
-/// `memory_limit_mb` is the run's declared total memory (0 = none): the
-/// executor turns it into an OS ceiling on the spawned process tree where
-/// the platform supports one (RB-09 / issue #1133). The operator-wide
-/// `RLIMIT_CPU` / `RLIMIT_NPROC` ceilings are resolved from the environment
-/// inside the spawn body (0 = install nothing; RB-01a / issue #1129).
+/// The operator-wide `RLIMIT_CPU` / `RLIMIT_NPROC` ceilings are resolved
+/// from the environment inside the spawn body (0 = install nothing; RB-01a
+/// / issue #1129).
 pub fn spawn_background_run_with_args(
     run_id: String,
     username: String,
     auth_type: String,
     os_user: String,
     workdir: Option<PathBuf>,
-    cli_args: Vec<std::ffi::OsString>,
-    memory_limit_mb: u64,
+    invocation: RunInvocation,
 ) {
     tokio::spawn(async move {
+        let RunInvocation {
+            cli_args,
+            memory_limit_mb,
+            monitor,
+        } = invocation;
         info!("Starting background run {} for user {}", run_id, username);
+
+        // The lease guard was created at claim time (before the handler's
+        // pre-spawn staging) and moved here. Taking ownership keeps the
+        // run heartbeated for this task's lifetime; dropping it — normal
+        // return, early error, cancellation, or panic — stops the
+        // heartbeat and leaves the row to the lease TTL.
+        let _monitor = monitor;
 
         let Some(backend) = crate::infra::db::global_backend() else {
             error!(
@@ -682,6 +712,11 @@ pub fn spawn_background_run_with_args(
             }
             Err(e) => {
                 error!("Failed to update status to running for {run_id}: {e}");
+                // Best effort: finalize now so quota is released. If the
+                // database is still unreachable this also fails; the lease
+                // is no longer renewed (the guard drops on return), so the
+                // reaper finalizes the queued row once the TTL expires.
+                mark_run_failed(&run_id).await;
                 return;
             }
             Ok(true) => {}
@@ -717,6 +752,13 @@ pub fn spawn_background_run_with_args(
                 }
             },
         };
+
+        // A retried/resumed run may reuse the predecessor's workdir; a
+        // leftover `.exit-code` from that predecessor must never attribute
+        // this execution (issue #1402 review, HIGH). The mtime check in
+        // `read_exit_record_after` is the second line of defence (the
+        // record predates this row's `started_at`).
+        clear_exit_record(&run_dir);
 
         // Validate OS username to prevent injection in sudo mode
         let os_user_regex = Regex::new(r"^[a-z_][a-z0-9_-]*[$]?$")
@@ -944,9 +986,9 @@ pub fn spawn_background_run_with_args(
                 // Wait for process completion
                 match child.wait().await {
                     Ok(status) => {
-                        // The exit record was only needed for crash recovery —
-                        // this live path reaped the child directly.
-                        let _ = tokio::fs::remove_file(&exit_file).await;
+                        // Keep `.exit-code` until the terminal write succeeds:
+                        // if the database is unavailable, the reaper retries
+                        // from the record instead of losing the true outcome.
                         finalize_run(&run_id, status.code(), &log_file_path).await;
                     }
                     Err(e) => {
@@ -1000,10 +1042,92 @@ async fn run_is_cancelled(run_id: &str) -> bool {
     }
 }
 
+/// Maximum accepted size of a wrapper `.exit-code` record.
+///
+/// The workdir is rule-writable; a rule could leave a huge or special file
+/// at the path. A valid record is an exit code and a newline.
+const EXIT_RECORD_MAX_BYTES: u64 = 64;
+
+/// Filesystem mtime granularity allowance when comparing an exit record to
+/// the run's `started_at` (the wrapper can write in the same clock tick the
+/// run started).
+const EXIT_RECORD_MTIME_TOLERANCE_MS: i64 = 2_000;
+
+/// Read the wrapper's `.exit-code` record, accepting it only when it is a
+/// regular file written for **this** execution.
+///
+/// The record is a stale artefact when a retried/resumed run reuses a
+/// predecessor's workdir: the old `.exit-code` would otherwise attribute a
+/// never-executed run as `completed`. Three guards:
+///
+/// - the run must have a `started_at` (a `queued` row never ran, so it is
+///   never attributed from a file);
+/// - the record's mtime must not predate `started_at` (2 s tolerance for
+///   filesystem granularity);
+/// - the path must be a regular file of bounded size — checked with
+///   `symlink_metadata` (no-follow) before a capped read. A writer-less FIFO
+///   would block a plain read (issue #735); a symlink is rejected.
+///
+/// This is a read-only check: the record is removed only after a terminal
+/// write succeeds (`finalize_run`), so a competing reaper or a transient
+/// database error cannot discard the outcome. Callers on a hot async path
+/// (the reaper) wrap it in `spawn_blocking` because the workdir may be on a
+/// slow shared filesystem; startup recovery runs it synchronously before
+/// serving.
+pub(crate) fn read_exit_record_after(workdir: &std::path::Path, started_at: &str) -> Option<i32> {
+    let started_ms = chrono::DateTime::parse_from_rfc3339(started_at)
+        .ok()?
+        .timestamp_millis();
+    let path = workdir.join(".exit-code");
+    let meta = std::fs::symlink_metadata(&path).ok()?;
+    if !meta.file_type().is_file() || meta.len() > EXIT_RECORD_MAX_BYTES {
+        return None;
+    }
+    let modified_ms = meta
+        .modified()
+        .ok()?
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .ok()?
+        .as_millis() as i64;
+    if modified_ms + EXIT_RECORD_MTIME_TOLERANCE_MS < started_ms {
+        return None;
+    }
+    use std::io::Read as _;
+    let mut text = String::new();
+    std::fs::File::open(&path)
+        .ok()?
+        .take(EXIT_RECORD_MAX_BYTES)
+        .read_to_string(&mut text)
+        .ok()?;
+    text.trim().parse().ok()
+}
+
+/// Delete the wrapper's `.exit-code` record (best-effort).
+///
+/// Called before every spawn (a reused workdir must not carry a predecessor
+/// record into the new execution) and by `finalize_run` after a terminal
+/// write succeeds.
+pub(crate) fn clear_exit_record(workdir: &std::path::Path) {
+    let path = workdir.join(".exit-code");
+    match std::fs::remove_file(&path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => warn!(
+            "Failed to clear stale .exit-code at {}: {e}",
+            path.display()
+        ),
+    }
+}
+
 pub(crate) async fn finalize_run(run_id: &str, exit_code: Option<i32>, log_path: &std::path::Path) {
+    crate::infra::run_lease::unregister_monitored(run_id);
     crate::process_control::unregister(run_id);
     let success = exit_code == Some(0);
     let final_state = final_status_from_exit(success);
+    // The wrapper record lives beside the log; remove it only after a
+    // terminal write succeeds (or the row is already terminal). A failed
+    // write leaves it for the reaper's next attempt.
+    let exit_dir = log_path.parent().map(std::path::Path::to_path_buf);
 
     // Release the run's quota reservation on EVERY terminal path — the
     // cancelled early-return below must not leak the reservation (issue:
@@ -1012,6 +1136,9 @@ pub(crate) async fn finalize_run(run_id: &str, exit_code: Option<i32>, log_path:
 
     if run_is_cancelled(run_id).await {
         info!("Run {run_id} exited after cancel; keeping 'cancelled'");
+        if let Some(dir) = &exit_dir {
+            clear_exit_record(dir);
+        }
         return;
     }
 
@@ -1028,21 +1155,37 @@ pub(crate) async fn finalize_run(run_id: &str, exit_code: Option<i32>, log_path:
         );
         return;
     };
+    // Test seam: force the terminal write to fail so a test can prove the
+    // wrapper record survives for the reaper's retry (issue #1402 review).
+    if std::env::var("OXO_FLOW_TEST_FINALIZE_TERMINAL_FAIL").is_ok_and(|v| v == "1") {
+        error!("Run {run_id}: forced terminal write failure (test seam)");
+        return;
+    }
     match backend
         .record_run_terminal(run_id, final_state, final_state, &end_str)
         .await
     {
-        Ok(true) => {}
+        Ok(true) => {
+            if let Some(dir) = &exit_dir {
+                clear_exit_record(dir);
+            }
+        }
         Ok(false) => {
             // A terminal state (cancel, or a competing finalizer) landed
             // first. Broadcasting a completion/failure for it would lie.
+            // The record is no longer needed: the row is terminal.
             info!("Run {run_id} is already terminal; keeping its persisted state");
+            if let Some(dir) = &exit_dir {
+                clear_exit_record(dir);
+            }
             return;
         }
         Err(e) => {
             // Write failure is logged but not fatal: the run's output is
             // done, so the remaining terminal bookkeeping (broadcast,
-            // webhook) still runs — only the DB row is stale.
+            // webhook) still runs — only the DB row is stale. The wrapper
+            // record is deliberately left in place so the reaper can
+            // attribute the true outcome on its next sweep.
             error!("Failed to update final status for run {run_id} via backend: {e}");
         }
     }
@@ -1111,7 +1254,7 @@ pub(crate) async fn finalize_run(run_id: &str, exit_code: Option<i32>, log_path:
 /// moment the CLI exits — the primary signal) and process liveness (the
 /// fallback for a process killed without a record). Finalization goes
 /// through `finalize_run` so semantics match the live wait path exactly.
-pub fn resume_monitoring(run_id: String, pid: i32, workdir: PathBuf) {
+pub fn resume_monitoring(run_id: String, pid: i32, workdir: PathBuf, started_at: Option<String>) {
     // Crash-recovery re-attach also samples resources and tails the log
     // (issue #82 P1-2 / P1-18).
     if pid > 0 {
@@ -1119,20 +1262,31 @@ pub fn resume_monitoring(run_id: String, pid: i32, workdir: PathBuf) {
     }
     spawn_log_tailer(run_id.clone(), workdir.clone());
     tokio::spawn(async move {
-        let exit_file = workdir.join(".exit-code");
+        // Re-attached runs are monitored by this task, so they heartbeat
+        // (issue #1402 review, MEDIUM); the guard unregisters on exit.
+        let _monitor = crate::infra::run_lease::RunMonitorGuard::new(run_id.clone());
         let log_path = workdir.join("execution.log");
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-            // Stat first: the workdir is rule-writable, and opening a
-            // writer-less FIFO planted at .exit-code would block this task
-            // forever — the run could never leave "running" (issue #735).
-            let exit_readable = tokio::fs::metadata(&exit_file)
-                .await
-                .map(|m| m.is_file())
-                .unwrap_or(false);
-            if exit_readable && let Ok(content) = tokio::fs::read_to_string(&exit_file).await {
-                let code = content.trim().parse::<i32>().ok();
-                finalize_run(&run_id, code, &log_path).await;
+            // Use the same hardened reader as the reaper: no-follow
+            // metadata, size cap, and the mtime-vs-`started_at` check. A
+            // predecessor's stale record in a reused workdir is ignored
+            // (the live CLI will overwrite it when it exits); never blindly
+            // delete the file — the CLI may have just written the live
+            // execution's true outcome (issue #1402 review, LOW).
+            let code = match started_at.as_deref() {
+                Some(started) => {
+                    let workdir = workdir.clone();
+                    let started = started.to_string();
+                    tokio::task::spawn_blocking(move || read_exit_record_after(&workdir, &started))
+                        .await
+                        .ok()
+                        .flatten()
+                }
+                None => None,
+            };
+            if let Some(code) = code {
+                finalize_run(&run_id, Some(code), &log_path).await;
                 break;
             }
             if !crate::process_control::probe_alive(pid) {
@@ -1467,6 +1621,64 @@ async fn mark_run_failed(run_id: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A reused workdir carries its predecessor's `.exit-code`: the record
+    /// predates this run's `started_at` and must not attribute it.
+    #[test]
+    fn exit_record_predating_the_run_is_rejected() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join(".exit-code"), "0").expect("stale record");
+        let started_at = (Utc::now() + chrono::Duration::minutes(5)).to_rfc3339();
+        assert_eq!(
+            read_exit_record_after(dir.path(), &started_at),
+            None,
+            "a record older than the run start belongs to a previous execution"
+        );
+    }
+
+    #[test]
+    fn exit_record_after_start_is_accepted_and_consumed() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let record = dir.path().join(".exit-code");
+        std::fs::write(&record, "0").expect("fresh record");
+        let started_at = (Utc::now() - chrono::Duration::minutes(1)).to_rfc3339();
+        assert_eq!(read_exit_record_after(dir.path(), &started_at), Some(0));
+        assert!(
+            record.exists(),
+            "attribution is read-only; the record is cleared only after a terminal write"
+        );
+
+        clear_exit_record(dir.path());
+        assert!(
+            !record.exists(),
+            "clearing removes the record so a later run cannot reuse it"
+        );
+    }
+
+    #[test]
+    fn exit_record_rejects_oversized_and_non_regular_files() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let record = dir.path().join(".exit-code");
+        let started_at = (Utc::now() - chrono::Duration::minutes(1)).to_rfc3339();
+
+        // A 100-byte record parses as 0 after trim but exceeds the size cap.
+        std::fs::write(&record, format!("0{}", " ".repeat(120))).expect("oversized record");
+        assert_eq!(read_exit_record_after(dir.path(), &started_at), None);
+
+        // A symlink is rejected by the no-follow metadata check (unix).
+        #[cfg(unix)]
+        {
+            let target = dir.path().join("real-exit");
+            std::fs::write(&target, "0").expect("target");
+            std::fs::remove_file(&record).expect("remove oversized record");
+            std::os::unix::fs::symlink(&target, &record).expect("symlink");
+            assert_eq!(
+                read_exit_record_after(dir.path(), &started_at),
+                None,
+                "a symlink must not be followed"
+            );
+        }
+    }
 
     #[tokio::test]
     async fn wrapper_script_records_exit_code() {

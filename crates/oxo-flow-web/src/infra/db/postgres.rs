@@ -13,6 +13,7 @@
 
 use async_trait::async_trait;
 use sqlx::PgPool;
+use sqlx::postgres::PgPoolOptions;
 use uuid::Uuid;
 
 use super::models;
@@ -59,15 +60,32 @@ pub struct PostgresBackend {
 }
 
 impl PostgresBackend {
+    /// Pool options used by production construction.
+    ///
+    /// `acquire_timeout` bounds every handler's wait for a connection:
+    /// sqlx's 30 s default let an unreachable/exhausted server hold API
+    /// requests (and /api/health) for tens of seconds (issue #1402). The
+    /// live smoke test reuses this helper with `max_connections(1)` to pin
+    /// the bound.
+    fn pool_options() -> PgPoolOptions {
+        PgPoolOptions::new().acquire_timeout(crate::infra::db::DB_ACQUIRE_TIMEOUT)
+    }
+
     /// Create a new `PostgresBackend` with a connection pool.
     pub async fn new(database_url: &str) -> Result<Self, String> {
-        let pool = PgPool::connect(database_url)
+        let pool = Self::pool_options()
+            .connect(database_url)
             .await
             .map_err(|e| format!("Failed to connect to PostgreSQL: {e}"))?;
         Ok(Self { pool })
     }
 
     /// Construct a `PostgresBackend` from an existing connection pool.
+    ///
+    /// Test-only: production construction goes through [`Self::new`], which
+    /// applies the bounded acquire timeout. The live tests use this to build
+    /// a deliberately constrained one-connection pool.
+    #[cfg(test)]
     pub fn from_pool(pool: PgPool) -> Self {
         Self { pool }
     }
@@ -169,6 +187,10 @@ impl PostgresBackend {
         .bind(&run.started_at)
         .bind(&run.finished_at)
         .bind(&run.created_at)
+        // Owner lease (issue #1402): the inserting process owns the run
+        // from the first instant.
+        .bind(crate::infra::run_lease::instance_id())
+        .bind(crate::infra::run_lease::heartbeat_timestamp())
         .bind(guard_value)
         .execute(&self.pool)
         .await
@@ -299,7 +321,11 @@ impl StorageBackend for PostgresBackend {
                 cluster_id TEXT,
                 started_at TEXT,
                 finished_at TEXT,
-                created_at TEXT NOT NULL
+                created_at TEXT NOT NULL,
+                -- Owner lease (issue #1402): see the SQLite twin. NULL only
+                -- on rows written before the lease migration.
+                owner_instance TEXT,
+                heartbeat_at TEXT
             );
 
             CREATE TABLE IF NOT EXISTS run_nodes (
@@ -562,6 +588,19 @@ impl StorageBackend for PostgresBackend {
             .await
             .map_err(|e| format!("PG migration cluster_id: {e}"))?;
 
+        // Owner lease (issue #1402), parity with the SQLite columns.
+        // Historical rows default to NULL and are never reaped; manual
+        // cancellation still works. The partial index is created after the
+        // admission repair below, in this same locked transaction.
+        sqlx::query("ALTER TABLE runs ADD COLUMN IF NOT EXISTS owner_instance TEXT")
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| format!("PG migration owner_instance: {e}"))?;
+        sqlx::query("ALTER TABLE runs ADD COLUMN IF NOT EXISTS heartbeat_at TEXT")
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| format!("PG migration heartbeat_at: {e}"))?;
+
         // Optimistic-concurrency token on pipelines (issue #1136), with the
         // same semantics as the SQLite column: historical rows start at 1.
         sqlx::query(
@@ -686,6 +725,28 @@ impl StorageBackend for PostgresBackend {
         .execute(&mut *tx)
         .await
         .map_err(|e| format!("PG admission index (workdir): {e}"))?;
+
+        // Sweep index for the owner lease (issue #1402). Partial, like the
+        // admission indexes, so terminal history does not bloat it. Built
+        // non-concurrently inside the bootstrapping transaction: a very
+        // large runs table would block writes for the duration at startup
+        // (documented residual; a concurrent build cannot run in a tx).
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_runs_lease ON runs(heartbeat_at) \
+             WHERE status IN ('queued', 'running', 'paused')",
+        )
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| format!("PG run-lease index: {e}"))?;
+        // Heartbeat lookup: owner_instance + the live set (issue #1402
+        // review). The reaper uses the heartbeat_at index above.
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_runs_owner_lease ON runs(owner_instance) \
+             WHERE status IN ('queued', 'running', 'paused')",
+        )
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| format!("PG run-owner lease index: {e}"))?;
 
         // AI config flags are part of the public model as i64 (matching
         // SQLite); PostgreSQL INT4 columns cannot decode into that type.
@@ -1133,6 +1194,8 @@ impl StorageBackend for PostgresBackend {
         .bind(&row.started_at)
         .bind(&row.finished_at)
         .bind(&row.created_at)
+        .bind(crate::infra::run_lease::instance_id())
+        .bind(crate::infra::run_lease::heartbeat_timestamp())
         .execute(&self.pool)
         .await
         .map_err(|e| e.to_string())?;
@@ -1295,10 +1358,16 @@ impl StorageBackend for PostgresBackend {
     }
 
     async fn mark_run_running(&self, id: &str, started_at: &str) -> Result<bool, String> {
+        // The spawner also (re)takes ownership (issue #1402): a queued row
+        // written before the lease migration or by a previous process is
+        // adopted by the process that actually starts the CLI.
         let res = sqlx::query(
-            "UPDATE runs SET status = 'running', phase = 'executing', started_at = $1 WHERE id = $2 AND status = 'queued'",
+            "UPDATE runs SET status = 'running', phase = 'executing', started_at = $1, \
+             owner_instance = $2, heartbeat_at = $3 WHERE id = $4 AND status = 'queued'",
         )
         .bind(started_at)
+        .bind(crate::infra::run_lease::instance_id())
+        .bind(crate::infra::run_lease::heartbeat_timestamp())
         .bind(id)
         .execute(&self.pool)
         .await
@@ -2826,6 +2895,81 @@ impl StorageBackend for PostgresBackend {
         .map_err(|e| e.to_string())?;
         Ok(rows.into_iter().map(|(id,)| id).collect())
     }
+
+    async fn claim_run_owner(
+        &self,
+        run_id: &str,
+        instance_id: &str,
+        heartbeat_at: &str,
+        stale_before: &str,
+    ) -> Result<bool, String> {
+        let res = sqlx::query(
+            "UPDATE runs SET owner_instance = $1, heartbeat_at = $2 \
+             WHERE id = $3 AND status IN ('queued', 'running', 'paused') \
+               AND (owner_instance IS NULL OR owner_instance = $1 \
+                    OR heartbeat_at IS NULL OR heartbeat_at < $4)",
+        )
+        .bind(instance_id)
+        .bind(heartbeat_at)
+        .bind(run_id)
+        .bind(stale_before)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(res.rows_affected() > 0)
+    }
+
+    async fn heartbeat_runs(
+        &self,
+        instance_id: &str,
+        run_ids: &[String],
+        heartbeat_at: &str,
+    ) -> Result<u64, String> {
+        if run_ids.is_empty() {
+            return Ok(0);
+        }
+        // Only the placeholder numbers are generated; every value is bound.
+        let marks = (3..3 + run_ids.len())
+            .map(|i| format!("${i}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "UPDATE runs SET heartbeat_at = $1 \
+             WHERE owner_instance = $2 AND status IN ('queued', 'running', 'paused') \
+               AND id IN ({marks})"
+        );
+        let mut query = sqlx::query(sqlx::AssertSqlSafe(sql))
+            .bind(heartbeat_at)
+            .bind(instance_id);
+        for run_id in run_ids {
+            query = query.bind(run_id);
+        }
+        let res = query.execute(&self.pool).await.map_err(|e| e.to_string())?;
+        Ok(res.rows_affected())
+    }
+
+    async fn stale_run_leases(
+        &self,
+        cutoff: &str,
+        limit: u32,
+    ) -> Result<Vec<models::StaleRunLease>, String> {
+        // heartbeat_at is always written by `run_lease::heartbeat_timestamp`
+        // (UTC RFC 3339 with a fixed `+00:00` suffix), so the TEXT
+        // comparison orders chronologically. Self-owned rows are included;
+        // the reaper filters the ones it is still monitoring.
+        sqlx::query_as::<_, models::StaleRunLease>(
+            "SELECT id, status, workdir, owner_instance, heartbeat_at, started_at FROM runs \
+             WHERE status IN ('queued', 'running', 'paused') \
+               AND owner_instance IS NOT NULL \
+               AND heartbeat_at IS NOT NULL AND heartbeat_at < $1 \
+             ORDER BY heartbeat_at ASC LIMIT $2",
+        )
+        .bind(cutoff)
+        .bind(i64::from(limit))
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| e.to_string())
+    }
 }
 
 /// Read a user's durable quota counters inside (or outside) a transaction.
@@ -2876,18 +3020,46 @@ mod tests {
 
     /// Connect to the smoke-test database, or skip the test cleanly when
     /// `OXO_PG_TEST_URL` is unset (local `make ci` has no PostgreSQL).
-    async fn connect() -> Option<PostgresBackend> {
-        let url = match std::env::var("OXO_PG_TEST_URL") {
-            Ok(u) if !u.trim().is_empty() => u.trim().to_string(),
+    /// The schema is initialized exactly once per test process.
+    ///
+    /// Every smoke test used to call `init()` and then immediately write
+    /// rows, so parallel tests could interleave `CREATE INDEX ON audit_logs`
+    /// (init) with an audit-chain write. PostgreSQL aborted one side with a
+    /// lock-order deadlock (`audit_logs` vs `audit_chain`). Production
+    /// initializes once before serving; this cell gives the tests the same
+    /// shape and keeps the parallel smoke run deterministic.
+    static SCHEMA_READY: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
+
+    /// The disposable live-PostgreSQL URL, or `None` to skip cleanly.
+    fn test_url() -> Option<String> {
+        match std::env::var("OXO_PG_TEST_URL") {
+            Ok(u) if !u.trim().is_empty() => Some(u.trim().to_string()),
             _ => {
                 eprintln!("skipping live-PostgreSQL smoke: OXO_PG_TEST_URL is not set");
-                return None;
+                None
             }
-        };
-        let backend = PostgresBackend::new(&url)
+        }
+    }
+
+    async fn connect() -> Option<PostgresBackend> {
+        let url = test_url()?;
+        // Test-only pool: a longer acquire timeout absorbs a slow shared
+        // tunnel when seven tests open pools at once. The production 5 s
+        // bound is pinned separately by `test_pool_acquire_timeout_is_bounded`;
+        // a shared static pool cannot be used here because a static pool's
+        // connections belong to the first test's runtime, which shuts down.
+        let pool = PgPoolOptions::new()
+            .max_connections(5)
+            .acquire_timeout(std::time::Duration::from_secs(30))
+            .connect(&url)
             .await
             .expect("connect to live PostgreSQL");
-        backend.init().await.expect("schema bootstrap");
+        let backend = PostgresBackend::from_pool(pool);
+        SCHEMA_READY
+            .get_or_init(|| async {
+                backend.init().await.expect("schema bootstrap");
+            })
+            .await;
         Some(backend)
     }
 
@@ -3036,6 +3208,134 @@ mod tests {
             nodes[0].finished_at.as_deref(),
             Some("2026-01-01T00:05:00+00:00")
         );
+    }
+
+    /// Owner-lease storage contract on live PostgreSQL (issue #1402): a
+    /// fresh run is owned and heartbeated by this process, ownership can be
+    /// taken over, and stale selection excludes the current instance.
+    #[tokio::test]
+    async fn test_run_lease_smoke() {
+        let Some(backend) = connect().await else {
+            return;
+        };
+        let user = backend
+            .create_user(&unique_username(), "user", None)
+            .await
+            .expect("create_user");
+        let run = backend
+            .create_run(&sample_run(&user.id))
+            .await
+            .expect("create_run");
+        let instance = crate::infra::run_lease::instance_id();
+        let heartbeat_before: Option<String> =
+            sqlx::query_scalar("SELECT heartbeat_at FROM runs WHERE id = $1")
+                .bind(&run.id)
+                .fetch_one(&backend.pool)
+                .await
+                .expect("read inserted heartbeat");
+        assert!(
+            heartbeat_before.is_some(),
+            "the insert records a heartbeat at admission"
+        );
+
+        assert_eq!(
+            backend
+                .heartbeat_runs(
+                    instance,
+                    std::slice::from_ref(&run.id),
+                    &PostgresBackend::now()
+                )
+                .await
+                .expect("heartbeat_runs"),
+            1,
+            "exactly the targeted live run is renewed"
+        );
+        let heartbeat_after: Option<String> =
+            sqlx::query_scalar("SELECT heartbeat_at FROM runs WHERE id = $1")
+                .bind(&run.id)
+                .fetch_one(&backend.pool)
+                .await
+                .expect("read renewed heartbeat");
+        assert_ne!(
+            heartbeat_before, heartbeat_after,
+            "the targeted run's heartbeat advanced"
+        );
+
+        // A cutoff in the future makes every stored heartbeat stale without
+        // touching the row.
+        let future = (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
+        assert!(
+            backend
+                .claim_run_owner(&run.id, "other-instance", &PostgresBackend::now(), &future)
+                .await
+                .expect("claim_run_owner"),
+            "a stale-owned live run can be re-owned by a recovering instance"
+        );
+        let an_hour_ago = (chrono::Utc::now() - chrono::Duration::hours(1)).to_rfc3339();
+        assert!(
+            !backend
+                .claim_run_owner(
+                    &run.id,
+                    "third-instance",
+                    &PostgresBackend::now(),
+                    &an_hour_ago
+                )
+                .await
+                .expect("live-owner claim"),
+            "a fresh live owner's row cannot be re-owned by a past cutoff"
+        );
+        let stale = backend
+            .stale_run_leases(&future, 1000)
+            .await
+            .expect("stale_run_leases");
+        assert!(
+            stale.iter().any(|row| row.id == run.id),
+            "the stale-looking lease is selected (self-owned rows are filtered by the reaper, not the query)"
+        );
+
+        assert!(
+            backend
+                .claim_run_owner(&run.id, instance, &PostgresBackend::now(), &future)
+                .await
+                .expect("reclaim_run_owner")
+        );
+
+        backend.delete_run(&run.id).await.expect("cleanup run");
+        backend.delete_user(&user.id).await.expect("cleanup user");
+    }
+
+    /// Live regression for the bounded pool acquire (issue #1402 review):
+    /// with the only connection held, a query must fail at the 5 s acquire
+    /// bound instead of hanging for sqlx's 30 s default.
+    #[tokio::test]
+    async fn test_pool_acquire_timeout_is_bounded() {
+        let Some(url) = test_url() else {
+            return;
+        };
+        let pool = PostgresBackend::pool_options()
+            .max_connections(1)
+            .connect(&url)
+            .await
+            .expect("one-connection pool");
+        let held = pool.acquire().await.expect("hold the only connection");
+        let backend = PostgresBackend::from_pool(pool.clone());
+
+        let started = std::time::Instant::now();
+        let result = backend.health().await;
+        let elapsed = started.elapsed();
+        assert!(
+            result.is_err(),
+            "a query with no available connection must fail, not hang: {result:?}"
+        );
+        assert!(
+            elapsed >= std::time::Duration::from_secs(4),
+            "the acquire must actually wait before timing out: {elapsed:?}"
+        );
+        assert!(
+            elapsed < std::time::Duration::from_secs(10),
+            "the acquire must be bounded by the 5 s acquire timeout: {elapsed:?}"
+        );
+        drop(held);
     }
 
     /// The PostgreSQL twin of the SQLite CAS test (RB-07 / #1256): a guarded

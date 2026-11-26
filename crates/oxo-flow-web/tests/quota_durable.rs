@@ -219,6 +219,72 @@ async fn first_admission_over_limit_is_rejected_like_every_other() {
     assert_eq!(usage.used_threads, 2, "usage counts the admitted run");
 }
 
+/// Per-user isolation of the concurrent-run quota (issue #1402 campaign):
+/// one identity at its cap must not consume or block another identity's
+/// allowance, and releasing one identity's run must not move the other's
+/// counters. The quota tables are keyed by `user_id`, so this is the
+/// property a multi-tenant deployment relies on — it was measured live with
+/// two team-mode identities and is pinned here at the storage level.
+#[tokio::test]
+async fn concurrent_run_quota_is_isolated_per_user() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let url = format!("sqlite:{}?mode=rwc", dir.path().join("quota.db").display());
+    let backend = SqliteBackend::new(&url).await.expect("backend");
+    backend.init().await.expect("schema");
+
+    let limits = QuotaConfig {
+        max_concurrent_runs: 1,
+        max_total_threads: 16,
+        max_total_memory_mb: 8192,
+        max_runs_per_day: 50,
+    };
+    let now = 1_800_000_000_000i64;
+
+    // Arrange — user A fills its single concurrent-run slot.
+    let (allowed, _) = backend
+        .quota_admit("a-1", "user-a", 1, 64, &limits, now)
+        .await
+        .expect("A first admit");
+    assert!(allowed);
+
+    // A's second run is rejected at its own cap...
+    let (allowed, usage) = backend
+        .quota_admit("a-2", "user-a", 1, 64, &limits, now)
+        .await
+        .expect("A second admit");
+    assert!(!allowed, "user A is at its concurrent-run cap");
+    assert_eq!(
+        usage.active_runs, 1,
+        "the rejection leaves A's usage unchanged"
+    );
+
+    // ...but user B is unaffected: A's reservation must not be charged to B.
+    let (allowed, usage) = backend
+        .quota_admit("b-1", "user-b", 1, 64, &limits, now)
+        .await
+        .expect("B first admit");
+    assert!(allowed, "user B has its own quota allowance");
+    assert_eq!(usage.active_runs, 1, "B starts from its own zero");
+
+    // Act — release A's run.
+    assert!(backend.quota_release("a-1").await.expect("release A"));
+    let (allowed, _) = backend
+        .quota_admit("a-3", "user-a", 1, 64, &limits, now)
+        .await
+        .expect("A re-admit");
+
+    // Assert — A's slot is free again; B's counters were never touched.
+    assert!(allowed, "A may run again after its release");
+    let b_usage = backend.quota_usage("user-b", now).await.expect("B usage");
+    assert_eq!(b_usage.active_runs, 1, "B's active run is unchanged");
+    assert_eq!(b_usage.used_threads, 1, "B's thread usage is unchanged");
+    let a_usage = backend.quota_usage("user-a", now).await.expect("A usage");
+    assert_eq!(
+        a_usage.active_runs, 1,
+        "A holds exactly its re-admitted run"
+    );
+}
+
 /// Request-level: two concurrent creates under `max_concurrent_runs = 1`
 /// cannot both be admitted. The spawned stub blocks until the test releases
 /// it, so the winner's reservation is still held while the loser is refused.

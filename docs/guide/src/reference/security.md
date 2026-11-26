@@ -215,9 +215,12 @@ predecessor; the head names the chain's end (genesis = seq 0, 64 hex zeros).
 Appends serialize on the backend (SQLite `BEGIN IMMEDIATE`, PostgreSQL
 `FOR UPDATE` on the head), so the sequence cannot gap or duplicate under
 concurrent writers. This is true by construction (the lock is the
-serialization point); the measured PostgreSQL evidence is single-host,
-single-instance PostgreSQL 16.15, and multi-instance deployment remains
-unmeasured.
+serialization point); the measured PostgreSQL evidence is one host — two
+instances on that host and in separate Linux network namespaces produced
+byte-identical exports, and an asymmetric partition plus a crash during an
+uncommitted transaction left a verifiable chain. Separate physical hosts,
+production scale, database media corruption, and cross-host clock skew
+remain unmeasured.
 
 Two admin-only endpoints expose it:
 

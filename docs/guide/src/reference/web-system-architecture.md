@@ -197,7 +197,45 @@ not per user, so a `workspace`-shared pipeline admits one live run across all
 its readers. `retry` and `resume-checkpoint` are the only paths that
 deliberately continue a predecessor's workdir.
 
-Backend-equivalent admission is now asserted, not assumed (`tests/admission_backend_parity.rs`, issue #1312): one shared scenario driver runs the SAME claims through the SAME `claim_run_row` helper against BOTH backends and compares each backend's verdict vector to one canonical contract (workdir-serialized claim; pipeline-serialized claim; concurrent double-claim admits exactly one; a terminal predecessor releases the guard; a zero-affected-rows rejection is `Ok(false)` — the exact input the retry/resume arms map to `409 RUN_NOT_TERMINAL` — never a storage error). The SQLite arm runs unconditionally; the PostgreSQL arm gates on `OXO_PG_TEST_URL` and skips when unset. This proves backend-equal admission VERDICTS for these scenarios in a single process on a single host. It does NOT prove multi-instance deployment, pool exhaustion, network partitions, or crash recovery — those remain unverified (see `docs/superpowers/audits/postgres-ledger-2026-11-19.md`).
+Backend-equivalent admission is now asserted, not assumed (`tests/admission_backend_parity.rs`, issue #1312): one shared scenario driver runs the SAME claims through the SAME `claim_run_row` helper against BOTH backends and compares each backend's verdict vector to one canonical contract (workdir-serialized claim; pipeline-serialized claim; concurrent double-claim admits exactly one; a terminal predecessor releases the guard; a zero-affected-rows rejection is `Ok(false)` — the exact input the retry/resume arms map to `409 RUN_NOT_TERMINAL` — never a storage error). The SQLite arm runs unconditionally; the PostgreSQL arm gates on `OXO_PG_TEST_URL` and skips when unset. This proves backend-equal admission VERDICTS for these scenarios in a single process on a single host. The 2026-11-26 #1402 campaign then measured the operational dimensions on one host: two instances on that host and in separate Linux network namespaces shared admission and the audit chain, a full and an asymmetric outbound partition were survived, connection exhaustion produced bounded structured errors, a clean restart and a `SIGKILL` crash during an uncommitted transaction both recovered, and per-user quota was isolated ([campaign report](../../../superpowers/audits/postgres-two-instance-2026-11-26.md)). Separate physical hosts, production-scale load, per-query network timeouts, database media corruption, and cross-host clock skew remain unmeasured, so no production-parity claim follows.
+
+Runs also carry an **owner lease** (issue #1402): the inserting web process
+records `owner_instance` and `heartbeat_at`. The executor guard
+(`RunMonitorGuard`) is created at claim time in the request handler —
+before pre-spawn materialization and input staging, which can outlast the
+lease — and moved into the local spawn task, the SQLite re-attach, or the
+remote dispatch; the heartbeat renews every 10 s only for runs with a
+registered guard, so a queued row left by a failed pre-spawn step is not
+renewed. A 30 s reaper finalizes a live run whose owner has been silent for
+90 s, attributing the wrapper's `.exit-code` record read-only: only when it
+postdates this run's `started_at` (`completed` for 0), and only for a
+`running` row (`failed` otherwise). The record is removed only after a
+terminal write succeeds (or the row is already terminal), so a transient
+write failure is retried on the next sweep with the outcome preserved.
+Every local spawn clears a predecessor's record first, and remote dispatch
+clears it too before staging, so no predecessor record survives that
+window; the completion pull then brings back the remote run's own record,
+whose mtime comes from the submit host's clock and is therefore not a
+reliable freshness signal under cross-host clock skew (a documented
+residual). This is the automatic
+reconciliation for the measured `kill -9` ghost row. A process never reaps
+a row it is still monitoring, but it does reap its own unmonitored rows (a
+failed pre-spawn step or a failed terminal write), so a single-instance
+deployment recovers without a second server; terminal rows are never
+selected, and rows written before the lease migration (NULL owner) are
+skipped so a rolling upgrade cannot misclassify an old instance's live run.
+Deliberate tradeoffs: the orphaned CLI is not signalled; a live owner that
+cannot reach the database for longer than the TTL can be finalized by
+another instance (the first terminal write wins); lease comparisons assume
+loosely synchronized clocks — a host off by more than half the TTL can reap
+early, and the campaign measured one host only; and a reaper finalization
+is a system reconciliation with no audit row (the chain records API
+mutations by an acting user).
+
+SQLite serving assumes one web process per database file: its startup
+recovery force-adopts live rows from the previous process, so two SQLite
+web processes on the same file would fight over ownership. PostgreSQL is
+the multi-instance backend.
 
 Nothing reclaims those trees automatically: a long-lived server accumulates one
 `users/<u>/runs/<run_id>/` directory per run forever. The manual sweeper is
@@ -294,11 +332,16 @@ FOR UPDATE` on the head row as the first statement of every chain write. Both
 orders are identical across `begin`/`finalize`/`record`, so appends cannot
 deadlock and cannot produce a gap or duplicate `seq`. That is true **by
 construction** — the write lock / row lock is the serialization point. The
-measured PostgreSQL evidence is single-host, single-instance PostgreSQL
-16.15; multi-instance deployment, remote/networked databases, pool
-exhaustion, network partitions, and crash recovery remain unmeasured. (SQLite
-serializes processes sharing the file on one host; a SQLite file on a network
-filesystem is not a supported deployment.) A finalize is idempotent:
+measured PostgreSQL evidence is one host: two instances on that host and two
+instances in separate Linux network namespaces produced byte-identical
+40- and 70-event exports; an asymmetric partition and a `SIGKILL` crash
+during an uncommitted transaction both left a verifiable chain; and a
+connection-exhaustion run verified ([campaign
+report](../../../superpowers/audits/postgres-two-instance-2026-11-26.md)).
+Separate physical hosts, remote/networked databases, production scale,
+database media corruption, and cross-host clock skew remain unmeasured.
+(SQLite serializes processes sharing the file on one host; a SQLite file on a
+network filesystem is not a supported deployment.) A finalize is idempotent:
 the `(audit_id, phase)` unique index admits one terminal event, a repeated
 finalize is a no-op, and the first terminal outcome wins over a conflicting
 later one (documented behavior, not an error). A snapshot

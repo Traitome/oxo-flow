@@ -5,9 +5,46 @@
 //! coupling to axum or any web framework.
 
 use std::sync::OnceLock;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::domains::observability::types::*;
+
+/// Upper bound on the `/api/health` database probe.
+///
+/// The probe must answer a load balancer before its own health timeout, even
+/// when the database is unreachable: a live partition measured 2026-11-26 on
+/// `tx-ubuntu` showed `/api/health` taking 30 s (the sqlx pool acquire
+/// timeout) before reporting `degraded` (issue #1402). This bound keeps the
+/// structured `degraded` body but reports it in seconds, not tens of
+/// seconds. It is deliberately shorter than [`crate::infra::db::DB_ACQUIRE_TIMEOUT`]
+/// so a hung pool is reported as degraded by the health endpoint even while
+/// ordinary queries are still waiting for a connection.
+pub const HEALTH_DB_PROBE_TIMEOUT: Duration = Duration::from_secs(4);
+
+/// Run one database health probe under `timeout`.
+///
+/// Returns `false` on a probe error or a timeout, logging the reason so an
+/// operator can tell a slow database from an unreachable one; the caller
+/// turns `false` into the documented HTTP 200 `status: "degraded"` body.
+/// A timeout is bounded to `timeout` wall-clock: the probe future is dropped
+/// and its pool connection returns to the pool through sqlx's drop handling.
+pub async fn probe_database<F, E>(probe: F, timeout: Duration) -> bool
+where
+    F: std::future::Future<Output = Result<bool, E>>,
+    E: std::fmt::Display,
+{
+    match tokio::time::timeout(timeout, probe).await {
+        Ok(Ok(healthy)) => healthy,
+        Ok(Err(error)) => {
+            tracing::warn!("health: database probe failed: {error}");
+            false
+        }
+        Err(_) => {
+            tracing::warn!("health: database probe exceeded {timeout:?} — reporting degraded");
+            false
+        }
+    }
+}
 
 /// Process start time, initialized on the first observability call so the
 /// uptime reported by `/api/health` and `/api/system` is meaningful even if
@@ -259,5 +296,40 @@ mod tests {
         // previously used sysinfo::System::uptime() and reported host boot
         // time (~27 days) for a server up for hours.
         assert!(uptime_secs() < 3600, "test process just started");
+    }
+
+    #[tokio::test]
+    async fn database_probe_reports_failure_for_error_and_false() {
+        assert!(!probe_database(async { Ok::<bool, String>(false) }, Duration::from_secs(1)).await);
+        assert!(
+            !probe_database(
+                async { Err::<bool, String>("connection refused".into()) },
+                Duration::from_secs(1)
+            )
+            .await,
+            "a probe error must report degraded, not healthy"
+        );
+        assert!(probe_database(async { Ok::<bool, String>(true) }, Duration::from_secs(1)).await);
+    }
+
+    /// The #1402 defect: a partitioned database held `/api/health` for the
+    /// pool's ~30 s acquire timeout. The probe must return `false` within its
+    /// own bound instead of waiting for the database to answer. A short
+    /// timeout keeps the test instant while still proving the timeout fired.
+    #[tokio::test]
+    async fn database_probe_times_out_within_its_bound() {
+        let slow = async {
+            tokio::time::sleep(Duration::from_secs(300)).await;
+            Ok::<bool, String>(true)
+        };
+        let started = Instant::now();
+        assert!(
+            !probe_database(slow, Duration::from_millis(50)).await,
+            "a probe past its bound must report degraded"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "the call must not wait for the database timeout"
+        );
     }
 }

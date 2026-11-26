@@ -288,6 +288,50 @@ async fn storage_backend_contract_round_trips_on_postgres() {
             .await
             .expect("mark run running")
     );
+
+    // Owner lease (issue #1402): the live row is owned and heartbeated by
+    // this process, ownership can be taken over, and stale selection
+    // excludes the current instance. A cutoff in the future makes every
+    // stored heartbeat stale without touching the row.
+    let instance = oxo_flow_web::infra::run_lease::instance_id();
+    assert_eq!(
+        backend
+            .heartbeat_runs(instance, std::slice::from_ref(&run.id), &now())
+            .await
+            .expect("heartbeat runs"),
+        1,
+        "the targeted live run's heartbeat is renewed"
+    );
+    let future = (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
+    assert!(
+        backend
+            .claim_run_owner(&run.id, "other-instance", &now(), &future)
+            .await
+            .expect("claim owner"),
+        "a stale-owned live run can be re-owned by a recovering instance"
+    );
+    let an_hour_ago = (chrono::Utc::now() - chrono::Duration::hours(1)).to_rfc3339();
+    assert!(
+        !backend
+            .claim_run_owner(&run.id, "third-instance", &now(), &an_hour_ago)
+            .await
+            .expect("live-owner claim"),
+        "a fresh live owner's row cannot be re-owned by a past cutoff"
+    );
+    let stale = backend
+        .stale_run_leases(&future, 10)
+        .await
+        .expect("stale leases");
+    assert!(
+        stale.iter().any(|row| row.id == run.id),
+        "the stale-looking lease is selected; the reaper filters monitored ids in-process"
+    );
+    assert!(
+        backend
+            .claim_run_owner(&run.id, instance, &now(), &future)
+            .await
+            .expect("reclaim owner"),
+    );
     backend
         .upsert_run_node(&models::RunNodeRow {
             run_id: run.id.clone(),

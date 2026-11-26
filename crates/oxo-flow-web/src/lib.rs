@@ -461,6 +461,10 @@ pub fn start_background_tasks() {
     executor::init_engine_version_probe();
     spawn_daily_quota_reset();
     spawn_session_cleanup();
+    // Owner leases (issue #1402): renew the heartbeats of this process's
+    // live runs, and finalize runs whose owning process died without
+    // attributing them (the kill -9 ghost row).
+    crate::infra::run_lease::spawn_background_tasks();
 }
 
 static BACKGROUND_TASKS_STARTED: std::sync::atomic::AtomicBool =
@@ -627,7 +631,8 @@ mod effective_bind_host_tests {
     }
 
     /// Both serving entry points call `start_background_tasks`; a second
-    /// call must not double-spawn the quota-reset loop.
+    /// call must not double-spawn the quota-reset, session-cleanup, or
+    /// run-lease loops.
     #[tokio::test]
     async fn background_tasks_start_exactly_once() {
         assert!(!background_tasks_started());

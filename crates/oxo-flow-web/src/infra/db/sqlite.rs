@@ -102,6 +102,11 @@ async fn insert_run_guarded(
     .bind(&run.started_at)
     .bind(&run.finished_at)
     .bind(&run.created_at)
+    // Owner lease (issue #1402): the inserting process owns the run from
+    // the first instant, so a crash before the spawn cannot strand it
+    // unowned.
+    .bind(crate::infra::run_lease::instance_id())
+    .bind(crate::infra::run_lease::heartbeat_timestamp())
     .bind(guard_value)
     .execute(pool)
     .await
@@ -157,6 +162,12 @@ impl SqliteBackend {
                 .map_err(|e| e.to_string())?;
         }
         let is_memory = database_url.contains(":memory:");
+        // Deliberately keep sqlx's default acquire timeout for SQLite: the
+        // measured #1402 hang was a remote PostgreSQL pool, while a local
+        // SQLite pool under parallel test load legitimately waits several
+        // seconds for one of its five connections (a 5 s bound made the
+        // suite flaky). The /api/health probe has its own 4 s bound for
+        // both backends.
         let mut opts = SqlitePoolOptions::new().max_connections(if is_memory { 1 } else { 5 });
         if is_memory {
             opts = opts
@@ -438,6 +449,8 @@ impl SqliteBackend {
                 started_at TEXT,
                 finished_at TEXT,
                 created_at TEXT NOT NULL,
+                owner_instance TEXT,
+                heartbeat_at TEXT,
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
                 FOREIGN KEY (pipeline_id) REFERENCES pipelines(id) ON DELETE CASCADE)"#,
         )
@@ -446,8 +459,8 @@ impl SqliteBackend {
         .map_err(|e| e.to_string())?;
         sqlx::query(
             r#"INSERT INTO runs_migrated
-                (id, user_id, pipeline_id, pipeline_snapshot, workflow_name, status, phase, dry_run, pid, workdir, config_overrides, artifacts_incomplete, cluster_id, started_at, finished_at, created_at)
-                SELECT id, user_id, NULLIF(pipeline_id, ''), pipeline_snapshot, NULL, status, phase, 0, pid, workdir, NULL, NULL, NULL, started_at, finished_at, created_at
+                (id, user_id, pipeline_id, pipeline_snapshot, workflow_name, status, phase, dry_run, pid, workdir, config_overrides, artifacts_incomplete, cluster_id, started_at, finished_at, created_at, owner_instance, heartbeat_at)
+                SELECT id, user_id, NULLIF(pipeline_id, ''), pipeline_snapshot, NULL, status, phase, 0, pid, workdir, NULL, NULL, NULL, started_at, finished_at, created_at, owner_instance, heartbeat_at
                 FROM runs"#,
         )
         .execute(&mut *conn)
@@ -527,6 +540,12 @@ impl StorageBackend for SqliteBackend {
                 started_at TEXT,
                 finished_at TEXT,
                 created_at TEXT NOT NULL,
+                -- Owner lease (issue #1402): the web process that created
+                -- the run renews heartbeat_at; another instance may
+                -- finalize the row once the lease expires. NULL only on
+                -- rows written before this migration.
+                owner_instance TEXT,
+                heartbeat_at TEXT,
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
                 FOREIGN KEY (pipeline_id) REFERENCES pipelines(id) ON DELETE CASCADE
             );
@@ -815,6 +834,13 @@ impl StorageBackend for SqliteBackend {
         // rows default to NULL.
         self.add_column_if_missing("runs", "cluster_id").await;
 
+        // Migration: owner lease (issue #1402). Historical rows default to
+        // NULL and are never reaped (they predate the owning process's
+        // heartbeat; manual cancel still works). The rebuild below copies
+        // both columns, so they must be added before it runs.
+        self.add_column_if_missing("runs", "owner_instance").await;
+        self.add_column_if_missing("runs", "heartbeat_at").await;
+
         // Migration (issue #1136): optimistic-concurrency token on pipelines.
         // Historical rows start at revision 1; every later write increments
         // it by one.
@@ -845,6 +871,31 @@ impl StorageBackend for SqliteBackend {
                 e
             );
         }
+
+        // Sweep index for the owner lease (issue #1402), created after the
+        // legacy runs-table rebuild: that rebuild drops every index on the
+        // old table. Partial so terminal history does not bloat it.
+        if let Err(e) = sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_runs_lease \
+             ON runs(heartbeat_at) WHERE status IN ('queued', 'running', 'paused')",
+        )
+        .execute(&self.pool)
+        .await
+        {
+            tracing::warn!("schema migration: failed to create idx_runs_lease: {e}");
+        }
+        // Heartbeat lookup: owner_instance + the live set (issue #1402
+        // review). The reaper uses the heartbeat_at index above.
+        if let Err(e) = sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_runs_owner_lease \
+             ON runs(owner_instance) WHERE status IN ('queued', 'running', 'paused')",
+        )
+        .execute(&self.pool)
+        .await
+        {
+            tracing::warn!("schema migration: failed to create idx_runs_owner_lease: {e}");
+        }
+
         // Migration: add usage_count to templates if missing
         self.add_column_if_missing("templates", "usage_count INTEGER NOT NULL DEFAULT 0")
             .await;
@@ -1326,6 +1377,8 @@ impl StorageBackend for SqliteBackend {
         .bind(&row.started_at)
         .bind(&row.finished_at)
         .bind(&row.created_at)
+        .bind(crate::infra::run_lease::instance_id())
+        .bind(crate::infra::run_lease::heartbeat_timestamp())
         .execute(&self.pool)
         .await
         .map_err(|e| e.to_string())?;
@@ -1429,10 +1482,17 @@ impl StorageBackend for SqliteBackend {
     }
 
     async fn mark_run_running(&self, id: &str, started_at: &str) -> Result<bool, String> {
+        // The spawner also (re)takes ownership: a queued row created before
+        // the lease migration, or inserted by a previous process in a
+        // rolling upgrade, is adopted by the process that actually starts
+        // the CLI (issue #1402).
         let res = sqlx::query(
-            "UPDATE runs SET status = 'running', phase = 'executing', started_at = ? WHERE id = ? AND status = 'queued'",
+            "UPDATE runs SET status = 'running', phase = 'executing', started_at = ?, \
+             owner_instance = ?, heartbeat_at = ? WHERE id = ? AND status = 'queued'",
         )
         .bind(started_at)
+        .bind(crate::infra::run_lease::instance_id())
+        .bind(crate::infra::run_lease::heartbeat_timestamp())
         .bind(id)
         .execute(&self.pool)
         .await
@@ -3023,6 +3083,81 @@ impl StorageBackend for SqliteBackend {
         .await
         .map_err(|e| e.to_string())?;
         Ok(rows.into_iter().map(|(id,)| id).collect())
+    }
+
+    async fn claim_run_owner(
+        &self,
+        run_id: &str,
+        instance_id: &str,
+        heartbeat_at: &str,
+        stale_before: &str,
+    ) -> Result<bool, String> {
+        let res = sqlx::query(
+            "UPDATE runs SET owner_instance = ?, heartbeat_at = ? \
+             WHERE id = ? AND status IN ('queued', 'running', 'paused') \
+               AND (owner_instance IS NULL OR owner_instance = ? \
+                    OR heartbeat_at IS NULL OR heartbeat_at < ?)",
+        )
+        .bind(instance_id)
+        .bind(heartbeat_at)
+        .bind(run_id)
+        .bind(instance_id)
+        .bind(stale_before)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(res.rows_affected() > 0)
+    }
+
+    async fn heartbeat_runs(
+        &self,
+        instance_id: &str,
+        run_ids: &[String],
+        heartbeat_at: &str,
+    ) -> Result<u64, String> {
+        if run_ids.is_empty() {
+            return Ok(0);
+        }
+        // Only the placeholder count is generated; every value is bound.
+        let marks = std::iter::repeat_n("?", run_ids.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "UPDATE runs SET heartbeat_at = ? \
+             WHERE owner_instance = ? AND status IN ('queued', 'running', 'paused') \
+               AND id IN ({marks})"
+        );
+        let mut query = sqlx::query(sqlx::AssertSqlSafe(sql))
+            .bind(heartbeat_at)
+            .bind(instance_id);
+        for run_id in run_ids {
+            query = query.bind(run_id);
+        }
+        let res = query.execute(&self.pool).await.map_err(|e| e.to_string())?;
+        Ok(res.rows_affected())
+    }
+
+    async fn stale_run_leases(
+        &self,
+        cutoff: &str,
+        limit: u32,
+    ) -> Result<Vec<models::StaleRunLease>, String> {
+        // heartbeat_at is always written by `run_lease::heartbeat_timestamp`
+        // (UTC RFC 3339 with a fixed `+00:00` suffix), so lexicographic
+        // ordering is chronological ordering here. Self-owned rows are
+        // included; the reaper filters the ones it is still monitoring.
+        sqlx::query_as::<_, models::StaleRunLease>(
+            "SELECT id, status, workdir, owner_instance, heartbeat_at, started_at FROM runs \
+             WHERE status IN ('queued', 'running', 'paused') \
+               AND owner_instance IS NOT NULL \
+               AND heartbeat_at IS NOT NULL AND heartbeat_at < ? \
+             ORDER BY heartbeat_at ASC LIMIT ?",
+        )
+        .bind(cutoff)
+        .bind(i64::from(limit))
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| e.to_string())
     }
 }
 

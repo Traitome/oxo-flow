@@ -1151,25 +1151,7 @@ pub async fn create_run(
         // the list endpoints could never see or cancel.
         let claim = claim_run_row(backend.as_ref(), &run).await;
         match claim {
-            Ok(true) => {
-                // RB-03 (#1131): the sources are materialized only after the
-                // claim inserts the row. If that fails the run is unrunnable
-                // — compensate (release the reservation, delete the row,
-                // remove the workdir) and answer the structured error here,
-                // rather than leaving a ghost `queued` row whose CLI spawn
-                // never happens.
-                if let Err(resp) = materialize_run_sources(
-                    &run_dir,
-                    &workflow_path,
-                    &include_paths,
-                    resolved_snapshot.as_deref(),
-                )
-                .await
-                {
-                    compensate_failed_run(backend.as_ref(), &run.id, &run_dir).await;
-                    return Err(resp);
-                }
-            }
+            Ok(true) => {}
             Ok(false) => {
                 // The run never starts; give the reservation back now.
                 release_spawn_budget(backend.as_ref(), &run.id).await;
@@ -1198,6 +1180,41 @@ pub async fn create_run(
                     "DB_ERROR",
                     "Internal database error".into(),
                 ));
+            }
+        }
+
+        // The row is durably queued. Register its lease heartbeat NOW —
+        // before materialization and input staging, both of which can take
+        // longer than the lease TTL on a large uploads volume — and carry
+        // the guard through to the spawn task (issue #1402 review, HIGH).
+        // Every compensation path below returns, dropping the guard.
+        let run_monitor = crate::infra::run_lease::RunMonitorGuard::new(run.id.clone());
+
+        // RB-03 (#1131): the sources are materialized only after the claim
+        // inserts the row. If that fails the run is unrunnable —
+        // compensate (release the reservation, delete the row, remove the
+        // workdir) and answer the structured error here, rather than
+        // leaving a ghost `queued` row whose CLI spawn never happens.
+        if let Err(resp) = materialize_run_sources(
+            &run_dir,
+            &workflow_path,
+            &include_paths,
+            resolved_snapshot.as_deref(),
+        )
+        .await
+        {
+            compensate_failed_run(backend.as_ref(), &run.id, &run_dir).await;
+            return Err(resp);
+        }
+
+        // Test seam (issue #1402 review): block the pre-spawn staging window
+        // so an integration test can prove the claim-time lease heartbeat
+        // covers it. Inert unless the variable is set.
+        if let Some(wait_file) = std::env::var_os("OXO_FLOW_TEST_STAGE_WAIT_FILE") {
+            let wait_file = std::path::PathBuf::from(wait_file);
+            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(120);
+            while !wait_file.exists() && tokio::time::Instant::now() < deadline {
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
             }
         }
 
@@ -1308,6 +1325,7 @@ pub async fn create_run(
                     max_memory_mb: quota_usage.1,
                     max_threads: quota_usage.0,
                 },
+                run_monitor,
             );
             return Ok(Json(resp));
         }
@@ -1337,6 +1355,7 @@ pub async fn create_run(
                 // executor enforces on the spawned tree.
                 memory_limit_mb: quota_usage.1,
             },
+            run_monitor,
         );
     }
 
@@ -2156,6 +2175,10 @@ pub async fn retry_run(
         }
     }
 
+    // Claim-time lease guard (issue #1402 review): covers the window before
+    // the spawn task starts; the spawn task takes ownership.
+    let run_monitor = crate::infra::run_lease::RunMonitorGuard::new(new_run_id.clone());
+
     // Issue #1017: when `from_rule` is set the retry semantics change from
     // "re-run the failed set" to "re-run from this rule downstream". The
     // CLI's `--from-rule` flag computes the transitive-dependent closure
@@ -2207,6 +2230,7 @@ pub async fn retry_run(
             // RB-09 (#1133): enforce the declared memory of the retried run.
             memory_limit_mb: quota_usage.1,
         },
+        run_monitor,
     );
 
     Ok(Json(plan))
@@ -3957,6 +3981,10 @@ pub async fn resume_checkpoint(
         }
     }
 
+    // Claim-time lease guard (issue #1402 review): covers the window before
+    // the spawn task starts; the spawn task takes ownership.
+    let run_monitor = crate::infra::run_lease::RunMonitorGuard::new(new_run_id.clone());
+
     let args: Vec<std::ffi::OsString> = vec![
         "resume".into(),
         checkpoint.into_os_string(),
@@ -3971,8 +3999,11 @@ pub async fn resume_checkpoint(
         "none".to_string(),
         "local".to_string(),
         Some(std::path::PathBuf::from(workdir)),
-        args,
-        quota_usage.1,
+        crate::executor::RunInvocation {
+            cli_args: args,
+            memory_limit_mb: quota_usage.1,
+            monitor: run_monitor,
+        },
     );
 
     Ok(Json(serde_json::json!({
@@ -4168,6 +4199,10 @@ pub async fn apply_repair_run(
         }
     }
 
+    // Claim-time lease guard (issue #1402 review): covers patch staging and
+    // the window before the spawn task starts.
+    let run_monitor = crate::infra::run_lease::RunMonitorGuard::new(new_run_id.clone());
+
     // Stage the reviewed patch into the run workdir (audit evidence beside
     // the workflow it may rewrite; the workdir is the repair's own scope).
     // The shared staged-write discipline keeps a crash from leaving a torn
@@ -4223,8 +4258,11 @@ pub async fn apply_repair_run(
         "none".to_string(),
         "local".to_string(),
         Some(std::path::PathBuf::from(&workdir)),
-        args,
-        quota_usage.1,
+        crate::executor::RunInvocation {
+            cli_args: args,
+            memory_limit_mb: quota_usage.1,
+            monitor: run_monitor,
+        },
     );
 
     Ok(Json(ApplyRepairResponse {
