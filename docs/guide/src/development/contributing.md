@@ -235,6 +235,15 @@ and confirm the matching scenario turns red before reverting.
 - API docs: `cargo doc --workspace --open`
 - When CLI behavior changes, update the corresponding command reference page
 
+The header version/stars widget is rendered **at build time** from
+`extra.source` (see `overrides/partials/source.html` and the `Inject docs
+source facts` step in the `deploy-pages` CI job), not fetched from
+`api.github.com` in each visitor's browser. The CI job exports
+`OXO_FLOW_DOCS_SOURCE_VERSION` (the mike version being deployed: `dev` or the
+release tag) and `OXO_FLOW_DOCS_SOURCE_STARS` (from an authenticated `gh api`
+call); `mkdocs.yml` reads them via `!ENV`. Locally both default to empty and
+the widget simply shows the icon + repository name.
+
 ---
 
 ## Licensing

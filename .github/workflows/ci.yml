@@ -2384,6 +2384,36 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
+      # Header source-widget facts (docs/guide/overrides/partials/source.html).
+      # Export the docs version and the CURRENT star count so the built site
+      # ships correct values and never falls back to a per-visitor anonymous
+      # api.github.com call (which 403s on a busy network, and is then frozen
+      # for the tab session by Material's `__source` sessionStorage cache).
+      # gh is preinstalled on the runner; repo metadata needs only read access,
+      # which the job's contents:write GITHUB_TOKEN already grants. A failed
+      # call leaves the variable unset — the widget then omits the fact rather
+      # than showing a wrong or hard-coded number.
+      - name: Inject docs source facts (version + stars)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # The version shown is the docs version being deployed (the mike
+          # branch), not the newest GitHub release tag: the previous behaviour
+          # mislabeled every page, including /dev/, with the latest release.
+          if [[ "$GITHUB_REF" == refs/tags/v* || "$RELEASE_TAG" == v* ]]; then
+            VERSION="${RELEASE_TAG#v}"
+          else
+            VERSION="dev"
+          fi
+          echo "OXO_FLOW_DOCS_SOURCE_VERSION=${VERSION}" >> "$GITHUB_ENV"
+          STARS="$(gh api "repos/${GITHUB_REPOSITORY}" --jq '.stargazers_count' 2>/dev/null || true)"
+          if [[ -n "$STARS" ]]; then
+            echo "OXO_FLOW_DOCS_SOURCE_STARS=${STARS}" >> "$GITHUB_ENV"
+            echo "source facts: version=${VERSION} stars=${STARS}"
+          else
+            echo "source facts: version=${VERSION} stars=unavailable (widget omits it)"
+          fi
+
       - name: Deploy with mike
         run: |
           cd docs/guide

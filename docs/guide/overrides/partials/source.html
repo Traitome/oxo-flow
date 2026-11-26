@@ -1,0 +1,31 @@
+{#-
+  Local override of Material's partials/source.html (theme.custom_dir).
+  Upstream renders only the icon + repo name and lets bundled JS fetch
+  version/stars from api.github.com at page load — that call runs on each
+  visitor's ANONYMOUS GitHub budget (60/hr/IP), so on a busy network it
+  403s and no facts render, while a returning tab serves a stale
+  sessionStorage `__source` cache. Instead we render the facts from
+  build-time values injected by the docs deploy job (extra.source), so
+  every reader sees the same correct numbers with no client GitHub call.
+
+  data-md-component="source" is deliberately omitted so Material's runtime
+  cannot append a second, competing facts list next to ours.
+-#}
+{% set source = config.extra.get('source') or {} %}
+{% set version = source.version or '' %}
+{% set stars = source.stars or '' %}
+<a href="{{ config.repo_url }}" title="{{ lang.t('source') }}" class="md-source">
+  <div class="md-source__icon md-icon">
+    {% set icon = config.theme.icon.repo or "fontawesome/brands/git-alt" %}
+    {% include ".icons/" ~ icon ~ ".svg" %}
+  </div>
+  <div class="md-source__repository{% if version or stars %} md-source__repository--active{% endif %}">
+    {{ config.repo_name }}
+    {% if version or stars %}
+    <ul class="md-source__facts">
+      {% if version %}<li class="md-source__fact md-source__fact--version">{{ version }}</li>{% endif %}
+      {% if stars %}<li class="md-source__fact md-source__fact--stars">{{ stars }}</li>{% endif %}
+    </ul>
+    {% endif %}
+  </div>
+</a>
