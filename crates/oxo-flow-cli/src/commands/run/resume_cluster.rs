@@ -16,7 +16,8 @@
 //!
 //! The scheduler seam is [`ClusterJobProbe`] — the three operations the
 //! reconciliation needs, with the production implementation delegating to the
-//! same [`ExecutorBackend`] the driver uses. Unit tests inject a fake probe;
+//! same [`oxo_flow_core::backend::ExecutorBackend`] the driver uses. Unit
+//! tests inject a fake probe;
 //! nothing here needs a live scheduler.
 
 mod probe;

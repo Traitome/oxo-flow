@@ -3,7 +3,8 @@
 //!
 //! [`ClusterJobProbe`] is intentionally three operations wide: poll a set of
 //! ids, read one accounting record, cancel one id. The production
-//! implementation delegates to the same [`ExecutorBackend`] the driver uses,
+//! implementation delegates to the same [`oxo_flow_core::backend::ExecutorBackend`]
+//! the driver uses,
 //! so the two surfaces cannot drift on scheduler state mapping; unit tests
 //! inject a fake probe and never touch a live scheduler.
 
@@ -43,7 +44,8 @@ pub(crate) trait ClusterJobProbe: Send + Sync {
     fn polls_elements_directly(&self) -> bool;
 }
 
-/// [`ClusterJobProbe`] over the production [`ExecutorBackend`].
+/// [`ClusterJobProbe`] over the production
+/// [`oxo_flow_core::backend::ExecutorBackend`].
 pub(crate) struct BackendProbe {
     backend: Arc<dyn ExecutorBackend>,
 }
