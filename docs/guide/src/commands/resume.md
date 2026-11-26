@@ -84,7 +84,10 @@ clears the persisted in-flight set or re-plans execution (issue #1427):
       never resubmitted;
     - terminal success with every declared output present → the rule is
       marked completed (a `recorded_as: "adopted from <backend> job <id>"`
-      benchmark is written only when no measured benchmark exists);
+      benchmark is written only when no measured benchmark exists). A rule
+      whose outputs are declared only through `output_pattern` has no fixed
+      files to verify at adoption time; its scheduler-confirmed success is
+      adopted without a per-instance file check;
     - terminal success whose declared outputs are missing → a warning, and
       the rule re-runs;
     - terminal failure or cancellation → recorded, and the normal resume
@@ -94,17 +97,26 @@ clears the persisted in-flight set or re-plans execution (issue #1427):
 - **`--abandon-jobs`** — cancel the recorded live jobs through the backend
   that owns them (`scancel`/`qdel`/`bkill`/…), clear their records, and
   re-run the rules. With a usable profile the rerun keeps the cluster route;
-  without one it continues **locally** (announced on stderr). A cancellation
-  the scheduler does not confirm also fails closed: a job that may still be
-  running is never reported as abandoned.
+  without one it continues **locally** (announced on stderr). A cancel the
+  scheduler **rejects** fails closed: a job that may still be running is
+  never reported as abandoned. An accepted `scancel`/`qdel`/… is the
+  scheduler's acknowledgement that the signal was delivered, not proof the
+  process has already stopped — a brief termination window remains. If the
+  scheduler reports the id no longer exists (a purged record), cancel cannot
+  confirm anything: verify with `oxo-flow cluster status`, then remove that
+  rule's `cluster_jobs` entry from the checkpoint manually (or complete the
+  rule) before resuming.
 
 Reconciliation always uses the backend recorded **on each job**, never the
 backend a (possibly edited) profile resolves to today. A checkpoint whose
 unsettled jobs span more than one scheduler (a crash on one backend followed
 by a run on another) is reconciled group by group, each through the scheduler
-that owns it — a job id is never handed to a different backend. A resume with
-no recorded cluster jobs still routes through the recorded profile (when its
-file still exists), so the remaining rules keep running on the scheduler
+that owns it — a job id is never handed to a different backend. When a
+group's backend differs from the checkpoint's recorded run, an error's
+recovery command cannot know that scheduler's location/zone; add its
+`--queue` value manually (GCP location / Tencent availability zone). A resume
+with no recorded cluster jobs still routes through the recorded profile (when
+its file still exists), so the remaining rules keep running on the scheduler
 instead of silently falling back to the local executor.
 
 Checkpoints written before this feature carry no job ids; their resume
@@ -112,10 +124,15 @@ behavior is unchanged (their rules re-run), and `run` deliberately never
 consults `cluster_jobs` — after a crashed cluster driver, use `resume`
 (not a fresh `run`) to re-attach.
 
-A recorded job whose rule an intervening invocation already completed is
-treated as **settled**: `resume` drops the stale id (and persists the cleanup)
-instead of polling a scheduler record that may since have been purged. If
-that superseded job was in fact still live, the intervening completion
+A recorded job whose rule an intervening invocation completed **and which is
+no longer marked in flight** is treated as **settled**: `resume` drops the
+stale id (and persists the cleanup) instead of polling a scheduler record
+that may since have been purged. The in-flight mark is the discriminator: a
+`run --rerun` re-submits a completed rule and records its NEW job id while
+the rule deliberately stays complete, so that shape — completed AND running —
+is treated as **live**: resume polls or cancels the job instead of dropping
+it, and never lets a dependent run against outputs it is still rewriting. If
+a genuinely superseded job was in fact still live, the intervening completion
 already raced it — reconciling an id the checkpoint's completion set no
 longer needs cannot undo that, and refusing to resume forever would be worse.
 

@@ -1,6 +1,6 @@
 use super::probe::ProbeFuture;
 use super::*;
-use oxo_flow_core::executor::checkpoint::ClusterRunRecord;
+use oxo_flow_core::executor::checkpoint::{ClusterJobRecord, ClusterRunRecord};
 use std::sync::Mutex;
 
 fn route() -> SchedulerRoute {
@@ -758,6 +758,60 @@ async fn a_completed_rule_drops_its_stale_job_without_a_profile_or_scheduler() {
         "the stale-id cleanup must be persisted"
     );
     assert!(persisted.completed_rules.contains("r0"));
+}
+
+#[test]
+fn prune_drops_only_completed_jobs_that_are_not_in_flight() {
+    // Issue #1427 re-review (Important): `run --rerun` re-submits a completed
+    // rule and records its NEW job id while the rule stays in
+    // `completed_rules`. That job is live — pruning it would let a resume
+    // skip it and run dependents against outputs it is still rewriting.
+    let mut ck = checkpoint_with_jobs(&[("done", "11", None), ("rerun", "22", None)]);
+    ck.mark_completed_quiet("done");
+    ck.mark_completed_quiet("rerun");
+    ck.mark_running("rerun");
+
+    let pruned = prune_stale_completed_jobs(&mut ck);
+
+    assert_eq!(pruned.len(), 1, "only the settled completion is stale");
+    assert_eq!(pruned[0].0, "done");
+    assert!(!ck.cluster_jobs.contains_key("done"));
+    assert!(
+        ck.cluster_jobs.contains_key("rerun"),
+        "a completed-but-running rerun submission must never be pruned"
+    );
+    assert!(ck.is_running("rerun"));
+}
+
+#[test]
+fn route_queue_is_inherited_only_by_the_recorded_run_backend() {
+    // Issue #1427 re-review (minor): a non-None queue must reach the group it
+    // belongs to and must NOT leak to a different backend's group.
+    let run = ClusterRunRecord {
+        profile: "slurm".to_string(),
+        backend: "slurm".to_string(),
+        queue: Some("gpu".to_string()),
+        account: Some("acct".to_string()),
+        run_dir: None,
+    };
+
+    let (same, account) = route_for_backend("slurm", Some(&run));
+    assert_eq!(same.backend, "slurm");
+    assert_eq!(same.queue.as_deref(), Some("gpu"));
+    assert_eq!(account.as_deref(), Some("acct"));
+
+    let (other, account) = route_for_backend("pbs", Some(&run));
+    assert_eq!(other.backend, "pbs");
+    assert_eq!(
+        other.queue, None,
+        "a foreign backend must not inherit SLURM's queue"
+    );
+    assert_eq!(account, None);
+
+    let (bare, account) = route_for_backend("pbs", None);
+    assert_eq!(bare.backend, "pbs");
+    assert_eq!(bare.queue, None);
+    assert_eq!(account, None);
 }
 
 #[test]

@@ -1126,21 +1126,23 @@ fn available_profiles(workflow_dir: &Path) -> Vec<String> {
     names
 }
 
-/// Whether a profile name is a plain file stem.
+/// Whether a profile name is a single path component.
 ///
 /// Profile files live directly under `<workflow-dir>/profiles/`. A name with
 /// a path separator, a drive/stream colon, or `.`/`..` traversal would let a
 /// `--profile` value read a file outside that directory — `run` always
 /// joined the name, but `resume` now takes the profile from a checkpoint and
 /// exposes the same lookup, so the boundary is enforced in one place.
+///
+/// Only the path SHAPE is restricted: any non-empty component that is not a
+/// traversal is accepted, so a legitimate `profiles/测试.toml` (or one with a
+/// space) stays reachable instead of being listed as available yet reported
+/// "not found".
 fn is_valid_profile_name(profile_name: &str) -> bool {
     !profile_name.is_empty()
         && profile_name != "."
         && profile_name != ".."
         && !profile_name.contains(['/', '\\', ':'])
-        && profile_name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
 }
 
 /// Resolve a profile name to its file under `<workflow_dir>/profiles/`
@@ -1595,23 +1597,23 @@ threshold = 5
     #[test]
     fn profile_names_cannot_escape_the_profiles_directory() {
         // Issue #1427 review (minor): `resume --profile ../x` must not read
-        // outside `<workflow>/profiles/`.
+        // outside `<workflow>/profiles/` — but a legitimate non-ASCII or
+        // space-bearing single component must stay reachable (and must not be
+        // listed as "available" while being reported "not found").
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join("profiles")).unwrap();
         std::fs::write(dir.path().join("profiles/batch.toml"), "[config]\n").unwrap();
+        std::fs::write(dir.path().join("profiles/测试.toml"), "[config]\n").unwrap();
+        std::fs::write(dir.path().join("profiles/my profile.toml"), "[config]\n").unwrap();
         std::fs::write(dir.path().join("evil.toml"), "[config]\n").unwrap();
 
-        assert!(profile_file(dir.path(), "batch").is_some());
-        for bad in [
-            "../evil",
-            "a/b",
-            "a\\b",
-            "..",
-            ".",
-            "",
-            "C:evil",
-            "with space",
-        ] {
+        for good in ["batch", "测试", "my profile"] {
+            assert!(
+                profile_file(dir.path(), good).is_some(),
+                "profile name {good:?} must resolve"
+            );
+        }
+        for bad in ["../evil", "a/b", "a\\b", "..", ".", "", "C:evil"] {
             assert!(
                 profile_file(dir.path(), bad).is_none(),
                 "profile name {bad:?} must be rejected"
@@ -1623,6 +1625,10 @@ threshold = 5
             .unwrap_err()
             .to_string();
         assert!(error.contains("not found"), "{error}");
+        // The non-ASCII profile actually merges (its name is not a typo).
+        let mut config =
+            WorkflowConfig::parse("[workflow]\nname = \"t\"\nversion = \"1.0\"\n").unwrap();
+        merge_profile(&mut config, "测试", dir.path()).unwrap();
     }
 
     #[test]

@@ -68,6 +68,24 @@ output = ["out1.txt"]
 shell = "echo ok > out1.txt"
 "#;
 
+/// `b` consumes `a`'s output, so re-running `b` while `a`'s recorded job is
+/// still live is exactly the concurrent-writer hazard re-attach must avoid.
+const DEPENDENT_PAIR: &str = r#"
+[workflow]
+name = "rerun-crash"
+
+[[rules]]
+name = "a"
+output = ["a.txt"]
+shell = "echo a > a.txt"
+
+[[rules]]
+name = "b"
+input = ["a.txt"]
+output = ["b.txt"]
+shell = "echo b > b.txt"
+"#;
+
 fn write_profile(dir: &Path) {
     std::fs::create_dir_all(dir.join("profiles")).unwrap();
     std::fs::write(
@@ -576,6 +594,103 @@ fn resume_abandon_without_a_profile_cancels_then_runs_locally() {
         vec!["1".to_string()],
         "a local rerun submits nothing to the scheduler"
     );
+    let after = CheckpointState::load_from_file(&cp).unwrap();
+    assert!(after.completed_rules.contains("work"));
+}
+
+/// Issue #1427 re-review (Important): a `run --rerun` submission keeps the
+/// rule in `completed_rules` while its NEW job is live. Resume must NOT prune
+/// that job — and must not submit its dependent while job 99 is still running.
+#[test]
+fn resume_does_not_prune_a_live_rerun_job() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("w.oxoflow");
+    std::fs::write(&wf, DEPENDENT_PAIR).unwrap();
+    write_profile(dir.path());
+    let state = dir.path().join("state");
+    seed_job(&state, "99", "RUNNING", 0);
+    std::fs::write(dir.path().join("a.txt"), "a").unwrap();
+    let mut ck = base_checkpoint(&wf, dir.path());
+    // The exact shape a `run --profile slurm --rerun` crash leaves: the rule
+    // is completed AND running, with the rerun's job id recorded.
+    ck.mark_completed_quiet("a");
+    ck.mark_running("a");
+    record_job(&mut ck, "a", "99", None);
+    let cp = save_checkpoint(&ck, dir.path());
+
+    let path = format!(
+        "{}:{}",
+        mock_scheduler_dir().display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let mut child = Command::new(oxo_bin())
+        .args(["resume", cp.to_str().unwrap(), "--json"])
+        .current_dir(dir.path())
+        .env("PATH", path)
+        .env("MOCK_SCHEDULER_DIR", &state)
+        .env("MOCK_SQUEUE_HIDE_TERMINAL", "1")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    // The resume must park on job 99: no dependent submission, no prune.
+    std::thread::sleep(std::time::Duration::from_secs(5));
+    assert_eq!(
+        job_ids(&state),
+        vec!["99".to_string()],
+        "no rule may be resubmitted while job 99 is live"
+    );
+    assert!(
+        !dir.path().join("b.txt").exists(),
+        "the dependent must not run while its producer's job is live"
+    );
+    child.kill().unwrap();
+    let out = child.wait_with_output().unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("already complete"),
+        "a live rerun job must never be pruned:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("waiting for 1 of 1 recorded scheduler job(s)"),
+        "resume must wait on the recorded job:\n{stderr}"
+    );
+    let after = CheckpointState::load_from_file(&cp).unwrap();
+    assert!(
+        after.cluster_jobs.contains_key("a"),
+        "the live job id must remain recorded for the next resume"
+    );
+}
+
+/// A checkpoint with recorded job ids but no `cluster_run` identity can still
+/// reconcile each job through its own backend; only queue/account are unknown.
+#[test]
+fn resume_abandons_without_a_cluster_run_identity() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("w.oxoflow");
+    std::fs::write(&wf, ONE_STEP).unwrap();
+    let state = dir.path().join("state");
+    seed_job(&state, "1", "RUNNING", 0);
+    let mut ck = base_checkpoint(&wf, dir.path());
+    ck.set_cluster_run(None);
+    record_job(&mut ck, "work", "1", None);
+    let cp = save_checkpoint(&ck, dir.path());
+
+    let (ok, stdout, stderr) = run_resume(
+        dir.path(),
+        &["resume", cp.to_str().unwrap(), "--abandon-jobs", "--json"],
+        Some(&state),
+    );
+    assert!(ok, "per-job backend recovery succeeds; stderr:\n{stderr}");
+    let doc = json(&stdout);
+    assert_eq!(doc["cancelled_jobs"], 1, "{doc}");
+    assert_eq!(job_state(&state, "1"), "CANCELLED");
+    assert!(
+        stderr.contains("no cluster run identity"),
+        "the missing route identity must be narrated:\n{stderr}"
+    );
+    assert!(dir.path().join("out.txt").exists(), "the local rerun ran");
     let after = CheckpointState::load_from_file(&cp).unwrap();
     assert!(after.completed_rules.contains("work"));
 }

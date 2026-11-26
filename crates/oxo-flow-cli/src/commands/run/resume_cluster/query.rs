@@ -33,6 +33,34 @@ impl RecordedQuery {
     }
 }
 
+/// Drop recorded jobs whose rule a later invocation already completed, and
+/// whose execution is no longer marked in flight.
+///
+/// The `running` mark is the discriminator (issue #1427 re-review): a
+/// `run --rerun` re-submits a completed rule, and the submit hook records the
+/// NEW job id while the rule intentionally stays in `completed_rules`. That
+/// job is live — pruning it would let the next resume skip it and run
+/// dependents against outputs it is still rewriting. A genuine later
+/// completion clears the running mark, at which point the id is superseded.
+///
+/// Returns the removed `(rule, job)` pairs so the caller can narrate and
+/// persist the cleanup.
+pub(crate) fn prune_stale_completed_jobs(
+    checkpoint: &mut CheckpointState,
+) -> Vec<(String, ClusterJobRecord)> {
+    let stale: Vec<(String, ClusterJobRecord)> = checkpoint
+        .unsettled_cluster_jobs()
+        .filter(|(rule, _)| {
+            checkpoint.completed_rules.contains(*rule) && !checkpoint.is_running(rule)
+        })
+        .map(|(rule, job)| (rule.to_string(), job.clone()))
+        .collect();
+    for (rule, _) in &stale {
+        checkpoint.clear_cluster_job(rule);
+    }
+    stale
+}
+
 pub(crate) fn recorded_queries(
     checkpoint: &CheckpointState,
     backend: &str,

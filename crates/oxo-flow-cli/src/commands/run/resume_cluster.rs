@@ -24,7 +24,10 @@ mod probe;
 mod query;
 
 use probe::{ClusterJobProbe, SchedulerRoute, recorded_probe};
-use query::{RecordedQuery, Verdict, reattach_required_error, recorded_queries, resolve_verdict};
+use query::{
+    RecordedQuery, Verdict, prune_stale_completed_jobs, reattach_required_error, recorded_queries,
+    resolve_verdict,
+};
 
 use super::config_placeholder_values;
 use anyhow::{Context, Result};
@@ -32,7 +35,7 @@ use colored::Colorize;
 use oxo_flow_core::backend::{BackendJobStatus, TerminalRecord};
 use oxo_flow_core::config::WorkflowConfig;
 use oxo_flow_core::executor::checkpoint::{
-    BenchmarkRecord, CheckpointState, ClusterJobRecord, rule_outputs_exist,
+    BenchmarkRecord, CheckpointState, ClusterRunRecord, rule_outputs_exist,
 };
 use oxo_flow_core::executor::{JobRecord, JobStatus};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -125,26 +128,21 @@ pub(crate) async fn prepare_cluster_resume(
         .map(|record| record.profile.clone());
     let run_profile = resolve_resume_profile(checkpoint, workflow_dir, explicit_profile)?;
 
-    // A recorded job whose rule is already complete is settled by
-    // definition: a later invocation (typically a plain local `run`)
-    // completed the rule, and keeping the stale id would wedge resume on a
-    // scheduler record that may since have been purged. Drop these FIRST,
-    // before the fail-closed gate, so a fully-completed checkpoint never
-    // demands a profile for a job nobody needs.
-    let stale_completed: Vec<(String, ClusterJobRecord)> = checkpoint
-        .unsettled_cluster_jobs()
-        .filter(|(rule, _)| checkpoint.completed_rules.contains(*rule))
-        .map(|(rule, job)| (rule.to_string(), job.clone()))
-        .collect();
+    // Drop recorded jobs that a later invocation genuinely completed. The
+    // `running` mark is the discriminator: `run --rerun` re-submits a
+    // completed rule and records its NEW job id while the rule deliberately
+    // stays in `completed_rules` — that job is live and must be reconciled,
+    // never dropped (issue #1427 re-review). A later completion clears the
+    // mark, at which point the id is genuinely superseded.
+    let stale_completed = prune_stale_completed_jobs(checkpoint);
     for (rule, job) in &stale_completed {
         eprintln!(
-            "  {} {}: already complete — dropping its stale recorded {} job {} instead of reconciling it",
+            "  {} {}: already complete and no longer in flight — dropping its stale recorded {} job {} instead of reconciling it",
             "Note:".yellow(),
             rule,
             job.backend,
             job.job_id
         );
-        checkpoint.clear_cluster_job(rule);
     }
 
     if checkpoint.cluster_jobs.is_empty() {
@@ -202,47 +200,48 @@ pub(crate) async fn prepare_cluster_resume(
         ));
     }
 
-    // Reconciliation always talks to the backend that actually owns each job
-    // id — recorded per job at submit time — never to whatever a (possibly
-    // edited) profile or the checkpoint's latest cluster run resolves to
-    // today.
-    let Some(cluster_run) = checkpoint.cluster_run.clone() else {
-        anyhow::bail!(
-            "checkpoint '{}' records {} unsettled scheduler job(s) but no cluster identity.\n  \
-             Refusing to cancel or re-run jobs whose backend is unknown. Pass --profile <NAME> \
-             and verify the jobs with 'oxo-flow cluster status' first.",
-            checkpoint_path.display(),
-            checkpoint.cluster_jobs.len()
+    // Reconciliation talks to the backend recorded on EACH job — never to
+    // whatever a (possibly edited) profile resolves to today. The checkpoint's
+    // `cluster_run` only supplies queue/account, and only for the group whose
+    // backend it names: the checkpoint may record no run identity at all, or a
+    // later cluster invocation on a different backend.
+    let cluster_run = checkpoint.cluster_run.clone();
+    if cluster_run.is_none() {
+        eprintln!(
+            "  {} the checkpoint records no cluster run identity — queue/account are unknown; each job is reconciled through its own recorded backend",
+            "Note:".yellow()
         );
-    };
+    }
     let config = load_expanded_config(workflow, run_profile.as_deref())?;
 
-    // Group the remaining jobs by the scheduler that owns them.
-    // `cluster_run.backend` is the LATEST cluster invocation's route and may
-    // differ from an older recorded job's (a crash on SLURM followed by a
-    // `run --profile pbs`). Polling or cancelling an id through the wrong
-    // scheduler could touch an unrelated job, so every group gets a probe
-    // built from its own recorded backend.
+    // Group the remaining jobs by the scheduler that owns them. Polling or
+    // cancelling an id through the wrong scheduler could touch an unrelated
+    // job, so every group gets a probe built from its own recorded backend.
     let mut groups: BTreeMap<String, usize> = BTreeMap::new();
     for (_, job) in checkpoint.unsettled_cluster_jobs() {
         *groups.entry(job.backend.clone()).or_default() += 1;
     }
-    if groups.len() > 1
-        || groups
-            .keys()
-            .next()
-            .is_some_and(|b| b != &cluster_run.backend)
-    {
-        let routes: Vec<String> = groups
-            .iter()
-            .map(|(backend, count)| format!("{backend} ({count})"))
-            .collect();
-        eprintln!(
-            "  {} the checkpoint's recorded cluster run is '{}', but its unsettled jobs span {} — each group is reconciled through the scheduler that owns it",
+    let routes: Vec<String> = groups
+        .iter()
+        .map(|(backend, count)| format!("{backend} ({count})"))
+        .collect();
+    match &cluster_run {
+        Some(run)
+            if groups.len() > 1 || groups.keys().next().is_some_and(|b| b != &run.backend) =>
+        {
+            eprintln!(
+                "  {} the checkpoint's recorded cluster run is '{}', but its unsettled jobs span {} — each group is reconciled through the scheduler that owns it",
+                "Warning:".bold().yellow(),
+                run.backend,
+                routes.join(", ")
+            );
+        }
+        None if groups.len() > 1 => eprintln!(
+            "  {} the checkpoint's unsettled jobs span {} — each group is reconciled through the scheduler that owns it",
             "Warning:".bold().yellow(),
-            cluster_run.backend,
             routes.join(", ")
-        );
+        ),
+        _ => {}
     }
     if abandon_jobs && run_profile.is_none() {
         eprintln!(
@@ -251,11 +250,14 @@ pub(crate) async fn prepare_cluster_resume(
         );
     }
 
+    let profile_label = cluster_run
+        .as_ref()
+        .map_or("none", |run| run.profile.as_str());
     eprintln!(
         "{} re-attaching to {} recorded scheduler job(s) (recorded profile '{}')",
         "Cluster:".bold().cyan(),
         oxo_flow_core::plural(checkpoint.cluster_jobs.len(), "job", "jobs"),
-        cluster_run.profile
+        profile_label
     );
     if abandon_jobs {
         eprintln!(
@@ -266,15 +268,7 @@ pub(crate) async fn prepare_cluster_resume(
 
     let mut outcome = ClusterReconcileOutcome::default();
     for (backend_name, job_count) in &groups {
-        // The queue/account only provably belong to a group submitted through
-        // the same backend as the checkpoint's recorded run; passing another
-        // backend's route would be worse than none.
-        let same_route = *backend_name == cluster_run.backend;
-        let route = SchedulerRoute::new(
-            backend_name.clone(),
-            same_route.then(|| cluster_run.queue.clone()).flatten(),
-        );
-        let account = same_route.then(|| cluster_run.account.clone()).flatten();
+        let (route, account) = route_for_backend(backend_name, cluster_run.as_ref());
         let probe = recorded_probe(backend_name, route.queue.as_deref(), account.as_deref())?;
         let queries = recorded_queries(checkpoint, backend_name, probe.polls_elements_directly());
         eprintln!(
@@ -317,6 +311,30 @@ pub(crate) async fn prepare_cluster_resume(
         run_profile,
         outcome: Some(outcome),
     })
+}
+
+/// Queue/account for one recorded backend group.
+///
+/// Only a group submitted through the backend the checkpoint's latest cluster
+/// run recorded may inherit that run's queue/account; another backend's
+/// location/zone would be worse than none (the cloud CLIs would address the
+/// wrong place). The route still names the group's own backend so recovery
+/// commands are correct.
+fn route_for_backend(
+    backend_name: &str,
+    cluster_run: Option<&ClusterRunRecord>,
+) -> (SchedulerRoute, Option<String>) {
+    let same = cluster_run.is_some_and(|run| run.backend == backend_name);
+    let queue = same
+        .then(|| cluster_run.and_then(|run| run.queue.clone()))
+        .flatten();
+    let account = same
+        .then(|| cluster_run.and_then(|run| run.account.clone()))
+        .flatten();
+    (
+        SchedulerRoute::new(backend_name.to_string(), queue),
+        account,
+    )
 }
 
 /// Load the workflow with the resume's profile applied and wildcards
@@ -473,7 +491,8 @@ async fn cancel_one(
     probe.cancel_job(&target).await.map_err(|error| {
         anyhow::anyhow!(
             "failed to cancel recorded {} job {} (rule '{}'): {error}\n  \
-             The job may still be running; refusing to clear it and re-run its rule. Cancel it with '{}' and retry.",
+             The job may still be running; refusing to clear it and re-run its rule. Cancel it with '{}' and retry. \
+             If the scheduler confirms the id no longer exists (a purged record), remove that rule's cluster_jobs entry from the checkpoint manually, or complete the rule, before resuming.",
             query.job.backend,
             target,
             query.rule,
