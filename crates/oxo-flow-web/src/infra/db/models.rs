@@ -95,11 +95,12 @@ pub struct RunRow {
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct StaleRunLease {
     pub id: String,
-    pub user_id: String,
-    pub status: String,
     pub workdir: Option<String>,
     pub owner_instance: Option<String>,
     pub heartbeat_at: Option<String>,
+    /// The run's execution start, used to reject a predecessor's
+    /// `.exit-code` record in a reused workdir (issue #1402 review, HIGH).
+    pub started_at: Option<String>,
 }
 
 /// Whether a run status is terminal — final and never overwritable.

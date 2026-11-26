@@ -46,7 +46,8 @@
 //! The measured campaign is single-host; cross-host clock skew and a
 //! multi-host deployment remain unmeasured residuals.
 
-use std::sync::OnceLock;
+use std::collections::HashSet;
+use std::sync::{LazyLock, Mutex, OnceLock};
 
 use crate::infra::db::StorageBackend;
 
@@ -65,6 +66,60 @@ pub const REAPER_INTERVAL_SECS: u64 = 30;
 /// Upper bound on rows finalized per sweep, so one unresponsive database
 /// region cannot stall the reaper loop behind an unbounded batch.
 const REAP_BATCH_LIMIT: u32 = 50;
+
+/// Runs in this process that an executor task is actually monitoring
+/// (local spawn, SQLite recovery re-attach, or remote dispatch).
+///
+/// The heartbeat renews only these runs. If `mark_run_running` fails before
+/// a spawn (e.g. the pool acquire times out during a database partition),
+/// the row would otherwise stay `queued` while this process renews its
+/// lease forever; other instances exclude it and the reaper can never
+/// recover it (issue #1402 review, MEDIUM).
+static MONITORED_RUNS: LazyLock<Mutex<HashSet<String>>> =
+    LazyLock::new(|| Mutex::new(HashSet::new()));
+
+fn register_monitored(run_id: &str) {
+    if let Ok(mut runs) = MONITORED_RUNS.lock() {
+        runs.insert(run_id.to_string());
+    }
+}
+
+/// Stop heartbeating a run. Idempotent.
+pub(crate) fn unregister_monitored(run_id: &str) {
+    if let Ok(mut runs) = MONITORED_RUNS.lock() {
+        runs.remove(run_id);
+    }
+}
+
+fn monitored_run_ids() -> Vec<String> {
+    MONITORED_RUNS
+        .lock()
+        .map(|runs| runs.iter().cloned().collect())
+        .unwrap_or_default()
+}
+
+/// RAII registration for an executor task.
+///
+/// Dropping the guard (normal return, early error, task cancellation, or
+/// panic) stops the run's heartbeat, leaving it to the lease TTL if no
+/// terminal write succeeded.
+pub(crate) struct RunMonitorGuard {
+    run_id: String,
+}
+
+impl RunMonitorGuard {
+    pub(crate) fn new(run_id: impl Into<String>) -> Self {
+        let run_id = run_id.into();
+        register_monitored(&run_id);
+        Self { run_id }
+    }
+}
+
+impl Drop for RunMonitorGuard {
+    fn drop(&mut self) {
+        unregister_monitored(&self.run_id);
+    }
+}
 
 /// Process-global instance identity.
 ///
@@ -97,12 +152,24 @@ pub fn stale_cutoff() -> String {
     (chrono::Utc::now() - chrono::Duration::seconds(LEASE_TTL_SECS as i64)).to_rfc3339()
 }
 
-/// Renew the heartbeat of every live run owned by this process. A no-op
-/// error-free path when the process owns no live runs.
+/// Upper bound on run ids per heartbeat statement (SQLite's default
+/// variable limit is 999 on older builds; PostgreSQL's is much higher).
+/// The monitored set is normally far below this.
+const HEARTBEAT_BATCH: usize = 500;
+
+/// Renew the heartbeat of every live run this process is actively
+/// monitoring. A no-op when no executor task is registered.
 pub async fn heartbeat(backend: &dyn StorageBackend) -> Result<u64, String> {
-    backend
-        .heartbeat_runs(instance_id(), &heartbeat_timestamp())
-        .await
+    let ids = monitored_run_ids();
+    if ids.is_empty() {
+        return Ok(0);
+    }
+    let now = heartbeat_timestamp();
+    let mut touched = 0u64;
+    for chunk in ids.chunks(HEARTBEAT_BATCH) {
+        touched += backend.heartbeat_runs(instance_id(), chunk, &now).await?;
+    }
+    Ok(touched)
 }
 
 /// Finalize every live run whose owner lease is stale.
@@ -123,11 +190,28 @@ pub async fn reap_stale(backend: &dyn StorageBackend) -> Result<usize, String> {
         .await?;
     let mut reaped = 0usize;
     for run in stale {
-        let workdir = run.workdir.as_deref().map(std::path::Path::new);
-        let log_path = workdir
-            .map(|workdir| workdir.join("execution.log"))
+        let log_path = run
+            .workdir
+            .as_deref()
+            .map(|workdir| std::path::Path::new(workdir).join("execution.log"))
             .unwrap_or_default();
-        let exit_code = workdir.and_then(crate::executor::read_exit_record);
+        // A queued row never executed, so it is never attributed from an
+        // exit record (a reused workdir may still carry the predecessor's).
+        // For a running row, accept the record only when it postdates the
+        // run's `started_at`; consume it so a later run cannot reuse it.
+        let exit_code = match (run.workdir.as_deref(), run.started_at.as_deref()) {
+            (Some(workdir), Some(started_at)) => {
+                let workdir = std::path::PathBuf::from(workdir);
+                let started_at = started_at.to_string();
+                tokio::task::spawn_blocking(move || {
+                    crate::executor::consume_exit_record(&workdir, &started_at)
+                })
+                .await
+                .ok()
+                .flatten()
+            }
+            _ => None,
+        };
         tracing::warn!(
             "Run {} lease expired (owner {:?}, last heartbeat {:?}, exit record {:?}) — \
              attributing the orphaned run",
@@ -137,7 +221,9 @@ pub async fn reap_stale(backend: &dyn StorageBackend) -> Result<usize, String> {
             exit_code
         );
         // A run the user cancelled in the meantime keeps its `cancelled`
-        // row: the terminal write is first-wins.
+        // row: the terminal write is first-wins. This is a system
+        // reconciliation, not a user action, so it writes no `audit_logs`
+        // row (the audit chain records API mutations by an acting user).
         crate::executor::finalize_run(&run.id, exit_code, &log_path).await;
         if backend
             .get_run(&run.id)
@@ -159,16 +245,22 @@ pub fn spawn_background_tasks() {
         let mut ticker =
             tokio::time::interval(std::time::Duration::from_secs(HEARTBEAT_INTERVAL_SECS));
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        // A database outage would otherwise warn every 10 s; log the first
+        // failure and then once a minute (every sixth beat).
+        let mut failures: u32 = 0;
         loop {
             ticker.tick().await;
             let Some(backend) = crate::infra::db::global_backend() else {
                 continue;
             };
-            if let Err(e) = heartbeat(backend.as_ref()).await {
-                // One warning per failed beat: a prolonged database outage
-                // would otherwise log every 10 s; this is the signal an
-                // operator needs, and the lease TTL handles the rest.
-                tracing::warn!("Run-lease heartbeat failed: {e}");
+            match heartbeat(backend.as_ref()).await {
+                Ok(_) => failures = 0,
+                Err(e) => {
+                    failures = failures.saturating_add(1);
+                    if failures == 1 || failures.is_multiple_of(6) {
+                        tracing::warn!("Run-lease heartbeat failed ({failures} consecutive): {e}");
+                    }
+                }
             }
         }
     });
@@ -193,6 +285,196 @@ pub fn spawn_background_tasks() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::infra::db::StorageBackend;
+    use crate::infra::db::models::RunRow;
+    use crate::infra::db::sqlite::SqliteBackend;
+
+    async fn lease_backend() -> (SqliteBackend, tempfile::TempDir) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let url = format!("sqlite:{}?mode=rwc", dir.path().join("lease.db").display());
+        let backend = SqliteBackend::new(&url).await.expect("backend");
+        backend.init().await.expect("schema");
+        (backend, dir)
+    }
+
+    fn run(id: &str, status: &str, workdir: &std::path::Path) -> RunRow {
+        RunRow {
+            id: id.to_string(),
+            user_id: "default".to_string(),
+            pipeline_id: None,
+            pipeline_snapshot: "x".to_string(),
+            workflow_name: None,
+            status: status.to_string(),
+            phase: "executing".to_string(),
+            dry_run: false,
+            pid: None,
+            workdir: Some(workdir.to_string_lossy().into_owned()),
+            config_overrides: None,
+            artifacts_incomplete: None,
+            cluster_id: None,
+            started_at: Some(chrono::Utc::now().to_rfc3339()),
+            finished_at: None,
+            created_at: chrono::Utc::now().to_rfc3339(),
+        }
+    }
+
+    async fn force_lease(backend: &SqliteBackend, id: &str, owner: Option<&str>, heartbeat: &str) {
+        sqlx::query("UPDATE runs SET owner_instance = ?, heartbeat_at = ? WHERE id = ?")
+            .bind(owner)
+            .bind(heartbeat)
+            .bind(id)
+            .execute(backend.inner_pool())
+            .await
+            .expect("force lease");
+    }
+
+    async fn heartbeat_of(backend: &SqliteBackend, id: &str) -> Option<String> {
+        sqlx::query_scalar("SELECT heartbeat_at FROM runs WHERE id = ?")
+            .bind(id)
+            .fetch_one(backend.inner_pool())
+            .await
+            .expect("read heartbeat")
+    }
+
+    /// MEDIUM regression: only runs with a live executor task are
+    /// heartbeated. A queued row left behind by a failed `mark_run_running`
+    /// must stop being renewed so the lease expires and another instance
+    /// (or this process after the owner dies) can reap it.
+    #[tokio::test]
+    async fn heartbeat_renews_only_registered_live_runs() {
+        let (backend, dir) = lease_backend().await;
+        for (id, status) in [
+            ("unit-heartbeat-registered", "running"),
+            ("unit-heartbeat-unregistered", "queued"),
+            ("unit-heartbeat-terminal", "completed"),
+        ] {
+            let workdir = dir.path().join(id);
+            std::fs::create_dir_all(&workdir).expect("workdir");
+            backend
+                .create_run(&run(id, status, &workdir))
+                .await
+                .expect("create run");
+        }
+        let old = (chrono::Utc::now() - chrono::Duration::hours(1)).to_rfc3339();
+        for id in [
+            "unit-heartbeat-registered",
+            "unit-heartbeat-unregistered",
+            "unit-heartbeat-terminal",
+        ] {
+            force_lease(&backend, id, Some(instance_id()), &old).await;
+        }
+
+        // Only the running row has a registered executor task.
+        let _guard = RunMonitorGuard::new("unit-heartbeat-registered");
+        let _terminal_guard = RunMonitorGuard::new("unit-heartbeat-terminal");
+        let touched = heartbeat(&backend).await.expect("heartbeat");
+        assert!(touched >= 1, "the registered live run is renewed");
+
+        assert_ne!(
+            heartbeat_of(&backend, "unit-heartbeat-registered")
+                .await
+                .as_deref(),
+            Some(old.as_str()),
+            "a registered running row is heartbeated"
+        );
+        assert_eq!(
+            heartbeat_of(&backend, "unit-heartbeat-unregistered")
+                .await
+                .as_deref(),
+            Some(old.as_str()),
+            "a queued row with no executor task is NOT heartbeated"
+        );
+        assert_eq!(
+            heartbeat_of(&backend, "unit-heartbeat-terminal")
+                .await
+                .as_deref(),
+            Some(old.as_str()),
+            "terminal rows are never heartbeated"
+        );
+    }
+
+    /// The stale sweep never selects a pre-lease NULL-owner row, selects a
+    /// dead owner's stale row, and the claim precondition refuses to
+    /// re-own a live instance's fresh row.
+    #[tokio::test]
+    async fn stale_selection_and_claim_preconditions() {
+        let (backend, dir) = lease_backend().await;
+        for id in [
+            "unit-lease-null-owner",
+            "unit-lease-dead-owner",
+            "unit-lease-live-owner",
+        ] {
+            let workdir = dir.path().join(id);
+            std::fs::create_dir_all(&workdir).expect("workdir");
+            backend
+                .create_run(&run(id, "running", &workdir))
+                .await
+                .expect("create run");
+        }
+        let old = (chrono::Utc::now() - chrono::Duration::hours(1)).to_rfc3339();
+        force_lease(&backend, "unit-lease-null-owner", None, &old).await;
+        force_lease(&backend, "unit-lease-dead-owner", Some("dead"), &old).await;
+        force_lease(
+            &backend,
+            "unit-lease-live-owner",
+            Some("live"),
+            &chrono::Utc::now().to_rfc3339(),
+        )
+        .await;
+
+        let future = (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
+        let stale = backend
+            .stale_run_leases("reaper-peer", &future, 100)
+            .await
+            .expect("stale leases");
+        assert!(
+            stale.iter().any(|row| row.id == "unit-lease-dead-owner"),
+            "a dead owner's live row is selected"
+        );
+        assert!(
+            !stale.iter().any(|row| row.id == "unit-lease-null-owner"),
+            "a NULL-owner pre-lease row is never selected"
+        );
+
+        // Claim precondition: a live owner's fresh row is not re-owned by a
+        // past cutoff, but a stale or NULL owner can be claimed.
+        assert!(
+            !backend
+                .claim_run_owner(
+                    "unit-lease-live-owner",
+                    "claimant",
+                    &chrono::Utc::now().to_rfc3339(),
+                    &stale_cutoff(),
+                )
+                .await
+                .expect("claim live"),
+            "a live owner's fresh heartbeat cannot be re-owned"
+        );
+        assert!(
+            backend
+                .claim_run_owner(
+                    "unit-lease-null-owner",
+                    "claimant",
+                    &chrono::Utc::now().to_rfc3339(),
+                    &stale_cutoff(),
+                )
+                .await
+                .expect("claim null owner"),
+            "an unowned live row is claimable"
+        );
+        assert!(
+            backend
+                .claim_run_owner(
+                    "unit-lease-dead-owner",
+                    "claimant",
+                    &chrono::Utc::now().to_rfc3339(),
+                    &future,
+                )
+                .await
+                .expect("claim stale"),
+            "a stale owner's row is claimable"
+        );
+    }
 
     #[test]
     fn instance_id_is_stable_and_identifying() {

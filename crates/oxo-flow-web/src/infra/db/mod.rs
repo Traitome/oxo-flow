@@ -714,18 +714,31 @@ pub trait StorageBackend: Send + Sync {
     // as documented in the campaign evidence.
 
     /// Take ownership of an existing live run (crash recovery re-attach).
+    ///
+    /// Only an unowned row, a row this instance already owns, or a row whose
+    /// heartbeat is older than `stale_before` may be claimed — a live
+    /// instance's current run must not be re-owned by a racing caller.
+    /// Callers must pass `stale_before` = now - the lease TTL for normal
+    /// recovery; SQLite startup recovery (one server per database file) may
+    /// pass a future value because the previous web process is known dead.
     /// Returns `true` when a live row was claimed; `false` when the row is
-    /// gone or already terminal.
+    /// gone, already terminal, or still owned by a live instance.
     async fn claim_run_owner(
         &self,
         run_id: &str,
         instance_id: &str,
         heartbeat_at: &str,
+        stale_before: &str,
     ) -> Result<bool, String>;
 
-    /// Renew the heartbeat for every live run owned by `instance_id`.
+    /// Renew the heartbeat for the given live runs owned by `instance_id`.
     /// Returns the number of rows touched (0 is normal when idle).
-    async fn heartbeat_runs(&self, instance_id: &str, heartbeat_at: &str) -> Result<u64, String>;
+    async fn heartbeat_runs(
+        &self,
+        instance_id: &str,
+        run_ids: &[String],
+        heartbeat_at: &str,
+    ) -> Result<u64, String>;
 
     /// Live runs owned by another instance whose last heartbeat is older
     /// than `cutoff` (RFC 3339), oldest first. `current_instance` is

@@ -663,6 +663,15 @@ pub fn spawn_background_run_with_args(
     tokio::spawn(async move {
         info!("Starting background run {} for user {}", run_id, username);
 
+        // Register this run as actively monitored before any database work
+        // (issue #1402 review, MEDIUM): the heartbeat renews only runs whose
+        // executor task exists in this process. A row left queued because
+        // `mark_run_running` failed (e.g. the pool acquire timeout during a
+        // database partition) must stop being heartbeated, otherwise no
+        // instance could ever reap it. The guard unregisters on every return
+        // and on task cancellation/panic.
+        let _monitor = crate::infra::run_lease::RunMonitorGuard::new(run_id.clone());
+
         let Some(backend) = crate::infra::db::global_backend() else {
             error!(
                 "Storage backend unavailable — cannot run workflow '{run_id}' in background; \
@@ -682,6 +691,11 @@ pub fn spawn_background_run_with_args(
             }
             Err(e) => {
                 error!("Failed to update status to running for {run_id}: {e}");
+                // Best effort: finalize now so quota is released. If the
+                // database is still unreachable this also fails; the lease
+                // is no longer renewed (the guard drops on return), so the
+                // reaper finalizes the queued row once the TTL expires.
+                mark_run_failed(&run_id).await;
                 return;
             }
             Ok(true) => {}
@@ -717,6 +731,13 @@ pub fn spawn_background_run_with_args(
                 }
             },
         };
+
+        // A retried/resumed run may reuse the predecessor's workdir; a
+        // leftover `.exit-code` from that predecessor must never attribute
+        // this execution (issue #1402 review, HIGH). The mtime check in
+        // `read_exit_record_after` is the second line of defence (the
+        // record predates this row's `started_at`).
+        clear_exit_record(&run_dir);
 
         // Validate OS username to prevent injection in sudo mode
         let os_user_regex = Regex::new(r"^[a-z_][a-z0-9_-]*[$]?$")
@@ -1000,26 +1021,88 @@ async fn run_is_cancelled(run_id: &str) -> bool {
     }
 }
 
-/// Read the wrapper's `.exit-code` record from a run workdir, if present.
+/// Maximum accepted size of a wrapper `.exit-code` record.
 ///
-/// The wrapper shell writes the CLI's exit code there the moment it exits,
-/// so a run whose owning web process is gone can still be attributed by
-/// outcome instead of guessed. Stat first: the workdir is rule-writable and
-/// opening a writer-less FIFO planted at `.exit-code` would block forever
-/// (issue #735). Shared by SQLite startup recovery and the run-lease
-/// reaper, so both attribute identically.
-pub(crate) fn read_exit_record(workdir: &std::path::Path) -> Option<i32> {
+/// The workdir is rule-writable; a rule could leave a huge or special file
+/// at the path. A valid record is an exit code and a newline.
+const EXIT_RECORD_MAX_BYTES: u64 = 64;
+
+/// Filesystem mtime granularity allowance when comparing an exit record to
+/// the run's `started_at` (the wrapper can write in the same clock tick the
+/// run started).
+const EXIT_RECORD_MTIME_TOLERANCE_MS: i64 = 2_000;
+
+/// Read the wrapper's `.exit-code` record, accepting it only when it is a
+/// regular file written for **this** execution.
+///
+/// The record is a stale artefact when a retried/resumed run reuses a
+/// predecessor's workdir: the old `.exit-code` would otherwise attribute a
+/// never-executed run as `completed`. Three guards:
+///
+/// - the run must have a `started_at` (a `queued` row never ran, so it is
+///   never attributed from a file);
+/// - the record's mtime must not predate `started_at` (2 s tolerance for
+///   filesystem granularity);
+/// - the path must be a regular file of bounded size — checked with
+///   `symlink_metadata` (no-follow) before a capped read. A writer-less FIFO
+///   would block a plain read (issue #735); a symlink is rejected.
+///
+/// The caller runs this on a blocking thread (`spawn_blocking`) because the
+/// workdir may be on a slow shared filesystem.
+pub(crate) fn read_exit_record_after(workdir: &std::path::Path, started_at: &str) -> Option<i32> {
+    let started_ms = chrono::DateTime::parse_from_rfc3339(started_at)
+        .ok()?
+        .timestamp_millis();
     let path = workdir.join(".exit-code");
-    if !std::fs::metadata(&path)
-        .map(|m| m.is_file())
-        .unwrap_or(false)
-    {
+    let meta = std::fs::symlink_metadata(&path).ok()?;
+    if !meta.file_type().is_file() || meta.len() > EXIT_RECORD_MAX_BYTES {
         return None;
     }
-    std::fs::read_to_string(&path).ok()?.trim().parse().ok()
+    let modified_ms = meta
+        .modified()
+        .ok()?
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .ok()?
+        .as_millis() as i64;
+    if modified_ms + EXIT_RECORD_MTIME_TOLERANCE_MS < started_ms {
+        return None;
+    }
+    use std::io::Read as _;
+    let mut text = String::new();
+    std::fs::File::open(&path)
+        .ok()?
+        .take(EXIT_RECORD_MAX_BYTES)
+        .read_to_string(&mut text)
+        .ok()?;
+    text.trim().parse().ok()
+}
+
+/// Delete the wrapper's `.exit-code` record (best-effort).
+///
+/// Called before every spawn (a reused workdir must not carry a predecessor
+/// record into the new execution) and after a record is consumed.
+pub(crate) fn clear_exit_record(workdir: &std::path::Path) {
+    let path = workdir.join(".exit-code");
+    match std::fs::remove_file(&path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => warn!(
+            "Failed to clear stale .exit-code at {}: {e}",
+            path.display()
+        ),
+    }
+}
+
+/// Read a fresh `.exit-code` record and consume it (remove the file) so a
+/// later run in the same workdir cannot reuse it.
+pub(crate) fn consume_exit_record(workdir: &std::path::Path, started_at: &str) -> Option<i32> {
+    let code = read_exit_record_after(workdir, started_at)?;
+    clear_exit_record(workdir);
+    Some(code)
 }
 
 pub(crate) async fn finalize_run(run_id: &str, exit_code: Option<i32>, log_path: &std::path::Path) {
+    crate::infra::run_lease::unregister_monitored(run_id);
     crate::process_control::unregister(run_id);
     let success = exit_code == Some(0);
     let final_state = final_status_from_exit(success);
@@ -1138,6 +1221,13 @@ pub fn resume_monitoring(run_id: String, pid: i32, workdir: PathBuf) {
     }
     spawn_log_tailer(run_id.clone(), workdir.clone());
     tokio::spawn(async move {
+        // Re-attached runs are monitored by this task, so they heartbeat
+        // (issue #1402 review, MEDIUM); the guard unregisters on exit.
+        let _monitor = crate::infra::run_lease::RunMonitorGuard::new(run_id.clone());
+        // The CLI is alive, so any `.exit-code` present belongs to an
+        // earlier execution in this reused workdir; discard it before
+        // polling for the live one (issue #1402 review, HIGH).
+        clear_exit_record(&workdir);
         let exit_file = workdir.join(".exit-code");
         let log_path = workdir.join("execution.log");
         loop {
@@ -1486,6 +1576,61 @@ async fn mark_run_failed(run_id: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A reused workdir carries its predecessor's `.exit-code`: the record
+    /// predates this run's `started_at` and must not attribute it.
+    #[test]
+    fn exit_record_predating_the_run_is_rejected() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join(".exit-code"), "0").expect("stale record");
+        let started_at = (Utc::now() + chrono::Duration::minutes(5)).to_rfc3339();
+        assert_eq!(
+            read_exit_record_after(dir.path(), &started_at),
+            None,
+            "a record older than the run start belongs to a previous execution"
+        );
+    }
+
+    #[test]
+    fn exit_record_after_start_is_accepted_and_consumed() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let record = dir.path().join(".exit-code");
+        std::fs::write(&record, "0").expect("fresh record");
+        let started_at = (Utc::now() - chrono::Duration::minutes(1)).to_rfc3339();
+        assert_eq!(read_exit_record_after(dir.path(), &started_at), Some(0));
+        assert!(record.exists(), "a plain read must not consume the record");
+
+        assert_eq!(consume_exit_record(dir.path(), &started_at), Some(0));
+        assert!(
+            !record.exists(),
+            "consuming a fresh record removes it so a later run cannot reuse it"
+        );
+    }
+
+    #[test]
+    fn exit_record_rejects_oversized_and_non_regular_files() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let record = dir.path().join(".exit-code");
+        let started_at = (Utc::now() - chrono::Duration::minutes(1)).to_rfc3339();
+
+        // A 100-byte record parses as 0 after trim but exceeds the size cap.
+        std::fs::write(&record, format!("0{}", " ".repeat(120))).expect("oversized record");
+        assert_eq!(read_exit_record_after(dir.path(), &started_at), None);
+
+        // A symlink is rejected by the no-follow metadata check (unix).
+        #[cfg(unix)]
+        {
+            let target = dir.path().join("real-exit");
+            std::fs::write(&target, "0").expect("target");
+            std::fs::remove_file(&record).expect("remove oversized record");
+            std::os::unix::fs::symlink(&target, &record).expect("symlink");
+            assert_eq!(
+                read_exit_record_after(dir.path(), &started_at),
+                None,
+                "a symlink must not be followed"
+            );
+        }
+    }
 
     #[tokio::test]
     async fn wrapper_script_records_exit_code() {

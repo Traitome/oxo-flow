@@ -68,7 +68,7 @@ async fn stale_owner_lease_is_reaped_and_fresh_or_self_leases_are_not() {
     let root = tempfile::tempdir().expect("temp workdirs");
     let old = (Utc::now() - Duration::hours(1)).to_rfc3339();
 
-    // Arrange — five live rows covering every reaper boundary, plus one
+    // Arrange — live rows covering every reaper boundary, plus one
     // completed row that must never be selected.
     for (id, status) in [
         ("lease-target", "running"),
@@ -76,6 +76,9 @@ async fn stale_owner_lease_is_reaped_and_fresh_or_self_leases_are_not() {
         ("lease-self", "running"),
         ("lease-fresh", "running"),
         ("lease-terminal", "completed"),
+        ("lease-null-owner", "running"),
+        ("lease-queued-stale-exit", "queued"),
+        ("lease-running-stale-exit", "running"),
     ] {
         let workdir = root.path().join(id);
         std::fs::create_dir_all(&workdir).expect("workdir");
@@ -88,13 +91,39 @@ async fn stale_owner_lease_is_reaped_and_fresh_or_self_leases_are_not() {
     // true outcome is `completed`, not `failed`.
     std::fs::write(root.path().join("lease-finished/.exit-code"), "0").expect("exit record");
     std::fs::write(root.path().join("lease-finished/execution.log"), "done\n").expect("log");
+    // HIGH regression (issue #1402 review): a reused workdir carries its
+    // predecessor's `.exit-code=0`. A NEW queued row never executed, and a
+    // running row whose `started_at` is newer than the record must not be
+    // attributed as completed.
+    std::fs::write(root.path().join("lease-queued-stale-exit/.exit-code"), "0")
+        .expect("predecessor record");
+    sqlx::query("UPDATE runs SET started_at = NULL WHERE id = 'lease-queued-stale-exit'")
+        .execute(oxo_flow_web::infra::db::sqlite::pool())
+        .await
+        .expect("queued row has no start");
+    std::fs::write(root.path().join("lease-running-stale-exit/.exit-code"), "0")
+        .expect("predecessor record");
+    let future_start = (Utc::now() + Duration::minutes(5)).to_rfc3339();
+    sqlx::query("UPDATE runs SET started_at = ? WHERE id = 'lease-running-stale-exit'")
+        .bind(&future_start)
+        .execute(oxo_flow_web::infra::db::sqlite::pool())
+        .await
+        .expect("running row starts after the stale record");
+
     // The target, the finished orphan and the completed row belong to a
     // dead instance and have an old heartbeat; the fresh row belongs to a
     // dead instance but beat now; the self row looks stale but is owned by
-    // THIS process.
+    // THIS process. The NULL-owner row is never selected.
     force_lease("lease-target", "dead-instance", &old).await;
     force_lease("lease-finished", "dead-instance", &old).await;
     force_lease("lease-terminal", "dead-instance", &old).await;
+    force_lease("lease-null-owner", "", &old).await;
+    sqlx::query("UPDATE runs SET owner_instance = NULL WHERE id = 'lease-null-owner'")
+        .execute(oxo_flow_web::infra::db::sqlite::pool())
+        .await
+        .expect("null owner");
+    force_lease("lease-queued-stale-exit", "dead-instance", &old).await;
+    force_lease("lease-running-stale-exit", "dead-instance", &old).await;
     force_lease(
         "lease-self",
         oxo_flow_web::infra::run_lease::instance_id(),
@@ -120,11 +149,18 @@ async fn stale_owner_lease_is_reaped_and_fresh_or_self_leases_are_not() {
         1
     );
 
-    // Act — a heartbeat renews only this process's own live rows.
-    let touched = oxo_flow_web::infra::run_lease::heartbeat(backend.as_ref())
+    // Act — a heartbeat renews only this process's own live rows. The
+    // executor registry is exercised in the crate's unit tests; here the
+    // storage contract is pinned directly for the specific run id.
+    let touched = backend
+        .heartbeat_runs(
+            oxo_flow_web::infra::run_lease::instance_id(),
+            &["lease-self".to_string()],
+            &Utc::now().to_rfc3339(),
+        )
         .await
         .expect("heartbeat");
-    assert!(touched >= 1, "the self-owned live row is renewed");
+    assert_eq!(touched, 1, "the targeted live row is renewed");
     let (_, renewed) = status_and_heartbeat("lease-self").await;
     assert_ne!(renewed.as_deref(), Some(old.as_str()), "heartbeat advanced");
 
@@ -133,8 +169,8 @@ async fn stale_owner_lease_is_reaped_and_fresh_or_self_leases_are_not() {
         .await
         .expect("reap");
     assert_eq!(
-        reaped, 2,
-        "both dead-owner stale live rows leave the live set"
+        reaped, 4,
+        "the target, finished orphan, and both stale-exit rows leave the live set"
     );
 
     // Assert — the target is terminal, the others are untouched.
@@ -143,6 +179,25 @@ async fn stale_owner_lease_is_reaped_and_fresh_or_self_leases_are_not() {
         status_and_heartbeat("lease-finished").await.0,
         "completed",
         "a finished orphan is attributed from its exit record, not failed"
+    );
+    assert!(
+        !root.path().join("lease-finished/.exit-code").exists(),
+        "a consumed exit record is removed so a later run cannot reuse it"
+    );
+    assert_eq!(
+        status_and_heartbeat("lease-queued-stale-exit").await.0,
+        "failed",
+        "a queued row never executed and must not inherit a predecessor's exit record"
+    );
+    assert_eq!(
+        status_and_heartbeat("lease-running-stale-exit").await.0,
+        "failed",
+        "an exit record older than this run's start must be rejected"
+    );
+    assert_eq!(
+        status_and_heartbeat("lease-null-owner").await.0,
+        "running",
+        "pre-lease NULL-owner rows are never selected for reaping"
     );
     assert_eq!(
         status_and_heartbeat("lease-self").await.0,

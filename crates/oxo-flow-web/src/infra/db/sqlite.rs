@@ -884,6 +884,17 @@ impl StorageBackend for SqliteBackend {
         {
             tracing::warn!("schema migration: failed to create idx_runs_lease: {e}");
         }
+        // Heartbeat lookup: owner_instance + the live set (issue #1402
+        // review). The reaper uses the heartbeat_at index above.
+        if let Err(e) = sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_runs_owner_lease \
+             ON runs(owner_instance) WHERE status IN ('queued', 'running', 'paused')",
+        )
+        .execute(&self.pool)
+        .await
+        {
+            tracing::warn!("schema migration: failed to create idx_runs_owner_lease: {e}");
+        }
 
         // Migration: add usage_count to templates if missing
         self.add_column_if_missing("templates", "usage_count INTEGER NOT NULL DEFAULT 0")
@@ -3079,30 +3090,50 @@ impl StorageBackend for SqliteBackend {
         run_id: &str,
         instance_id: &str,
         heartbeat_at: &str,
+        stale_before: &str,
     ) -> Result<bool, String> {
         let res = sqlx::query(
             "UPDATE runs SET owner_instance = ?, heartbeat_at = ? \
-             WHERE id = ? AND status IN ('queued', 'running', 'paused')",
+             WHERE id = ? AND status IN ('queued', 'running', 'paused') \
+               AND (owner_instance IS NULL OR owner_instance = ? \
+                    OR heartbeat_at IS NULL OR heartbeat_at < ?)",
         )
         .bind(instance_id)
         .bind(heartbeat_at)
         .bind(run_id)
+        .bind(instance_id)
+        .bind(stale_before)
         .execute(&self.pool)
         .await
         .map_err(|e| e.to_string())?;
         Ok(res.rows_affected() > 0)
     }
 
-    async fn heartbeat_runs(&self, instance_id: &str, heartbeat_at: &str) -> Result<u64, String> {
-        let res = sqlx::query(
+    async fn heartbeat_runs(
+        &self,
+        instance_id: &str,
+        run_ids: &[String],
+        heartbeat_at: &str,
+    ) -> Result<u64, String> {
+        if run_ids.is_empty() {
+            return Ok(0);
+        }
+        // Only the placeholder count is generated; every value is bound.
+        let marks = std::iter::repeat_n("?", run_ids.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
             "UPDATE runs SET heartbeat_at = ? \
-             WHERE owner_instance = ? AND status IN ('queued', 'running', 'paused')",
-        )
-        .bind(heartbeat_at)
-        .bind(instance_id)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| e.to_string())?;
+             WHERE owner_instance = ? AND status IN ('queued', 'running', 'paused') \
+               AND id IN ({marks})"
+        );
+        let mut query = sqlx::query(sqlx::AssertSqlSafe(sql))
+            .bind(heartbeat_at)
+            .bind(instance_id);
+        for run_id in run_ids {
+            query = query.bind(run_id);
+        }
+        let res = query.execute(&self.pool).await.map_err(|e| e.to_string())?;
         Ok(res.rows_affected())
     }
 
@@ -3116,7 +3147,7 @@ impl StorageBackend for SqliteBackend {
         // (UTC RFC 3339 with a fixed `+00:00` suffix), so lexicographic
         // ordering is chronological ordering here.
         sqlx::query_as::<_, models::StaleRunLease>(
-            "SELECT id, user_id, status, workdir, owner_instance, heartbeat_at FROM runs \
+            "SELECT id, workdir, owner_instance, heartbeat_at, started_at FROM runs \
              WHERE status IN ('queued', 'running', 'paused') \
                AND owner_instance IS NOT NULL AND owner_instance <> ? \
                AND heartbeat_at IS NOT NULL AND heartbeat_at < ? \

@@ -293,22 +293,31 @@ async fn storage_backend_contract_round_trips_on_postgres() {
     // this process, ownership can be taken over, and stale selection
     // excludes the current instance. A cutoff in the future makes every
     // stored heartbeat stale without touching the row.
-    assert!(
+    let instance = oxo_flow_web::infra::run_lease::instance_id();
+    assert_eq!(
         backend
-            .heartbeat_runs(oxo_flow_web::infra::run_lease::instance_id(), &now())
+            .heartbeat_runs(instance, std::slice::from_ref(&run.id), &now())
             .await
-            .expect("heartbeat runs")
-            >= 1,
-        "the live run's heartbeat is renewed"
-    );
-    assert!(
-        backend
-            .claim_run_owner(&run.id, "other-instance", &now())
-            .await
-            .expect("claim owner"),
-        "a live run can be re-owned by a recovering instance"
+            .expect("heartbeat runs"),
+        1,
+        "the targeted live run's heartbeat is renewed"
     );
     let future = (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
+    assert!(
+        backend
+            .claim_run_owner(&run.id, "other-instance", &now(), &future)
+            .await
+            .expect("claim owner"),
+        "a stale-owned live run can be re-owned by a recovering instance"
+    );
+    let an_hour_ago = (chrono::Utc::now() - chrono::Duration::hours(1)).to_rfc3339();
+    assert!(
+        !backend
+            .claim_run_owner(&run.id, "third-instance", &now(), &an_hour_ago)
+            .await
+            .expect("live-owner claim"),
+        "a fresh live owner's row cannot be re-owned by a past cutoff"
+    );
     let stale = backend
         .stale_run_leases("current-instance", &future, 10)
         .await
@@ -327,11 +336,7 @@ async fn storage_backend_contract_round_trips_on_postgres() {
     );
     assert!(
         backend
-            .claim_run_owner(
-                &run.id,
-                oxo_flow_web::infra::run_lease::instance_id(),
-                &now()
-            )
+            .claim_run_owner(&run.id, instance, &now(), &future)
             .await
             .expect("reclaim owner"),
     );

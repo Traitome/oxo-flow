@@ -861,6 +861,10 @@ fn build_remote_run_cmd(
 pub fn spawn_remote_run(run_id: String, username: String, cluster: ClusterRow, staged: RunStaging) {
     register_remote(&run_id, &cluster.id);
     tokio::spawn(async move {
+        // This task is the remote run's executor/monitor, so it owns the
+        // lease heartbeat (issue #1402 review, MEDIUM). The guard
+        // unregisters on every return/cancellation.
+        let _monitor = crate::infra::run_lease::RunMonitorGuard::new(run_id.clone());
         let remote_dir = remote_run_dir(&cluster, &run_id);
         let RunStaging {
             local_workdir,

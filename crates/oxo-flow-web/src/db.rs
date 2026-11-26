@@ -43,12 +43,15 @@ pub async fn init_db(database_url: &str) -> Result<()> {
 /// interrupted when no record exists. Rows without a pid keep the old
 /// grace-period blind marking for legacy data.
 pub async fn recover_orphaned_runs() -> Result<()> {
-    let rows: Vec<(String, Option<i64>, Option<String>)> =
-        sqlx::query_as("SELECT id, pid, workdir FROM runs WHERE status IN ('running', 'paused')")
-            .fetch_all(crate::infra::db::sqlite::pool())
-            .await?;
+    /// `(id, pid, workdir, started_at)` of an in-flight row.
+    type OrphanedRun = (String, Option<i64>, Option<String>, Option<String>);
+    let rows: Vec<OrphanedRun> = sqlx::query_as(
+        "SELECT id, pid, workdir, started_at FROM runs WHERE status IN ('running', 'paused')",
+    )
+    .fetch_all(crate::infra::db::sqlite::pool())
+    .await?;
 
-    for (id, pid, workdir) in rows {
+    for (id, pid, workdir, started_at) in rows {
         match pid {
             Some(pid) => {
                 let pid = pid as i32;
@@ -76,16 +79,33 @@ pub async fn recover_orphaned_runs() -> Result<()> {
                     // The restarted process becomes the owner again (issue
                     // #1402): the lease heartbeat must resume, or another
                     // instance would reap a run this process is monitoring.
-                    if let Some(backend) = crate::infra::db::global_backend()
-                        && let Err(e) = backend
+                    if let Some(backend) = crate::infra::db::global_backend() {
+                        // SQLite startup recovery runs in a new process on
+                        // the one server for this database file, so the
+                        // previous web owner is known dead: pass a future
+                        // cutoff to force adoption (the general precondition
+                        // still protects other callers).
+                        let force_adopt_before =
+                            (chrono::Utc::now() + chrono::Duration::days(1)).to_rfc3339();
+                        match backend
                             .claim_run_owner(
                                 &id,
                                 crate::infra::run_lease::instance_id(),
                                 &crate::infra::run_lease::heartbeat_timestamp(),
+                                &force_adopt_before,
                             )
                             .await
-                    {
-                        tracing::warn!("Run {id}: failed to claim owner lease after restart: {e}");
+                        {
+                            Ok(true) => {}
+                            Ok(false) => tracing::warn!(
+                                "Run {id}: owner lease not adoptable after restart (row terminal?)"
+                            ),
+                            Err(e) => {
+                                tracing::warn!(
+                                    "Run {id}: failed to claim owner lease after restart: {e}"
+                                );
+                            }
+                        }
                     }
                     tracing::info!("Run {id}: re-attached live CLI (pid {pid}) after restart");
                     if let Some(wd) = workdir {
@@ -93,11 +113,18 @@ pub async fn recover_orphaned_runs() -> Result<()> {
                     }
                 } else {
                     // The CLI died while the server was down: attribute from
-                    // the exit record instead of guessing (the stat-first
-                    // FIFO guard lives in the shared reader, issue #735).
+                    // the exit record instead of guessing. The record is
+                    // accepted only when it postdates this row's start (a
+                    // reused workdir may carry a predecessor's) and is
+                    // consumed so a later run cannot reuse it; the stat-first
+                    // FIFO guard lives in the shared reader (issue #735).
                     let workdir = workdir.unwrap_or_default();
-                    let exit_code =
-                        crate::executor::read_exit_record(std::path::Path::new(&workdir));
+                    let exit_code = started_at.as_deref().and_then(|started_at| {
+                        crate::executor::consume_exit_record(
+                            std::path::Path::new(&workdir),
+                            started_at,
+                        )
+                    });
                     tracing::info!(
                         "Run {id}: CLI already dead after restart (exit record: {exit_code:?}) — attributing"
                     );
