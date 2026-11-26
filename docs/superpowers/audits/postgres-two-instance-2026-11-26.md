@@ -237,13 +237,37 @@ campaign matrix:
 | Defect | Fix | Regression test |
 | --- | --- | --- |
 | `/api/health` took ~30 s under a database outage | 4 s bound on the health DB probe; the structured 200 `degraded` body is unchanged | `domains::observability::service::tests::database_probe_times_out_within_its_bound` |
-| Pool waits could hold API requests 10-30 s | 5 s `acquire_timeout` on the PostgreSQL pool; requests answer `500 DB_ERROR` instead of hanging (SQLite keeps sqlx's default; the health probe bounds both) | Live probe 4 (pool options have no unit seam); pool construction is exercised by every web test |
+| Pool waits could hold API requests 10-30 s | 5 s `acquire_timeout` on the PostgreSQL pool; requests answer `500 DB_ERROR` instead of hanging (SQLite keeps sqlx's default; the health probe bounds both) | Live probe 4 + gated `test_pool_acquire_timeout_is_bounded` (holds the only connection; fails at the 5 s bound) |
 | `kill -9` left a `running` ghost row forever | Owner lease (`owner_instance`, `heartbeat_at`), 10 s heartbeat, 90 s TTL, 30 s reaper; `.exit-code` attribution; quota release through the shared finalizer | `tests/run_lease_reaper.rs`; storage-contract assertions in `tests/postgres_storage_contract.rs`; unit tests in `infra::run_lease` |
 
 The lease schema is added by both bootstraps (SQLite `ALTER TABLE`/rebuild
 path and PostgreSQL `ADD COLUMN IF NOT EXISTS`) with a partial sweep index;
 pre-lease rows have a NULL owner and are deliberately not reaped, so a
 rolling upgrade cannot misclassify an old instance's live run.
+
+## Review follow-up (2026-11-27)
+
+An independent review of the first campaign PR found two correctness gaps
+and several hardening items. They are fixed here, not re-probed on the live
+host; the regression tests are checked into the same PR.
+
+| Finding | Resolution |
+| --- | --- |
+| **HIGH — a reused workdir's stale `.exit-code` could mark a retried/resumed run `completed` without execution.** Retry/resume/apply-repair reuse the predecessor workdir; the reaper read any `.exit-code` for any live row (including `queued`). | The reaper accepts a record only for a `running` row whose `started_at` is newer than the record's mtime (2 s filesystem tolerance); a `queued` row is never attributed. Every spawn clears `.exit-code` before starting, `resume_monitoring` clears it before polling, and a consumed record is removed. Reads use `symlink_metadata` (no-follow), a 64-byte cap, and `spawn_blocking`. Regression: `tests/run_lease_reaper.rs` (queued row and running row with a predecessor record → `failed`, not `completed`). |
+| **MEDIUM — the heartbeat was process-scoped, not executor-scoped.** If `mark_run_running` failed (e.g. the pool acquire timeout during the partition this PR targets), the task returned, but the process kept renewing the queued row forever; other instances excluded it and the reaper could never recover it. | A process-local monitored-run registry (`RunMonitorGuard`) is registered by the local spawn task, SQLite re-attach, and remote dispatch, and dropped on every return/cancellation. The heartbeat renews only registered live runs (batched `id IN (...)`), and `mark_run_running` failure additionally attempts an immediate finalize/quota release; otherwise the lease expires and the reaper takes the queued row. Regression: `infra::run_lease::tests::heartbeat_renews_only_registered_live_runs` (an unregistered queued row stays stale; a registered terminal row is skipped). |
+| **LOW — no index for the heartbeat lookup.** | Partial `idx_runs_owner_lease` on `runs(owner_instance)` for `queued`/`running`/`paused` on both backends. |
+| **LOW — `.exit-code` read hardening.** | No-follow metadata, size cap, mtime check, `spawn_blocking`, and consumption (above). |
+| **LOW — `claim_run_owner` could re-own a live instance's run.** | The update requires `owner_instance IS NULL`, the same instance, or `heartbeat_at < stale_before`; SQLite recovery (the one-server-per-file case with a known-dead previous process) explicitly passes a future cutoff. Regression: `stale_selection_and_claim_preconditions` and the PG smoke/contract tests. |
+| **LOW — test gaps.** | Added NULL-owner non-selection, terminal-row heartbeat skip, targeted (not `>= 1`) heartbeat assertions in the PG smoke/contract tests, and the gated pool-acquire-timeout test. The queued-pre-spawn recovery is covered by the registry test; its production timing is the lease TTL. |
+
+Notes from the same review are reflected in code/docs: the reaper's terminal
+write is a system reconciliation and writes **no** `audit_logs` row (the
+chain records API mutations by an acting user); the new PostgreSQL partial
+indexes are built non-concurrently inside the bootstrap transaction (a very
+large `runs` table would block writes during startup); heartbeat timestamps
+are UTC RFC 3339 with a fixed `+00:00` suffix so TEXT comparison is
+chronological; a failed heartbeat logs the first failure and then once a
+minute instead of every 10 s.
 
 ## Residuals
 
@@ -278,6 +302,19 @@ rolling upgrade cannot misclassify an old instance's live run.
   instance (the later completion cannot overwrite the first terminal
   write); an orphaned CLI is not signalled; pre-lease rows (NULL owner) are
   not reaped; reconciliation is not instant (~90-120 s).
+- **A pre-spawn `mark_run_running` failure is recovered by the lease
+  expiry, not instantly.** The task attempts an immediate finalize and
+  quota release, but if the database is still unreachable that also fails;
+  the row then stops being heartbeated (executor-scoped registry) and is
+  reaped after the 90 s TTL.
+- **The reaper's terminal write is not an audit event.** It is a system
+  reconciliation with no acting user; the hash-chained `audit_logs`/chain
+  records API mutations only. A missing audit row for a reaped run is
+  therefore expected, not tampering.
+- **The new PostgreSQL lease indexes are built non-concurrently** inside
+  the bootstrap transaction (a concurrent build cannot run in a
+  transaction). A very large `runs` table would hold writes for the index
+  build during startup; production-scale DDL time is unmeasured.
 - **A terminal write that fails while the database is down is not
   retried.** If a run finishes during an outage and its owning web process
   stays alive, the row can remain `running` after recovery (the owner keeps
@@ -294,6 +331,7 @@ and drop a disposable database, restart PostgreSQL, and install temporary
 `iptables` rules). Their exact commands are named in
 [`data/postgres-1402-campaign-2026-11-26.log`](data/postgres-1402-campaign-2026-11-26.log).
 The checked-in regression tests (`tests/run_lease_reaper.rs`,
-`tests/quota_durable.rs`, `tests/postgres_storage_contract.rs`, and the
-health/lease unit tests) run without the live host; the PostgreSQL storage
-contract gates on `OXO_FLOW_TEST_POSTGRES_URL`.
+`tests/quota_durable.rs`, `tests/postgres_storage_contract.rs`, the
+executor exit-record tests, and the health/lease unit tests) run without
+the live host; the PostgreSQL storage contract and the pool-acquire-timeout
+test gate on `OXO_FLOW_TEST_POSTGRES_URL`.

@@ -786,20 +786,25 @@ no ghost `queued` row survives:
   saved-pipeline slot rule above).
 
 Every run row also carries an **owner lease** (`owner_instance`,
-`heartbeat_at`, issue #1402): the web process that created the run renews its
-heartbeat every 10 s, and any instance may finalize a live run whose owner has
-been silent for 90 s (swept every 30 s). When the orphan's workdir is
-reachable and contains the wrapper's `.exit-code` record, the run is
-attributed to that real outcome (`completed` for 0); otherwise it is marked
-`failed`. A process never reaps its own rows, and rows written before the
-lease migration (NULL owner) are not reaped — a rolling upgrade does not
-misclassify an old instance's live run. The measured `kill -9` ghost row is
-now reconciled automatically in about 90-120 s; a lease longer than the TTL
-cannot be renewed from a database partition, so another instance may finalize
-that run first. `/api/health` bounds its database probe to 4 s and every
-PostgreSQL pool acquire to 5 s, so a broken database surfaces as `degraded` /
-`500 DB_ERROR` in seconds instead of a 30 s hang; a request that already holds
-a connection to a black-holed server can still block in TCP retransmission.
+`heartbeat_at`, issue #1402): while an executor task is actually monitoring
+the run, its process renews the heartbeat every 10 s, and any instance may
+finalize a live run whose owner has been silent for 90 s (swept every 30 s).
+A queued row with no executor task is not heartbeated, so a failed pre-spawn
+step cannot pin it forever. When the orphan's workdir is reachable and holds
+a wrapper `.exit-code` record that postdates **this** run's `started_at`, the
+run is attributed to that outcome (`completed` for 0); otherwise it is marked
+`failed`. A `queued` row is never attributed from a record, and a record is
+consumed after use — a retried/resumed run reusing a predecessor's workdir
+cannot inherit its result. A process never reaps its own rows, and rows
+written before the lease migration (NULL owner) are not reaped — a rolling
+upgrade does not misclassify an old instance's live run. The measured
+`kill -9` ghost row is now reconciled automatically in about 90-120 s; a
+lease longer than the TTL cannot be renewed from a database partition, so
+another instance may finalize that run first. `/api/health` bounds its
+database probe to 4 s and every PostgreSQL pool acquire to 5 s, so a broken
+database surfaces as `degraded` / `500 DB_ERROR` in seconds instead of a
+30 s hang; a request that already holds a connection to a black-holed server
+can still block in TCP retransmission.
 
 `pipeline_id` (optional) only *associates* the run with a saved pipeline —
 the TOML still comes from `toml_content`. Every run created through this

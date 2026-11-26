@@ -398,13 +398,15 @@ prototype-grade:
   process groups can leave the database state inconsistent with the process.
 - **Crash restart** on SQLite probes and re-attaches unfinished runs by pid;
   on PostgreSQL, runs carry an owner lease (`owner_instance`/`heartbeat_at`,
-  renewed every 10 s, 90 s TTL) and a 30 s reaper finalizes a live run whose
-  web process died, attributing the wrapper's `.exit-code` when the workdir
-  is reachable. A process never reaps its own rows and pre-lease rows are
-  skipped. The lease does not make every race provably safe: an orphaned CLI
-  is not signalled, a live owner partitioned from the database longer than
-  the TTL can be finalized by another instance, and a terminal write that
-  fails during an outage is not retried.
+  renewed every 10 s while an executor task is registered, 90 s TTL) and a
+  30 s reaper finalizes a live run whose web process died, attributing the
+  wrapper's `.exit-code` only when it postdates this run's `started_at` (a
+  reused workdir's predecessor record is rejected and consumed). A process
+  never reaps its own rows and pre-lease rows are skipped. The lease does not
+  make every race provably safe: an orphaned CLI is not signalled, a live
+  owner partitioned from the database longer than the TTL can be finalized by
+  another instance, and a terminal write that fails during an outage is not
+  retried. A reaper finalization writes no audit row (it has no acting user).
 
 Do not present these controls as crash-consistent or compliance-grade;
 treat run records written under crash/restart races as provisional until

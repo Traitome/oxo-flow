@@ -201,17 +201,23 @@ Backend-equivalent admission is now asserted, not assumed (`tests/admission_back
 
 Runs also carry an **owner lease** (issue #1402): the inserting web process
 records `owner_instance` and `heartbeat_at` and renews the heartbeat every
-10 s; a 30 s reaper finalizes a live run whose owner has been silent for 90 s,
-attributing the wrapper's `.exit-code` record when the workdir is reachable
-(`completed` for 0) and `failed` otherwise. This is the automatic
-reconciliation for the measured `kill -9` ghost row. A process never reaps its
-own rows, terminal rows are never selected, and rows written before the lease
-migration (NULL owner) are skipped so a rolling upgrade cannot misclassify an
-old instance's live run. Deliberate tradeoffs: the orphaned CLI is not
-signalled; a live owner that cannot reach the database for longer than the TTL
-can be finalized by another instance (the first terminal write wins); and a
-terminal write that fails during an outage is not retried, so a live owner can
-leave a row `running` until it is cancelled or the process exits.
+10 s **only while an executor task for that run is registered in the
+process** (local spawn, SQLite re-attach, or remote dispatch); a queued row
+with no executor is not renewed. A 30 s reaper finalizes a live run whose
+owner has been silent for 90 s, attributing the wrapper's `.exit-code` record
+only when it postdates this run's `started_at` (`completed` for 0) and
+`failed` otherwise; a `queued` row is never attributed, the record is
+consumed, and every spawn clears a predecessor's record first. This is the
+automatic reconciliation for the measured `kill -9` ghost row. A process
+never reaps its own rows, terminal rows are never selected, and rows written
+before the lease migration (NULL owner) are skipped so a rolling upgrade
+cannot misclassify an old instance's live run. Deliberate tradeoffs: the
+orphaned CLI is not signalled; a live owner that cannot reach the database
+for longer than the TTL can be finalized by another instance (the first
+terminal write wins); a terminal write that fails during an outage is not
+retried, so a live owner can leave a row `running` until it is cancelled or
+the process exits; and a reaper finalization is a system reconciliation with
+no audit row (the chain records API mutations by an acting user).
 
 Nothing reclaims those trees automatically: a long-lived server accumulates one
 `users/<u>/runs/<run_id>/` directory per run forever. The manual sweeper is
