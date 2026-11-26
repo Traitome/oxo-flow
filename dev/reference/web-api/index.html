@@ -5784,15 +5784,22 @@ Like every <code>ApiResult</code> error, the 429 carries no <code>Retry-After</c
 (the typed tuple cannot carry headers) — the countdown lives in the
 error <code>message</code> instead (<code>retry in {wait_secs}s</code>).
 <code>skip_succeeded</code> (default <code>true</code>) chooses which rules re-execute. The
-returned plan and the spawned CLI flags are derived from the same mapping
-(<code>retry_spawn_flags</code>), so the promise and the execution cannot drift:</p>
+returned plan and the spawned CLI flags are derived from the same decision
+(<code>retry_spawn_flags</code>): the flags decide which checkpoint records the CLI may
+reuse. The plan is <strong>pre-verification</strong> and advisory — the retry spawn also
+carries <code>--verify-outputs</code>, so strict manifest verification can only <em>expand</em>
+the executed set (a rule listed in <code>will_skip</code> whose output fails
+re-executes with its completed downstream); it never skips a rule whose
+output failed verification. <code>will_rerun</code> is an estimate too: it adds the
+failed/cancelled rules plus their direct dependents, while the engine's
+runtime invalidation may cascade transitively:</p>
 <ul>
 <li><code>skip_succeeded: true</code> — the retry spawns with <code>--resume-failed</code> (no
   <code>--rerun</code>). Failed and cancelled rules re-execute, the checkpoint's
   cascade invalidation re-runs their downstream dependents, and completed
-  rules outside that closure keep their checkpoint records and are skipped.
-  <code>will_rerun</code> lists the re-executed set; <code>will_skip</code> lists the skipped
-  completed rules.</li>
+  rules outside that closure keep their checkpoint records and are listed
+  in <code>will_skip</code> (advisory — strict verification may still re-run one).
+  <code>will_rerun</code> lists the expected re-executed set.</li>
 <li><code>skip_succeeded: false</code> — the retry spawns with <code>--rerun</code>, which
   re-executes EVERY rule regardless of checkpoint state. <code>will_rerun</code> lists
   every rule in the workflow (DAG order) and <code>will_skip</code> is empty — the same
@@ -5811,12 +5818,24 @@ record, so they re-execute as well; the plan lists them in <code>will_rerun</cod
 alongside the downstream closure. <code>--from-rule</code> subsumes
 <code>skip_succeeded</code> for the re-executed set: completed rules outside that set
 keep their checkpoint state, so the plan lists them in <code>will_skip</code>
-regardless of <code>skip_succeeded</code>. A <code>from_rule</code> naming a rule not in the DAG
+regardless of <code>skip_succeeded</code> (advisory: strict verification may still
+re-run a listed rule). A <code>from_rule</code> naming a rule not in the DAG
 surfaces as a <code>400 RuleNotFound</code> from the spawned CLI's own DAG walk.</p>
+<p>The spawned CLI also carries <code>--verify-outputs</code> (issue #1426): a retry is a
+continuation of the predecessor run, so every completed rule the plan reuses
+must pass its recorded output-manifest check (size + capped <code>sha256</code>)
+instead of the historical size+mtime gate. A rule whose output is missing,
+resized, content-changed, or unhashed — plus its completed downstream —
+re-executes before the run reports it up to date. The flag is sent for all
+three retry shapes above; with <code>--rerun</code> every rule executes, so the check
+is a no-op there. The local web spawn environment allowlist also forwards
+<code>OXO_FLOW_MANIFEST_HASH_MAX_BYTES</code>, so a retry hashes with the operator's
+cap rather than the 64 MiB default. Plain create is unaffected: it is a
+fresh <code>run</code> and keeps the historical gate by design.</p>
 <p>The retry <strong>really executes</strong>: the returned <code>new_run_id</code> is a real run in
 the database (same workdir, same owner), spawned with the flag pair above so
-the rules the plan lists re-execute despite their existing outputs and the
-checkpoint's cascade invalidation re-runs their downstream dependents.
+the rules <code>will_rerun</code> lists re-execute despite their existing outputs and
+the checkpoint's cascade invalidation re-runs their downstream dependents.
 The retry <strong>replays the original run's <code>config_overrides</code></strong>:
 the new row carries the stored overrides forward and the spawned CLI
 receives the same <code>--arg=KEY=VALUE</code> entries, so a retry re-executes with the
@@ -5830,8 +5849,9 @@ When <code>from_rule</code> is set, the plan's <code>will_rerun</code> list cont
 rule plus every transitive dependent (the downstream closure) and any
 failed/cancelled rule in its upstream target set (those re-execute too,
 since they have no success checkpoint record), and <code>will_skip</code> contains the
-remaining completed rules — the same set the engine will execute at run
-start.</p>
+remaining completed rules — the pre-verification reuse estimate; strict
+manifest verification can still re-run one of them (and its completed
+downstream).</p>
 <h3 id="apply-reviewed-repair">Apply Reviewed Repair<a class="headerlink" href="#apply-reviewed-repair" title="Permanent link">#</a></h3>
 <p><div class="language-text highlight"><pre><span></span><code><span id="__span-47-1"><a id="__codelineno-47-1" name="__codelineno-47-1" href="#__codelineno-47-1"></a>POST /api/runs/{id}/apply-repair
 </span><span id="__span-47-2"><a id="__codelineno-47-2" name="__codelineno-47-2" href="#__codelineno-47-2"></a>Content-Type: application/json
@@ -6723,12 +6743,13 @@ Usage is visible at <code>GET /api/quota</code> (<code>{ enabled, limits: {…},
   process count (it is a fork-bomb backstop, not a per-run quota). Both are
   Linux-only; off Linux the install is a no-op.</p>
 <ul>
-<li><strong>Child environment allowlist (web spawn path)</strong>: the spawned CLI no longer
+<li><strong>Child environment allowlist (local web spawn path)</strong>: the spawned CLI no longer
   inherits the server's environment. The web spawn path reuses the engine's own
   rule-shell policy (<code>apply_rule_env_allowlist</code>), so the child sees only
   <code>PATH</code>/<code>HOME</code>/<code>LANG</code>/<code>LC_*</code>, the engine's non-secret configuration knobs
   (e.g. <code>OXO_FLOW_TMPDIR</code>, <code>OXO_FLOW_MODULE_CACHE</code>, <code>OXO_FLOW_STRICT_PLACEHOLDERS</code>,
-  <code>OXO_FLOW_BIN</code>), and the explicitly declared passthrough names — never
+  <code>OXO_FLOW_MANIFEST_HASH_MAX_BYTES</code>, <code>OXO_FLOW_BIN</code>), and the explicitly
+  declared passthrough names — never
   <code>DATABASE_URL</code>, <code>OXO_FLOW_MASTER_KEY</code>, provider keys, or MCP tokens. The
   passthrough contract is reproduced end-to-end: the server forwards both
   the <code>OXO_FLOW_ENV_PASSTHROUGH</code> list and the named variables themselves, so

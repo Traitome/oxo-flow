@@ -4477,15 +4477,22 @@ large-output or directory-output workflows where re-hashing/re-running is
 unacceptable. Plain <code>oxo-flow run</code> keeps the historical size+mtime gate;
 <code>run --verify-outputs</code> opts a plain run (for example a retry wrapper) into the
 same strict behavior, and <code>resume</code> applies it by default.</p>
-<p><strong>Coverage boundary.</strong> Only the <code>resume</code> command (<code>resume-checkpoint</code> on the
-web surface) and <code>run --verify-outputs</code> apply strict verification. The web
-retry path spawns <code>run --resume-failed</code>, which keeps the historical
-size+mtime gate until it is wired to <code>--verify-outputs</code>; a retry of a run
-whose outputs were damaged after completion does not re-verify them.
-Similarly, <code>OXO_FLOW_MANIFEST_HASH_MAX_BYTES</code> is honored by direct CLI runs
-but is not yet forwarded into the web server's spawn environment allowlist,
-so web-spawned runs and their resumes use the 64 MiB default. Both are
-planned follow-ups, not silent guarantees.</p>
+<p><strong>Coverage boundary.</strong> The <code>resume</code> command (<code>resume-checkpoint</code> on the web
+surface), the web retry path, and <code>run --verify-outputs</code> apply strict
+verification. The web retry spawns <code>run --resume-failed --verify-outputs</code>
+(the flag is set for every retry shape — <code>--resume-failed</code>, <code>--rerun</code>, and
+<code>--from-rule</code>), so a retry of a run whose outputs were damaged after
+completion re-executes the affected rule and its completed downstream
+instead of silently reusing them. <code>OXO_FLOW_MANIFEST_HASH_MAX_BYTES</code> is
+forwarded into the local web server spawn environment allowlist, so locally
+web-spawned runs, retries, and their resumes hash with the operator's cap
+exactly like a direct CLI run. Web cluster runs execute the staged copy on
+the remote host with the remote CLI's own environment, so a cap must be set
+there too. Plain web create remains a <code>run</code> and keeps the historical
+size+mtime gate by design, and <code>dry-run</code>/<code>status</code> previews do not verify.
+Same-size corruption of an output above the hash cap remains unverified
+(size-only), so strict verification re-runs it; raise the cap for content
+identity, or <code>--trust-mtime</code> accepts the size+mtime verdict.</p>
 <h3 id="checkpoint-format-version">Checkpoint format version<a class="headerlink" href="#checkpoint-format-version" title="Permanent link">#</a></h3>
 <p>Every checkpoint records a <code>checkpoint_format_version</code> marker. If the version
 recorded is <strong>newer</strong> than the running engine's — i.e. the checkpoint was
