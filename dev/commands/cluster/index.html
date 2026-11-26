@@ -5361,9 +5361,12 @@ jobs, and dependencies are chained per instance. The run submits at most
 checkpoint exactly as a local run does — <code>status</code>, <code>resume</code>, and re-run
 invalidation behave identically, and a second <code>run --profile slurm</code> with
 nothing changed submits nothing. Terminal verdicts are folded into the
-checkpoint as each job settles, and a rule still recorded as
-<code>running</code>/<code>pending</code> after a driver crash is re-queued rather than trusted
-because its output file exists (a killed job can leave a partial file).</p>
+checkpoint as each job settles; the accepted job id (and its array base) is
+recorded at submit time and removed on settle, so a checkpoint's
+<code>cluster_jobs</code> map holds exactly the submissions a crashed driver never saw
+finish. A rule still recorded as <code>running</code>/<code>pending</code> after a driver crash is
+reconciled by <code>resume</code> — never trusted merely because its output file exists
+(a killed job can leave a partial file).</p>
 <p>The run's scratch directory (<code>[engine] tmp_dir</code> / <code>OXO_FLOW_TMPDIR</code>, issue</p>
 <h1 id="907-travels-onto-the-cluster-too-every-submitted-job-script-exports">907) travels onto the cluster too: every submitted job script exports<a class="headerlink" href="#907-travels-onto-the-cluster-too-every-submitted-job-script-exports" title="Permanent link">#</a></h1>
 <p><code>TMPDIR</code>/<code>TMP</code>/<code>TEMP</code> to the resolved directory before the rule's command
@@ -5557,16 +5560,23 @@ interrupted rule is <code>required = false</code>: it is never reported as compl
 (A <code>required = false</code> failure <em>without</em> an interrupt still exits 0.)
 Signals are watched on the cluster path only; the local executor has its
 own (pre-existing) signal handling.</p>
-<p>What remains out of scope is <em>re-attaching</em>: a driver that died without a
-signal (crash, OOM) cannot adopt the scheduler job ids of a previous
-process. Those jobs keep running under the scheduler; a subsequent
-<code>resume</code> (checkpoint path argument) or <code>run --resume-failed</code> re-queues their rules from the checkpoint's
-RUNNING entries rather than reusing the live job ids — verdicts the driver
-had already observed settling were folded into the checkpoint, so their work
-is not repeated. Until a
-re-attach path exists, use <code>oxo-flow cluster status</code> (run-aware; <code>--all</code>
-for the raw scheduler view) and <code>oxo-flow cluster cancel &lt;JOB_ID&gt;...</code> to
-inspect or clean up jobs orphaned by a crashed driver.</p>
+<p>Re-attaching is a <code>resume</code> feature: the checkpoint records the run's
+profile/backend/queue and every accepted job id, all removed as jobs settle.
+<code>oxo-flow resume &lt;checkpoint&gt;</code> re-attaches through the recorded profile (or an
+explicit <code>--profile</code>), polls the recorded jobs to a terminal state, adopts a
+success only after verifying the rule's declared outputs, records failures for
+a normal re-run, and fails closed when the scheduler cannot confirm a job.
+Each job is polled/cancelled through the backend recorded on that job, so a
+checkpoint whose jobs span two schedulers is reconciled group by group rather
+than sending an id to the wrong scheduler. <code>--abandon-jobs</code> cancels the
+recorded live jobs through the backend that owns them, then reruns their
+rules. See
+<a href="../resume/#cluster-runs-reattach-or-abandon">resume → Cluster runs</a>.</p>
+<p>A plain <code>run</code> is NOT a re-attach path: <code>run --profile</code> re-plans from the
+checkpoint's completion set and submits whatever is not complete, so after a
+crashed driver use <code>resume</code> rather than a fresh <code>run</code>. <code>oxo-flow cluster
+status</code> (run-aware; <code>--all</code> for the raw scheduler view) and <code>oxo-flow cluster
+cancel &lt;JOB_ID&gt;...</code> remain the raw inspection/cleanup surfaces.</p>
 <h3 id="crash-safe-checkpoint-folding-issue-1083">Crash-safe checkpoint folding (issue #1083)<a class="headerlink" href="#crash-safe-checkpoint-folding-issue-1083" title="Permanent link">#</a></h3>
 <p>The driver folds every job verdict into the checkpoint <strong>as soon as it
 becomes available</strong>, not when the run loop finishes: a submission records a

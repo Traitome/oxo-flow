@@ -5978,12 +5978,17 @@ run with the workflow's own config. The same hard error applies when the
 profile file exists but its TOML fails to parse or merge.</p>
 <h4 id="cluster-submission">Cluster submission<a class="headerlink" href="#cluster-submission" title="Permanent link">#</a></h4>
 <p>A profile that also carries a <code>[cluster]</code> block makes <code>run --profile</code> submit
-to a scheduler instead of executing locally: the run expands rules into
-per-instance jobs, submits at most <code>max_submitted</code> at a time (grouped into
-scheduler arrays where possible), tracks them to completion, and writes the
-checkpoint exactly as a local run does. Both conditions are required — a
+to a scheduler instead of executing locally. Both conditions are required — a
 <code>[cluster]</code> block in effect <strong>and</strong> a profile named; adding either one alone
 never changes an existing local run.</p>
+<p>Rules become jobs after wildcard expansion, so a 100-sample scatter is 100
+jobs, and dependencies are chained per instance. The run submits at most
+<code>max_submitted</code> at a time (grouped into scheduler arrays where possible),
+tracks them to completion, and writes the checkpoint exactly as a local run
+does. The checkpoint also records the run's profile/backend/queue and each
+accepted job's scheduler id, removed as the job settles — the evidence
+<a href="../resume/#cluster-runs-reattach-or-abandon"><code>resume</code></a> uses to re-attach to a
+crashed run's live jobs (or to abandon them) instead of executing them again.</p>
 <p>The full story — the <code>[cluster]</code> TOML reference and driver-default fallbacks,
 profile lookup rules, <code>TMPDIR</code> exports on job scripts, the <code>scratch = true</code>
 plan-time rejection, job arrays, the run directory layout, what <code>status.json</code>
@@ -6337,6 +6342,15 @@ partially-written outputs, so a killed job's half-finished outputs are not
 mistaken for finished work (issue #1083). Rules with no checkpoint entry at
 all keep their historical freshness semantics — output existence alone
 decides, as before (issue #77).</p>
+<p>On a <strong>cluster</strong> run the checkpoint also carries each accepted scheduler job
+id plus the run's profile/backend, so <code>oxo-flow resume</code> does not blindly
+re-run a rule whose job may still be live: it re-attaches through the
+recorded profile, waits for the recorded jobs to settle, adopts verified
+terminal successes, and re-runs only proven failures — or, with
+<code>--abandon-jobs</code>, cancels the recorded jobs first. Without a usable profile it
+fails closed, naming the jobs. A plain <code>oxo-flow run</code> does not reconcile; use
+<a href="../resume/#cluster-runs-reattach-or-abandon"><code>resume</code></a> after a crashed or
+interrupted cluster run.</p>
 <h3 id="variant-checkpoints-checkpoint">Variant checkpoints (<code>--checkpoint</code>)<a class="headerlink" href="#variant-checkpoints-checkpoint" title="Permanent link">#</a></h3>
 <p>The default checkpoint is <strong>per workdir</strong> (<code>&lt;workdir&gt;/.oxo-flow/checkpoint.json</code>),
 so running a <code>pipeline.smoke.oxoflow</code> variant next to <code>pipeline.oxoflow</code> in

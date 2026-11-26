@@ -2761,6 +2761,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#cluster-runs-re-attach-or-abandon" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cluster runs: re-attach or abandon
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -4243,6 +4254,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#cluster-runs-re-attach-or-abandon" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cluster runs: re-attach or abandon
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -4379,6 +4401,77 @@ marker (written before the marker existed) is treated as compatible. See the
 cross-version contract in
 <a href="https://github.com/traitome/oxo-flow/blob/main/docs/superpowers/audits/reentry-2026-11.md">docs/superpowers/audits/reentry-2026-11.md</a>
 (§5.2/§5.3).</p>
+<h3 id="cluster-runs-re-attach-or-abandon">Cluster runs: re-attach or abandon<a class="headerlink" href="#cluster-runs-re-attach-or-abandon" title="Permanent link">#</a></h3>
+<p>A <code>run --profile &lt;NAME&gt;</code> cluster run records, in the checkpoint, the profile
+name/backend/queue it submitted through <strong>and</strong> the scheduler job id of every
+accepted job. Each id is removed as its job settles, so the checkpoint's
+<code>cluster_jobs</code> map holds exactly the jobs an interrupted driver never
+observed reaching a terminal state.</p>
+<p><code>resume</code> reconciles those recorded jobs with the scheduler <strong>before</strong> it
+clears the persisted in-flight set or re-plans execution (issue #1427):</p>
+<ul>
+<li><strong>No profile recorded and none supplied</strong> — fail closed. Nothing is
+  cleared, persisted, or executed; the error names every recorded job and
+  the two escape hatches.</li>
+<li><strong>Profile available</strong> — the explicit <code>--profile</code>, else the profile the
+  checkpoint recorded if its file still exists under the workflow's
+  <code>profiles/</code> directory. Resume re-attaches through the backend recorded at
+  submit time:<ul>
+<li>queued/running → waits, polling, until the job is terminal; it is
+  never resubmitted;</li>
+<li>terminal success with every declared output present → the rule is
+  marked completed (a <code>recorded_as: "adopted from &lt;backend&gt; job &lt;id&gt;"</code>
+  benchmark is written only when no measured benchmark exists). A rule
+  whose outputs are declared only through <code>output_pattern</code> has no fixed
+  files to verify at adoption time; its scheduler-confirmed success is
+  adopted without a per-instance file check;</li>
+<li>terminal success whose declared outputs are missing → a warning, and
+  the rule re-runs;</li>
+<li>terminal failure or cancellation → recorded, and the normal resume
+  re-runs the rule;</li>
+<li>scheduler unreachable, or a job neither in the live queue nor in the
+  accounting store → fail closed with the job named.</li>
+</ul>
+</li>
+<li><strong><code>--abandon-jobs</code></strong> — cancel the recorded live jobs through the backend
+  that owns them (<code>scancel</code>/<code>qdel</code>/<code>bkill</code>/…), clear their records, and
+  re-run the rules. With a usable profile the rerun keeps the cluster route;
+  without one it continues <strong>locally</strong> (announced on stderr). A cancel the
+  scheduler <strong>rejects</strong> fails closed: a job that may still be running is
+  never reported as abandoned. An accepted <code>scancel</code>/<code>qdel</code>/… is the
+  scheduler's acknowledgement that the signal was delivered, not proof the
+  process has already stopped — a brief termination window remains. If the
+  scheduler reports the id no longer exists (a purged record), cancel cannot
+  confirm anything: verify with <code>oxo-flow cluster status</code>, then remove that
+  rule's <code>cluster_jobs</code> entry from the checkpoint manually (or complete the
+  rule) before resuming.</li>
+</ul>
+<p>Reconciliation always uses the backend recorded <strong>on each job</strong>, never the
+backend a (possibly edited) profile resolves to today. A checkpoint whose
+unsettled jobs span more than one scheduler (a crash on one backend followed
+by a run on another) is reconciled group by group, each through the scheduler
+that owns it — a job id is never handed to a different backend. When a
+group's backend differs from the checkpoint's recorded run, an error's
+recovery command cannot know that scheduler's location/zone; add its
+<code>--queue</code> value manually (GCP location / Tencent availability zone). A resume
+with no recorded cluster jobs still routes through the recorded profile (when
+its file still exists), so the remaining rules keep running on the scheduler
+instead of silently falling back to the local executor.</p>
+<p>Checkpoints written before this feature carry no job ids; their resume
+behavior is unchanged (their rules re-run), and <code>run</code> deliberately never
+consults <code>cluster_jobs</code> — after a crashed cluster driver, use <code>resume</code>
+(not a fresh <code>run</code>) to re-attach.</p>
+<p>A recorded job whose rule an intervening invocation completed <strong>and which is
+no longer marked in flight</strong> is treated as <strong>settled</strong>: <code>resume</code> drops the
+stale id (and persists the cleanup) instead of polling a scheduler record
+that may since have been purged. The in-flight mark is the discriminator: a
+<code>run --rerun</code> re-submits a completed rule and records its NEW job id while
+the rule deliberately stays complete, so that shape — completed AND running —
+is treated as <strong>live</strong>: resume polls or cancels the job instead of dropping
+it, and never lets a dependent run against outputs it is still rewriting. If
+a genuinely superseded job was in fact still live, the intervening completion
+already raced it — reconciling an id the checkpoint's completion set no
+longer needs cannot undo that, and refusing to resume forever would be worse.</p>
 <h2 id="options">Options<a class="headerlink" href="#options" title="Permanent link">#</a></h2>
 <table>
 <thead>
@@ -4423,6 +4516,16 @@ cross-version contract in
 <td><code>--no-report-snapshot</code></td>
 <td>—</td>
 <td>Skip the automatic report snapshot after the resumed run (same flag as <code>run</code>)</td>
+</tr>
+<tr>
+<td><code>--profile &lt;NAME&gt;</code></td>
+<td>—</td>
+<td>Re-attach recorded cluster jobs through this profile (and run the remaining rules on that scheduler). Defaults to the profile the checkpoint records; without either, a checkpoint holding unsettled cluster jobs fails closed</td>
+</tr>
+<tr>
+<td><code>--abandon-jobs</code></td>
+<td>—</td>
+<td>Cancel the scheduler jobs recorded in the checkpoint instead of re-attaching and waiting, then re-run their rules (locally when no usable profile exists)</td>
 </tr>
 <tr>
 <td><code>--background</code> / <code>--detach</code></td>
@@ -4497,13 +4600,25 @@ family (<a href="../run/#json-output"><code>run</code></a>).</p>
 <td><code>running</code></td>
 <td>Present when the checkpoint recorded rules still running (the prior run died mid-flight); they re-run</td>
 </tr>
+<tr>
+<td><code>adopted</code></td>
+<td>Present when a cluster reconciliation ran: how many recorded scheduler jobs were adopted as completed (their declared outputs were verified first)</td>
+</tr>
+<tr>
+<td><code>cancelled_jobs</code></td>
+<td>Present when a cluster reconciliation ran: how many recorded scheduler jobs <code>--abandon-jobs</code> cancelled before re-running</td>
+</tr>
 </tbody>
 </table>
-<p>The non-<code>--json</code> path is unchanged: exit codes and output are byte-identical
-to prior releases. A malformed checkpoint or a missing workflow still fails
-with a non-zero exit and, under <code>--json</code>, the shared structured error
-envelope (<code>{"command":"resume","errors":[{"code":...,"message":...}]}</code>)
-instead of empty stdout.</p>
+<p>For a <strong>local</strong> checkpoint the non-<code>--json</code> path is unchanged: exit codes and
+output are byte-identical to prior releases. A cluster checkpoint that records
+scheduler jobs additionally narrates the re-attach (one line per reconciled
+job) and may wait for live jobs before the run loop starts — that narration is
+new (issue #1427), and a fail-closed reconciliation exits non-zero. A
+malformed checkpoint or a missing workflow still fails with a non-zero exit
+and, under <code>--json</code>, the shared structured error envelope
+(<code>{"command":"resume","errors":[{"code":...,"message":...}]}</code>) instead of
+empty stdout.</p>
 <h2 id="examples">Examples<a class="headerlink" href="#examples" title="Permanent link">#</a></h2>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># Resume from the default checkpoint</span>
 </span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>oxo-flow<span class="w"> </span>resume<span class="w"> </span>.oxo-flow/checkpoint.json
@@ -4530,7 +4645,10 @@ instead of empty stdout.</p>
   is re-judged on this resume anyway.</li>
 <li>A rule recorded as still <strong><code>running</code></strong> in the checkpoint (its process was
   killed mid-execution) is always re-run on resume — its partial outputs
-  never pass the freshness gate (issue #1083).</li>
+  never pass the freshness gate (issue #1083). On a <strong>cluster</strong> checkpoint
+  this holds only for rules whose scheduler job the re-attach could not
+  reconcile; a job confirmed completed is adopted instead (see
+  <a href="#cluster-runs-reattach-or-abandon">Cluster runs: re-attach or abandon</a>).</li>
 <li><code>--background</code> / <code>--detach</code> detaches the resumed run (see
   <a href="../run/#background-runs-background">run's Background runs section</a>).</li>
 </ul>

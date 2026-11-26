@@ -5492,6 +5492,14 @@ job. A run stopped by SIGINT/SIGTERM/SIGHUP exits <code>128 + signum</code>
 (130/143/129) and <code>--json</code> reports status <code>"failed"</code>, even when every
 interrupted rule is <code>required = false</code> — an interrupt is never
 reported as a completed run.</p>
+<p>A driver that died WITHOUT a signal (crash, OOM) leaves accepted jobs
+running under the scheduler. The checkpoint records their job ids, so
+<code>oxo-flow resume &lt;checkpoint&gt;</code> (with <code>--profile &lt;NAME&gt;</code>, or the profile
+the checkpoint recorded) polls them to terminal and adopts verified
+successes instead of re-running them; <code>resume --abandon-jobs</code> cancels
+them first. Without a usable profile, resume fails closed rather than
+duplicating the computation. A plain <code>run</code> does not reconcile — see
+<a href="../../commands/resume/#cluster-runs-reattach-or-abandon">resume</a>.</p>
 </div>
 <div class="admonition note">
 <p class="admonition-title">What environment a cloud job sees</p>
