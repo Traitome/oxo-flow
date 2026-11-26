@@ -213,8 +213,11 @@ postdates this run's `started_at` (`completed` for 0), and only for a
 terminal write succeeds (or the row is already terminal), so a transient
 write failure is retried on the next sweep with the outcome preserved.
 Every local spawn clears a predecessor's record first, and remote dispatch
-clears it too (the remote CLI writes no local record, and cross-host clock
-skew makes an mtime comparison meaningless). This is the automatic
+clears it too before staging, so no predecessor record survives that
+window; the completion pull then brings back the remote run's own record,
+whose mtime comes from the submit host's clock and is therefore not a
+reliable freshness signal under cross-host clock skew (a documented
+residual). This is the automatic
 reconciliation for the measured `kill -9` ghost row. A process never reaps
 a row it is still monitoring, but it does reap its own unmonitored rows (a
 failed pre-spawn step or a failed terminal write), so a single-instance

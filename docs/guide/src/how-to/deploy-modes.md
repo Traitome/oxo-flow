@@ -404,7 +404,10 @@ prototype-grade:
   90 s TTL) and a 30 s reaper finalizes a live run whose web process died,
   attributing the wrapper's `.exit-code` read-only and only when it
   postdates this run's `started_at` (a reused workdir's predecessor record
-  is rejected; a remote run has no local record). The record is removed
+  is rejected; for a remote run no predecessor record survives, and the
+  pulled record's mtime comes from the submit host's clock, so it is not a
+  reliable freshness signal under clock skew — a documented residual). The
+  record is removed
   only after the terminal write succeeds, so a transient write failure is
   retried on the next sweep. A process never reaps a row it still monitors
   but does reap its own unmonitored rows; pre-lease rows are skipped. The
