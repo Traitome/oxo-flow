@@ -332,36 +332,21 @@ pub(crate) async fn execute_rule_task(
                 // Declared-output manifest (issue #1426): recorded on EVERY
                 // successful rule, independent of `--provenance`, so a later
                 // `resume` can verify content instead of trusting size+mtime.
-                // Collected before the checkpoint lock is taken — hashing up
-                // to the configured cap per output must not serialize other
-                // rule completions behind this rule's fsync.
-                let manifest_rule = rule.clone();
-                let manifest_workdir = ctx.workdir_actual.as_ref().to_path_buf();
+                // Collected before the checkpoint lock is taken; the shared
+                // async helper hashes on the blocking pool, so this never
+                // serializes other rule completions behind the fsync.
                 let mut wildcard_scope: HashMap<String, String> = (*wildcard_values).clone();
                 for (key, value) in &instance_bindings {
                     wildcard_scope.insert(key.clone(), value.clone());
                 }
-                let manifest_scope = wildcard_scope.clone();
-                let output_manifest = tokio::task::spawn_blocking(move || {
-                    oxo_flow_core::executor::output_checksums::collect_output_manifest(
-                        &manifest_rule,
-                        &manifest_workdir,
-                        &manifest_scope,
+                let output_manifest =
+                    oxo_flow_core::executor::output_checksums::collect_output_manifest_async(
+                        rule.clone(),
+                        ctx.workdir_actual.as_ref().to_path_buf(),
+                        wildcard_scope.clone(),
                         oxo_flow_core::executor::checkpoint::output_manifest_hash_max_bytes(),
                     )
-                })
-                .await
-                .unwrap_or_else(|e| {
-                    // A panicked collector must not fail the rule (completion
-                    // is already true), but it must be visible: with no
-                    // manifest the next strict `resume` re-executes this rule.
-                    tracing::warn!(
-                        rule = %rule_name,
-                        error = %e,
-                        "output manifest collection failed — this rule has no recorded output manifest"
-                    );
-                    Vec::new()
-                });
+                    .await;
 
                 let mut ck = ctx.checkpoint.lock().await;
                 ck.record_run(&record, output_tail_bytes_from_env());

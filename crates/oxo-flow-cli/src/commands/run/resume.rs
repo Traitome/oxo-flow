@@ -214,6 +214,10 @@ async fn resume_command_inner(
         &workflow_path,
         profile.as_deref(),
         abandon_jobs,
+        // `--trust-mtime` must reach cluster adoption too (issue #1426
+        // MEDIUM-1): refusing an already-successful scheduler job over an
+        // over-cap/directory output would resubmit hours of compute.
+        trust_mtime,
         &execution_workdir,
     )
     .await?;
@@ -248,8 +252,8 @@ async fn resume_command_inner(
     if !trust_mtime {
         eprintln!(
             "  Note: verifying recorded output manifests for completed rules — a missing, \
-             resized, content-changed, or unhashed output re-runs (pass --trust-mtime to keep \
-             the size+mtime verdict)."
+             resized, content-changed, or unhashed output re-runs the rule and its completed \
+             downstream (pass --trust-mtime to keep the size+mtime verdict)."
         );
     }
     if !skipped_when_false.is_empty() {

@@ -198,10 +198,12 @@ pub struct RunRequest {
     /// executes and fail closed on drift. The workflow's
     /// `[engine] locked = true` key is the persistent form; this flag wins.
     pub locked: bool,
-    /// Issue #1426: strict output verification. `resume` sets this so a
-    /// completed rule is reused only when its recorded output manifest
-    /// verifies (every declared output present, size match, content hash
-    /// match). Plain `run` keeps the historical size+mtime freshness gate.
+    /// Issue #1426: strict output verification. Set by `resume` and by
+    /// `run --verify-outputs`; a completed rule whose recorded output
+    /// manifest fails is re-executed together with its completed downstream
+    /// (the pre-plan analysis invalidates and forces the closure; the
+    /// executor's own gate re-checks rules that reach it). Plain `run` keeps
+    /// the historical size+mtime freshness gate.
     pub verify_outputs: bool,
     /// Issue #1426 (`resume --trust-mtime`): accept the size+mtime freshness
     /// verdict without requiring the content manifest. Only meaningful with
@@ -1144,6 +1146,53 @@ async fn run_command_inner(
         }
     }
 
+    // ── Strict output verification (issue #1426) ─────────────────────────
+    // A checkpoint-completed rule whose recorded output manifest does not
+    // verify re-executes — and so must its completed downstream, or a
+    // dependent pre-skipped on its own intact output would silently keep
+    // results derived from the damaged artifact (review MEDIUM-3). Seed the
+    // same downstream invalidation `--from-rule` and input changes use, and
+    // force the closure past the executor's freshness gate. Tombstoned
+    // rules are exempt (their outputs were deleted by design) and when-false
+    // rules are exempt (the gate dominates and is re-judged every run).
+    if verify_outputs && !trust_mtime && !rerun {
+        let failed = manifest_failure_seeds(
+            &checkpoint,
+            &config,
+            &order,
+            workdir_actual.as_ref(),
+            &wildcard_values,
+            &tombstone_keep,
+        )
+        .await;
+        if !failed.is_empty() {
+            let seeds: HashSet<String> = failed.iter().cloned().collect();
+            let closure = {
+                let mut ck = checkpoint.lock().await;
+                let closure =
+                    crate::commands::run_preview::invalidate_with_downstream(&mut ck, &dag, &seeds);
+                // Persist before scheduling (same discipline as the
+                // --from-rule and input-change invalidations): a crash
+                // before the first rule settles must not resurrect the
+                // stale completion records.
+                if let Err(e) = ck.save_to_file(&checkpoint_path) {
+                    tracing::warn!(error = %e, "failed to persist strict output invalidation");
+                }
+                closure
+            };
+            force_rules.extend(closure.iter().cloned());
+            diagnostic_narrate(
+                format_args!(
+                    "  {} strict output verification invalidated {} (including completed downstream): {} — they will re-execute",
+                    "↻".yellow(),
+                    oxo_flow_core::plural(closure.len(), "rule", "rules"),
+                    closure.join(", ")
+                ),
+                Some(&run_log),
+            );
+        }
+    }
+
     // indicatif's stderr draw target auto-hides when stderr is not a terminal,
     // which makes every per-rule progress message silently disappear under pipes,
     // redirects, nohup, CI, or schedulers. When that happens, fall back to plain
@@ -1708,9 +1757,84 @@ async fn run_command_inner(
         workflow: &workflow,
         apply_patch: apply_patch.as_deref(),
         json_summary: &mut json_summary,
-        strict_output_verification: verify_outputs && !trust_mtime,
     })
     .await
+}
+
+/// Checkpoint-completed rules whose recorded output manifest does not verify
+/// (issue #1426).
+///
+/// Only rules that are actually part of this run are considered; tombstoned
+/// rules (outputs deleted by design) and when-false rules (the gate is
+/// re-judged and dominates) are exempt. Verification hashes outputs on the
+/// One completed rule queued for strict output verification: its expanded
+/// rule, the merged fan-out/config scope, and the recorded manifest (if any).
+struct ManifestCandidate {
+    name: String,
+    rule: Rule,
+    scope: HashMap<String, String>,
+    manifest: Option<oxo_flow_core::executor::checkpoint::OutputManifest>,
+}
+
+/// blocking pool — one pass, before scheduling, so the downstream cascading
+/// below can use the result.
+async fn manifest_failure_seeds(
+    checkpoint: &Arc<Mutex<CheckpointState>>,
+    config: &WorkflowConfig,
+    order: &[String],
+    workdir: &Path,
+    wildcard_values: &HashMap<String, String>,
+    tombstone_keep: &HashSet<String>,
+) -> Vec<String> {
+    let candidates: Vec<ManifestCandidate> = {
+        let ck = checkpoint.lock().await;
+        order
+            .iter()
+            .filter_map(|name| {
+                if !ck.completed_rules.contains(name) || tombstone_keep.contains(name) {
+                    return None;
+                }
+                let rule = config.get_rule(name)?.clone();
+                if crate::commands::run_preview::when_condition_false(
+                    &rule,
+                    config,
+                    wildcard_values,
+                ) {
+                    return None;
+                }
+                let mut scope = wildcard_values.clone();
+                for (key, value) in config.instance_bindings(name) {
+                    scope.insert(key, value);
+                }
+                Some(ManifestCandidate {
+                    name: name.clone(),
+                    rule,
+                    scope,
+                    manifest: ck.output_manifests.get(name).cloned(),
+                })
+            })
+            .collect()
+    };
+    let mut failed = Vec::new();
+    for candidate in candidates {
+        if let Err(failure) = oxo_flow_core::executor::checkpoint::verify_output_manifest_async(
+            candidate.rule,
+            workdir.to_path_buf(),
+            candidate.scope,
+            candidate.manifest,
+        )
+        .await
+        {
+            tracing::warn!(
+                rule = %candidate.name,
+                path = failure.path().unwrap_or("<rule>"),
+                reason = %failure.describe(),
+                "strict output verification failed — re-executing the rule and its completed downstream"
+            );
+            failed.push(candidate.name);
+        }
+    }
+    failed
 }
 
 /// The scheduled rules grouped into the DAG's parallel waves (issue #1080

@@ -10,8 +10,36 @@ use oxo_flow_core::config::WorkflowConfig;
 use oxo_flow_core::dag::WorkflowDag;
 use oxo_flow_core::executor::checkpoint::CheckpointState;
 use oxo_flow_core::wildcard;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
+
+/// Map each deleted chunk path to the rule(s) that declare it as an output.
+///
+/// Transform chunks are engine-generated map-rule outputs; their paths may
+/// carry `{config.*}`/fan-out placeholders on authored rules, so expand each
+/// rule with the run's values plus its own instance bindings — the same
+/// expansion the output manifest used when the entry was recorded.
+fn chunk_owners(
+    config: &WorkflowConfig,
+    wildcard_values: &HashMap<String, String>,
+    paths: &[String],
+) -> BTreeMap<String, Vec<String>> {
+    let mut owners: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for rule in &config.rules {
+        let mut scope = wildcard_values.clone();
+        for (key, value) in config.instance_bindings(&rule.name) {
+            scope.insert(key, value);
+        }
+        for output in rule.output.iter() {
+            let expanded =
+                oxo_flow_core::executor::checkpoint::expand_config_in_path(output, &scope);
+            if paths.iter().any(|path| path == &expanded) {
+                owners.entry(rule.name.clone()).or_default().push(expanded);
+            }
+        }
+    }
+    owners
+}
 
 /// Contextual state needed to finalize workflow execution and produce post-run summaries.
 pub(crate) struct CompletionContext<'a> {
@@ -310,14 +338,47 @@ pub(crate) async fn handle_run_completion(ctx: CompletionContext<'_>) -> anyhow:
                 // (issue #324 F-2) — previously the empty migration made
                 // cleanup a silent no-op on every default run.
                 let mut migrated: Vec<String> = Vec::new();
-                for chunk in rule.input.iter() {
-                    if let Some(sha) = ctx.checkpoint.checksums.remove(&chunk.to_string()) {
-                        ctx.checkpoint
-                            .record_cleaned_checksum(&chunk.to_string(), sha);
-                        migrated.push(chunk.to_string());
+                let chunk_paths: Vec<String> =
+                    rule.input.iter().map(|chunk| chunk.to_string()).collect();
+                for chunk in &chunk_paths {
+                    if let Some(sha) = ctx.checkpoint.checksums.remove(chunk) {
+                        ctx.checkpoint.record_cleaned_checksum(chunk, sha);
+                        migrated.push(chunk.clone());
                     }
                 }
-                if !migrated.is_empty()
+                // Issue #1426 LOW-4: the chunks about to be deleted are the
+                // OUTPUTS of a different producer rule, so their manifest
+                // entries must be cleared by path across every rule — a
+                // stale entry would make a later strict resume report the
+                // engine-managed intermediate missing and re-run its
+                // producer. Persisted in the same save as the checksum
+                // migration (and restored on failure).
+                let manifest_rollback = ctx.checkpoint.take_output_manifest_paths(&chunk_paths);
+                // The deleted chunks are also tombstoned on their owning map
+                // rules, exactly like `temporary` outputs: a later run must
+                // treat "deleted by design" as settled (skip while the
+                // combine stays completed) and regenerate them lazily through
+                // `cascade_up_tombstoned` when the combine needs them again.
+                // Without this marker a strict resume would see a producer
+                // with no manifest/outputs and re-run it (and, via the
+                // MEDIUM-3 downstream cascade, the combine) on every run.
+                let owner_tombstones = chunk_owners(ctx.config, ctx.wildcard_values, &chunk_paths);
+                let mut tombstone_rollback: Vec<(String, Option<Vec<String>>)> = Vec::new();
+                for owner in owner_tombstones.keys() {
+                    tombstone_rollback
+                        .push((owner.clone(), ctx.checkpoint.tombstones.get(owner).cloned()));
+                }
+                for (owner, paths) in &owner_tombstones {
+                    let entry = ctx.checkpoint.tombstones.entry(owner.clone()).or_default();
+                    for path in paths {
+                        if !entry.contains(path) {
+                            entry.push(path.clone());
+                        }
+                    }
+                }
+                if (!migrated.is_empty()
+                    || !manifest_rollback.is_empty()
+                    || !owner_tombstones.is_empty())
                     && let Err(e) = ctx.checkpoint.save_to_file(ctx.checkpoint_path)
                 {
                     tracing::warn!(
@@ -330,6 +391,17 @@ pub(crate) async fn handle_run_completion(ctx: CompletionContext<'_>) -> anyhow:
                     for path in &migrated {
                         if let Some(sha) = ctx.checkpoint.cleaned_checksums.remove(path) {
                             ctx.checkpoint.checksums.insert(path.clone(), sha);
+                        }
+                    }
+                    ctx.checkpoint.restore_output_manifests(manifest_rollback);
+                    for (owner, previous) in tombstone_rollback {
+                        match previous {
+                            Some(paths) => {
+                                ctx.checkpoint.tombstones.insert(owner, paths);
+                            }
+                            None => {
+                                ctx.checkpoint.tombstones.remove(&owner);
+                            }
                         }
                     }
                     continue;

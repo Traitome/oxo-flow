@@ -120,6 +120,7 @@ pub(crate) async fn prepare_cluster_resume(
     workflow: &Path,
     explicit_profile: Option<&str>,
     abandon_jobs: bool,
+    trust_mtime: bool,
     workdir: &Path,
 ) -> Result<ResumeClusterPlan> {
     let workflow_dir = oxo_flow_core::parent_dir(workflow);
@@ -286,6 +287,7 @@ pub(crate) async fn prepare_cluster_resume(
             &config,
             workdir,
             abandon_jobs,
+            trust_mtime,
             DEFAULT_POLL_INTERVAL,
         )
         .await?;
@@ -377,6 +379,7 @@ async fn reconcile_recorded_jobs(
     config: &WorkflowConfig,
     workdir: &Path,
     abandon: bool,
+    trust_mtime: bool,
     poll_interval: Duration,
 ) -> Result<ClusterReconcileOutcome> {
     let mut pending = queries;
@@ -416,16 +419,20 @@ async fn reconcile_recorded_jobs(
                     }
                 }
                 Verdict::Terminal(status, record) => match status {
-                    BackendJobStatus::Completed => adopt_completed(
-                        checkpoint,
-                        config,
-                        workdir,
-                        &query,
-                        record.as_deref(),
-                        &wildcard_values,
-                        tail_bytes,
-                        &mut outcome,
-                    ),
+                    BackendJobStatus::Completed => {
+                        adopt_completed(
+                            checkpoint,
+                            config,
+                            workdir,
+                            &query,
+                            record.as_deref(),
+                            &wildcard_values,
+                            trust_mtime,
+                            tail_bytes,
+                            &mut outcome,
+                        )
+                        .await
+                    }
                     // A cancelled job is not a success and not a self-caused
                     // failure — but resume must re-run it either way.
                     BackendJobStatus::Failed | BackendJobStatus::Cancelled => {
@@ -572,13 +579,14 @@ fn record_failed(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn adopt_completed(
+async fn adopt_completed(
     checkpoint: &mut CheckpointState,
     config: &WorkflowConfig,
     workdir: &Path,
     query: &RecordedQuery,
     record: Option<&TerminalRecord>,
     wildcard_values: &HashMap<String, String>,
+    trust_mtime: bool,
     tail_bytes: usize,
     outcome: &mut ClusterReconcileOutcome,
 ) {
@@ -625,19 +633,24 @@ fn adopt_completed(
     }
     // Strict output verification (issue #1426): instantiate this rule's
     // fan-out bindings, then — when the checkpoint carries a recorded output
-    // manifest — adopt only if the artifacts still match it. Existence alone
-    // cannot prove a truncated or rewritten output is the job's result.
+    // manifest and the caller did NOT pass `--trust-mtime` — adopt only if
+    // the artifacts still match it. Existence alone cannot prove a truncated
+    // or rewritten output is the job's result. `--trust-mtime` must reach
+    // adoption too: refusing an already-successful scheduler job over an
+    // over-cap/directory output would resubmit hours of compute.
     let mut scope = wildcard_values.clone();
     for (key, value) in config.instance_bindings(rule) {
         scope.insert(key, value);
     }
-    if let Some(manifest) = checkpoint.output_manifests.get(rule)
-        && let Err(failure) = oxo_flow_core::executor::checkpoint::verify_output_manifest(
-            rule_def,
-            workdir,
-            &scope,
-            Some(manifest),
+    if !trust_mtime
+        && let Some(manifest) = checkpoint.output_manifests.get(rule)
+        && let Err(failure) = oxo_flow_core::executor::checkpoint::verify_output_manifest_async(
+            rule_def.clone(),
+            workdir.to_path_buf(),
+            scope.clone(),
+            Some(manifest.clone()),
         )
+        .await
     {
         eprintln!(
             "  {} {}: {} job {} finished successfully but strict output verification failed ({}: {}) — leaving it for a normal re-run",
@@ -728,16 +741,17 @@ fn adopt_completed(
     // Record the adopted rule's output manifest (issue #1426) so the next
     // strict `resume` can verify — or refuse — reuse exactly like an observed
     // completion. The outputs were just verified above when a manifest
-    // existed; collecting fresh here records the settled artifacts' identity.
-    checkpoint.record_output_manifest(
-        rule,
-        oxo_flow_core::executor::output_checksums::collect_output_manifest(
-            rule_def,
-            workdir,
-            &scope,
-            oxo_flow_core::executor::checkpoint::output_manifest_hash_max_bytes(),
-        ),
-    );
+    // existed and `--trust-mtime` was absent; collecting fresh here records
+    // the settled artifacts' identity. Hashing runs on the blocking pool
+    // (LOW-5).
+    let manifest = oxo_flow_core::executor::output_checksums::collect_output_manifest_async(
+        rule_def.clone(),
+        workdir.to_path_buf(),
+        scope,
+        oxo_flow_core::executor::checkpoint::output_manifest_hash_max_bytes(),
+    )
+    .await;
+    checkpoint.record_output_manifest(rule, manifest);
     checkpoint.clear_cluster_job(rule);
     eprintln!(
         "  {} {}: {} job {} finished successfully — adopted from the scheduler",

@@ -742,7 +742,7 @@ struct SubmissionPlan {
 /// this purpose (see `ExecutorConfig.force_rules`), so consuming both here
 /// is what keeps the two paths deciding identically.
 #[allow(clippy::too_many_arguments)]
-fn plan_submissions(
+async fn plan_submissions(
     ck: &CheckpointState,
     config: &WorkflowConfig,
     dag: &WorkflowDag,
@@ -788,10 +788,17 @@ fn plan_submissions(
     // from existence, mtime, and recorded checksums — it does not verify the
     // output manifest. Re-check every rule the plan would skip and submit it
     // when its manifest does not verify, so a resumed cluster checkpoint
-    // cannot reuse a damaged artifact. `when`-false rules and tombstoned
-    // temporaries are exempt: they are skipped by design, not by artifact
-    // evidence.
+    // cannot reuse a damaged artifact.
+    //
+    // Verification hashes on the blocking pool (LOW-5), and a failure also
+    // cascades to the rule's completed downstream: otherwise a dependent
+    // pre-skipped on its own intact output would keep results derived from
+    // the damaged producer (MEDIUM-3). `when`-false and tombstoned rules are
+    // stop points: neither will regenerate its outputs for this run, so its
+    // own downstream remains consistent with them.
     if strict_output_verification {
+        let mut failed: Vec<String> = Vec::new();
+        let mut candidates = Vec::new();
         for entry in &preview.plan {
             if !entry.status.is_skip()
                 || matches!(
@@ -811,19 +818,75 @@ fn plan_submissions(
             for (key, value) in config.instance_bindings(&entry.name) {
                 scope.insert(key, value);
             }
-            let manifest = ck.output_manifests.get(&entry.name).map(Vec::as_slice);
-            if let Err(failure) = oxo_flow_core::executor::checkpoint::verify_output_manifest(
-                rule, workdir, &scope, manifest,
-            ) {
+            candidates.push((
+                entry.name.clone(),
+                rule.clone(),
+                scope,
+                ck.output_manifests.get(&entry.name).cloned(),
+            ));
+        }
+        for (name, rule, scope, manifest) in candidates {
+            if let Err(failure) = oxo_flow_core::executor::checkpoint::verify_output_manifest_async(
+                rule,
+                workdir.to_path_buf(),
+                scope,
+                manifest,
+            )
+            .await
+            {
                 tracing::warn!(
-                    rule = %entry.name,
+                    rule = %name,
                     path = failure.path().unwrap_or("<rule>"),
                     reason = %failure.describe(),
                     "strict output verification failed — submitting the rule instead of \
                      reusing its recorded outputs (resume default; pass --trust-mtime to \
                      accept mtime evidence instead)"
                 );
-                to_run.insert(entry.name.clone());
+                failed.push(name);
+            }
+        }
+        if !failed.is_empty() {
+            let order_set: HashSet<&str> = order.iter().map(String::as_str).collect();
+            let mut closure: HashSet<String> = HashSet::new();
+            let mut frontier = failed.clone();
+            while let Some(name) = frontier.pop() {
+                let Ok(dependents) = dag.dependents(&name) else {
+                    continue;
+                };
+                for dep in dependents {
+                    if !order_set.contains(dep.as_str()) || closure.contains(&dep) {
+                        continue;
+                    }
+                    let Some(dep_rule) = config.get_rule(&dep) else {
+                        continue;
+                    };
+                    if crate::commands::run_preview::when_condition_false(
+                        dep_rule,
+                        config,
+                        wildcard_values,
+                    ) || ck.tombstones.contains_key(&dep)
+                    {
+                        // Not regenerated this run — stop the cascade here.
+                        continue;
+                    }
+                    closure.insert(dep.clone());
+                    frontier.push(dep);
+                }
+            }
+            for name in failed.iter().chain(closure.iter()) {
+                to_run.insert(name.clone());
+            }
+            if !closure.is_empty() {
+                let mut cascaded: Vec<&String> = closure.iter().collect();
+                cascaded.sort();
+                tracing::warn!(
+                    rules = %cascaded
+                        .iter()
+                        .map(|name| name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    "strict output verification re-runs a damaged rule — its completed downstream is resubmitted too"
+                );
             }
         }
     }
@@ -872,24 +935,27 @@ pub(crate) async fn run_on_cluster(
 
     // The will-run set: the same computation `dry-run` reports (see
     // `plan_submissions` for why `force_rules` is unioned in).
-    let submission = {
-        let ck = args.checkpoint.lock().await;
-        plan_submissions(
-            &ck,
-            args.config,
-            args.dag,
-            args.order,
-            args.workdir,
-            args.wildcard_values,
-            args.sensitive_keys,
-            &args.config.workflow.interpreter_map,
-            args.checkpoint_path,
-            args.rerun,
-            args.resume_failed,
-            args.force_rules,
-            args.strict_output_verification,
-        )
-    };
+    // Snapshot under the checkpoint lock, then plan WITHOUT holding it:
+    // strict resume hashes output manifests (on the blocking pool), and an
+    // async lock must never span that work (LOW-5). The preview clones the
+    // checkpoint internally anyway, so the snapshot adds no new class of cost.
+    let ck_snapshot = args.checkpoint.lock().await.clone();
+    let submission = plan_submissions(
+        &ck_snapshot,
+        args.config,
+        args.dag,
+        args.order,
+        args.workdir,
+        args.wildcard_values,
+        args.sensitive_keys,
+        &args.config.workflow.interpreter_map,
+        args.checkpoint_path,
+        args.rerun,
+        args.resume_failed,
+        args.force_rules,
+        args.strict_output_verification,
+    )
+    .await;
     let to_run = submission.to_run;
     // Issue #1371 review N1: mark preserved checkpoint work as NOT executed
     // in this invocation before any submission — a cluster re-run with
@@ -1573,8 +1639,8 @@ shell = "mkdir -p out/S1 && echo started > out/S1/done.txt && sleep 45 && echo d
         }
     }
 
-    #[test]
-    fn killed_job_with_partial_output_is_requeued_on_restart() {
+    #[tokio::test]
+    async fn killed_job_with_partial_output_is_requeued_on_restart() {
         // Issue #1083 regression: the driver was killed while this Slurm
         // job was running. Its declared output exists (partially written),
         // and the checkpoint carries the submit-time `running` record.
@@ -1598,7 +1664,8 @@ shell = "mkdir -p out/S1 && echo started > out/S1/done.txt && sleep 45 && echo d
             false,
             &std::collections::HashSet::new(),
             false,
-        );
+        )
+        .await;
         assert!(
             plan.to_run.contains("emit"),
             "an interrupted submission must be re-queued, not skipped as 'outputs up-to-date'"
@@ -1625,22 +1692,27 @@ shell = "mkdir -p out/S1 && echo started > out/S1/done.txt && sleep 45 && echo d
             false,
             &std::collections::HashSet::new(),
             false,
-        );
+        )
+        .await;
         assert!(!plan.to_run.contains("emit"));
         assert_eq!(plan.skipped_fresh, vec!["emit".to_string()]);
     }
 
     /// Issue #1426: a rule the preview would skip is submitted when strict
     /// resume's recorded output manifest does not verify — existence/mtime
-    /// evidence alone is not enough.
-    #[test]
-    fn strict_verification_submits_a_rule_whose_manifest_fails() {
+    /// evidence alone is not enough. A completed DEPENDENT of the damaged
+    /// producer is submitted too (MEDIUM-3): its own intact output was built
+    /// from the artifact the producer is about to regenerate.
+    #[tokio::test]
+    async fn strict_verification_submits_a_rule_whose_manifest_fails() {
         let dir = tempfile::tempdir().unwrap();
         let wf = dir.path().join("wf.oxoflow");
         std::fs::write(
             &wf,
             "[workflow]\nname = \"strict\"\n[[rules]]\nname = \"emit\"\n\
-             output = [\"out.txt\"]\nshell = \"true\"\n",
+             output = [\"out.txt\"]\nshell = \"true\"\n\n\
+             [[rules]]\nname = \"consume\"\ninput = [\"out.txt\"]\n\
+             output = [\"final.txt\"]\nshell = \"true\"\n",
         )
         .unwrap();
         let mut config = WorkflowConfig::from_file(&wf).unwrap();
@@ -1650,6 +1722,7 @@ shell = "mkdir -p out/S1 && echo started > out/S1/done.txt && sleep 45 && echo d
         let values = config.config_placeholder_values();
         let checkpoint_path = dir.path().join("checkpoint.json");
         std::fs::write(dir.path().join("out.txt"), "hello").unwrap();
+        std::fs::write(dir.path().join("final.txt"), "done").unwrap();
 
         let mut ck = CheckpointState::new();
         ck.mark_completed_quiet("emit");
@@ -1659,6 +1732,20 @@ shell = "mkdir -p out/S1 && echo started > out/S1/done.txt && sleep 45 && echo d
                 path: "out.txt".to_string(),
                 size: 99,
                 sha256: None,
+            }],
+        );
+        // The dependent's own output is intact, so its manifest verifies; it
+        // is still stale with respect to the regenerated producer output.
+        ck.mark_completed_quiet("consume");
+        ck.record_output_manifest(
+            "consume",
+            vec![oxo_flow_core::executor::checkpoint::OutputManifestEntry {
+                path: "final.txt".to_string(),
+                size: 4,
+                sha256: oxo_flow_core::executor::checkpoint::compute_file_checksum(
+                    &dir.path().join("final.txt"),
+                )
+                .ok(),
             }],
         );
 
@@ -1676,10 +1763,11 @@ shell = "mkdir -p out/S1 && echo started > out/S1/done.txt && sleep 45 && echo d
             false,
             &std::collections::HashSet::new(),
             false,
-        );
+        )
+        .await;
         assert!(
-            !historical.to_run.contains("emit"),
-            "without strict verification the existing skip stands"
+            !historical.to_run.contains("emit") && !historical.to_run.contains("consume"),
+            "without strict verification the existing skips stand"
         );
 
         let strict = plan_submissions(
@@ -1696,14 +1784,20 @@ shell = "mkdir -p out/S1 && echo started > out/S1/done.txt && sleep 45 && echo d
             false,
             &std::collections::HashSet::new(),
             true,
-        );
+        )
+        .await;
         assert!(
             strict.to_run.contains("emit"),
             "a failing output manifest must force a submission"
         );
         assert!(
+            strict.to_run.contains("consume"),
+            "the damaged producer's completed downstream must be resubmitted too: {:?}",
+            strict.to_run
+        );
+        assert!(
             strict.skipped_fresh.is_empty(),
-            "the forced rule must not be reported as a fresh skip"
+            "the forced rules must not be reported as fresh skips"
         );
     }
 
@@ -2182,10 +2276,47 @@ shell = "mkdir -p out/S1 && echo started > out/S1/done.txt && sleep 45 && echo d
         async fn checksums(&self) -> std::collections::BTreeMap<String, String> {
             self.checkpoint.lock().await.checksums.clone()
         }
+
+        async fn manifests(
+            &self,
+        ) -> std::collections::BTreeMap<String, oxo_flow_core::executor::checkpoint::OutputManifest>
+        {
+            self.checkpoint.lock().await.output_manifests.clone()
+        }
     }
 
     const ONE_RULE_WORKFLOW: &str = "[workflow]\nname = \"prov\"\n[[rules]]\nname = \"emit\"\n\
                                      output = [\"out.txt\"]\nshell = \"true\"\n";
+
+    #[tokio::test]
+    async fn cluster_fold_records_the_output_manifest_without_provenance() {
+        // Issue #1426: the always-on output manifest is recorded by the
+        // cluster settle hook too, even when `--provenance` is absent — the
+        // local executor and cluster paths must not diverge on reuse
+        // evidence.
+        let f = FoldFixture::new(ONE_RULE_WORKFLOW);
+        std::fs::write(f.workdir.join("out.txt"), "hello").unwrap();
+        let prov = ClusterProvenance::new(false);
+        f.fold_success(&prov, "emit").await;
+        let manifests = f.manifests().await;
+        let entry = manifests
+            .get("emit")
+            .and_then(|m| m.first())
+            .expect("the output manifest must be recorded");
+        assert_eq!(entry.path, "out.txt");
+        assert_eq!(entry.size, 5);
+        assert!(
+            entry
+                .sha256
+                .as_deref()
+                .is_some_and(|hash| hash.starts_with("sha256:")),
+            "the manifest must carry the sha256: {entry:?}"
+        );
+        assert!(
+            f.checksums().await.is_empty(),
+            "no provenance checksums are recorded without --provenance"
+        );
+    }
 
     #[tokio::test]
     async fn cluster_provenance_records_literal_output_checksums() {

@@ -59,6 +59,10 @@ fn output_len(dir: &Path) -> u64 {
     std::fs::metadata(dir.join("out.bin")).unwrap().len()
 }
 
+fn file_len(dir: &Path, name: &str) -> u64 {
+    std::fs::metadata(dir.join(name)).unwrap().len()
+}
+
 /// Remove the `output_manifests` map, simulating a pre-#1426 checkpoint
 /// written before output manifests existed.
 fn strip_output_manifests(path: &Path) {
@@ -246,6 +250,175 @@ fn resume_skips_a_hashed_large_output() {
     assert_eq!(run_count(dir.path()), 1, "hashed output skips:\n{stderr}");
 }
 
+/// Transform-chunk cleanup deletes the chunk files (outputs of the map
+/// rules), and strict resume must deal with that without a stale-manifest
+/// false positive: the deleted chunks' manifest entries are cleared with
+/// their files (LOW-4), the intact combine output still skips, and the run
+/// succeeds.
+#[test]
+fn transform_cleanup_clears_chunk_manifests_and_resume_succeeds() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("tf.oxoflow");
+    std::fs::write(
+        &wf,
+        r#"[workflow]
+name = "tf"
+
+[[rules]]
+name = "chunked"
+output = ["parts/chunk.txt"]
+shell = "echo final > {output[0]}"
+
+[rules.transform.split]
+by = "chunk"
+n = "3"
+
+[rules.transform]
+map = "echo chunk_{chunk} >> chunk_runs.log && echo chunk_{chunk} > {output[0]}"
+cleanup = true
+
+[rules.transform.combine]
+shell = "echo combine >> combine_runs.log && cat {chunks} > {output[0]}"
+"#,
+    )
+    .unwrap();
+    let (ok, _stdout, stderr) =
+        run_cli(dir.path(), &["run", wf.to_str().unwrap(), "-j", "1"], None);
+    assert!(ok, "initial transform run failed:\n{stderr}");
+    assert!(
+        dir.path().join("parts/chunk.txt").exists(),
+        "the combine output exists"
+    );
+    assert!(
+        !dir.path().join(".oxo-flow/chunks/chunk/0.txt").exists(),
+        "cleanup removed the chunk files"
+    );
+
+    // The deleted chunks' manifest entries are cleared with them; the
+    // combine's own manifest remains.
+    let ck: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(checkpoint(dir.path())).unwrap()).unwrap();
+    let manifests = ck["output_manifests"].as_object().unwrap();
+    assert!(
+        manifests.contains_key("chunked_combine"),
+        "the combine output must stay recorded: {manifests:?}"
+    );
+    for chunk_rule in ["chunked_0", "chunked_1", "chunked_2"] {
+        assert!(
+            !manifests.contains_key(chunk_rule),
+            "a cleaned chunk's manifest entry must not survive: {chunk_rule}"
+        );
+        assert!(
+            ck["tombstones"]
+                .as_object()
+                .is_some_and(|tombstones| tombstones.contains_key(chunk_rule)),
+            "a cleaned chunk producer must be tombstoned like a temporary output: {chunk_rule}"
+        );
+    }
+
+    // Strict resume: the combine output verifies and stays skipped; the
+    // cleaned map rules are tombstone-kept (their outputs are gone by
+    // design and the combine is complete), so this run is a no-op rather
+    // than a regeneration cycle.
+    let (ok, _stdout, stderr) = run_cli(
+        dir.path(),
+        &[
+            "resume",
+            checkpoint(dir.path()).to_str().unwrap(),
+            "-j",
+            "1",
+        ],
+        None,
+    );
+    assert!(ok, "resume after transform cleanup must succeed:\n{stderr}");
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("combine_runs.log"))
+            .unwrap()
+            .lines()
+            .count(),
+        1,
+        "the intact combine output must not re-run"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("chunk_runs.log"))
+            .unwrap()
+            .lines()
+            .count(),
+        3,
+        "tombstoned chunk producers stay skipped while the combine is complete"
+    );
+
+    // Deleting the combine output brings the whole chain back: the combine
+    // re-runs and cascade-up regenerates the tombstoned chunks, which are
+    // cleaned (and re-tombstoned) again afterwards.
+    std::fs::remove_file(dir.path().join("parts/chunk.txt")).unwrap();
+    let (ok, _stdout, stderr) = run_cli(
+        dir.path(),
+        &[
+            "resume",
+            checkpoint(dir.path()).to_str().unwrap(),
+            "-j",
+            "1",
+        ],
+        None,
+    );
+    assert!(ok, "lazy regeneration resume must succeed:\n{stderr}");
+    assert!(
+        dir.path().join("parts/chunk.txt").exists(),
+        "the combine output was rebuilt from regenerated chunks"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("combine_runs.log"))
+            .unwrap()
+            .lines()
+            .count(),
+        2,
+        "the deleted combine output re-ran"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("chunk_runs.log"))
+            .unwrap()
+            .lines()
+            .count(),
+        6,
+        "cascade-up regenerated the tombstoned chunk producers"
+    );
+    assert!(
+        !dir.path().join(".oxo-flow/chunks/chunk/0.txt").exists(),
+        "the regenerated chunks are cleaned again"
+    );
+}
+
+/// `run --verify-outputs` opts a plain run (e.g. a retry wrapper) into the
+/// same strict check; without the flag `run` keeps the historical gate.
+#[test]
+fn run_verify_outputs_flag_rejects_a_truncated_output() {
+    let dir = tempfile::tempdir().unwrap();
+    first_run(dir.path(), None);
+    let wf = dir.path().join("w.oxoflow");
+    std::fs::write(dir.path().join("out.bin"), vec![0u8; 500]).unwrap();
+
+    // Historical `run`: completed + fresh output → skipped, damage persists.
+    let (ok, _stdout, stderr) = run_cli(dir.path(), &["run", wf.to_str().unwrap()], None);
+    assert!(ok, "plain run succeeds:\n{stderr}");
+    assert_eq!(run_count(dir.path()), 1, "plain run keeps the mtime gate");
+    assert_eq!(output_len(dir.path()), 500);
+
+    // Opting in re-runs the rule and restores the artifact.
+    let (ok, _stdout, stderr) = run_cli(
+        dir.path(),
+        &["run", wf.to_str().unwrap(), "--verify-outputs"],
+        None,
+    );
+    assert!(ok, "verify-outputs run succeeds:\n{stderr}");
+    assert_eq!(
+        run_count(dir.path()),
+        2,
+        "the damaged rule re-ran:\n{stderr}"
+    );
+    assert_eq!(output_len(dir.path()), 1024);
+}
+
 /// A deleted declared output re-executes (the manifest has no file to
 /// verify).
 #[test]
@@ -262,4 +435,169 @@ fn resume_reruns_when_a_declared_output_is_missing() {
     assert!(ok, "resume must succeed:\n{stderr}");
     assert_eq!(output_len(dir.path()), 1024, "the output was regenerated");
     assert_eq!(run_count(dir.path()), 2, "the rule re-executed:\n{stderr}");
+}
+
+/// MEDIUM-3: a damaged producer's completed dependent must re-execute too.
+/// Sequence: producer completes (manifest 1024 B); the output is truncated;
+/// the consumer runs later and records a baseline from the truncated file;
+/// resume re-runs the producer — the consumer must not be skipped on its own
+/// intact output, or the run exits 0 with results derived from the damaged
+/// artifact.
+#[test]
+fn resume_invalidates_a_completed_downstream_of_a_damaged_producer() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("chain.oxoflow");
+    std::fs::write(
+        &wf,
+        r#"[workflow]
+name = "downstream"
+
+[[rules]]
+name = "producer"
+output = ["a.bin"]
+shell = "echo producer >> producer.log && head -c 1024 /dev/zero > a.bin"
+
+[[rules]]
+name = "consumer"
+input = ["a.bin"]
+output = ["b.size"]
+shell = "echo consumer >> consumer.log && wc -c < a.bin > b.size"
+"#,
+    )
+    .unwrap();
+
+    // Producer alone, then damage its output, then let the consumer run
+    // against the damaged file and complete (baseline = 500).
+    let (ok, _stdout, stderr) = run_cli(
+        dir.path(),
+        &["run", wf.to_str().unwrap(), "-t", "producer"],
+        None,
+    );
+    assert!(ok, "producer run failed:\n{stderr}");
+    assert_eq!(file_len(dir.path(), "a.bin"), 1024);
+    std::fs::write(dir.path().join("a.bin"), vec![0u8; 500]).unwrap();
+    let (ok, _stdout, stderr) = run_cli(
+        dir.path(),
+        &["run", wf.to_str().unwrap(), "-t", "consumer"],
+        None,
+    );
+    assert!(ok, "consumer run failed:\n{stderr}");
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("b.size"))
+            .unwrap()
+            .trim(),
+        "500",
+        "the consumer's first run consumed the damaged artifact"
+    );
+
+    let (ok, _stdout, stderr) = run_cli(
+        dir.path(),
+        &["resume", checkpoint(dir.path()).to_str().unwrap()],
+        None,
+    );
+    assert!(ok, "resume must succeed:\n{stderr}");
+    assert_eq!(
+        file_len(dir.path(), "a.bin"),
+        1024,
+        "the producer regenerated"
+    );
+    assert!(
+        stderr.contains("strict output verification invalidated"),
+        "the downstream cascade must be narrated:\n{stderr}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("b.size"))
+            .unwrap()
+            .trim(),
+        "1024",
+        "the completed consumer must re-execute against the restored output"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("producer.log"))
+            .unwrap()
+            .lines()
+            .count(),
+        2,
+        "producer ran twice"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("consumer.log"))
+            .unwrap()
+            .lines()
+            .count(),
+        2,
+        "consumer ran twice (not skipped on its intact-but-stale output)"
+    );
+}
+
+/// Fan-out: manifests are per instance. Truncating one instance's output
+/// re-runs only that instance; the sibling stays skipped.
+#[test]
+fn resume_verifies_fanout_instances_independently() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("data")).unwrap();
+    for sample in ["S1", "S2"] {
+        std::fs::write(
+            dir.path().join(format!("data/{sample}.fastq")),
+            format!("{sample}-reads\n"),
+        )
+        .unwrap();
+    }
+    let wf = dir.path().join("fanout.oxoflow");
+    std::fs::write(
+        &wf,
+        r#"[workflow]
+name = "fanout"
+
+[[sample_groups]]
+name = "cohort"
+samples = ["S1", "S2"]
+
+[[rules]]
+name = "qc"
+input = ["data/{sample}.fastq"]
+output = ["out/{sample}.txt"]
+shell = "echo {sample} >> runs.log && cat {input} > {output}"
+"#,
+    )
+    .unwrap();
+    let (ok, _stdout, stderr) =
+        run_cli(dir.path(), &["run", wf.to_str().unwrap(), "-j", "1"], None);
+    assert!(ok, "initial fan-out run failed:\n{stderr}");
+
+    // Truncate ONE instance's output.
+    std::fs::write(dir.path().join("out/S1.txt"), "S1").unwrap();
+
+    let (ok, _stdout, stderr) = run_cli(
+        dir.path(),
+        &[
+            "resume",
+            checkpoint(dir.path()).to_str().unwrap(),
+            "-j",
+            "1",
+        ],
+        None,
+    );
+    assert!(ok, "resume must succeed:\n{stderr}");
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("out/S1.txt")).unwrap(),
+        "S1-reads\n",
+        "the damaged instance regenerated"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("out/S2.txt")).unwrap(),
+        "S2-reads\n",
+        "the intact instance is untouched"
+    );
+    let runs = std::fs::read_to_string(dir.path().join("runs.log")).unwrap();
+    assert_eq!(
+        runs.lines().filter(|line| *line == "S1").count(),
+        2,
+        "S1 re-ran: {runs}"
+    );
+    assert_eq!(
+        runs.lines().filter(|line| *line == "S2").count(),
+        1,
+        "S2 stayed skipped: {runs}"
+    );
 }

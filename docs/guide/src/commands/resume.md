@@ -69,25 +69,52 @@ WARN strict output verification failed — re-executing the rule instead of
      reason="output 'aln/S1.bam' is 500 bytes but the manifest recorded 1024"
 ```
 
-The safe default has three deliberate consequences:
+The check runs in two places, and both are required: a **pre-plan pass**
+verifies every checkpoint-completed rule in this run's execution set and, on
+failure, invalidates the rule **together with its completed downstream** in
+the checkpoint and forces the closure to re-execute (a dependent whose own
+output is intact but was built from the damaged artifact must not be skipped);
+the **executor's freshness gate** re-verifies any rule that still reaches it
+(crash-leftover outputs with no completion record, targeted subsets). On a
+cluster resume the same pre-plan pass seeds the submission plan, whose
+downstream cascade resubmits affected completed rules.
+
+The failed rule and its downstream re-run together; the run does not exit 0
+with dependents derived from the damaged artifact. The safe default has
+three deliberate consequences:
 
 - A **legacy checkpoint** (written before output manifests existed) has no
   manifest for its completed rules, so those rules re-run on the next
   `resume` — once. Their fresh completions record manifests.
 - An output **above the hash cap** records size only and is therefore
-  **unverified**: strict resume re-runs it. Raise
-  `OXO_FLOW_MANIFEST_HASH_MAX_BYTES` to content-hash larger artifacts at a
-  proportionally higher per-completion cost. Same-size corruption of an
-  output above the cap is only detectable once the cap is raised.
+  **unverified**: strict resume re-runs it. `--provenance` does **not** relax
+  this — its `checksums` map is a separate audit trail and the manifest entry
+  still has no `sha256`, so an over-cap output remains unverified until the
+  cap is raised (or `--trust-mtime` accepts mtime evidence). Same-size
+  corruption of an output above the cap is only detectable once the cap is
+  raised.
 - A declared output that is a **directory** (or another non-regular file)
   has no content hash and is treated as unverified, so such rules re-run
   under the strict default.
 
 Pass `--trust-mtime` to opt out and keep the historical size+mtime verdict
-(existence and mtime only). This is the escape hatch for large-output or
-directory-output workflows where re-hashing/re-running is unacceptable.
-Plain `oxo-flow run` keeps the historical size+mtime gate; only `resume`
-verifies manifests.
+(existence and mtime only) — including for cluster re-attach adoption, where
+it prevents resubmitting an already-successful scheduler job over an
+unverifiable (over-cap/directory) output. This is the escape hatch for
+large-output or directory-output workflows where re-hashing/re-running is
+unacceptable. Plain `oxo-flow run` keeps the historical size+mtime gate;
+`run --verify-outputs` opts a plain run (for example a retry wrapper) into the
+same strict behavior, and `resume` applies it by default.
+
+**Coverage boundary.** Only the `resume` command (`resume-checkpoint` on the
+web surface) and `run --verify-outputs` apply strict verification. The web
+retry path spawns `run --resume-failed`, which keeps the historical
+size+mtime gate until it is wired to `--verify-outputs`; a retry of a run
+whose outputs were damaged after completion does not re-verify them.
+Similarly, `OXO_FLOW_MANIFEST_HASH_MAX_BYTES` is honored by direct CLI runs
+but is not yet forwarded into the web server's spawn environment allowlist,
+so web-spawned runs and their resumes use the 64 MiB default. Both are
+planned follow-ups, not silent guarantees.
 
 ### Checkpoint format version
 

@@ -104,19 +104,24 @@ pub const MANIFEST_HASH_MAX_BYTES_ENV: &str = "OXO_FLOW_MANIFEST_HASH_MAX_BYTES"
 /// typo must never silently disable content hashing, because an unhashed
 /// entry is treated as unverified by strict resume.
 pub fn output_manifest_hash_max_bytes() -> u64 {
-    match std::env::var(MANIFEST_HASH_MAX_BYTES_ENV) {
-        Ok(raw) => match raw.trim().parse::<u64>() {
-            Ok(0) | Err(_) => {
-                tracing::warn!(
-                    value = %raw,
-                    "invalid {MANIFEST_HASH_MAX_BYTES_ENV}, using the default output-manifest hash cap"
-                );
-                MANIFEST_HASH_MAX_BYTES
-            }
-            Ok(bytes) => bytes,
-        },
-        Err(_) => MANIFEST_HASH_MAX_BYTES,
-    }
+    static RESOLVED: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *RESOLVED.get_or_init(|| {
+        match std::env::var(MANIFEST_HASH_MAX_BYTES_ENV) {
+            Ok(raw) => match raw.trim().parse::<u64>() {
+                Ok(0) | Err(_) => {
+                    // Resolved once per process: an invalid value warns once,
+                    // not once per completed rule.
+                    tracing::warn!(
+                        value = %raw,
+                        "invalid {MANIFEST_HASH_MAX_BYTES_ENV}, using the default output-manifest hash cap"
+                    );
+                    MANIFEST_HASH_MAX_BYTES
+                }
+                Ok(bytes) => bytes,
+            },
+            Err(_) => MANIFEST_HASH_MAX_BYTES,
+        }
+    })
 }
 
 /// Sorted, deduplicated snapshot of a rule's resolved input files.
@@ -841,10 +846,13 @@ pub struct CheckpointState {
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub when_verdicts: BTreeMap<String, bool>,
 
-    /// Tombstones for `temporary = true` rules whose outputs were deleted
-    /// after a fully successful run. Maps rule name → deleted output paths;
-    /// a future run regenerates them via cascade-up (the completed producer
-    /// is re-executed when a dependent needs the missing inputs).
+    /// Tombstones for outputs the engine deletes by design after a fully
+    /// successful run: `temporary = true` rules' outputs, and transform
+    /// map-rule outputs consumed by a `transform.cleanup = true` combine
+    /// (issue #1426 LOW-4). Maps rule name → deleted output paths; a future
+    /// run skips the producer while every dependent stays complete, and
+    /// regenerates it via cascade-up when a dependent needs the missing
+    /// inputs again.
     #[serde(default)]
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub tombstones: BTreeMap<String, Vec<String>>,
@@ -1193,8 +1201,16 @@ impl CheckpointState {
     }
 
     /// Record the declared-output manifest for a rule (issue #1426). Written
-    /// on every successful rule, independent of `--provenance`.
+    /// on every successful rule, independent of `--provenance`. An EMPTY
+    /// manifest is never stored: a successful rule that produced no
+    /// recordable output (no declared outputs, or only unresolved templates)
+    /// must not serialize `"rule": []`, and strict verification treats both
+    /// "absent" and "empty" as no evidence anyway.
     pub fn record_output_manifest(&mut self, rule: &str, manifest: OutputManifest) {
+        if manifest.is_empty() {
+            self.output_manifests.remove(rule);
+            return;
+        }
         self.output_manifests.insert(rule.to_string(), manifest);
     }
 
@@ -1211,6 +1227,47 @@ impl CheckpointState {
         if manifest.is_empty() {
             self.output_manifests.remove(rule);
         }
+    }
+
+    /// Remove manifest entries for `paths` from EVERY rule's manifest,
+    /// returning the manifests that changed so a failed persistence can roll
+    /// them back (issue #1426 LOW-4).
+    ///
+    /// Used by transform-chunk cleanup: the deleted chunk files are the
+    /// combine rule's *inputs*, declared as outputs of a DIFFERENT producer
+    /// rule, so the cleanup site cannot name the manifest owner. The removed
+    /// files are engine-managed intermediates; keeping their entries would
+    /// make a later strict `resume` report them missing and re-run the
+    /// producer needlessly.
+    pub fn take_output_manifest_paths(
+        &mut self,
+        paths: &[String],
+    ) -> BTreeMap<String, OutputManifest> {
+        let mut previous = BTreeMap::new();
+        let mut emptied = Vec::new();
+        for (rule, manifest) in self.output_manifests.iter_mut() {
+            if !manifest
+                .iter()
+                .any(|entry| paths.iter().any(|path| path == &entry.path))
+            {
+                continue;
+            }
+            previous.insert(rule.clone(), manifest.clone());
+            manifest.retain(|entry| !paths.iter().any(|path| path == &entry.path));
+            if manifest.is_empty() {
+                emptied.push(rule.clone());
+            }
+        }
+        for rule in emptied {
+            self.output_manifests.remove(&rule);
+        }
+        previous
+    }
+
+    /// Restore manifests captured by [`Self::take_output_manifest_paths`]
+    /// (rollback path when their persistence failed).
+    pub fn restore_output_manifests(&mut self, previous: BTreeMap<String, OutputManifest>) {
+        self.output_manifests.extend(previous);
     }
 
     /// Record a checksum for an output the engine deletes by design
@@ -6135,5 +6192,55 @@ mod optional_tests {
         // The last removed entry drops the rule's empty manifest entirely.
         ck.clear_output_manifest_paths("r", &["keep.txt".to_string()]);
         assert!(!ck.output_manifests.contains_key("r"));
+    }
+
+    #[test]
+    fn empty_output_manifest_is_never_stored_or_serialized() {
+        // A successful rule with no recordable outputs must not serialize
+        // `"rule": []` (issue #1426 review LOW-7), and a fresh success
+        // replaces/clears a previous record.
+        let mut ck = CheckpointState::new();
+        ck.record_output_manifest(
+            "r",
+            vec![OutputManifestEntry {
+                path: "out.txt".to_string(),
+                size: 1,
+                sha256: None,
+            }],
+        );
+        ck.record_output_manifest("r", Vec::new());
+        assert!(!ck.output_manifests.contains_key("r"));
+        ck.record_output_manifest("r", Vec::new());
+        assert!(
+            !serde_json::to_string(&ck)
+                .unwrap()
+                .contains("output_manifests")
+        );
+    }
+
+    #[test]
+    fn take_output_manifest_paths_clears_across_rules_and_restores() {
+        // Transform-chunk cleanup deletes files produced by a DIFFERENT rule
+        // than the cleanup owner (issue #1426 LOW-4): the path-based sweep
+        // must clear the entries wherever they live, and the returned map
+        // must roll the state back intact.
+        let entry = |path: &str| OutputManifestEntry {
+            path: path.to_string(),
+            size: 1,
+            sha256: Some("sha256:aa".to_string()),
+        };
+        let mut ck = CheckpointState::new();
+        ck.record_output_manifest("chunk_producer", vec![entry("chunks/1.txt")]);
+        ck.record_output_manifest("mixed", vec![entry("chunks/1.txt"), entry("keep.txt")]);
+
+        let previous = ck.take_output_manifest_paths(&["chunks/1.txt".to_string()]);
+        assert_eq!(previous.len(), 2, "both owning rules are captured");
+        assert!(!ck.output_manifests.contains_key("chunk_producer"));
+        assert_eq!(ck.output_manifests["mixed"].len(), 1);
+        assert_eq!(ck.output_manifests["mixed"][0].path, "keep.txt");
+
+        ck.restore_output_manifests(previous);
+        assert_eq!(ck.output_manifests["chunk_producer"].len(), 1);
+        assert_eq!(ck.output_manifests["mixed"].len(), 2);
     }
 }

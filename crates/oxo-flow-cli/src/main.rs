@@ -181,6 +181,17 @@ pub enum Commands {
         cache_dir: Option<PathBuf>,
         #[arg(long, help = "Track output file checksums for later verification")]
         provenance: bool,
+        /// Verify recorded output manifests for checkpoint-completed rules and
+        /// re-run mismatches (plus their completed downstream) — the strict
+        /// behavior `resume` applies by default (issue #1426).
+        #[arg(
+            long,
+            help = "Verify recorded output manifests for completed rules and re-run a rule \
+                    whose recorded output is missing, resized, content-changed, or unhashed, \
+                    together with its completed downstream. `resume` applies this by default; \
+                    this flag opts a plain `run` (e.g. a retry) into the same check"
+        )]
+        verify_outputs: bool,
         #[arg(long, help = "Execute from a published .tar.zst/.tar.gz bundle")]
         bundle: Option<PathBuf>,
         #[arg(
@@ -1855,6 +1866,7 @@ async fn main() -> Result<()> {
             skip_ref_build,
             cache_dir,
             provenance,
+            verify_outputs,
             bundle,
             yes,
             args,
@@ -2042,10 +2054,10 @@ async fn main() -> Result<()> {
                 strict_envs,
                 apply_patch,
                 locked,
-                // `run` keeps the historical size+mtime freshness gate
-                // (issue #1426); strict output verification is `resume`'s
-                // safe default.
-                verify_outputs: false,
+                // `run` keeps the historical size+mtime freshness gate by
+                // default (issue #1426); `--verify-outputs` opts into the
+                // strict check `resume` applies, and `resume` itself sets it.
+                verify_outputs,
                 trust_mtime: false,
             })
             .await?

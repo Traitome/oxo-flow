@@ -370,8 +370,10 @@ manifest before reusing a completed rule; an entry without a `sha256`
 [Output manifests and strict resume verification](run.md#output-manifests-and-strict-resume-verification).
 `tombstones` lists
 outputs of [`temporary`](run.md#temporary-rules-temporary-true)
-rules that were deleted after a successful run — the rule stays skipped until
-a dependent needs those outputs again. `reentries` records checkpoint
+rules — and of transform map rules whose chunk files a
+`transform.cleanup = true` combine deleted — that were deleted after a
+successful run. The rule stays skipped until a dependent needs those outputs
+again (then it regenerates via cascade-up). `reentries` records checkpoint
 re-entry contributions (round, checkpoint rule, group, samples, pairs) so resumes
 replay them deterministically and revoke them when the rule is invalidated
 (see [Checkpoint re-entry](../reference/workflow-format.md#checkpoint-re-entry)).

@@ -113,6 +113,33 @@ pub fn collect_output_manifest(
     entries
 }
 
+/// Blocking-pool wrapper for [`collect_output_manifest`] (issue #1426 LOW-5):
+/// rule completion and cluster adoption run on async workers and must not
+/// hash up to the cap inline. A panicked/failed blocking task degrades to an
+/// empty manifest with a warning — strict resume then re-runs the rule
+/// (never silently accepts it).
+pub async fn collect_output_manifest_async(
+    rule: Rule,
+    workdir: std::path::PathBuf,
+    wildcard_scope: HashMap<String, String>,
+    hash_max_bytes: u64,
+) -> Vec<OutputManifestEntry> {
+    match tokio::task::spawn_blocking(move || {
+        collect_output_manifest(&rule, &workdir, &wildcard_scope, hash_max_bytes)
+    })
+    .await
+    {
+        Ok(manifest) => manifest,
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "output manifest collection task failed — this rule will have no recorded output manifest"
+            );
+            Vec::new()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{collect_output_checksums, collect_output_manifest};
