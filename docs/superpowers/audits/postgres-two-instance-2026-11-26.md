@@ -49,12 +49,26 @@ is a measurable availability residual for load balancers with short health
 timeouts; it is not a correctness failure. A health-specific DB probe
 timeout is a candidate follow-up, not implemented here.
 
+## Database restart probe (single host)
+
+One running instance was exercised across a clean PostgreSQL restart
+(`systemctl restart postgresql`):
+
+- Before: `health` 200, `runs` 200.
+- After `pg_isready` reported ready: `health` 200 `status: "ok"` in 0 s with
+  `database.status: "ok"`; `runs` 200; the audit chain verified `ok: true`
+  with 40 events. The web process was not restarted — the pool reconnected.
+
+Limits: a clean service restart, not a crash/kill -9 or corruption, and no
+in-flight write was deliberately overlapped.
+
 ## Limits
 
 - One host, two processes, one database; no separate hosts or network
   namespaces. The partition probe is a full outbound block on one host
-  (not asymmetric/partial), and there is no pool-exhaustion, database
-  restart, or kill-mid-transaction measurement yet.
+  (not asymmetric/partial); the restart probe is a clean service restart.
+  Pool exhaustion, crash/kill -9 recovery, corruption, and
+  kill-mid-transaction remain unmeasured.
 - Personal mode only; no multi-user RBAC or per-user quota interaction.
 - The 10-run cap is the configured concurrent-run quota, not a defect.
 - No production-scale or crash-recovery claim is made. The full #1402
