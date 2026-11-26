@@ -62,13 +62,39 @@ One running instance was exercised across a clean PostgreSQL restart
 Limits: a clean service restart, not a crash/kill -9 or corruption, and no
 in-flight write was deliberately overlapped.
 
+## Connection exhaustion probe (single host)
+
+With `max_connections = 10` (superuser-reserved 3) and six held
+`pg_sleep(60)` sessions as the `oxo` role, 10 concurrent `GET /api/runs`
+requests with a 10 s client cap produced **8 timeouts (`000`) and 2 HTTP 200**
+responses; `/api/health` still answered 200 through an existing connection.
+Releasing the held sessions restored `health`/`runs` to 200 and the 40-event
+chain verified. Limits: reserved superuser connections make the exact
+threshold fuzzy, and the 10 s cap is a client-side observation; no 5xx
+classification is claimed.
+
+## Crash probe: kill -9 the web process
+
+A `sleep 30` run reached `running`; the web server was killed with `kill -9`
+and restarted. Health returned 200, but the run row remained **`running`**
+after restart and a further wait — a ghost row: the single-instance restart
+does not reconcile in-flight runs whose executor died. The audit chain still
+verified `ok: true` with 42 events. The orphaned rule process was terminated
+and the test row marked failed manually for cleanup.
+
+This is a measured crash-recovery gap, not a correctness failure of the
+chain. Fixing it needs an owner lease/heartbeat (or an explicit
+single-instance startup reconciliation) so a second live instance's runs are
+not misclassified; that is a design follow-up, not implemented here.
+
 ## Limits
 
 - One host, two processes, one database; no separate hosts or network
   namespaces. The partition probe is a full outbound block on one host
-  (not asymmetric/partial); the restart probe is a clean service restart.
-  Pool exhaustion, crash/kill -9 recovery, corruption, and
-  kill-mid-transaction remain unmeasured.
+  (not asymmetric/partial); the restart probe is a clean service restart;
+  the crash probe kills only the web process. Network-namespace isolation,
+  asymmetric partitions, database corruption, and kill-mid-transaction
+  remain unmeasured. The ghost-row reconciliation gap is documented above.
 - Personal mode only; no multi-user RBAC or per-user quota interaction.
 - The 10-run cap is the configured concurrent-run quota, not a defect.
 - No production-scale or crash-recovery claim is made. The full #1402
