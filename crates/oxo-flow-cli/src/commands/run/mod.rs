@@ -1091,9 +1091,12 @@ async fn run_command_inner(
     }
 
     // Tombstone-aware skip (temporary rules): a tombstoned rule whose
-    // outputs are deleted stays SKIPPED while no dependent needs them;
-    // when a dependent will run, cascade-up has already removed it from
-    // completed so it re-executes first. Mirrored by the dry-run preview.
+    // outputs are deleted stays SKIPPED while no dependent needs them; when
+    // a dependent will run, the cascade-up below removes it from completed
+    // so it re-executes first. Mirrored by the dry-run preview. This
+    // PRE-replay view is used only to decide whether a recorded re-entry may
+    // replay; it is recomputed after the replay for the strict analysis and
+    // the scheduler.
     let tombstone_keep: std::collections::HashSet<String> = {
         let ck = checkpoint.lock().await;
         ck.tombstones
@@ -1107,44 +1110,85 @@ async fn run_command_inner(
             .collect()
     };
 
-    // Lazy regeneration (temporary rules): any rule that will execute may
-    // consume the tombstoned outputs of completed producers — cascade up so
-    // those producers re-execute first. Mirrored by the dry-run preview.
-    if !rerun {
-        let will_run_seeds: std::collections::HashSet<String> = {
-            let ck = checkpoint.lock().await;
-            order
+    // ── Checkpoint re-entry replay (issue #78 P3) ────────────────────────
+    // MUST run before the strict/seeding analyses below: replay rebuilds
+    // config/dag/order, and a replayed instance that the checkpoint records
+    // as completed would otherwise escape strict output verification and be
+    // silently reused through the historical existence path (review HIGH-1).
+    {
+        let ck = checkpoint.lock().await;
+        if !ck.reentries.is_empty() {
+            let valid: std::collections::HashSet<String> = config
+                .rules
                 .iter()
-                .filter(|name| {
-                    crate::commands::run_preview::will_run_seed(
-                        name,
-                        &ck.completed_rules,
-                        &tombstone_keep,
-                        &config,
-                        &wildcard_values,
-                        workdir_actual.as_ref(),
-                    )
+                .filter(|rule| {
+                    ck.is_completed(&rule.name)
+                        && !rerun
+                        && (tombstone_keep.contains(&rule.name)
+                            || crate::commands::run_preview::rule_outputs_exist(
+                                rule,
+                                workdir_actual.as_ref(),
+                                &wildcard_values,
+                            ))
                 })
-                .cloned()
-                .collect()
-        };
-        let upstream = {
-            let mut ck = checkpoint.lock().await;
-            crate::commands::run_preview::cascade_up_tombstoned(&mut ck, &dag, &will_run_seeds)
-        };
-        if !upstream.is_empty() {
-            force_rules.extend(upstream.iter().cloned());
-            diagnostic_narrate(
-                format_args!(
-                    "  {} temporary outputs needed again — re-running {}: {}",
-                    "↻".yellow(),
-                    oxo_flow_core::plural(upstream.len(), "producer rule", "producer rules"),
-                    upstream.join(", ")
-                ),
-                Some(&run_log),
-            );
+                .map(|r| r.name.clone())
+                .collect();
+            replay_checkpoint_reentries(
+                &mut ReplayPlan {
+                    config: &mut config,
+                    dag: &mut dag,
+                    order: &mut order,
+                    target: &target,
+                    when_false_rules: &when_false_rules,
+                    workdir: workdir.as_ref().unwrap_or(&workdir_default),
+                    run_log: Some(&run_log),
+                },
+                &ck.reentries,
+                &valid,
+                ReplayPlanOrdering::ExecutionOrder,
+                "run",
+                false,
+            )?;
         }
     }
+
+    // ── Runtime-discovered output_pattern replay (issue #227 item 5) ──────
+    // Also before the strict/seeding analyses: the replayed consumer
+    // instances are checkpoint-completed and must be verified like any
+    // other completed rule (review HIGH-1).
+    {
+        let ck = checkpoint.lock().await;
+        replay_output_pattern_domains(
+            &mut ReplayPlan {
+                config: &mut config,
+                dag: &mut dag,
+                order: &mut order,
+                target: &target,
+                when_false_rules: &when_false_rules,
+                workdir: workdir.as_ref().unwrap_or(&workdir_default),
+                run_log: Some(&run_log),
+            },
+            &ck,
+            rerun,
+            ReplayPlanOrdering::ExecutionOrder,
+        )?;
+    }
+
+    // Recompute the tombstone-aware skip set on the REPLAYED plan: replay can
+    // add rule instances and dependencies, so the pre-replay set may be stale
+    // for the strict analysis and the scheduler (review HIGH-1/LOW-1).
+    let tombstone_keep: std::collections::HashSet<String> = {
+        let ck = checkpoint.lock().await;
+        ck.tombstones
+            .keys()
+            .filter(|rule| {
+                dag.dependents(rule)
+                    .map(|deps| deps.iter().all(|d| ck.completed_rules.contains(d)))
+                    .unwrap_or(true)
+            })
+            .cloned()
+            .collect()
+    };
 
     // ── Strict output verification (issue #1426) ─────────────────────────
     // A checkpoint-completed rule whose recorded output manifest does not
@@ -1152,9 +1196,11 @@ async fn run_command_inner(
     // dependent pre-skipped on its own intact output would silently keep
     // results derived from the damaged artifact (review MEDIUM-3). Seed the
     // same downstream invalidation `--from-rule` and input changes use, and
-    // force the closure past the executor's freshness gate. Tombstoned
-    // rules are exempt (their outputs were deleted by design) and when-false
-    // rules are exempt (the gate dominates and is re-judged every run).
+    // force the closure past the executor's freshness gate. Runs AFTER the
+    // re-entry/output_pattern replay (final plan) and BEFORE the tombstone
+    // cascade-up below, so a rule that will run because of this invalidation
+    // is visible to cascade-up and its deleted-by-design upstream producers
+    // regenerate instead of being pre-skipped (review HIGH-2).
     if verify_outputs && !trust_mtime && !rerun {
         let failed = manifest_failure_seeds(
             &checkpoint,
@@ -1187,6 +1233,47 @@ async fn run_command_inner(
                     "↻".yellow(),
                     oxo_flow_core::plural(closure.len(), "rule", "rules"),
                     closure.join(", ")
+                ),
+                Some(&run_log),
+            );
+        }
+    }
+
+    // Lazy regeneration (temporary rules): any rule that will execute may
+    // consume the tombstoned outputs of completed producers — cascade up so
+    // those producers re-execute first. Mirrored by the dry-run preview.
+    // Runs AFTER strict invalidation so rules forced by it count as will-run
+    // seeds (review HIGH-2).
+    if !rerun {
+        let will_run_seeds: std::collections::HashSet<String> = {
+            let ck = checkpoint.lock().await;
+            order
+                .iter()
+                .filter(|name| {
+                    crate::commands::run_preview::will_run_seed(
+                        name,
+                        &ck.completed_rules,
+                        &tombstone_keep,
+                        &config,
+                        &wildcard_values,
+                        workdir_actual.as_ref(),
+                    )
+                })
+                .cloned()
+                .collect()
+        };
+        let upstream = {
+            let mut ck = checkpoint.lock().await;
+            crate::commands::run_preview::cascade_up_tombstoned(&mut ck, &dag, &will_run_seeds)
+        };
+        if !upstream.is_empty() {
+            force_rules.extend(upstream.iter().cloned());
+            diagnostic_narrate(
+                format_args!(
+                    "  {} temporary outputs needed again — re-running {}: {}",
+                    "↻".yellow(),
+                    oxo_flow_core::plural(upstream.len(), "producer rule", "producer rules"),
+                    upstream.join(", ")
                 ),
                 Some(&run_log),
             );
@@ -1637,69 +1724,10 @@ async fn run_command_inner(
     //
     // Concurrency is still bounded by -j (tokio Semaphore).  ResourcePool
     // (threads/memory/groups) is checked per-rule inside execute_rule_with_config.
-
-    // ── Checkpoint re-entry replay (issue #78 P3) ────────────────────────
-    // Re-apply recorded re-entries whose checkpoint rule still stands, then
-    // rebuild the DAG so a resume reconstructs the same static plan a fresh
-    // run would. Invalidated checkpoint rules are revoked: their samples
-    // leave the plan until the rule re-runs and re-records.
-    {
-        let ck = checkpoint.lock().await;
-        if !ck.reentries.is_empty() {
-            let valid: std::collections::HashSet<String> = config
-                .rules
-                .iter()
-                .filter(|rule| {
-                    ck.is_completed(&rule.name)
-                        && !rerun
-                        && (tombstone_keep.contains(&rule.name)
-                            || crate::commands::run_preview::rule_outputs_exist(
-                                rule,
-                                workdir_actual.as_ref(),
-                                &wildcard_values,
-                            ))
-                })
-                .map(|r| r.name.clone())
-                .collect();
-            replay_checkpoint_reentries(
-                &mut ReplayPlan {
-                    config: &mut config,
-                    dag: &mut dag,
-                    order: &mut order,
-                    target: &target,
-                    when_false_rules: &when_false_rules,
-                    workdir: workdir.as_ref().unwrap_or(&workdir_default),
-                    run_log: Some(&run_log),
-                },
-                &ck.reentries,
-                &valid,
-                ReplayPlanOrdering::ExecutionOrder,
-                "run",
-                false,
-            )?;
-        }
-    }
-
-    // ── Runtime-discovered output_pattern replay (issue #227 item 5) ──────
-    // Rationale and producer completion gating live in
-    // `reentry::replay_output_pattern_domains`.
-    {
-        let ck = checkpoint.lock().await;
-        replay_output_pattern_domains(
-            &mut ReplayPlan {
-                config: &mut config,
-                dag: &mut dag,
-                order: &mut order,
-                target: &target,
-                when_false_rules: &when_false_rules,
-                workdir: workdir.as_ref().unwrap_or(&workdir_default),
-                run_log: Some(&run_log),
-            },
-            &ck,
-            rerun,
-            ReplayPlanOrdering::ExecutionOrder,
-        )?;
-    }
+    //
+    // Checkpoint re-entry and output_pattern replay already ran earlier in
+    // this function (before the strict/tombstone analyses, which depend on
+    // the replayed config/dag/order — review HIGH-1).
 
     // Parent context the repair loop forwards into its verification rerun
     // (issue #1164 review-R3): the effective workdir, the raw override
@@ -1761,12 +1789,6 @@ async fn run_command_inner(
     .await
 }
 
-/// Checkpoint-completed rules whose recorded output manifest does not verify
-/// (issue #1426).
-///
-/// Only rules that are actually part of this run are considered; tombstoned
-/// rules (outputs deleted by design) and when-false rules (the gate is
-/// re-judged and dominates) are exempt. Verification hashes outputs on the
 /// One completed rule queued for strict output verification: its expanded
 /// rule, the merged fan-out/config scope, and the recorded manifest (if any).
 struct ManifestCandidate {
@@ -1776,6 +1798,12 @@ struct ManifestCandidate {
     manifest: Option<oxo_flow_core::executor::checkpoint::OutputManifest>,
 }
 
+/// Checkpoint-completed rules whose recorded output manifest does not verify
+/// (issue #1426).
+///
+/// Only rules that are actually part of this run are considered; tombstoned
+/// rules (outputs deleted by design) and when-false rules (the gate is
+/// re-judged and dominates) are exempt. Verification hashes outputs on the
 /// blocking pool — one pass, before scheduling, so the downstream cascading
 /// below can use the result.
 async fn manifest_failure_seeds(

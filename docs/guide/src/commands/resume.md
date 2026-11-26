@@ -70,14 +70,18 @@ WARN strict output verification failed — re-executing the rule instead of
 ```
 
 The check runs in two places, and both are required: a **pre-plan pass**
-verifies every checkpoint-completed rule in this run's execution set and, on
-failure, invalidates the rule **together with its completed downstream** in
-the checkpoint and forces the closure to re-execute (a dependent whose own
-output is intact but was built from the damaged artifact must not be skipped);
-the **executor's freshness gate** re-verifies any rule that still reaches it
+verifies every checkpoint-completed rule in the run's FINAL execution set —
+it runs after the checkpoint re-entry and output_pattern replay, so instances
+rebuilt from the checkpoint are verified too — and, on failure, invalidates
+the rule **together with its completed downstream** in the checkpoint and
+forces the closure to re-execute (a dependent whose own output is intact but
+was built from the damaged artifact must not be skipped). That invalidation
+also feeds the tombstone cascade-up, so temporary/transform-cleaned producers
+of a forced rule regenerate instead of being skipped with deleted inputs. The
+**executor's freshness gate** re-verifies any rule that still reaches it
 (crash-leftover outputs with no completion record, targeted subsets). On a
-cluster resume the same pre-plan pass seeds the submission plan, whose
-downstream cascade resubmits affected completed rules.
+cluster resume the pre-plan pass seeds the submission plan, whose downstream
+cascade resubmits affected completed rules.
 
 The failed rule and its downstream re-run together; the run does not exit 0
 with dependents derived from the damaged artifact. The safe default has

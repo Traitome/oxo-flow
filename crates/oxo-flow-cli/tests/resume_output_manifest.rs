@@ -389,6 +389,150 @@ shell = "echo combine >> combine_runs.log && cat {chunks} > {output[0]}"
     );
 }
 
+/// HIGH-1: output_pattern consumer instances are re-created by the re-entry
+/// replay at run start (the initial config cannot know them). A tampered
+/// consumer output must still be caught by the POST-replay strict pass — the
+/// pre-replay plan does not contain the instances at all.
+#[test]
+fn resume_verifies_replayed_output_pattern_instances() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("replay.oxoflow");
+    std::fs::write(
+        &wf,
+        r#"[workflow]
+name = "replay-strict"
+
+[[rules]]
+name = "split"
+output_pattern = "results/chunks/{i}.txt"
+shell = "mkdir -p results/chunks && echo split >> split_runs.log && for i in 1 2 3; do echo part-$i > results/chunks/$i.txt; done"
+
+[[rules]]
+name = "collect"
+input = ["results/chunks/{i}.txt"]
+output = ["results/merged/{i}.txt"]
+shell = "echo {i} >> collect_runs.log && cat {input} > {output}"
+"#,
+    )
+    .unwrap();
+    let (ok, _stdout, stderr) =
+        run_cli(dir.path(), &["run", wf.to_str().unwrap(), "-j", "1"], None);
+    assert!(ok, "initial replay run failed:\n{stderr}");
+
+    // Damage one replayed consumer instance's output.
+    std::fs::write(dir.path().join("results/merged/2.txt"), "XX").unwrap();
+
+    let (ok, _stdout, stderr) = run_cli(
+        dir.path(),
+        &[
+            "resume",
+            checkpoint(dir.path()).to_str().unwrap(),
+            "-j",
+            "1",
+        ],
+        None,
+    );
+    assert!(ok, "resume must succeed:\n{stderr}");
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("results/merged/2.txt")).unwrap(),
+        "part-2\n",
+        "the replayed consumer instance must be re-verified and re-run:\n{stderr}"
+    );
+    let runs = std::fs::read_to_string(dir.path().join("collect_runs.log")).unwrap();
+    assert_eq!(
+        runs.lines().filter(|line| *line == "2").count(),
+        2,
+        "only the damaged replayed instance re-ran: {runs}"
+    );
+    assert_eq!(
+        runs.lines().filter(|line| *line == "1").count(),
+        1,
+        "an intact replayed instance stays skipped: {runs}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("split_runs.log"))
+            .unwrap()
+            .lines()
+            .count(),
+        1,
+        "the completed producer replays without re-running: {stderr}"
+    );
+}
+
+/// HIGH-2: a strict invalidation that forces a combine must be visible to
+/// the tombstone cascade-up. With the combine's output above the hash cap
+/// (size-only manifest), strict resume invalidates the combine; its
+/// cleanup-tombstoned map producers must regenerate instead of being
+/// pre-skipped, or the combine re-runs against deleted chunk inputs.
+#[test]
+fn resume_over_cap_combine_regenerates_tombstoned_chunks() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("tf.oxoflow");
+    std::fs::write(
+        &wf,
+        r#"[workflow]
+name = "tf"
+
+[[rules]]
+name = "chunked"
+output = ["parts/chunk.txt"]
+shell = "echo final > {output[0]}"
+
+[rules.transform.split]
+by = "chunk"
+n = "3"
+
+[rules.transform]
+map = "echo chunk_{chunk} >> chunk_runs.log && echo chunk_{chunk} > {output[0]}"
+cleanup = true
+
+[rules.transform.combine]
+shell = "echo combine >> combine_runs.log && cat {chunks} > {output[0]}"
+"#,
+    )
+    .unwrap();
+    // Cap below the 24-byte combine output (the 8-byte chunk outputs still
+    // hash at exactly the cap): the combine's entry is size-only/unverified.
+    let cap = Some("8");
+    let (ok, _stdout, stderr) = run_cli(dir.path(), &["run", wf.to_str().unwrap(), "-j", "1"], cap);
+    assert!(ok, "initial transform run failed:\n{stderr}");
+
+    let (ok, _stdout, stderr) = run_cli(
+        dir.path(),
+        &[
+            "resume",
+            checkpoint(dir.path()).to_str().unwrap(),
+            "-j",
+            "1",
+        ],
+        cap,
+    );
+    assert!(
+        ok,
+        "resume must not run the combine against deleted chunks:\n{stderr}"
+    );
+    assert!(
+        dir.path().join("parts/chunk.txt").exists(),
+        "the combine output was rebuilt"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("combine_runs.log"))
+            .unwrap()
+            .lines()
+            .count(),
+        2,
+        "the size-only combine re-ran"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("chunk_runs.log"))
+            .unwrap()
+            .lines()
+            .count(),
+        6,
+        "the tombstoned map producers regenerated before the combine"
+    );
+}
+
 /// `run --verify-outputs` opts a plain run (e.g. a retry wrapper) into the
 /// same strict check; without the flag `run` keeps the historical gate.
 #[test]
@@ -415,6 +559,28 @@ fn run_verify_outputs_flag_rejects_a_truncated_output() {
         run_count(dir.path()),
         2,
         "the damaged rule re-ran:\n{stderr}"
+    );
+    assert_eq!(output_len(dir.path()), 1024);
+}
+
+/// `run --verify-outputs` has no `--trust-mtime` escape hatch: a size-only
+/// (over-cap) manifest entry is UNVERIFIED and must re-execute.
+#[test]
+fn run_verify_outputs_refuses_a_size_only_manifest() {
+    let dir = tempfile::tempdir().unwrap();
+    first_run(dir.path(), Some("16"));
+    let wf = dir.path().join("w.oxoflow");
+
+    let (ok, _stdout, stderr) = run_cli(
+        dir.path(),
+        &["run", wf.to_str().unwrap(), "--verify-outputs"],
+        Some("16"),
+    );
+    assert!(ok, "verify-outputs run succeeds:\n{stderr}");
+    assert_eq!(
+        run_count(dir.path()),
+        2,
+        "an unhashed (size-only) manifest entry must re-run:\n{stderr}"
     );
     assert_eq!(output_len(dir.path()), 1024);
 }
