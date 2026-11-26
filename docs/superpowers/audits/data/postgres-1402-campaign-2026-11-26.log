@@ -1,0 +1,87 @@
+# Raw evidence — PostgreSQL multi-instance/crash/pool campaign (issue #1402)
+# Date: 2026-11-26 (UTC+8 host clock; PG log timestamps CST)
+# Host: VM-4-4-ubuntu, Linux 6.8.0-137-generic, 4 vCPU / 3.6 GiB
+# PostgreSQL: 16.15 (Ubuntu), local cluster postgresql@16-main
+# Web binary: oxo-flow-web 0.32.0, release, --features postgres, built from the campaign branch (this PR)
+# CLI binary: oxo-flow 0.32.0, release (unchanged by this PR)
+# Disposable database per probe: oxo_1402, dropped at the end of each script.
+# Scripts are host-local and intentionally not committed; each probe's exact command is named below.
+
+===== probe 1: per-user quota isolation (team mode) =====
+# command: bash ~/probe1402-scripts/quota.sh
+TOKENS admin=36 user=36
+QUOTA_SET={"limits":{"max_concurrent_runs":1,"max_runs_per_day":100,"max_total_memory_mb":8192,"max_total_threads":64},"updated":true}
+USER_FIRST code=200 body={"run_id":"4e0bc982-662c-4a4e-9496-f82a017b6ac9","status":"queued"}
+USER_FIRST_STATUS=running
+USER_SECOND code=429 body={"code":"QUOTA_EXCEEDED","message":"Quota exceeded: Concurrent run limit reached: 1/1 — see /api/quota for limits"}
+ADMIN_FIRST code=200 body={"run_id":"490c7254-a3b1-4bda-9a4e-afaaaa952410","status":"queued"}
+USER_QUOTA={"active_runs":1,"runs_today":1,"used_memory_mb":0,"used_threads":1}
+ADMIN_QUOTA={"active_runs":1,"runs_today":1,"used_memory_mb":0,"used_threads":1}
+USER_QUOTA_AFTER={"active_runs":0,"runs_today":1,"used_memory_mb":0,"used_threads":0}
+ADMIN_QUOTA_AFTER={"active_runs":0,"runs_today":1,"used_memory_mb":0,"used_threads":0}
+VERIFY={"ok":true,"findings":0,"events":14}
+EXPORT_SHA=e7e44e515d231e651855ec0e4a891ac424c08892635962b4163e86bad917d7a7
+DONE
+
+===== probe 2: kill -9 web process + owner-lease reaper =====
+# command: bash ~/probe1402-scripts/ghost.sh
+RUN_IDS long=d2800e84-b8e4-49f9-886f-1c9974c6576a short=d2d443ae-99ec-430b-9747-c4f7df6f98c7
+STATUS_BEFORE_KILL long=running short=running
+WEB_KILLED pid=984025
+SHORT_EXIT_RECORD=0
+LONG_EXIT_RECORD=absent
+STATUS_AFTER_RESTART long=running short=running
+STATUS_AFTER_REAP long=failed short=completed
+REAP_ELAPSED_AFTER_RESTART_S=91
+REAPER_LOG_LINES=2
+Run d2800e84-b8e4-49f9-886f-1c9974c6576a lease expired (owner Some("unknown:984025:659601a9-91c5-4b50-a511-270d52849a1f"), last heartbeat Some("2026-11-26T14:40:59.300949682+00:00"), exit record None) — attributing the orphaned run
+Run d2d443ae-99ec-430b-9747-c4f7df6f98c7 lease expired (owner Some("unknown:984025:659601a9-91c5-4b50-a511-270d52849a1f"), last heartbeat Some("2026-11-26T14:40:59.345454815+00:00"), exit record Some(0)) — attributing the orphaned run
+QUOTA_AFTER_REAP={"active_runs":0,"runs_today":2,"used_memory_mb":0,"used_threads":0}
+VERIFY={"ok":true,"findings":0,"events":4}
+DONE
+
+===== probe 3: outbound PostgreSQL partition, bounded health/acquire =====
+# command: bash ~/probe1402-scripts/partition.sh  (iptables OUTPUT DROP tcp/5432)
+HEALTH_BEFORE=200
+HEALTH_PARTITION code=200 elapsed_ms=4013 body={"status":"degraded","database":"error"}
+RUNS_PARTITION code=500 elapsed_ms=5011 body={"code":"DB_ERROR","message":"Internal database error","detail":null,"suggestion":null}
+CREATE_PARTITION code=000 elapsed_ms=15012 body=
+head: cannot open '/home/ubuntu/probe1402/partition/create-body.json' for reading: No such file or directory
+HEALTH_RECOVER code=200 elapsed_ms=22
+RUNS_RECOVER=200
+VERIFY={"ok":true,"findings":0,"events":0}
+DONE
+
+===== probe 4: connection exhaustion, bounded acquire =====
+# command: bash ~/probe1402-scripts/pool.sh  (max_connections=10, six held sessions)
+HEALTH_BEFORE=200
+ACTIVE_BEFORE=8
+ACTIVE_HELD=13
+CODES_EXHAUST=200:2 500:8 max_elapsed_ms=5031
+HEALTH_EXHAUST code=200 elapsed_ms=10 body={"status":"ok","database":"ok"}
+HEALTH_RECOVER=200
+RUNS_RECOVER=200
+VERIFY={"ok":true,"findings":0,"events":0}
+DONE
+
+===== probe 5: PostgreSQL SIGKILL crash during an uncommitted transaction =====
+# command: bash ~/probe1402-scripts/crash.sh  (systemctl kill -s SIGKILL postgresql@16-main)
+WEB_PID=986608
+CHAIN_BEFORE=0:0000000000000000
+RUN_ID=5658c11b-aee8-476a-80a4-9b30592285fd
+RUN_STATUS_BEFORE_CRASH=running
+TX_STATE=active
+TX_ROWS_VISIBLE_BEFORE_CRASH=0
+PG_AFTER_KILL=failed
+HEALTH_DURING_OUTAGE code=200 elapsed_ms=4011 body={"status":"degraded","database":"error"}
+PG_RESTARTED=active ready_after_ms=500
+CRASH_RECOVERY_LOG=2026-11-26 22:44:41.038 CST [986725] LOG:  database system was not properly shut down; automatic recovery in progress|
+HEALTH_AFTER_RECOVERY code=200 attempts=1
+WEB_STILL_SAME_PID=yes
+TX_RUN_ROWS_AFTER=0
+TX_AUDIT_ROWS_AFTER=0
+CHAIN_AFTER=2:aa42afe593235b82
+RUN_STATUS_AFTER=completed
+VERIFY={"ok":true,"findings":0,"events":2}
+EXPORT_SHA=7f37e3ac5fbb90d35c36f3c0a9c58c2083c8d69b3b2f0bd53ca674320098f550
+DONE

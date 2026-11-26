@@ -1,109 +1,70 @@
-# PostgreSQL two-instance admission and audit-chain smoke — 2026-11-26
+# PostgreSQL multi-instance, crash-recovery, and pool-exhaustion campaign (issue #1402)
 
-Partial evidence for issue #1402 (multi-instance PostgreSQL campaign). This
-is **not** a multi-host or production-scale campaign: two web processes ran
-on one host against one PostgreSQL database.
+Campaign evidence for issue #1402. It measures the PostgreSQL run ledger with
+two web instances on one host, two instances in separate Linux network
+namespaces, an asymmetric partition, connection exhaustion, a per-user quota
+isolation probe, a `kill -9` web-process crash (including the owner-lease
+reconciliation fix), and a `SIGKILL` PostgreSQL crash during an uncommitted
+transaction. Three defects the campaign proved are fixed: the health bound
+and the lease reconciliation have committed regression tests, and the
+pool-acquire bound is verified by the live pool-exhaustion probe (pool
+construction is exercised by every web test). The residual list below is part
+of the result: a separate
+physical host, production scale, packet-loss/latency injection, per-query
+network timeouts, and database media corruption remain unmeasured, so **no
+production-parity claim is made**.
+
+Raw output for the five new probes is committed at
+[`data/postgres-1402-campaign-2026-11-26.log`](data/postgres-1402-campaign-2026-11-26.log).
+The earlier probes' raw output stayed on the campaign host; the page records
+their measured values.
 
 ## Environment
 
 | Field | Value |
 | --- | --- |
 | Host | `VM-4-4-ubuntu`, Linux 6.8.0-137, 4 vCPU / 3.6 GiB |
-| PostgreSQL | 16.15, local, database `oxo_multi` owned by role `oxo` |
-| Web binary | `0.32.0`, main `93fa06c3`, release, `postgres` feature |
-| Instances | two processes, `127.0.0.1:18110` and `127.0.0.1:18111` |
-| Shared state | same `DATABASE_URL`, same `OXO_FLOW_WORKSPACE` |
-| Mode | personal (no auth), AI disabled, run-creation rate limit disabled |
+| PostgreSQL | 16.15, local cluster `postgresql@16-main`, database `oxo_1402` per probe |
+| Web binary | `0.32.0`, release, `--features postgres`, built from the campaign branch (this PR) |
+| CLI binary | `0.32.0`, release, unchanged by this PR (it executes workflow rules; the web owns the ledger) |
+| Instances | two processes (`127.0.0.1:18110`/`:18111`), two network namespaces (`10.200.0.2:18121`/`10.200.0.3:18122`), and single instances on ports `18130`-`18135` for the focused probes |
+| Shared state | one `DATABASE_URL`; same `OXO_FLOW_WORKSPACE` within a probe |
+| Mode | personal (no auth) except the quota and multi-user probes (team mode, fixed test accounts) |
 
-## Scenario and results
+## Scenario matrix
+
+| Probe | Measured outcome | Section |
+| --- | --- | --- |
+| Two web instances, one database, 20 concurrent creates | 10 admitted, 10 `QUOTA_EXCEEDED` (the shared `default` identity's 10-run quota); both instances list the runs; 40-event chain verifies byte-identically | [Two-instance pair](#two-instance-pair-one-host) |
+| Two instances in separate network namespaces | 10/10 creates succeed; 22-run shared view; 70-event chain byte-identical; asymmetric in-namespace `DROP` affects only that instance | [Network-namespace pair](#network-namespace-pair-and-asymmetric-partition) |
+| Per-user quota isolation (team mode) | user at 1/1 gets `429`; admin's create is `200`; each identity's `/api/quota` usage is its own; release restores both | [Per-user quota isolation](#per-user-quota-isolation-team-mode) |
+| Full outbound partition (`iptables DROP 5432`) | `/api/health` **4013 ms** (pre-fix 30 s) `200 degraded`; `GET /api/runs` `500 DB_ERROR` in **5011 ms**; recovery in 22 ms | [Health fail-fast](#health-fail-fast-and-bounded-pool-acquire) |
+| Connection exhaustion (`max_connections=10`, six held sessions) | 8 requests `500` at **max 5031 ms**, 2 `200` (pre-fix: 8/10 hit a 10 s client cap); health stays `200 ok` | [Pool exhaustion](#pool-exhaustion-re-check) |
+| `kill -9` web process with two running orphans | after restart and **91 s**, still-running orphan → `failed`; finished orphan (exit record 0) → `completed`; quota released; chain `ok` | [Ghost-run reconciliation](#ghost-run-reconciliation-after-a-web-process-crash) |
+| `SIGKILL` PostgreSQL mid-transaction | uncommitted run and audit rows roll back (`0`/`0`); WAL recovery logged; same web process reconnects; live run completes; chain `ok` | [Database crash](#database-crash-during-an-uncommitted-transaction) |
+| Clean database restart | health/runs recover, 40-event chain verifies without a web restart | [Earlier probes](#earlier-probes) |
+| Multi-user team mode | user 3 runs, admin 1, viewer denied `403`; views scoped; 13-event chain with distinct ids | [Earlier probes](#earlier-probes) |
+
+## Two-instance pair (one host)
+
+Two web processes (`127.0.0.1:18110`, `127.0.0.1:18111`) shared one
+PostgreSQL database and one workspace; personal mode, AI disabled,
+run-creation rate limit disabled.
 
 - 20 concurrent `POST /api/runs` calls (10 per instance) with the same
   single-rule workflow.
 - **10 runs admitted**, 10 rejected with the structured
-  `QUOTA_EXCEEDED` response (`Concurrent run limit reached: 10/10`) — the
-  quota is global across the two instances, not per process.
+  `QUOTA_EXCEEDED` response (`Concurrent run limit reached: 10/10`). Both
+  processes act as the same `default` identity in personal mode, so this is
+  the **per-user** quota shared across instances (RB-09), not a per-process
+  counter; the team-mode probe below shows that a different identity has its
+  own allowance.
 - All 10 admitted runs completed; both instances list `completed: 10`.
 - Audit chain: both instances verify `ok: true`, `0` findings, **40
   events**; the two exports are byte-identical
   (`sha256:bf78f91aa06e54ce325bfc26a6f81f3ee10605641179e8100e4eb0e202d6cfb8`).
 - Restarting one instance (health ok) leaves the chain verifiable with the
   same 40 events.
-
-## Partition probe (single host)
-
-A second probe blocked all outbound PostgreSQL traffic (`iptables -A OUTPUT
--p tcp --dport 5432 -j DROP`) against one running instance:
-
-- 10 concurrent `GET /api/runs` requests all hit a 5 s client cap (`000`),
-  i.e. the server did not answer within 5 s while the database was
-  unreachable.
-- `GET /api/health` with a 35 s budget answered after **30 s** with HTTP 200
-  `status: "degraded"`, `components.database.status: "error"`,
-  `latency_ms: null`.
-- Removing the rule restored `health` and `runs` to 200 within 2 s; no
-  restart was needed.
-
-Observation: the health probe does not fail fast under a database partition
-— it waits for the pool/DB timeout (~30 s) before reporting degraded. That
-is a measurable availability residual for load balancers with short health
-timeouts; it is not a correctness failure. A health-specific DB probe
-timeout is a candidate follow-up, not implemented here.
-
-## Database restart probe (single host)
-
-One running instance was exercised across a clean PostgreSQL restart
-(`systemctl restart postgresql`):
-
-- Before: `health` 200, `runs` 200.
-- After `pg_isready` reported ready: `health` 200 `status: "ok"` in 0 s with
-  `database.status: "ok"`; `runs` 200; the audit chain verified `ok: true`
-  with 40 events. The web process was not restarted — the pool reconnected.
-
-Limits: a clean service restart, not a crash/kill -9 or corruption, and no
-in-flight write was deliberately overlapped.
-
-## Connection exhaustion probe (single host)
-
-With `max_connections = 10` (superuser-reserved 3) and six held
-`pg_sleep(60)` sessions as the `oxo` role, 10 concurrent `GET /api/runs`
-requests with a 10 s client cap produced **8 timeouts (`000`) and 2 HTTP 200**
-responses; `/api/health` still answered 200 through an existing connection.
-Releasing the held sessions restored `health`/`runs` to 200 and the 40-event
-chain verified. Limits: reserved superuser connections make the exact
-threshold fuzzy, and the 10 s cap is a client-side observation; no 5xx
-classification is claimed.
-
-## Crash probe: kill -9 the web process
-
-A `sleep 30` run reached `running`; the web server was killed with `kill -9`
-and restarted. Health returned 200, but the run row remained **`running`**
-after restart and a further wait — a ghost row: the single-instance restart
-does not reconcile in-flight runs whose executor died. The audit chain still
-verified `ok: true` with 42 events. The orphaned rule process was terminated
-and the test row marked failed manually for cleanup.
-
-This is a measured crash-recovery gap, not a correctness failure of the
-chain. The restarted instance can still cancel the ghost through
-`POST /api/runs/{id}/cancel` (200, status `cancelled` in a follow-up probe),
-so it is recoverable manually. Automatic reconciliation is what is missing:
-fixing it needs an owner lease/heartbeat (or an explicit single-instance
-startup reconciliation) so a second live instance's runs are not
-misclassified; that is a design follow-up, not implemented here.
-
-## Multi-user team mode probe (single host)
-
-Team mode against PostgreSQL (`oxo_users`), fixed admin/user/viewer
-accounts:
-
-- user created 3 runs (all 200), admin created 1 (200), viewer's create was
-  denied (403).
-- The user's run list showed its own 3; the admin's list showed all 4.
-- Audit chain verified `ok: true`, 0 findings, 13 events; the export's
-  distinct `user_id` values were the admin UUID, `user`, and `viewer` (the
-  denied viewer request is audited).
-
-Limits: three fixed accounts, one host, no per-user quota/concurrent-login
-campaign, and no OAuth/API-key path in this probe.
 
 ## Network-namespace pair and asymmetric partition
 
@@ -128,25 +89,202 @@ packet loss/latency injection, and the partition is an outbound DROP rather
 than a routing partition. This is the network-namespace step of #1402, not
 a multi-host claim.
 
-## Limits
+## Per-user quota isolation (team mode)
 
-- One physical host; the network-namespace pair uses a host TCP forwarder,
-  not separate hosts. No packet-loss/latency injection or routing
-  partition. The partition probe is a full outbound block on one host
-  (not asymmetric/partial); the restart probe is a clean service restart;
-  the crash probe kills only the web process. Network-namespace isolation,
-  asymmetric partitions, database corruption, and kill-mid-transaction
-  remain unmeasured. The ghost-row reconciliation gap is documented above.
-- Personal mode only; no multi-user RBAC or per-user quota interaction.
-- The 10-run cap is the configured concurrent-run quota, not a defect.
-- No production-scale or crash-recovery claim is made. The full #1402
-  matrix (separate hosts, partitions, pool exhaustion, crash recovery)
-  remains open.
+Three fixed accounts (admin/user/viewer) against PostgreSQL; the admin set
+`max_concurrent_runs = 1` for every identity through `PUT /api/quota`:
+
+- user's first create → `200`; once the run reached `running`, the user's
+  second create → `429 {"code":"QUOTA_EXCEEDED","message":"… Concurrent run
+  limit reached: 1/1 …"}`.
+- admin's create in the same window → `200` — the user's consumed slot is
+  not charged to the admin identity.
+- `/api/quota` reported `active_runs: 1` for **each** identity (its own
+  usage), and after cancelling both runs both returned `active_runs: 0`;
+  `runs_today` stayed `1` (completion never erases the daily count).
+- Audit chain verified `ok: true`, 0 findings, 14 events. This fixes the
+  per-user quota question left open by the earlier multi-user probe: the
+  durable counters are keyed by `users.id`, so one user at its cap does not
+  consume another user's allowance.
+
+## Health fail-fast and bounded pool acquire
+
+The earlier partition probe measured `/api/health` taking **30 s** (the sqlx
+pool acquire timeout) before returning `200 degraded` — a load balancer
+with a shorter timeout would treat a live server as dead. The fix bounds
+the health database probe to 4 s (`HEALTH_DB_PROBE_TIMEOUT`) and every
+PostgreSQL pool acquire to 5 s (`DB_ACQUIRE_TIMEOUT`; SQLite keeps sqlx's
+default because its local pool contention under parallel test load is
+legitimate, and the health probe bounds both backends).
+
+Re-run with a full outbound PostgreSQL partition (`iptables -A OUTPUT -p tcp
+--dport 5432 -j DROP`):
+
+- `/api/health` answered **4013 ms**, HTTP 200,
+  `{"status":"degraded","components":{"database":{"status":"error"}}}`.
+- `GET /api/runs` answered **5011 ms** with a structured
+  `500 {"code":"DB_ERROR","message":"Internal database error"}` instead of
+  hanging to the client cap.
+- Removing the rule restored health in **22 ms** and runs to 200 without a
+  restart; the chain verified.
+- A `POST /api/runs` during the same partition still hit the 15 s client
+  cap (`000`): a request that already holds a connection to a black-holed
+  server can block in TCP retransmission, which a pool *acquire* timeout
+  cannot bound. That is a documented residual, not a regression — the
+  health endpoint and pool waits are bounded, per-query network waits are
+  not.
+
+## Pool exhaustion re-check
+
+With `max_connections = 10` (three reserved for superusers) and six held
+`pg_sleep(60)` sessions, ten concurrent `GET /api/runs` requests produced:
+
+- **2 × `200`, 8 × `500`, maximum elapsed 5031 ms** — the pre-fix
+  measurement was 8/10 client timeouts at a 10 s cap (`000`). The bounded
+  acquire converts a pool wait into a fast structured error.
+- `/api/health` stayed `200 ok` in 10 ms through an existing connection.
+- Releasing the sessions restored health/runs; the chain verified.
+- Limits: reserved superuser connections make the exact threshold fuzzy,
+  and the 5 s bound is connection acquisition, not query execution.
+
+## Ghost-run reconciliation after a web-process crash
+
+The earlier crash probe left a `running` row after the web process was
+killed, recoverable only by manual cancel. The fix adds an owner lease
+(issue #1402): every run row records the inserting instance and a
+`heartbeat_at`; a background task renews it every 10 s while the process
+lives, and a reaper finalizes live rows whose owner has been silent for
+90 s. When the orphan's workdir is reachable and carries the wrapper's
+`.exit-code` record, the real outcome is used; otherwise the run is
+`failed`. A process never reaps its own rows; terminal rows are never
+selected.
+
+Measured with two orphaned runs (a `sleep 600` still running and a
+`sleep 20` that finished after the web died):
+
+- `STATUS_BEFORE_KILL`: both `running`; web killed with `kill -9`.
+- After 25 s the finished orphan's workdir held `.exit-code = 0`; the
+  long-run workdir had no exit record.
+- The restarted instance reported both still `running` immediately after
+  restart (lease not expired), then **91 s after restart**:
+  long-run → `failed`, finished orphan → `completed`.
+- Two reaper log lines named the old owner
+  (`unknown:984025:<uuid>`; the hostname field is `unknown` when the service
+  environment does not export `HOSTNAME`), the last heartbeat, and the exit
+  record (`None` / `Some(0)`).
+- `/api/quota` after reconciliation: `active_runs: 0` (both durable
+  reservations released); audit chain `ok: true`, 0 findings.
+
+Limits: reconciliation takes about 90-120 s (the lease TTL plus the 30 s
+sweep), not instant; the orphaned CLI is not signalled (it may keep running
+after its ledger entry is finalized); a live owner partitioned from the
+database for longer than the lease TTL can have its runs finalized by
+another instance, and a later completion by the original process cannot
+overwrite the first terminal write.
+
+## Database crash during an uncommitted transaction
+
+A PostgreSQL crash was induced with `systemctl kill -s SIGKILL
+postgresql@16-main` while a transaction held an uncommitted `runs` row and
+an uncommitted `audit_logs` row (`SELECT pg_sleep(30)` before `COMMIT`):
+
+- `pg_stat_activity` showed the transaction `active`; both rows invisible
+  before the crash (`TX_ROWS_VISIBLE_BEFORE_CRASH=0`).
+- During the outage `/api/health` answered **4011 ms** `200 degraded`
+  (bounded), and the unit was `failed`.
+- On restart PostgreSQL logged
+  `database system was not properly shut down; automatic recovery in
+  progress`; the first health request after recovery was `200`.
+- The web process was **not restarted** (same PID) — the pool reconnected.
+- Both half-written rows were absent after recovery (`0` and `0`), so a
+  crash cannot leave a ghost run row or an audit row without its chain
+  event.
+- The live run whose owner never died reached `completed`; the chain
+  verified `ok: true`, 0 findings; the export hash is recorded in the raw
+  log.
+
+This is the kill-mid-transaction probe. Database **media corruption**
+(truncated/edited data files or WAL) was not attempted and is residual: it
+would test PostgreSQL's corruption handling rather than an oxo-flow code
+path, and it risks the host's other databases.
+
+## Earlier probes
+
+These were recorded before the fixes and remain valid evidence for the
+campaign matrix:
+
+- **Full partition**: one instance behind `iptables OUTPUT DROP 5432`
+  returned nothing for 10 concurrent run-list requests within 5 s, and
+  `/api/health` answered after 30 s (the defect fixed above); removing the
+  rule restored health/runs in 2 s.
+- **Clean database restart**: `systemctl restart postgresql`; health and
+  runs stayed 200, the 40-event chain verified, and the web process was not
+  restarted (the pool reconnected). Limits: clean restart, not a crash.
+- **Connection exhaustion**: with `max_connections=10` and six held
+  sessions, 8/10 concurrent run-list requests hit a 10 s client cap and 2
+  succeeded; health stayed 200. Re-measured after the fix above.
+- **Multi-user team mode**: user created 3 runs, admin 1, viewer denied
+  `403`; the user's list showed its own 3, the admin's all 4; the 13-event
+  chain verified with distinct admin/user/viewer ids (the denied viewer
+  create is audited).
+- **Manual ghost recovery**: the restarted instance could cancel the
+  ghost run with `POST /api/runs/{id}/cancel` (200, `cancelled`), which is
+  what made the missing automatic reconciliation a defect rather than an
+  outage.
+
+## Defects fixed by this campaign
+
+| Defect | Fix | Regression test |
+| --- | --- | --- |
+| `/api/health` took ~30 s under a database outage | 4 s bound on the health DB probe; the structured 200 `degraded` body is unchanged | `domains::observability::service::tests::database_probe_times_out_within_its_bound` |
+| Pool waits could hold API requests 10-30 s | 5 s `acquire_timeout` on the PostgreSQL pool; requests answer `500 DB_ERROR` instead of hanging (SQLite keeps sqlx's default; the health probe bounds both) | Live probe 4 (pool options have no unit seam); pool construction is exercised by every web test |
+| `kill -9` left a `running` ghost row forever | Owner lease (`owner_instance`, `heartbeat_at`), 10 s heartbeat, 90 s TTL, 30 s reaper; `.exit-code` attribution; quota release through the shared finalizer | `tests/run_lease_reaper.rs`; storage-contract assertions in `tests/postgres_storage_contract.rs`; unit tests in `infra::run_lease` |
+
+The lease schema is added by both bootstraps (SQLite `ALTER TABLE`/rebuild
+path and PostgreSQL `ADD COLUMN IF NOT EXISTS`) with a partial sweep index;
+pre-lease rows have a NULL owner and are deliberately not reaped, so a
+rolling upgrade cannot misclassify an old instance's live run.
+
+## Residuals
+
+- **Separate physical hosts were not available.** The only host is
+  `tx-ubuntu`; multi-instance evidence is two processes on one host and two
+  Linux network namespaces on that host with a TCP forwarder. A true
+  multi-host fleet, its network, and its clock skew are unmeasured.
+- **Network impairment is coarse.** Partitions are outbound `DROP` rules
+  (full or per-namespace), not routing partitions, packet loss, latency
+  injection, or a broken TCP proxy. The database is local.
+- **Per-query network waits are still unbounded.** A request that already
+  holds a connection to a black-holed server can block in TCP
+  retransmission (`CREATE_PARTITION` hit a 15 s client cap). Health and
+  pool acquisition are bounded; a client-side per-query timeout or
+  `TCP_USER_TIMEOUT` tuning remains a follow-up.
+- **Database media corruption was not attempted** (see above). The clean
+  restart and the `SIGKILL` crash/WAL-recovery path are covered.
+- **No production-scale measurement**: row counts, sustained load, a large
+  pool, multi-instance admission on separate hosts, and long-running
+  transactions are unmeasured.
+- **Lease tradeoffs are deliberate**: a live owner that cannot reach the
+  database for longer than the TTL may have its runs finalized by another
+  instance (the later completion cannot overwrite the first terminal
+  write); an orphaned CLI is not signalled; pre-lease rows (NULL owner) are
+  not reaped; reconciliation is not instant (~90-120 s).
+- **A terminal write that fails while the database is down is not
+  retried.** If a run finishes during an outage and its owning web process
+  stays alive, the row can remain `running` after recovery (the owner keeps
+  heartbeating, so the reaper does not take it). This was not exercised by
+  the final crash probe (the run finished after recovery); it is a known
+  residual of the live-owner path.
+- **No production-parity claim.** Single-host, single-database, one
+  operator, one author; the evidence is a campaign, not a qualification.
 
 ## Reproduction
 
-The host-local script that produced this evidence is intentionally not
-committed; it starts both instances with the same `DATABASE_URL` /
-workspace, fires the 20 requests, polls run status, verifies/exports the
-chain on both instances, restarts one, and re-verifies. Raw output is in
-the campaign ledger (`pg-two-instance-2026-11-26.log`).
+The host-local probe scripts are intentionally not committed (they create
+and drop a disposable database, restart PostgreSQL, and install temporary
+`iptables` rules). Their exact commands are named in
+[`data/postgres-1402-campaign-2026-11-26.log`](data/postgres-1402-campaign-2026-11-26.log).
+The checked-in regression tests (`tests/run_lease_reaper.rs`,
+`tests/quota_durable.rs`, `tests/postgres_storage_contract.rs`, and the
+health/lease unit tests) run without the live host; the PostgreSQL storage
+contract gates on `OXO_FLOW_TEST_POSTGRES_URL`.

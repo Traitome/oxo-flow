@@ -85,6 +85,8 @@ GET /api/health
 ```
 Returns status, version, mode, uptime, component health (database, filesystem, scheduler, AI provider), resource usage, and license info.
 
+`components.database` is probed with a **4 s bound** (issue #1402): when the database is unreachable, or the pool cannot hand out a connection within that bound, the endpoint still answers HTTP 200 with `status: "degraded"` and `components.database.status: "error"` — it does not hold a load balancer for the pool's acquire timeout (measured at ~30 s under a partition before the fix). A request that already holds a connection to a black-holed server can still block in TCP retransmission; this endpoint cannot bound that.
+
 In `hpc` mode, `components.scheduler` reports `{"status":"ok"}` when a scheduler backend is detected (the same cached probe `/api/hpc` uses); it is `null` in other modes or when no backend is installed.
 
 `components.ai_key_storage` is `"encrypted"` when `OXO_FLOW_MASTER_KEY` is set, `"plaintext"` otherwise.
@@ -226,9 +228,14 @@ a one-row `audit_chain_head` cursor (`seq`, `hash`); an empty chain carries
 serialized — SQLite inside `BEGIN IMMEDIATE`, PostgreSQL behind a
 `SELECT … FOR UPDATE` on the head row — so the sequence is gapless and
 monotonic under concurrent writers. This is true by construction (the lock is
-the serialization point); the measured PostgreSQL evidence is single-host,
-single-instance PostgreSQL 16.15, and multi-instance deployment remains
-unmeasured. The
+the serialization point). The measured PostgreSQL evidence is one host: two
+instances on that host and two instances in separate Linux network namespaces
+produced byte-identical 40- and 70-event exports, an asymmetric partition and
+a `SIGKILL` crash during an uncommitted transaction both left a verifiable
+chain, and a connection-exhaustion run verified ([#1402
+campaign](../../../superpowers/audits/postgres-two-instance-2026-11-26.md)). Separate
+physical hosts, production-scale concurrency, database media corruption, and
+cross-host clock skew remain unmeasured. The
 `(audit_id, phase)` unique index makes a retried finalize idempotent; the
 first terminal outcome wins and a conflicting later outcome appends nothing.
 
@@ -653,8 +660,14 @@ weak `W/"7"` form, a multi-token list, or `*` — is rejected with
 > and the storage contract was live-verified against `postgres:16`
 > (dated 2026-11-05 historical evidence: full contract round-trip passed,
 > the web suite passed 554 tests / 0 failed with the `postgres` feature);
-> these exact totals are not presented as current CI evidence. Concurrency, crash recovery, and
-> multi-instance behavior remain unvalidated. The runs gate is
+> these exact totals are not presented as current CI evidence. The
+> 2026-11-26 #1402 campaign measured two instances on one host and in
+> separate Linux network namespaces, full and asymmetric outbound
+> partitions, connection exhaustion, a clean restart, a `SIGKILL` crash
+> during an uncommitted transaction, and per-user quota isolation
+> ([campaign report](../../../superpowers/audits/postgres-two-instance-2026-11-26.md));
+> separate physical hosts, production scale, per-query network timeouts, and
+> database media corruption remain unvalidated. The runs gate is
 > backend-agnostic: if no storage backend is initialized at all, these
 > endpoints return
 > `503 {"code": "RUNS_REQUIRE_STORAGE_BACKEND", "message", "detail", "suggestion"}`.
@@ -762,14 +775,31 @@ no ghost `queued` row survives:
   covers the cluster-resolution paths: a `cluster_id` that fails to load
   (`500 DB_ERROR`) or resolves to no enabled cluster (`404 CLUSTER_NOT_FOUND`)
   also removes the row and workdir rather than leaving a ghost `queued` run
-  nothing will ever execute. (Orphan recovery scans `running`/`paused`
-  rows only; a `queued` row that never spawned would otherwise be
-  unreachable, which is why the row is removed rather than left behind.)
+  nothing will ever execute. (SQLite startup recovery scans
+  `running`/`paused` rows only; a `queued` row that never spawned would
+  otherwise be unreachable, which is why the row is removed rather than
+  left behind.)
 - The spawn happens only after the workflow, its includes, the resolved
   snapshot, the staged inputs, and the run row are durably committed, so a
   client never sees a `2xx` for a run whose workdir is incomplete. A losing
   concurrent create still answers `409` with no trace (see the
   saved-pipeline slot rule above).
+
+Every run row also carries an **owner lease** (`owner_instance`,
+`heartbeat_at`, issue #1402): the web process that created the run renews its
+heartbeat every 10 s, and any instance may finalize a live run whose owner has
+been silent for 90 s (swept every 30 s). When the orphan's workdir is
+reachable and contains the wrapper's `.exit-code` record, the run is
+attributed to that real outcome (`completed` for 0); otherwise it is marked
+`failed`. A process never reaps its own rows, and rows written before the
+lease migration (NULL owner) are not reaped — a rolling upgrade does not
+misclassify an old instance's live run. The measured `kill -9` ghost row is
+now reconciled automatically in about 90-120 s; a lease longer than the TTL
+cannot be renewed from a database partition, so another instance may finalize
+that run first. `/api/health` bounds its database probe to 4 s and every
+PostgreSQL pool acquire to 5 s, so a broken database surfaces as `degraded` /
+`500 DB_ERROR` in seconds instead of a 30 s hang; a request that already holds
+a connection to a black-holed server can still block in TCP retransmission.
 
 `pipeline_id` (optional) only *associates* the run with a saved pipeline —
 the TOML still comes from `toml_content`. Every run created through this

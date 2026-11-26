@@ -56,7 +56,7 @@ open http://localhost:8080
 |---------|-------|
 | Network | `127.0.0.1:8080` by default — pass `--host 0.0.0.0` to bind all interfaces |
 | Database | SQLite (default) or PostgreSQL — see [Database Selection](#database-selection-database_url) |
-| Run execution | Backend-routed code exists for SQLite and PostgreSQL; schema bootstrap + core CRUD are CI-smoke-verified on live PostgreSQL, while concurrency/crash-recovery/multi-instance remain unvalidated. Team mode has no OS-level tenant execution boundary, so expose it only to fully trusted workflow authors |
+| Run execution | Backend-routed code exists for SQLite and PostgreSQL; schema bootstrap + core CRUD are CI-smoke-verified on live PostgreSQL, and a 2026-11-26 campaign measured two instances (same host and separate network namespaces), partitions, connection exhaustion, clean/crash restarts, per-user quota, and owner-lease ghost-run reconciliation. Separate physical hosts, production scale, per-query network timeouts, and database media corruption remain unvalidated. Team mode has no OS-level tenant execution boundary, so expose it only to fully trusted workflow authors |
 | Auth | Password env vars (`OXO_FLOW_ADMIN_PASSWORD` / `OXO_FLOW_USER_PASSWORD` / `OXO_FLOW_VIEWER_PASSWORD`) + optional ORCID/GitHub OAuth |
 | Workspace | `workspace/users/<username>/runs/<run_id>` |
 
@@ -235,10 +235,16 @@ Two constraints apply:
   for run-record persistence. CI runs a live-PostgreSQL smoke test (a
   `services: postgres` container) that verifies the schema bootstrap and
   the core `StorageBackend` CRUD surface — users, runs, run nodes, audit
-  logs, webhook config, chat sessions — against a real server. That does
-  NOT extend to production parity: concurrency, crash recovery, and
-  multi-instance behavior remain unvalidated, so test them before
-  relying on PostgreSQL for execution metadata. The runs gate is
+  logs, webhook config, chat sessions — against a real server. The
+  2026-11-26 #1402 campaign additionally measured two instances on one host
+  and in separate Linux network namespaces, full and asymmetric partitions,
+  connection exhaustion, clean and crash restarts, per-user quota, and the
+  owner-lease reconciliation of a `kill -9` ghost run
+  (`docs/superpowers/audits/postgres-two-instance-2026-11-26.md`). That still
+  does NOT extend to production parity: separate physical hosts, production
+  scale, per-query network timeouts, and database media corruption remain
+  unvalidated, so test them before relying on PostgreSQL for execution
+  metadata. The runs gate is
   backend-agnostic in behavior — any initialized storage backend passes
   — and answers `503 RUNS_REQUIRE_STORAGE_BACKEND` only when no backend
   was initialized at all.
@@ -390,11 +396,15 @@ prototype-grade:
   yet reconciled through monotonic compare-and-set transitions.
 - **Pause/resume** sends SIGSTOP/SIGCONT, but persistence failures and missing
   process groups can leave the database state inconsistent with the process.
-- **Crash restart** attempts to probe and re-attach unfinished runs. The
-  backend does not yet provide restart-safe multi-instance ownership or proof
-  that a terminal state cannot be overwritten in every race. There is no
-  cross-instance lease: two servers pointed at the same database can both
-  adopt the same run after a restart.
+- **Crash restart** on SQLite probes and re-attaches unfinished runs by pid;
+  on PostgreSQL, runs carry an owner lease (`owner_instance`/`heartbeat_at`,
+  renewed every 10 s, 90 s TTL) and a 30 s reaper finalizes a live run whose
+  web process died, attributing the wrapper's `.exit-code` when the workdir
+  is reachable. A process never reaps its own rows and pre-lease rows are
+  skipped. The lease does not make every race provably safe: an orphaned CLI
+  is not signalled, a live owner partitioned from the database longer than
+  the TTL can be finalized by another instance, and a terminal write that
+  fails during an outage is not retried.
 
 Do not present these controls as crash-consistent or compliance-grade;
 treat run records written under crash/restart races as provisional until

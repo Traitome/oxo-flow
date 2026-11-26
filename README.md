@@ -451,10 +451,15 @@ storage-backed web domains; the default (`sqlite://oxo-flow.db` in the
 working directory) stays SQLite. Note that the published Docker image is
 built WITHOUT the `postgres` feature — rebuild with
 `cargo build --features postgres` to enable it. Run execution and lifecycle
-bookkeeping route through the unified `StorageBackend` trait. PostgreSQL code
-paths exist, but live parity, concurrency, crash recovery, and multi-instance
-behavior are unproven; do not treat the presence of a trait implementation as
-production-parity evidence.
+bookkeeping route through the unified `StorageBackend` trait. A 2026-11-26
+campaign measured two instances on one host and in separate Linux network
+namespaces, full/asymmetric partitions, connection exhaustion, clean and
+`SIGKILL` crash restarts, per-user quota isolation, and owner-lease
+reconciliation of a killed web process
+([evidence](docs/superpowers/audits/postgres-two-instance-2026-11-26.md)).
+Separate physical hosts, production scale, per-query network timeouts, and
+database media corruption remain unproven; do not treat the trait
+implementation or this single-host campaign as production-parity evidence.
 
 ## Documentation
 
