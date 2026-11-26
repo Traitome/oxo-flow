@@ -403,14 +403,18 @@ fn spawn_real_run(run_id: &str, workdir: &std::path::Path) {
     .into_iter()
     .map(std::ffi::OsString::from)
     .collect();
+    let monitor = oxo_flow_web::infra::run_lease::RunMonitorGuard::new(run_id);
     executor::spawn_background_run_with_args(
         run_id.to_string(),
         "default".to_string(),
         "none".to_string(),
         "local".to_string(),
         Some(workdir.to_path_buf()),
-        args,
-        0,
+        executor::RunInvocation {
+            cli_args: args,
+            memory_limit_mb: 0,
+            monitor,
+        },
     );
 }
 

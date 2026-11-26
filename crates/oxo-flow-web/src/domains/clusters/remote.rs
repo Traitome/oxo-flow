@@ -858,13 +858,19 @@ fn build_remote_run_cmd(
 /// spawn_background_run's DB transitions (running on launch, terminal
 /// write + SSE at the end). Callers stage a `RunStaging` bundle rather
 /// than passing loose flags (clippy too_many_arguments at 8).
-pub fn spawn_remote_run(run_id: String, username: String, cluster: ClusterRow, staged: RunStaging) {
+pub fn spawn_remote_run(
+    run_id: String,
+    username: String,
+    cluster: ClusterRow,
+    staged: RunStaging,
+    monitor: crate::infra::run_lease::RunMonitorGuard,
+) {
     register_remote(&run_id, &cluster.id);
     tokio::spawn(async move {
-        // This task is the remote run's executor/monitor, so it owns the
-        // lease heartbeat (issue #1402 review, MEDIUM). The guard
-        // unregisters on every return/cancellation.
-        let _monitor = crate::infra::run_lease::RunMonitorGuard::new(run_id.clone());
+        // This task is the remote run's executor/monitor and owns the lease
+        // guard created at claim time (issue #1402 review, MEDIUM). The
+        // guard unregisters on every return/cancellation.
+        let _monitor = monitor;
         let remote_dir = remote_run_dir(&cluster, &run_id);
         let RunStaging {
             local_workdir,
@@ -876,6 +882,12 @@ pub fn spawn_remote_run(run_id: String, username: String, cluster: ClusterRow, s
             max_memory_mb,
             max_threads,
         } = staged;
+
+        // The remote CLI writes no local `.exit-code`; a predecessor's
+        // record in this reused local workdir must never attribute the
+        // remote run (issue #1402 review, LOW). Cross-host clock skew also
+        // makes an mtime comparison meaningless for a remote record.
+        crate::executor::clear_exit_record(&local_workdir);
 
         // All bookkeeping below uses the storage backend, which resolves to
         // the SQLite pool on SQLite deployments (see infra::db).

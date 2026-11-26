@@ -3139,21 +3139,20 @@ impl StorageBackend for SqliteBackend {
 
     async fn stale_run_leases(
         &self,
-        current_instance: &str,
         cutoff: &str,
         limit: u32,
     ) -> Result<Vec<models::StaleRunLease>, String> {
         // heartbeat_at is always written by `run_lease::heartbeat_timestamp`
         // (UTC RFC 3339 with a fixed `+00:00` suffix), so lexicographic
-        // ordering is chronological ordering here.
+        // ordering is chronological ordering here. Self-owned rows are
+        // included; the reaper filters the ones it is still monitoring.
         sqlx::query_as::<_, models::StaleRunLease>(
-            "SELECT id, workdir, owner_instance, heartbeat_at, started_at FROM runs \
+            "SELECT id, status, workdir, owner_instance, heartbeat_at, started_at FROM runs \
              WHERE status IN ('queued', 'running', 'paused') \
-               AND owner_instance IS NOT NULL AND owner_instance <> ? \
+               AND owner_instance IS NOT NULL \
                AND heartbeat_at IS NOT NULL AND heartbeat_at < ? \
              ORDER BY heartbeat_at ASC LIMIT ?",
         )
-        .bind(current_instance)
         .bind(cutoff)
         .bind(i64::from(limit))
         .fetch_all(&self.pool)

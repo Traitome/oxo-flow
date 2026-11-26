@@ -10,8 +10,11 @@
 //! - a stale row owned by a silent instance is finalized as `failed` and its
 //!   durable quota reservation is released; a finished orphan whose exit
 //!   record says 0 is attributed `completed` instead;
-//! - a stale-looking row owned by the CURRENT process is never reaped (it is
-//!   still monitored in-process);
+//! - a stale-looking row owned by the CURRENT process is never reaped while
+//!   an executor guard is held; an unmonitored self-owned row (a failed
+//!   pre-spawn step) IS reaped, so one server recovers alone;
+//! - only a `running` row is attributed from an exit record — a `queued` or
+//!   `paused` row with a predecessor's record is `failed`;
 //! - a row whose owner heartbeat is fresh is never reaped;
 //! - terminal rows are never touched;
 //! - reaping is idempotent.
@@ -79,6 +82,8 @@ async fn stale_owner_lease_is_reaped_and_fresh_or_self_leases_are_not() {
         ("lease-null-owner", "running"),
         ("lease-queued-stale-exit", "queued"),
         ("lease-running-stale-exit", "running"),
+        ("lease-paused-exit", "paused"),
+        ("lease-self-unmonitored", "running"),
     ] {
         let workdir = root.path().join(id);
         std::fs::create_dir_all(&workdir).expect("workdir");
@@ -109,6 +114,9 @@ async fn stale_owner_lease_is_reaped_and_fresh_or_self_leases_are_not() {
         .execute(oxo_flow_web::infra::db::sqlite::pool())
         .await
         .expect("running row starts after the stale record");
+    // A paused row with a fresh record is not attributed: only a running
+    // row has an unambiguous outcome (issue #1402 delta review, LOW).
+    std::fs::write(root.path().join("lease-paused-exit/.exit-code"), "0").expect("paused record");
 
     // The target, the finished orphan and the completed row belong to a
     // dead instance and have an old heartbeat; the fresh row belongs to a
@@ -124,8 +132,15 @@ async fn stale_owner_lease_is_reaped_and_fresh_or_self_leases_are_not() {
         .expect("null owner");
     force_lease("lease-queued-stale-exit", "dead-instance", &old).await;
     force_lease("lease-running-stale-exit", "dead-instance", &old).await;
+    force_lease("lease-paused-exit", "dead-instance", &old).await;
     force_lease(
         "lease-self",
+        oxo_flow_web::infra::run_lease::instance_id(),
+        &old,
+    )
+    .await;
+    force_lease(
+        "lease-self-unmonitored",
         oxo_flow_web::infra::run_lease::instance_id(),
         &old,
     )
@@ -149,28 +164,30 @@ async fn stale_owner_lease_is_reaped_and_fresh_or_self_leases_are_not() {
         1
     );
 
-    // Act — a heartbeat renews only this process's own live rows. The
-    // executor registry is exercised in the crate's unit tests; here the
-    // storage contract is pinned directly for the specific run id.
-    let touched = backend
-        .heartbeat_runs(
-            oxo_flow_web::infra::run_lease::instance_id(),
-            &["lease-self".to_string()],
-            &Utc::now().to_rfc3339(),
-        )
+    // Act — only the registered run is heartbeated; `lease-self` has an
+    // executor (the guard), `lease-self-unmonitored` does not (a failed
+    // pre-spawn step). The heartbeat renews the former, not the latter.
+    let _self_monitor = oxo_flow_web::infra::run_lease::RunMonitorGuard::new("lease-self");
+    let touched = oxo_flow_web::infra::run_lease::heartbeat(backend.as_ref())
         .await
         .expect("heartbeat");
-    assert_eq!(touched, 1, "the targeted live row is renewed");
+    assert!(touched >= 1, "the registered live row is renewed");
     let (_, renewed) = status_and_heartbeat("lease-self").await;
     assert_ne!(renewed.as_deref(), Some(old.as_str()), "heartbeat advanced");
+    let (_, unmonitored) = status_and_heartbeat("lease-self-unmonitored").await;
+    assert_eq!(
+        unmonitored.as_deref(),
+        Some(old.as_str()),
+        "a self-owned row with no executor is not heartbeated"
+    );
 
     // Act — one reaper sweep.
     let reaped = oxo_flow_web::infra::run_lease::reap_stale(backend.as_ref())
         .await
         .expect("reap");
     assert_eq!(
-        reaped, 4,
-        "the target, finished orphan, and both stale-exit rows leave the live set"
+        reaped, 6,
+        "the target, finished orphan, three stale-exit rows, and the unmonitored self row leave the live set"
     );
 
     // Assert — the target is terminal, the others are untouched.
@@ -182,7 +199,7 @@ async fn stale_owner_lease_is_reaped_and_fresh_or_self_leases_are_not() {
     );
     assert!(
         !root.path().join("lease-finished/.exit-code").exists(),
-        "a consumed exit record is removed so a later run cannot reuse it"
+        "the record is removed after the terminal write succeeds"
     );
     assert_eq!(
         status_and_heartbeat("lease-queued-stale-exit").await.0,
@@ -195,6 +212,16 @@ async fn stale_owner_lease_is_reaped_and_fresh_or_self_leases_are_not() {
         "an exit record older than this run's start must be rejected"
     );
     assert_eq!(
+        status_and_heartbeat("lease-paused-exit").await.0,
+        "failed",
+        "a paused row's outcome is ambiguous, so a record is not attributed"
+    );
+    assert_eq!(
+        status_and_heartbeat("lease-self-unmonitored").await.0,
+        "failed",
+        "a self-owned row with no executor is reaped after the TTL"
+    );
+    assert_eq!(
         status_and_heartbeat("lease-null-owner").await.0,
         "running",
         "pre-lease NULL-owner rows are never selected for reaping"
@@ -202,7 +229,7 @@ async fn stale_owner_lease_is_reaped_and_fresh_or_self_leases_are_not() {
     assert_eq!(
         status_and_heartbeat("lease-self").await.0,
         "running",
-        "a process never reaps its own rows"
+        "a monitored self-owned row is never reaped"
     );
     assert_eq!(
         status_and_heartbeat("lease-fresh").await.0,

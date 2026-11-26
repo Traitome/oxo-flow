@@ -81,6 +81,11 @@ impl PostgresBackend {
     }
 
     /// Construct a `PostgresBackend` from an existing connection pool.
+    ///
+    /// Test-only: production construction goes through [`Self::new`], which
+    /// applies the bounded acquire timeout. The live tests use this to build
+    /// a deliberately constrained one-connection pool.
+    #[cfg(test)]
     pub fn from_pool(pool: PgPool) -> Self {
         Self { pool }
     }
@@ -2945,21 +2950,20 @@ impl StorageBackend for PostgresBackend {
 
     async fn stale_run_leases(
         &self,
-        current_instance: &str,
         cutoff: &str,
         limit: u32,
     ) -> Result<Vec<models::StaleRunLease>, String> {
         // heartbeat_at is always written by `run_lease::heartbeat_timestamp`
         // (UTC RFC 3339 with a fixed `+00:00` suffix), so the TEXT
-        // comparison orders chronologically.
+        // comparison orders chronologically. Self-owned rows are included;
+        // the reaper filters the ones it is still monitoring.
         sqlx::query_as::<_, models::StaleRunLease>(
-            "SELECT id, workdir, owner_instance, heartbeat_at, started_at FROM runs \
+            "SELECT id, status, workdir, owner_instance, heartbeat_at, started_at FROM runs \
              WHERE status IN ('queued', 'running', 'paused') \
-               AND owner_instance IS NOT NULL AND owner_instance <> $1 \
-               AND heartbeat_at IS NOT NULL AND heartbeat_at < $2 \
-             ORDER BY heartbeat_at ASC LIMIT $3",
+               AND owner_instance IS NOT NULL \
+               AND heartbeat_at IS NOT NULL AND heartbeat_at < $1 \
+             ORDER BY heartbeat_at ASC LIMIT $2",
         )
-        .bind(current_instance)
         .bind(cutoff)
         .bind(i64::from(limit))
         .fetch_all(&self.pool)
@@ -3281,20 +3285,12 @@ mod tests {
             "a fresh live owner's row cannot be re-owned by a past cutoff"
         );
         let stale = backend
-            .stale_run_leases("current-instance", &future, 1000)
+            .stale_run_leases(&future, 1000)
             .await
             .expect("stale_run_leases");
         assert!(
             stale.iter().any(|row| row.id == run.id),
-            "another instance sees the stale-looking lease"
-        );
-        let own = backend
-            .stale_run_leases("other-instance", &future, 1000)
-            .await
-            .expect("stale_run_leases excluding own rows");
-        assert!(
-            !own.iter().any(|row| row.id == run.id),
-            "an instance never selects its own rows for reaping"
+            "the stale-looking lease is selected (self-owned rows are filtered by the reaper, not the query)"
         );
 
         assert!(

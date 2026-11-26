@@ -740,13 +740,15 @@ pub trait StorageBackend: Send + Sync {
         heartbeat_at: &str,
     ) -> Result<u64, String>;
 
-    /// Live runs owned by another instance whose last heartbeat is older
-    /// than `cutoff` (RFC 3339), oldest first. `current_instance` is
-    /// excluded even if its own heartbeat looks stale — a process is the
-    /// authority for the runs it is still monitoring.
+    /// Live runs whose last heartbeat is older than `cutoff` (RFC 3339),
+    /// oldest first. This includes rows owned by the calling process: the
+    /// reaper filters rows it is still monitoring in-process and finalizes
+    /// its own **unmonitored** rows (a queued row whose pre-spawn step
+    /// failed, or a run whose terminal write failed), which makes recovery
+    /// work in a single-instance deployment too. Pre-lease NULL-owner rows
+    /// are never selected.
     async fn stale_run_leases(
         &self,
-        current_instance: &str,
         cutoff: &str,
         limit: u32,
     ) -> Result<Vec<models::StaleRunLease>, String>;

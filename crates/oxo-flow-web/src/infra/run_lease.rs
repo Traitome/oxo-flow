@@ -19,13 +19,18 @@
 //! attribute the run any more. When the run's workdir is visible from the
 //! reaping instance and carries the wrapper's `.exit-code` record, the run
 //! is attributed to that real outcome (`completed` for 0); otherwise it is
-//! marked `failed`.
+//! marked `failed`. Attribution is read-only: the record is removed only
+//! after a terminal write succeeds (or the row is already terminal), so a
+//! transient write failure leaves the true outcome for the next sweep.
 //!
 //! Safety boundaries (deliberate, not incidental):
 //!
-//! - A process never reaps its own rows, even when its own heartbeats are
-//!   stale (e.g. a long database partition). It is still monitoring them
-//!   in-process, and when the database returns it can attribute them.
+//! - A process never reaps a row it is still monitoring, even when its own
+//!   heartbeats are stale (e.g. a long database partition): the executor
+//!   will attribute it when the database returns. Its own **unmonitored**
+//!   live rows are fair game — a queued row whose pre-spawn step failed, or
+//!   a run whose terminal write failed — so a single-instance deployment
+//!   recovers without a second server.
 //! - Terminal rows are never selected: the storage query filters the
 //!   live set, and the terminal write itself is first-wins.
 //! - Rows written before the lease migration have a NULL owner and are not
@@ -98,17 +103,26 @@ fn monitored_run_ids() -> Vec<String> {
         .unwrap_or_default()
 }
 
+fn is_monitored(run_id: &str) -> bool {
+    MONITORED_RUNS
+        .lock()
+        .map(|runs| runs.contains(run_id))
+        .unwrap_or(false)
+}
+
 /// RAII registration for an executor task.
 ///
-/// Dropping the guard (normal return, early error, task cancellation, or
-/// panic) stops the run's heartbeat, leaving it to the lease TTL if no
-/// terminal write succeeded.
-pub(crate) struct RunMonitorGuard {
+/// Registered at **claim time** in the request handler — before any
+/// pre-spawn materialization/staging that can exceed the lease TTL — and
+/// moved into the spawn task. Dropping the guard (normal return, early
+/// error, task cancellation, or panic) stops the run's heartbeat, leaving
+/// it to the lease TTL if no terminal write succeeded.
+pub struct RunMonitorGuard {
     run_id: String,
 }
 
 impl RunMonitorGuard {
-    pub(crate) fn new(run_id: impl Into<String>) -> Self {
+    pub fn new(run_id: impl Into<String>) -> Self {
         let run_id = run_id.into();
         register_monitored(&run_id);
         Self { run_id }
@@ -185,26 +199,41 @@ pub async fn heartbeat(backend: &dyn StorageBackend) -> Result<u64, String> {
 ///
 /// Returns the number of rows this sweep moved out of the live set.
 pub async fn reap_stale(backend: &dyn StorageBackend) -> Result<usize, String> {
+    let current = instance_id();
     let stale = backend
-        .stale_run_leases(instance_id(), &stale_cutoff(), REAP_BATCH_LIMIT)
+        .stale_run_leases(&stale_cutoff(), REAP_BATCH_LIMIT)
         .await?;
     let mut reaped = 0usize;
     for run in stale {
+        // A process never reaps a row it is still monitoring. Its own
+        // **unmonitored** rows are fair game: a queued row whose pre-spawn
+        // step failed, or a run whose terminal write failed, must recover
+        // in a single-instance deployment too.
+        if run.owner_instance.as_deref() == Some(current) && is_monitored(&run.id) {
+            continue;
+        }
         let log_path = run
             .workdir
             .as_deref()
             .map(|workdir| std::path::Path::new(workdir).join("execution.log"))
             .unwrap_or_default();
-        // A queued row never executed, so it is never attributed from an
-        // exit record (a reused workdir may still carry the predecessor's).
-        // For a running row, accept the record only when it postdates the
-        // run's `started_at`; consume it so a later run cannot reuse it.
-        let exit_code = match (run.workdir.as_deref(), run.started_at.as_deref()) {
-            (Some(workdir), Some(started_at)) => {
+        // Only a running row is attributed from an exit record. A queued
+        // row never executed, and a paused row's outcome is ambiguous; a
+        // record must also postdate this run's `started_at` (a reused
+        // workdir may still carry the predecessor's). The read is
+        // read-only: `finalize_run` removes the record only after the
+        // terminal write succeeded, so a lost race or a transient DB error
+        // cannot discard the true outcome.
+        let exit_code = match (
+            run.status.as_str(),
+            run.workdir.as_deref(),
+            run.started_at.as_deref(),
+        ) {
+            ("running", Some(workdir), Some(started_at)) => {
                 let workdir = std::path::PathBuf::from(workdir);
                 let started_at = started_at.to_string();
                 tokio::task::spawn_blocking(move || {
-                    crate::executor::consume_exit_record(&workdir, &started_at)
+                    crate::executor::read_exit_record_after(&workdir, &started_at)
                 })
                 .await
                 .ok()
@@ -424,7 +453,7 @@ mod tests {
 
         let future = (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
         let stale = backend
-            .stale_run_leases("reaper-peer", &future, 100)
+            .stale_run_leases(&future, 100)
             .await
             .expect("stale leases");
         assert!(

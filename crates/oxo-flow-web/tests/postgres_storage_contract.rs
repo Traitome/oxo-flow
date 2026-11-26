@@ -319,20 +319,12 @@ async fn storage_backend_contract_round_trips_on_postgres() {
         "a fresh live owner's row cannot be re-owned by a past cutoff"
     );
     let stale = backend
-        .stale_run_leases("current-instance", &future, 10)
+        .stale_run_leases(&future, 10)
         .await
         .expect("stale leases");
     assert!(
         stale.iter().any(|row| row.id == run.id),
-        "another instance sees the stale-looking lease"
-    );
-    let own_stale = backend
-        .stale_run_leases("other-instance", &future, 10)
-        .await
-        .expect("stale leases excluding own rows");
-    assert!(
-        !own_stale.iter().any(|row| row.id == run.id),
-        "an instance never selects its own rows for reaping"
+        "the stale-looking lease is selected; the reaper filters monitored ids in-process"
     );
     assert!(
         backend

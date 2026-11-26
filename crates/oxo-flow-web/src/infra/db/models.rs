@@ -95,6 +95,7 @@ pub struct RunRow {
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct StaleRunLease {
     pub id: String,
+    pub status: String,
     pub workdir: Option<String>,
     pub owner_instance: Option<String>,
     pub heartbeat_at: Option<String>,

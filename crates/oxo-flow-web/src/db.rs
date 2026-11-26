@@ -80,11 +80,13 @@ pub async fn recover_orphaned_runs() -> Result<()> {
                     // #1402): the lease heartbeat must resume, or another
                     // instance would reap a run this process is monitoring.
                     if let Some(backend) = crate::infra::db::global_backend() {
-                        // SQLite startup recovery runs in a new process on
-                        // the one server for this database file, so the
-                        // previous web owner is known dead: pass a future
-                        // cutoff to force adoption (the general precondition
-                        // still protects other callers).
+                        // SQLite startup recovery assumes ONE web process
+                        // per database file (documented in the deployment
+                        // guide): the previous web owner is known dead, so
+                        // pass a future cutoff to force adoption. The general
+                        // precondition still protects other callers, and
+                        // PostgreSQL multi-instance deployments use the
+                        // stale-owner path instead.
                         let force_adopt_before =
                             (chrono::Utc::now() + chrono::Duration::days(1)).to_rfc3339();
                         match backend
@@ -109,18 +111,20 @@ pub async fn recover_orphaned_runs() -> Result<()> {
                     }
                     tracing::info!("Run {id}: re-attached live CLI (pid {pid}) after restart");
                     if let Some(wd) = workdir {
-                        crate::executor::resume_monitoring(id, pid, wd.into());
+                        crate::executor::resume_monitoring(id, pid, wd.into(), started_at.clone());
                     }
                 } else {
                     // The CLI died while the server was down: attribute from
                     // the exit record instead of guessing. The record is
-                    // accepted only when it postdates this row's start (a
-                    // reused workdir may carry a predecessor's) and is
-                    // consumed so a later run cannot reuse it; the stat-first
-                    // FIFO guard lives in the shared reader (issue #735).
+                    // read-only here (accepted only when it postdates this
+                    // row's start; a reused workdir may carry a
+                    // predecessor's); finalize clears it only after a
+                    // terminal write succeeds, so a transient database error
+                    // leaves it for the reaper's retry. The stat-first FIFO
+                    // guard lives in the shared reader (issue #735).
                     let workdir = workdir.unwrap_or_default();
                     let exit_code = started_at.as_deref().and_then(|started_at| {
-                        crate::executor::consume_exit_record(
+                        crate::executor::read_exit_record_after(
                             std::path::Path::new(&workdir),
                             started_at,
                         )
