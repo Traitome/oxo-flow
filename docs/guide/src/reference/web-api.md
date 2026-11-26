@@ -786,21 +786,27 @@ no ghost `queued` row survives:
   saved-pipeline slot rule above).
 
 Every run row also carries an **owner lease** (`owner_instance`,
-`heartbeat_at`, issue #1402): while an executor task is actually monitoring
-the run, its process renews the heartbeat every 10 s, and any instance may
-finalize a live run whose owner has been silent for 90 s (swept every 30 s).
-A queued row with no executor task is not heartbeated, so a failed pre-spawn
-step cannot pin it forever. When the orphan's workdir is reachable and holds
-a wrapper `.exit-code` record that postdates **this** run's `started_at`, the
-run is attributed to that outcome (`completed` for 0); otherwise it is marked
-`failed`. A `queued` row is never attributed from a record, and a record is
-consumed after use — a retried/resumed run reusing a predecessor's workdir
-cannot inherit its result. A process never reaps its own rows, and rows
-written before the lease migration (NULL owner) are not reaped — a rolling
-upgrade does not misclassify an old instance's live run. The measured
-`kill -9` ghost row is now reconciled automatically in about 90-120 s; a
-lease longer than the TTL cannot be renewed from a database partition, so
-another instance may finalize that run first. `/api/health` bounds its
+`heartbeat_at`, issue #1402): the executor guard is created at claim time
+(before pre-spawn staging) and moved into the spawn task, and its process
+renews the heartbeat every 10 s; any instance may finalize a live run whose
+owner has been silent for 90 s (swept every 30 s). A queued row with no
+executor task is not heartbeated, so a failed pre-spawn step cannot pin it
+forever. When the orphan's workdir is reachable and holds a wrapper
+`.exit-code` record that postdates **this** run's `started_at`, the run is
+attributed to that outcome (`completed` for 0); otherwise it is marked
+`failed`. Only a `running` row is attributed from a record (never a
+`queued` or `paused` one), and the record is removed only after the
+terminal write succeeds — a failed write is retried on the next sweep with
+the outcome preserved, and a retried/resumed run reusing a predecessor's
+workdir cannot inherit its result because every local spawn clears the
+record first. A process never reaps a row it is still monitoring, but it
+does reap its own unmonitored rows; rows written before the lease migration
+(NULL owner) are not reaped — a rolling upgrade does not misclassify an old
+instance's live run. The measured `kill -9` ghost row is now reconciled
+automatically in about 90-120 s; a lease longer than the TTL cannot be
+renewed from a database partition, so another instance may finalize that
+run first. Lease comparisons assume loosely synchronized clocks (one host
+was measured). `/api/health` bounds its
 database probe to 4 s and every PostgreSQL pool acquire to 5 s, so a broken
 database surfaces as `degraded` / `500 DB_ERROR` in seconds instead of a
 30 s hang; a request that already holds a connection to a black-holed server

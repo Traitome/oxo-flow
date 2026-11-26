@@ -156,8 +156,8 @@ killed, recoverable only by manual cancel. The fix adds an owner lease
 lives, and a reaper finalizes live rows whose owner has been silent for
 90 s. When the orphan's workdir is reachable and carries the wrapper's
 `.exit-code` record, the real outcome is used; otherwise the run is
-`failed`. A process never reaps its own rows; terminal rows are never
-selected.
+`failed`. A process never reaps a row it is still monitoring; terminal rows
+are never selected.
 
 Measured with two orphaned runs (a `sleep 600` still running and a
 `sleep 20` that finished after the web died):
@@ -253,11 +253,11 @@ host; the regression tests are checked into the same PR.
 
 | Finding | Resolution |
 | --- | --- |
-| **HIGH — a reused workdir's stale `.exit-code` could mark a retried/resumed run `completed` without execution.** Retry/resume/apply-repair reuse the predecessor workdir; the reaper read any `.exit-code` for any live row (including `queued`). | The reaper accepts a record only for a `running` row whose `started_at` is newer than the record's mtime (2 s filesystem tolerance); a `queued` row is never attributed. Every spawn clears `.exit-code` before starting, `resume_monitoring` clears it before polling, and a consumed record is removed. Reads use `symlink_metadata` (no-follow), a 64-byte cap, and `spawn_blocking`. Regression: `tests/run_lease_reaper.rs` (queued row and running row with a predecessor record → `failed`, not `completed`). |
-| **MEDIUM — the heartbeat was process-scoped, not executor-scoped.** If `mark_run_running` failed (e.g. the pool acquire timeout during the partition this PR targets), the task returned, but the process kept renewing the queued row forever; other instances excluded it and the reaper could never recover it. | A process-local monitored-run registry (`RunMonitorGuard`) is registered by the local spawn task, SQLite re-attach, and remote dispatch, and dropped on every return/cancellation. The heartbeat renews only registered live runs (batched `id IN (...)`), and `mark_run_running` failure additionally attempts an immediate finalize/quota release; otherwise the lease expires and the reaper takes the queued row. Regression: `infra::run_lease::tests::heartbeat_renews_only_registered_live_runs` (an unregistered queued row stays stale; a registered terminal row is skipped). |
+| **HIGH — a reused workdir's stale `.exit-code` could mark a retried/resumed run `completed` without execution.** Retry/resume/apply-repair reuse the predecessor workdir; the reaper read any `.exit-code` for any live row (including `queued`). | The reaper accepts a record only for a `running` row whose `started_at` is newer than the record's mtime (2 s filesystem tolerance); a `queued` row is never attributed. Every spawn clears `.exit-code` before starting, `resume_monitoring` uses the same read-only reader, and the record is removed only after a terminal write succeeds (the delta review below corrected the first fix's eager consumption). Reads use `symlink_metadata` (no-follow), a 64-byte cap, and `spawn_blocking`. Regression: `tests/run_lease_reaper.rs` (queued row and running row with a predecessor record → `failed`, not `completed`). |
+| **MEDIUM — the heartbeat was process-scoped, not executor-scoped.** If `mark_run_running` failed (e.g. the pool acquire timeout during the partition this PR targets), the task returned, but the process kept renewing the queued row forever; other instances excluded it and the reaper could never recover it. | A process-local monitored-run registry (`RunMonitorGuard`) is created at claim time in the request handler and moved into the local spawn task, SQLite re-attach, or remote dispatch; it drops on every return/cancellation. The heartbeat renews only registered live runs (batched `id IN (...)`), and `mark_run_running` failure additionally attempts an immediate finalize/quota release; otherwise the lease expires and the reaper takes the queued row. Regression: `tests/run_lease_staging.rs` (claim-time guard covers the pre-spawn staging window) and `infra::run_lease::tests::heartbeat_renews_only_registered_live_runs` (an unregistered queued row stays stale; a registered terminal row is skipped). |
 | **LOW — no index for the heartbeat lookup.** | Partial `idx_runs_owner_lease` on `runs(owner_instance)` for `queued`/`running`/`paused` on both backends. |
-| **LOW — `.exit-code` read hardening.** | No-follow metadata, size cap, mtime check, `spawn_blocking`, and consumption (above). |
-| **LOW — `claim_run_owner` could re-own a live instance's run.** | The update requires `owner_instance IS NULL`, the same instance, or `heartbeat_at < stale_before`; SQLite recovery (the one-server-per-file case with a known-dead previous process) explicitly passes a future cutoff. Regression: `stale_selection_and_claim_preconditions` and the PG smoke/contract tests. |
+| **LOW — `.exit-code` read hardening.** | No-follow metadata, size cap, mtime check, `spawn_blocking`, read-only attribution with removal only after the terminal write (corrected by the delta review below). |
+| **LOW — `claim_run_owner` could re-own a live instance's run.** | The update requires `owner_instance IS NULL`, the same instance, or `heartbeat_at < stale_before`; SQLite recovery explicitly passes a future cutoff because SQLite serving assumes one web process per database file (see residuals). Regression: `stale_selection_and_claim_preconditions` and the PG smoke/contract tests. |
 | **LOW — test gaps.** | Added NULL-owner non-selection, terminal-row heartbeat skip, targeted (not `>= 1`) heartbeat assertions in the PG smoke/contract tests, and the gated pool-acquire-timeout test. The queued-pre-spawn recovery is covered by the registry test; its production timing is the lease TTL. |
 
 Notes from the same review are reflected in code/docs: the reaper's terminal
@@ -268,6 +268,21 @@ large `runs` table would block writes during startup); heartbeat timestamps
 are UTC RFC 3339 with a fixed `+00:00` suffix so TEXT comparison is
 chronological; a failed heartbeat logs the first failure and then once a
 minute instead of every 10 s.
+
+## Delta review follow-up (2026-11-27)
+
+A second review of the review-fix commit found that the executor-scoped
+heartbeat was registered too late and that the exit-record fix consumed the
+record before the terminal write. Both are fixed here; the remaining items
+are documentation corrections and one deployment assumption.
+
+| Finding | Resolution |
+| --- | --- |
+| **HIGH — the executor-scoped heartbeat missed the pre-executor staging window.** `RunMonitorGuard` was created inside the spawn task, but `POST /api/runs` materializes sources and stages uploads before spawning; a staging window longer than the 90 s TTL could be reaped while the handler owned it. | The guard is created at claim time in `create_run` (and retry/resume/apply-repair after their claims), before materialization/staging, and moved into `spawn_background_run`/`spawn_background_run_with_args`/`spawn_remote_run`. Regression: `tests/run_lease_staging.rs` parks the handler in the staging seam, backdates the heartbeat an hour, proves one tick renews the row while no spawn task exists, proves the reaper refuses the monitored row, then releases the staging and observes a normal completion. |
+| **MEDIUM — the reaper consumed `.exit-code` before the terminal write.** If that write failed, the true outcome was gone and the next sweep would write `failed`. | Attribution uses the read-only `read_exit_record_after`; `finalize_run` removes the record only after `record_run_terminal` succeeds or reports the row already terminal, and leaves it on a write error. Regression: `tests/run_lease_reaper_failure.rs` (forced terminal-write failure leaves the row live and the record present; the next sweep attributes the preserved `0` as `completed`) plus a concurrent double-reap scenario (first terminal write wins; final state is the record's outcome). |
+| **LOW — `resume_monitoring` blind-cleared `.exit-code` at task start.** | It now takes the run's `started_at`, uses the same hardened reader as the reaper, and never deletes a record it did not attribute. |
+| **LOW — the SQLite force-adopt recovery path could steal a live same-host process's run.** | SQLite serving is documented as one web process per database file (`web-system-architecture.md`, `deploy-modes.md`); PostgreSQL is the multi-instance backend. The force-adopt comment records the assumption. |
+| **LOW — documentation drifted from the fix.** | `spawn_remote_run` now clears a predecessor's `.exit-code` (the remote CLI writes no local record and cross-host clock skew makes an mtime check meaningless); the audit/guide wording now distinguishes a monitored self-owned row (never reaped while its executor lives) from an unmonitored self-owned row (reaped after the TTL even in a single-instance deployment); the terminal-write residual now describes the reaper retry instead of "not retried"; the attribution gate is stated as `started_at IS NOT NULL` plus `status = running` (paused rows are not attributed); `consume_exit_record` (a synchronous `spawn_blocking`-documented helper) was removed with the eager consumption. |
 
 ## Residuals
 
@@ -315,12 +330,22 @@ minute instead of every 10 s.
   the bootstrap transaction (a concurrent build cannot run in a
   transaction). A very large `runs` table would hold writes for the index
   build during startup; production-scale DDL time is unmeasured.
-- **A terminal write that fails while the database is down is not
-  retried.** If a run finishes during an outage and its owning web process
-  stays alive, the row can remain `running` after recovery (the owner keeps
-  heartbeating, so the reaper does not take it). This was not exercised by
-  the final crash probe (the run finished after recovery); it is a known
-  residual of the live-owner path.
+- **A terminal write that fails while the database is down is retried by
+  the lease reaper, not instantly.** `finalize_run` stops the run's
+  heartbeat before attempting the write, so a failed write leaves the row
+  live but unmonitored; after the 90 s TTL the reaper (this instance or
+  another) attributes the preserved `.exit-code` and writes the terminal
+  row (`tests/run_lease_reaper_failure.rs`). The live-owner path therefore
+  converges once the database recovers, provided the workdir is reachable
+  from the reaping instance.
+- **SQLite serving assumes one web process per database file.** SQLite
+  startup recovery force-adopts live rows with a future cutoff because the
+  previous process is known dead; two SQLite web processes on the same file
+  would re-own each other's runs. PostgreSQL is the multi-instance backend.
+- **Lease clocks are assumed loosely synchronized.** Heartbeats are written
+  by one process and compared by a reaping process; a host whose clock is
+  off by more than half the 90 s TTL can reap early. The campaign measured
+  one host only, so cross-host clock skew is unmeasured.
 - **No production-parity claim.** Single-host, single-database, one
   operator, one author; the evidence is a campaign, not a qualification.
 
@@ -331,6 +356,7 @@ and drop a disposable database, restart PostgreSQL, and install temporary
 `iptables` rules). Their exact commands are named in
 [`data/postgres-1402-campaign-2026-11-26.log`](data/postgres-1402-campaign-2026-11-26.log).
 The checked-in regression tests (`tests/run_lease_reaper.rs`,
+`tests/run_lease_staging.rs`, `tests/run_lease_reaper_failure.rs`,
 `tests/quota_durable.rs`, `tests/postgres_storage_contract.rs`, the
 executor exit-record tests, and the health/lease unit tests) run without
 the live host; the PostgreSQL storage contract and the pool-acquire-timeout

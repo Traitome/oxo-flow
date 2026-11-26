@@ -457,9 +457,10 @@ namespaces, full/asymmetric partitions, connection exhaustion, clean and
 `SIGKILL` crash restarts, per-user quota isolation, and owner-lease
 reconciliation of a killed web process
 ([evidence](docs/superpowers/audits/postgres-two-instance-2026-11-26.md)).
-Separate physical hosts, production scale, per-query network timeouts, and
-database media corruption remain unproven; do not treat the trait
-implementation or this single-host campaign as production-parity evidence.
+Separate physical hosts, production scale, per-query network timeouts,
+database media corruption, and cross-host clock skew remain unproven; do
+not treat the trait implementation or this single-host campaign as
+production-parity evidence.
 
 ## Documentation
 
