@@ -5603,30 +5603,50 @@ the run directory no longer contains one.</p>
 </span><span id="__span-20-23"><a id="__codelineno-20-23" name="__codelineno-20-23" href="#__codelineno-20-23"></a><span class="w">      </span><span class="p">{</span><span class="nt">"backend"</span><span class="p">:</span><span class="w"> </span><span class="s2">"slurm"</span><span class="p">,</span><span class="w"> </span><span class="nt">"tool"</span><span class="p">:</span><span class="w"> </span><span class="s2">"sacct"</span><span class="p">,</span><span class="w"> </span><span class="nt">"raw_fields"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"MaxRSS"</span><span class="p">:</span><span class="w"> </span><span class="s2">"1G"</span><span class="p">}}</span>
 </span><span id="__span-20-24"><a id="__codelineno-20-24" name="__codelineno-20-24" href="#__codelineno-20-24"></a><span class="w">    </span><span class="p">]</span>
 </span><span id="__span-20-25"><a id="__codelineno-20-25" name="__codelineno-20-25" href="#__codelineno-20-25"></a><span class="w">  </span><span class="p">},</span>
-</span><span id="__span-20-26"><a id="__codelineno-20-26" name="__codelineno-20-26" href="#__codelineno-20-26"></a><span class="w">  </span><span class="nt">"rules"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
-</span><span id="__span-20-27"><a id="__codelineno-20-27" name="__codelineno-20-27" href="#__codelineno-20-27"></a><span class="w">    </span><span class="p">{</span>
-</span><span id="__span-20-28"><a id="__codelineno-20-28" name="__codelineno-20-28" href="#__codelineno-20-28"></a><span class="w">      </span><span class="nt">"rule"</span><span class="p">:</span><span class="w"> </span><span class="s2">"align"</span><span class="p">,</span>
-</span><span id="__span-20-29"><a id="__codelineno-20-29" name="__codelineno-20-29" href="#__codelineno-20-29"></a><span class="w">      </span><span class="nt">"status"</span><span class="p">:</span><span class="w"> </span><span class="s2">"completed"</span><span class="p">,</span>
-</span><span id="__span-20-30"><a id="__codelineno-20-30" name="__codelineno-20-30" href="#__codelineno-20-30"></a><span class="w">      </span><span class="nt">"wall_time_secs"</span><span class="p">:</span><span class="w"> </span><span class="mf">720.5</span><span class="p">,</span>
-</span><span id="__span-20-31"><a id="__codelineno-20-31" name="__codelineno-20-31" href="#__codelineno-20-31"></a><span class="w">      </span><span class="nt">"cpu_seconds"</span><span class="p">:</span><span class="w"> </span><span class="mf">5700.0</span><span class="p">,</span>
-</span><span id="__span-20-32"><a id="__codelineno-20-32" name="__codelineno-20-32" href="#__codelineno-20-32"></a><span class="w">      </span><span class="nt">"max_rss_bytes"</span><span class="p">:</span><span class="w"> </span><span class="mi">1073741824</span><span class="p">,</span>
-</span><span id="__span-20-33"><a id="__codelineno-20-33" name="__codelineno-20-33" href="#__codelineno-20-33"></a><span class="w">      </span><span class="nt">"io_read_bytes"</span><span class="p">:</span><span class="w"> </span><span class="mi">4000000000</span><span class="p">,</span>
-</span><span id="__span-20-34"><a id="__codelineno-20-34" name="__codelineno-20-34" href="#__codelineno-20-34"></a><span class="w">      </span><span class="nt">"scheduler_wait_secs"</span><span class="p">:</span><span class="w"> </span><span class="mi">15</span><span class="p">,</span>
-</span><span id="__span-20-35"><a id="__codelineno-20-35" name="__codelineno-20-35" href="#__codelineno-20-35"></a><span class="w">      </span><span class="nt">"nodes"</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
-</span><span id="__span-20-36"><a id="__codelineno-20-36" name="__codelineno-20-36" href="#__codelineno-20-36"></a><span class="w">      </span><span class="nt">"cores"</span><span class="p">:</span><span class="w"> </span><span class="mi">8</span><span class="p">,</span>
-</span><span id="__span-20-37"><a id="__codelineno-20-37" name="__codelineno-20-37" href="#__codelineno-20-37"></a><span class="w">      </span><span class="nt">"source"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-20-38"><a id="__codelineno-20-38" name="__codelineno-20-38" href="#__codelineno-20-38"></a><span class="w">        </span><span class="nt">"backend"</span><span class="p">:</span><span class="w"> </span><span class="s2">"slurm"</span><span class="p">,</span>
-</span><span id="__span-20-39"><a id="__codelineno-20-39" name="__codelineno-20-39" href="#__codelineno-20-39"></a><span class="w">        </span><span class="nt">"tool"</span><span class="p">:</span><span class="w"> </span><span class="s2">"sacct"</span><span class="p">,</span>
-</span><span id="__span-20-40"><a id="__codelineno-20-40" name="__codelineno-20-40" href="#__codelineno-20-40"></a><span class="w">        </span><span class="nt">"raw_fields"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"MaxRSS"</span><span class="p">:</span><span class="w"> </span><span class="s2">"1G"</span><span class="p">,</span><span class="w"> </span><span class="nt">"TotalCPU"</span><span class="p">:</span><span class="w"> </span><span class="s2">"01:35:00"</span><span class="p">,</span><span class="w"> </span><span class="nt">"NNodes"</span><span class="p">:</span><span class="w"> </span><span class="s2">"1"</span><span class="p">}</span>
-</span><span id="__span-20-41"><a id="__codelineno-20-41" name="__codelineno-20-41" href="#__codelineno-20-41"></a><span class="w">      </span><span class="p">}</span>
-</span><span id="__span-20-42"><a id="__codelineno-20-42" name="__codelineno-20-42" href="#__codelineno-20-42"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-20-43"><a id="__codelineno-20-43" name="__codelineno-20-43" href="#__codelineno-20-43"></a><span class="w">  </span><span class="p">]</span>
-</span><span id="__span-20-44"><a id="__codelineno-20-44" name="__codelineno-20-44" href="#__codelineno-20-44"></a><span class="p">}</span>
+</span><span id="__span-20-26"><a id="__codelineno-20-26" name="__codelineno-20-26" href="#__codelineno-20-26"></a><span class="w">  </span><span class="nt">"budget"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-20-27"><a id="__codelineno-20-27" name="__codelineno-20-27" href="#__codelineno-20-27"></a><span class="w">    </span><span class="nt">"amount"</span><span class="p">:</span><span class="w"> </span><span class="mf">10.0</span><span class="p">,</span>
+</span><span id="__span-20-28"><a id="__codelineno-20-28" name="__codelineno-20-28" href="#__codelineno-20-28"></a><span class="w">    </span><span class="nt">"currency"</span><span class="p">:</span><span class="w"> </span><span class="s2">"USD"</span><span class="p">,</span>
+</span><span id="__span-20-29"><a id="__codelineno-20-29" name="__codelineno-20-29" href="#__codelineno-20-29"></a><span class="w">    </span><span class="nt">"cpu_second_rate"</span><span class="p">:</span><span class="w"> </span><span class="mf">0.0001</span><span class="p">,</span>
+</span><span id="__span-20-30"><a id="__codelineno-20-30" name="__codelineno-20-30" href="#__codelineno-20-30"></a><span class="w">    </span><span class="nt">"gb_second_rate"</span><span class="p">:</span><span class="w"> </span><span class="mf">0.00002</span>
+</span><span id="__span-20-31"><a id="__codelineno-20-31" name="__codelineno-20-31" href="#__codelineno-20-31"></a><span class="w">  </span><span class="p">},</span>
+</span><span id="__span-20-32"><a id="__codelineno-20-32" name="__codelineno-20-32" href="#__codelineno-20-32"></a><span class="w">  </span><span class="nt">"cost_accrual"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-20-33"><a id="__codelineno-20-33" name="__codelineno-20-33" href="#__codelineno-20-33"></a><span class="w">    </span><span class="nt">"currency"</span><span class="p">:</span><span class="w"> </span><span class="s2">"USD"</span><span class="p">,</span>
+</span><span id="__span-20-34"><a id="__codelineno-20-34" name="__codelineno-20-34" href="#__codelineno-20-34"></a><span class="w">    </span><span class="nt">"limit"</span><span class="p">:</span><span class="w"> </span><span class="mf">10.0</span><span class="p">,</span>
+</span><span id="__span-20-35"><a id="__codelineno-20-35" name="__codelineno-20-35" href="#__codelineno-20-35"></a><span class="w">    </span><span class="nt">"cpu_seconds"</span><span class="p">:</span><span class="w"> </span><span class="mf">5700.0</span><span class="p">,</span>
+</span><span id="__span-20-36"><a id="__codelineno-20-36" name="__codelineno-20-36" href="#__codelineno-20-36"></a><span class="w">    </span><span class="nt">"gb_seconds"</span><span class="p">:</span><span class="w"> </span><span class="mf">772.8</span><span class="p">,</span>
+</span><span id="__span-20-37"><a id="__codelineno-20-37" name="__codelineno-20-37" href="#__codelineno-20-37"></a><span class="w">    </span><span class="nt">"cpu_cost"</span><span class="p">:</span><span class="w"> </span><span class="mf">0.57</span><span class="p">,</span>
+</span><span id="__span-20-38"><a id="__codelineno-20-38" name="__codelineno-20-38" href="#__codelineno-20-38"></a><span class="w">    </span><span class="nt">"gb_cost"</span><span class="p">:</span><span class="w"> </span><span class="mf">0.015456</span><span class="p">,</span>
+</span><span id="__span-20-39"><a id="__codelineno-20-39" name="__codelineno-20-39" href="#__codelineno-20-39"></a><span class="w">    </span><span class="nt">"accrued"</span><span class="p">:</span><span class="w"> </span><span class="mf">0.585456</span><span class="p">,</span>
+</span><span id="__span-20-40"><a id="__codelineno-20-40" name="__codelineno-20-40" href="#__codelineno-20-40"></a><span class="w">    </span><span class="nt">"unknown_rules"</span><span class="p">:</span><span class="w"> </span><span class="p">[],</span>
+</span><span id="__span-20-41"><a id="__codelineno-20-41" name="__codelineno-20-41" href="#__codelineno-20-41"></a><span class="w">    </span><span class="nt">"method"</span><span class="p">:</span><span class="w"> </span><span class="s2">"cpu_second_rate * cpu_seconds + gb_second_rate * (max_rss_bytes/1e9 * wall_time_secs)"</span><span class="p">,</span>
+</span><span id="__span-20-42"><a id="__codelineno-20-42" name="__codelineno-20-42" href="#__codelineno-20-42"></a><span class="w">    </span><span class="nt">"on_unknown"</span><span class="p">:</span><span class="w"> </span><span class="s2">"refuse"</span>
+</span><span id="__span-20-43"><a id="__codelineno-20-43" name="__codelineno-20-43" href="#__codelineno-20-43"></a><span class="w">  </span><span class="p">},</span>
+</span><span id="__span-20-44"><a id="__codelineno-20-44" name="__codelineno-20-44" href="#__codelineno-20-44"></a><span class="w">  </span><span class="nt">"rules"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-20-45"><a id="__codelineno-20-45" name="__codelineno-20-45" href="#__codelineno-20-45"></a><span class="w">    </span><span class="p">{</span>
+</span><span id="__span-20-46"><a id="__codelineno-20-46" name="__codelineno-20-46" href="#__codelineno-20-46"></a><span class="w">      </span><span class="nt">"rule"</span><span class="p">:</span><span class="w"> </span><span class="s2">"align"</span><span class="p">,</span>
+</span><span id="__span-20-47"><a id="__codelineno-20-47" name="__codelineno-20-47" href="#__codelineno-20-47"></a><span class="w">      </span><span class="nt">"status"</span><span class="p">:</span><span class="w"> </span><span class="s2">"completed"</span><span class="p">,</span>
+</span><span id="__span-20-48"><a id="__codelineno-20-48" name="__codelineno-20-48" href="#__codelineno-20-48"></a><span class="w">      </span><span class="nt">"wall_time_secs"</span><span class="p">:</span><span class="w"> </span><span class="mf">720.5</span><span class="p">,</span>
+</span><span id="__span-20-49"><a id="__codelineno-20-49" name="__codelineno-20-49" href="#__codelineno-20-49"></a><span class="w">      </span><span class="nt">"cpu_seconds"</span><span class="p">:</span><span class="w"> </span><span class="mf">5700.0</span><span class="p">,</span>
+</span><span id="__span-20-50"><a id="__codelineno-20-50" name="__codelineno-20-50" href="#__codelineno-20-50"></a><span class="w">      </span><span class="nt">"max_rss_bytes"</span><span class="p">:</span><span class="w"> </span><span class="mi">1073741824</span><span class="p">,</span>
+</span><span id="__span-20-51"><a id="__codelineno-20-51" name="__codelineno-20-51" href="#__codelineno-20-51"></a><span class="w">      </span><span class="nt">"io_read_bytes"</span><span class="p">:</span><span class="w"> </span><span class="mi">4000000000</span><span class="p">,</span>
+</span><span id="__span-20-52"><a id="__codelineno-20-52" name="__codelineno-20-52" href="#__codelineno-20-52"></a><span class="w">      </span><span class="nt">"scheduler_wait_secs"</span><span class="p">:</span><span class="w"> </span><span class="mi">15</span><span class="p">,</span>
+</span><span id="__span-20-53"><a id="__codelineno-20-53" name="__codelineno-20-53" href="#__codelineno-20-53"></a><span class="w">      </span><span class="nt">"nodes"</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
+</span><span id="__span-20-54"><a id="__codelineno-20-54" name="__codelineno-20-54" href="#__codelineno-20-54"></a><span class="w">      </span><span class="nt">"cores"</span><span class="p">:</span><span class="w"> </span><span class="mi">8</span><span class="p">,</span>
+</span><span id="__span-20-55"><a id="__codelineno-20-55" name="__codelineno-20-55" href="#__codelineno-20-55"></a><span class="w">      </span><span class="nt">"source"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-20-56"><a id="__codelineno-20-56" name="__codelineno-20-56" href="#__codelineno-20-56"></a><span class="w">        </span><span class="nt">"backend"</span><span class="p">:</span><span class="w"> </span><span class="s2">"slurm"</span><span class="p">,</span>
+</span><span id="__span-20-57"><a id="__codelineno-20-57" name="__codelineno-20-57" href="#__codelineno-20-57"></a><span class="w">        </span><span class="nt">"tool"</span><span class="p">:</span><span class="w"> </span><span class="s2">"sacct"</span><span class="p">,</span>
+</span><span id="__span-20-58"><a id="__codelineno-20-58" name="__codelineno-20-58" href="#__codelineno-20-58"></a><span class="w">        </span><span class="nt">"raw_fields"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"MaxRSS"</span><span class="p">:</span><span class="w"> </span><span class="s2">"1G"</span><span class="p">,</span><span class="w"> </span><span class="nt">"TotalCPU"</span><span class="p">:</span><span class="w"> </span><span class="s2">"01:35:00"</span><span class="p">,</span><span class="w"> </span><span class="nt">"NNodes"</span><span class="p">:</span><span class="w"> </span><span class="s2">"1"</span><span class="p">}</span>
+</span><span id="__span-20-59"><a id="__codelineno-20-59" name="__codelineno-20-59" href="#__codelineno-20-59"></a><span class="w">      </span><span class="p">}</span>
+</span><span id="__span-20-60"><a id="__codelineno-20-60" name="__codelineno-20-60" href="#__codelineno-20-60"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-20-61"><a id="__codelineno-20-61" name="__codelineno-20-61" href="#__codelineno-20-61"></a><span class="w">  </span><span class="p">]</span>
+</span><span id="__span-20-62"><a id="__codelineno-20-62" name="__codelineno-20-62" href="#__codelineno-20-62"></a><span class="p">}</span>
 </span></code></pre></div>
 <p>Unknown fields are omitted from JSON (<code>run.conflicts</code> is omitted when
 empty; <code>run.scheduler_totals</code>, <code>run.scheduler_source</code>, and
 <code>run.reconciliation</code> when no raw export was given); the example shows only
-recorded values.</p>
+recorded values. <code>budget</code> and <code>cost_accrual</code> appear only when the
+checkpoint's workflow declared a <code>[resource_budget] max_cost</code> table (see
+<a href="#cost-accrual">Cost accrual</a> below).</p>
 <p>Per rule: <code>rule</code>, <code>status</code> (<code>completed</code>, <code>failed</code>, <code>cancelled</code>,
 <code>timed_out</code>, <code>skipped</code>, or <code>unknown</code> for an interrupted attempt),
 <code>wall_time_secs</code>, <code>cpu_seconds</code>, <code>user_seconds</code>, <code>system_seconds</code>,
@@ -5674,10 +5694,14 @@ timed-out re-execution renders its own recorded start/finish duration and its
 left a synthetic marker. An old success's wall/CPU never describes the
 failed attempt, and the run totals sum only the current attempt.</p>
 <p>No supported backend reports GPU-seconds, user/system CPU split, a
-control-plane peak-memory metric, or a price today, so <code>gpu_seconds</code>,
-<code>user_seconds</code>, <code>system_seconds</code>, <code>peak_memory_bytes</code>, and <code>cost</code> are
-always absent. The schema reserves their shape; it never invents an amount
-or a currency.</p>
+control-plane peak-memory metric, or a price, so <code>gpu_seconds</code>,
+<code>user_seconds</code>, <code>system_seconds</code>, <code>peak_memory_bytes</code>, and the per-rule
+<code>cost</code> are always absent. The schema reserves their shape; it never invents
+an amount or a currency. A <em>declared</em> rate is a different thing: when a
+workflow sets <code>[resource_budget] max_cost</code>, the ledger derives an
+<strong>accrued</strong> amount from the recorded metrics using the operator's own rates
+(see <a href="#cost-accrual">Cost accrual</a>) — that is the run's own declaration
+priced against its own measurements, not a vendor-billing figure.</p>
 <h4 id="additive-vs-peak">Additive vs peak<a class="headerlink" href="#additive-vs-peak" title="Permanent link">#</a></h4>
 <p><code>wall_time_secs</code>, <code>cpu_seconds</code>, <code>io_read_bytes</code>, <code>io_write_bytes</code>, and
 <code>scheduler_wait_secs</code> sum across rules. Memory is a <strong>peak</strong>: a rule's
@@ -5689,6 +5713,35 @@ same bytes. <code>rules_total</code> counts every rule the checkpoint mentions;
 up-to-date skip are excluded (completion bookkeeping, not execution). A
 <code>*_complete</code> flag says whether every executed rule reported the metric, so a
 partial sum is never presented as a full one.</p>
+<h4 id="cost-accrual">Cost accrual<a class="headerlink" href="#cost-accrual" title="Permanent link">#</a></h4>
+<p>When the checkpoint's workflow declared a <code>[resource_budget] max_cost</code> table
+(issue #1400), the ledger prices its own recorded metrics against the
+operator's declared rates and adds two objects to the JSON document (and a
+column group to the CSV — see <a href="#csv-format">CSV format</a>):</p>
+<ul>
+<li><code>budget</code> echoes the declaration: <code>amount</code>, <code>currency</code>,
+  <code>cpu_second_rate</code> and/or <code>gb_second_rate</code>, and <code>on_unknown</code>.</li>
+<li><code>cost_accrual</code> is the derived result: <code>currency</code>, <code>limit</code> (the <code>amount</code>),
+  the summed <code>cpu_seconds</code> and <code>gb_seconds</code>, the per-rate contributions
+  <code>cpu_cost</code>/<code>gb_cost</code>, the total <code>accrued</code>, <code>method</code> (a stable string
+  naming the rates used), <code>on_unknown</code>, and <code>unknown_rules</code> — the names of
+  executed rules whose metric a configured rate depends on but which did not
+  report it.</li>
+</ul>
+<p>The accrual formula is exactly:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-21-1"><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a>accrued = cpu_second_rate * sum(rule.cpu_seconds)
+</span><span id="__span-21-2"><a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a>        + gb_second_rate   * sum(max_rss_bytes/1e9 * wall_time_secs)
+</span></code></pre></div>
+<p><code>gb_seconds</code> needs both <code>max_rss_bytes</code> and <code>wall_time_secs</code> for every
+executed rule; <code>cpu_seconds</code> needs the CPU metric. <strong>Unknown is never
+zero:</strong> when a configured rate depends on a metric some executed rule did
+not report, <code>accrued</code> is <code>null</code> (never <code>0</code>) and <code>unknown_rules</code> names the
+offenders — the ledger reports the unbounded residual rather than a
+fictitious number. <code>currency</code> is compared for equality only; a mismatch
+between the budget and a rule's own reported cost is fail-closed, never a
+converted figure. A legacy checkpoint without <code>resource_usage</code> has no
+measured metrics at all, so accrual is unknown and <code>unknown_rules</code> lists
+every executed rule.</p>
 <h4 id="per-backend-sources">Per-backend sources<a class="headerlink" href="#per-backend-sources" title="Permanent link">#</a></h4>
 <table>
 <thead>
@@ -5786,12 +5839,22 @@ coverage gap is not a numeric conflict. sacct's bare <code>MaxRSS=0</code> is SL
 matching the core parser.</p>
 <h4 id="csv-format">CSV format<a class="headerlink" href="#csv-format" title="Permanent link">#</a></h4>
 <p>One row per rule plus a <code>TOTAL</code> row. Column names are stable:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-21-1"><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a>record_type,rule,status,wall_time_secs,cpu_seconds,user_seconds,system_seconds,
-</span><span id="__span-21-2"><a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a>max_rss_bytes,peak_memory_bytes,io_read_bytes,io_write_bytes,
-</span><span id="__span-21-3"><a id="__codelineno-21-3" name="__codelineno-21-3" href="#__codelineno-21-3"></a>scheduler_wait_secs,nodes,cores,gpu_seconds,cost_amount,cost_currency,
-</span><span id="__span-21-4"><a id="__codelineno-21-4" name="__codelineno-21-4" href="#__codelineno-21-4"></a>cost_method,source_backend,source_tool,source_version,source_note,
-</span><span id="__span-21-5"><a id="__codelineno-21-5" name="__codelineno-21-5" href="#__codelineno-21-5"></a>source_raw_fields,recorded_as,incomplete_metrics
+<div class="language-text highlight"><pre><span></span><code><span id="__span-22-1"><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a>record_type,rule,status,wall_time_secs,cpu_seconds,user_seconds,system_seconds,
+</span><span id="__span-22-2"><a id="__codelineno-22-2" name="__codelineno-22-2" href="#__codelineno-22-2"></a>max_rss_bytes,peak_memory_bytes,io_read_bytes,io_write_bytes,
+</span><span id="__span-22-3"><a id="__codelineno-22-3" name="__codelineno-22-3" href="#__codelineno-22-3"></a>scheduler_wait_secs,nodes,cores,gpu_seconds,cost_amount,cost_currency,
+</span><span id="__span-22-4"><a id="__codelineno-22-4" name="__codelineno-22-4" href="#__codelineno-22-4"></a>cost_method,source_backend,source_tool,source_version,source_note,
+</span><span id="__span-22-5"><a id="__codelineno-22-5" name="__codelineno-22-5" href="#__codelineno-22-5"></a>source_raw_fields,recorded_as,budget_amount,budget_currency,accrued_cost,
+</span><span id="__span-22-6"><a id="__codelineno-22-6" name="__codelineno-22-6" href="#__codelineno-22-6"></a>cost_unknown_rules,incomplete_metrics
 </span></code></pre></div>
+<p>The four cost-budget columns (<code>budget_amount,budget_currency,accrued_cost,
+cost_unknown_rules</code>, issue #1400) sit between <code>recorded_as</code> and
+<code>incomplete_metrics</code>. Like the other run-level fields they are filled on the
+<code>TOTAL</code> row and empty on per-rule rows. They are empty unless the workflow
+declared a <code>[resource_budget] max_cost</code> table. <code>accrued_cost</code> is empty when
+accrual is not computable (the JSON <code>accrued</code> is <code>null</code>; see
+<a href="#cost-accrual">Cost accrual</a>) and <code>cost_unknown_rules</code> is a compact list of
+the offending rule names. A workflow without <code>max_cost</code> emits the same
+columns, all four empty.</p>
 <p>Unknown values are empty cells. Seconds render with millisecond precision
 (<code>10.000</code>); bytes are integers. The reserved metric columns
 (<code>user_seconds</code>, <code>system_seconds</code>, <code>peak_memory_bytes</code>) mirror the JSON

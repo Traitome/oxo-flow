@@ -5734,6 +5734,13 @@ number in the ledger can be traced back to a raw field.</p>
   submission, or a rule blocked behind a failure stays marked. The ledger
   therefore reports a cluster no-op as <code>rules_executed: 0</code> rather than
   recycling the earlier run's benchmarks.</li>
+<li><strong>CPU accounting is whole seconds, so a <code>cpu_second_rate</code> budget is
+  coarse here.</strong> The schedulers' CPU fields (<code>TotalCPU</code>, <code>resources_used.cput</code>,
+  <code>cpu</code>) carry whole-second resolution — sub-second precision truncates — so a
+  rule whose CPU time is under a second reports <code>0</code> and contributes nothing to
+  a <code>cpu_second_rate</code> budget, even under a microscopic cap. Price a cluster
+  budget with <code>gb_second_rate</code> (<code>MaxRSS</code> × wall time) when short rules must be
+  counted (see <a href="../resource-tuning/#cost-budgets-max_cost">Cost budgets</a>).</li>
 <li><strong>Reconcile with an independent export.</strong> <code>--resource-ledger --acct
   &lt;sacct.csv&gt;</code> (JSON only — CSV has no reconciliation columns, so
   <code>-f csv</code> + <code>--acct</code> fails closed as a usage error) reduces the CSV to the rules that executed in this run (a
@@ -5797,6 +5804,15 @@ prints a warning and the run proceeds (<code>-j</code> is dropped silently):</p>
 </tr>
 </tbody>
 </table>
+<p>A declared <code>[resource_budget] max_cost</code> table <strong>is</strong> enforced on the cluster
+path (issue #1400): it does not consume a <code>run</code> flag, so it is neither warned
+nor dropped. The same ledger-based accrual that stops local dispatch stops
+<strong>new</strong> cluster submissions once the accrued cost reaches the cap — jobs
+already submitted run to completion, and the run ends with the structured
+status <code>cost_budget_exceeded</code> (see <a href="../resource-tuning/#cost-budgets-max_cost">Resource Budgets</a>
+and <a href="../../commands/report/#cost-accrual"><code>report</code> → Cost accrual</a>). The
+<code>max_threads</code>/<code>max_memory</code>/<code>max_jobs</code> caps keep their separate pre-submit
+check.</p>
 <p><code>--skip-ref-build</code> is accepted on the cluster path and is a no-op there by
 construction: the reference-build step runs only on the local execution
 path, and <code>run --profile</code> never builds references itself.</p>
