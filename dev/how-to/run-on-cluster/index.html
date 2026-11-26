@@ -4870,13 +4870,13 @@
 <tr>
 <td><strong>AWS Batch</strong></td>
 <td>Supported (spec generation)</td>
-<td>Prototype — CLI wrapper (<code>aws</code>), mock/wire tests only; live campaign pending (#1390). Submit/describe/list/cancel shapes verified against the botocore Batch service model and the AWS CLI v2 reference (2026-11-25 audit); array child ids, <code>terminate-job</code> cancel, and the 100-id DescribeJobs cap are pinned by wire tests — <a href="../../../superpowers/audits/cloud-cli-accuracy-2026-11-26.md">Audit evidence</a>.</td>
+<td>Prototype — CLI wrapper (<code>aws</code>), mock/wire tests only; live campaign not run (no AWS credentials; prerequisites in <a href="../../../superpowers/audits/cloud-live-campaigns-todo-2026-11-26.md">the cloud live TODO</a>, #1390 closed as not planned for live). Submit/describe/list/cancel shapes verified against the botocore Batch service model and the AWS CLI v2 reference (2026-11-25 audit); array child ids, <code>terminate-job</code> cancel, and the 100-id DescribeJobs cap are pinned by wire tests — <a href="../../../superpowers/audits/cloud-cli-accuracy-2026-11-26.md">Audit evidence</a>.</td>
 <td><code>aws-batch</code></td>
 </tr>
 <tr>
 <td><strong>GCP Batch</strong></td>
 <td>Supported (spec generation)</td>
-<td>Prototype — CLI wrapper (<code>gcloud</code>), mock/wire tests only; live campaign pending (#1390; endpoint unreachable from the qualification host). Submit (plain <code>--config</code> path, minted positional id)/describe/tasks-list/cancel shapes verified against the gcloud reference and <code>google/cloud/batch/v1</code> protos (2026-11-25 audit); cancel uses <code>CancelJob</code>, not <code>DeleteJob</code> — <a href="../../../superpowers/audits/cloud-cli-accuracy-2026-11-26.md">Audit evidence</a>.</td>
+<td>Prototype — CLI wrapper (<code>gcloud</code>), mock/wire tests only; live campaign not run (the GCP endpoint is unreachable from the qualification host; prerequisites in <a href="../../../superpowers/audits/cloud-live-campaigns-todo-2026-11-26.md">the cloud live TODO</a>, #1390 closed as not planned for live). Submit (plain <code>--config</code> path, minted positional id)/describe/tasks-list/cancel shapes verified against the gcloud reference and <code>google/cloud/batch/v1</code> protos (2026-11-25 audit); cancel uses <code>CancelJob</code>, not <code>DeleteJob</code> — <a href="../../../superpowers/audits/cloud-cli-accuracy-2026-11-26.md">Audit evidence</a>.</td>
 <td><code>gcp-batch</code></td>
 </tr>
 <tr>
