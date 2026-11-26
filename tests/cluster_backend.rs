@@ -780,7 +780,12 @@ async fn aws_batch_executor_renders_spec_and_parses_status() {
         walltime: None,
         extra_args: Vec::new(),
         name_scope: None,
-        volume: None,
+        volume: Some(oxo_flow_core::config::ClusterVolume {
+            kind: "hostpath".into(),
+            host_path: Some(dir.path().display().to_string()),
+            mount_root: Some("/oxoflow".into()),
+            ..Default::default()
+        }),
     };
     let exec = ClusterExecutor::new(ClusterBackend::AwsBatch, cluster_config.clone())
         .with_workdir(dir.path().to_path_buf());
@@ -816,11 +821,18 @@ async fn aws_batch_executor_renders_spec_and_parses_status() {
         "8"
     );
 
+    // Cloud arrays read cmd.N.sh from a shared volume: declare one so the
+    // command directory maps onto its mount root instead of the submit host.
+    let cmd_dir = dir.path().join("runs/cmd").display().to_string();
     let array_spec = exec
-        .render_array_script(&rule, "runs/cmd", 4, &[], None)
+        .render_array_script(&rule, &cmd_dir, 4, &[], None)
         .unwrap();
     let arr_val: serde_json::Value = serde_json::from_str(&array_spec).unwrap();
     assert_eq!(arr_val["arrayProperties"]["size"], 4);
+    assert!(
+        array_spec.contains("/oxoflow/runs/cmd"),
+        "array command must read from the shared mount: {arr_val}"
+    );
 }
 
 #[tokio::test]
@@ -834,7 +846,12 @@ async fn gcp_batch_executor_renders_spec_and_parses_status() {
         walltime: None,
         extra_args: Vec::new(),
         name_scope: None,
-        volume: None,
+        volume: Some(oxo_flow_core::config::ClusterVolume {
+            kind: "hostpath".into(),
+            host_path: Some(dir.path().display().to_string()),
+            mount_root: Some("/oxoflow".into()),
+            ..Default::default()
+        }),
     };
     let exec = ClusterExecutor::new(ClusterBackend::GcpBatch, cluster_config.clone())
         .with_workdir(dir.path().to_path_buf());
@@ -868,9 +885,14 @@ async fn gcp_batch_executor_renders_spec_and_parses_status() {
         2000
     );
 
+    let cmd_dir = dir.path().join("runs/cmd").display().to_string();
     let array_spec = exec
-        .render_array_script(&rule, "runs/cmd", 6, &[], None)
+        .render_array_script(&rule, &cmd_dir, 6, &[], None)
         .unwrap();
     let arr_val: serde_json::Value = serde_json::from_str(&array_spec).unwrap();
     assert_eq!(arr_val["taskGroups"][0]["taskCount"], 6);
+    assert!(
+        array_spec.contains("/oxoflow/runs/cmd"),
+        "array command must read from the shared mount: {arr_val}"
+    );
 }
