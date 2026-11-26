@@ -1134,6 +1134,18 @@ keep their checkpoint state, so the plan lists them in `will_skip`
 regardless of `skip_succeeded`. A `from_rule` naming a rule not in the DAG
 surfaces as a `400 RuleNotFound` from the spawned CLI's own DAG walk.
 
+The spawned CLI also carries `--verify-outputs` (issue #1426): a retry is a
+continuation of the predecessor run, so every completed rule the plan reuses
+must pass its recorded output-manifest check (size + capped `sha256`)
+instead of the historical size+mtime gate. A rule whose output is missing,
+resized, content-changed, or unhashed — plus its completed downstream —
+re-executes before the run reports it up to date. The flag is sent for all
+three retry shapes above; with `--rerun` every rule executes, so the check
+is a no-op there. The web spawn environment allowlist also forwards
+`OXO_FLOW_MANIFEST_HASH_MAX_BYTES`, so a retry hashes with the operator's
+cap rather than the 64 MiB default. Plain create is unaffected: it is a
+fresh `run` and keeps the historical gate by design.
+
 The retry **really executes**: the returned `new_run_id` is a real run in
 the database (same workdir, same owner), spawned with the flag pair above so
 the rules the plan lists re-execute despite their existing outputs and the
@@ -2135,7 +2147,8 @@ Declared resources are enforced, not only counted:
   rule-shell policy (`apply_rule_env_allowlist`), so the child sees only
   `PATH`/`HOME`/`LANG`/`LC_*`, the engine's non-secret configuration knobs
   (e.g. `OXO_FLOW_TMPDIR`, `OXO_FLOW_MODULE_CACHE`, `OXO_FLOW_STRICT_PLACEHOLDERS`,
-  `OXO_FLOW_BIN`), and the explicitly declared passthrough names — never
+  `OXO_FLOW_MANIFEST_HASH_MAX_BYTES`, `OXO_FLOW_BIN`), and the explicitly
+  declared passthrough names — never
   `DATABASE_URL`, `OXO_FLOW_MASTER_KEY`, provider keys, or MCP tokens. The
   passthrough contract is reproduced end-to-end: the server forwards both
   the `OXO_FLOW_ENV_PASSTHROUGH` list and the named variables themselves, so

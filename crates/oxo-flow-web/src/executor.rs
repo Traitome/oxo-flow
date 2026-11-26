@@ -337,6 +337,11 @@ const WEB_SPAWN_ENV_ALLOWLIST: &[&str] = &[
     "OXO_FLOW_DISK_HOLD_ROUNDS",
     "OXO_FLOW_SPAWN_WATCHDOG_SECS",
     "OXO_ENV_LOCK_TIMEOUT_SECS",
+    // Operator-tuned content-hash cap for the per-rule output manifest
+    // (#1426). Forwarding keeps web-spawned runs and retries consistent
+    // with direct CLI runs; it is a size cap, not a credential, and does
+    // not defeat the spawn isolation.
+    "OXO_FLOW_MANIFEST_HASH_MAX_BYTES",
     // Operator passthrough for RULE shells: the CLI child re-reads this
     // variable when building its own allowlist, so without forwarding it
     // an operator's passthrough names reach rule shells on direct CLI runs
@@ -493,6 +498,16 @@ pub struct RunFlags {
     /// can later audit output integrity. Run-only — the dry-run branch
     /// never carries it (the CLI rejects the flag for dry-run).
     pub provenance: bool,
+    /// Forward `--verify-outputs` (issue #1426): verify each completed
+    /// rule's recorded output manifest before reusing it, re-running a rule
+    /// whose output is missing, resized, content-changed, or unhashed (plus
+    /// its completed downstream). Set by the web retry path — a retry is a
+    /// continuation of an existing run, so it adopts the strict-resume
+    /// behavior instead of the historical size+mtime freshness gate. Harmless
+    /// with `--rerun` (every rule executes anyway). Run-only, like the other
+    /// execution flags; `false` for create (a fresh `run` keeps the
+    /// historical gate by design).
+    pub verify_outputs: bool,
     /// Forward `--from-rule <RULE>` (issue #1017): re-run from RULE
     /// downstream, invalidating the transitive-dependent closure so stale
     /// downstream outputs cannot silently pass the freshness gate. When
@@ -556,6 +571,14 @@ pub fn build_cli_args(
         }
         if flags.rerun {
             args.push("--rerun".into());
+        }
+        if flags.verify_outputs {
+            // Issue #1426: a retry continues an existing run, so it verifies
+            // the checkpoint's recorded output manifests before reusing a
+            // completed rule — the same strict check `resume` applies. The
+            // CLI accepts it alongside --resume-failed/--rerun/--from-rule;
+            // with --rerun it is a no-op because every rule executes.
+            args.push("--verify-outputs".into());
         }
         if flags.allow_protected_drift {
             // Issue #935: the CLI's run gate refuses protected-tree drift;
@@ -1729,6 +1752,7 @@ mod tests {
             config_overrides: vec!["min_quality=30".into()],
             allow_protected_drift: false,
             provenance: false,
+            verify_outputs: false,
             from_rule: None,
             memory_limit_mb: 0,
         };
@@ -1886,6 +1910,74 @@ mod tests {
         assert!(
             !args.iter().any(|a| a.to_string_lossy() == "--provenance"),
             "default must not emit --provenance: {args:?}"
+        );
+    }
+
+    #[test]
+    fn build_cli_args_verify_outputs_run_only() {
+        // Issue #1426: the web retry path opts into the strict manifest
+        // check `resume` applies. The flag rides the run branch only
+        // (dry-run rejects execution-only flags), and Default keeps it off
+        // so a plain create keeps the historical size+mtime gate.
+        let flags = RunFlags {
+            verify_outputs: true,
+            ..RunFlags::default()
+        };
+        let args = build_cli_args(
+            std::path::Path::new("wf.oxoflow"),
+            std::path::Path::new("dir"),
+            &flags,
+        );
+        let strs: Vec<String> = args
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(strs[0], "run");
+        assert!(strs.contains(&"--verify-outputs".to_string()), "{strs:?}");
+
+        let dry = RunFlags {
+            dry_run: true,
+            ..flags
+        };
+        let args = build_cli_args(std::path::Path::new("w"), std::path::Path::new("d"), &dry);
+        assert!(
+            !args
+                .iter()
+                .any(|a| a.to_string_lossy() == "--verify-outputs"),
+            "dry-run must not carry --verify-outputs: {args:?}"
+        );
+
+        let off = RunFlags::default();
+        let args = build_cli_args(
+            std::path::Path::new("wf.oxoflow"),
+            std::path::Path::new("dir"),
+            &off,
+        );
+        assert!(
+            !args
+                .iter()
+                .any(|a| a.to_string_lossy() == "--verify-outputs"),
+            "default (plain create) must not emit --verify-outputs: {args:?}"
+        );
+    }
+
+    #[test]
+    fn web_spawn_env_allowlist_forwards_manifest_hash_cap() {
+        // Issue #1426: an operator-tuned output-manifest hash cap must reach
+        // the spawned CLI. Otherwise a web-spawned run/retry would hash with
+        // the 64 MiB default while a direct CLI run honors the operator's
+        // value — the same workflow verified differently on two surfaces.
+        assert!(
+            WEB_SPAWN_ENV_ALLOWLIST.contains(&"OXO_FLOW_MANIFEST_HASH_MAX_BYTES"),
+            "the web spawn allowlist must forward the output-manifest hash cap"
+        );
+        // It is a size cap, not a credential: the allowlist promises every
+        // entry is an OXO_* engine knob the CLI/core reads.
+        assert!(
+            WEB_SPAWN_ENV_ALLOWLIST
+                .iter()
+                .all(|name| name.starts_with("OXO_") || name.starts_with("AWS_")),
+            "every forwarded name must be an engine knob or an S3 endpoint pair"
         );
     }
 

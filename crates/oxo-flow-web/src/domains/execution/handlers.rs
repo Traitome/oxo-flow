@@ -1347,6 +1347,11 @@ pub async fn create_run(
                 config_overrides: validated_overrides,
                 allow_protected_drift: req.allow_protected_drift.unwrap_or(false),
                 provenance: req.provenance.unwrap_or(false),
+                // Create is a plain `run`, not a continuation: it keeps the
+                // historical size+mtime freshness gate by design (issue
+                // #1426). Strict manifest verification belongs to the retry
+                // path, which reuses another run's checkpoint.
+                verify_outputs: false,
                 // Create never carries a from-rule origin: a fresh run has
                 // no checkpoint to invalidate. Mid-chain re-entry lives on
                 // the retry path only (issue #1017).
@@ -2224,6 +2229,14 @@ pub async fn retry_run(
             // Checksums are recorded by the original create request only;
             // resume inherits whatever the checkpoint carries.
             provenance: false,
+            // Issue #1426: a retry is a continuation of the predecessor run
+            // in its workdir, so the rules the plan keeps (will_skip) must
+            // still have their recorded output manifests verified before
+            // reuse — a retry of a run whose output was damaged after
+            // completion must not silently reuse it. Unconditional on the
+            // path: with --rerun every rule executes (the flag is a no-op),
+            // while --resume-failed and --from-rule reuse checkpointed rules.
+            verify_outputs: true,
             // Issue #1017: forward the from-rule origin so the CLI's
             // closure invalidation runs before the freshness gate.
             from_rule,

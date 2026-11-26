@@ -122,15 +122,20 @@ unacceptable. Plain `oxo-flow run` keeps the historical size+mtime gate;
 `run --verify-outputs` opts a plain run (for example a retry wrapper) into the
 same strict behavior, and `resume` applies it by default.
 
-**Coverage boundary.** Only the `resume` command (`resume-checkpoint` on the
-web surface) and `run --verify-outputs` apply strict verification. The web
-retry path spawns `run --resume-failed`, which keeps the historical
-size+mtime gate until it is wired to `--verify-outputs`; a retry of a run
-whose outputs were damaged after completion does not re-verify them.
-Similarly, `OXO_FLOW_MANIFEST_HASH_MAX_BYTES` is honored by direct CLI runs
-but is not yet forwarded into the web server's spawn environment allowlist,
-so web-spawned runs and their resumes use the 64 MiB default. Both are
-planned follow-ups, not silent guarantees.
+**Coverage boundary.** The `resume` command (`resume-checkpoint` on the web
+surface), the web retry path, and `run --verify-outputs` apply strict
+verification. The web retry spawns `run --resume-failed --verify-outputs`
+(the flag is set for every retry shape — `--resume-failed`, `--rerun`, and
+`--from-rule`), so a retry of a run whose outputs were damaged after
+completion re-executes the affected rule and its completed downstream
+instead of silently reusing them. `OXO_FLOW_MANIFEST_HASH_MAX_BYTES` is
+forwarded into the web server's spawn environment allowlist, so web-spawned
+runs, retries, and their resumes hash with the operator's cap exactly like a
+direct CLI run. Plain web create remains a `run` and keeps the historical
+size+mtime gate by design, and `dry-run`/`status` previews do not verify.
+Same-size corruption of an output above the hash cap stays undetectable
+unless the cap is raised (or `resume --trust-mtime` explicitly accepts the
+size+mtime verdict).
 
 ### Checkpoint format version
 
