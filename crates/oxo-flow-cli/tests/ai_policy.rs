@@ -159,6 +159,13 @@ impl Drop for Stub {
 /// Read one HTTP request off the socket: headers first, then the declared
 /// Content-Length body (bounded by the stream read timeout).
 fn read_http_request(stream: &mut TcpStream) -> String {
+    // A listener set nonblocking yields nonblocking accepted sockets on
+    // macOS, where `set_read_timeout` does not bound a `read` that returns
+    // `WouldBlock`: under parallel test load the first read could see no
+    // bytes yet, record "" as the request, and hang the credential
+    // assertion that polls for a matching body (issue #1402 make-ci run).
+    // A blocking stream makes the read timeout meaningful.
+    stream.set_nonblocking(false).expect("blocking stub stream");
     stream
         .set_read_timeout(Some(Duration::from_secs(2)))
         .expect("read timeout");
