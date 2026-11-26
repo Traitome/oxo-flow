@@ -40,12 +40,21 @@ pub(crate) async fn dispatch_cluster_run(
     let checkpoint = args.checkpoint;
     let workdir = args.workdir;
     let summary = run_on_cluster(cluster_profile, args).await?;
+    // #1400: a run the cluster cost gate stopped reports its own observable
+    // outcome (`cost_budget_exceeded`) with the structured detail, instead of
+    // folding into the generic `failed` status.
+    let status = if summary.cost_budget.is_some() {
+        "cost_budget_exceeded"
+    } else if summary.is_success() {
+        "completed"
+    } else {
+        "failed"
+    };
+    if let Some(detail) = &summary.cost_budget {
+        json_summary.set_cost_budget(detail.clone());
+    }
     json_summary.emit(
-        if summary.is_success() {
-            "completed"
-        } else {
-            "failed"
-        },
+        status,
         &RunCounts {
             succeeded: summary.succeeded,
             skipped: summary.skipped,

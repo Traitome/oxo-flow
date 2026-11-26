@@ -741,8 +741,17 @@ pub async fn handle_report(args: ReportArgs) -> Result<()> {
             .as_deref()
             .map(|path| load_raw_accounting_totals(path, &executed))
             .transpose()?;
+        // The workflow's declared `[resource_budget] max_cost` (issue #1400),
+        // if any, is attached to the ledger so the document reports the
+        // budget and the cost accrued against it. `None` leaves the ledger
+        // byte-identical to a pre-#1400 render.
+        let max_cost = config
+            .resource_budget
+            .as_ref()
+            .and_then(|b| b.max_cost.as_ref());
         let ledger =
-            build_resource_ledger(cp, Some(workflow.display().to_string()), None, raw.as_ref());
+            build_resource_ledger(cp, Some(workflow.display().to_string()), None, raw.as_ref())
+                .with_cost_budget(max_cost);
         let rendered = match ledger_format.as_str() {
             "csv" => ledger.to_csv(),
             _ => ledger.to_json().map_err(|e| anyhow::anyhow!(e))?,

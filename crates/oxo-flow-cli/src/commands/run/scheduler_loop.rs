@@ -480,6 +480,14 @@ pub(crate) async fn run_scheduler_loop(ctx: SchedulerLoopContext<'_>) -> anyhow:
     let mut disk_hold_rounds: u32 = 0;
     let disk_hold_abort_rounds = disk_hold_abort_rounds();
 
+    // #1400 enforced cost budget: resolved once from the validated config.
+    // When `[resource_budget] max_cost` is absent the whole gate below is
+    // skipped (zero overhead) and the loop behaves exactly as before.
+    let cost_budget = config
+        .resource_budget
+        .as_ref()
+        .and_then(|b| b.max_cost.clone());
+
     // ---- main event loop -------------------------------------------------
 
     // Termination signals (audit C14): SIGINT/SIGTERM/SIGHUP stop the run
@@ -599,6 +607,28 @@ pub(crate) async fn run_scheduler_loop(ctx: SchedulerLoopContext<'_>) -> anyhow:
             sched.check_deadlock(dag)?;
         }
 
+        // #1400 enforced cost budget: accrue the declared rate table over the
+        // rules that ALREADY executed (read straight from the checkpoint's
+        // resource_usage via the canonical `resource_ledger` builder — reused,
+        // never a hand copy) and, once the cap is reached — or the total is
+        // unknowable under a `refuse` policy, or a currency mismatch was
+        // reported — withhold every NEW dispatch this round. In-flight rules
+        // are left alone (nothing is ever killed). Skipped entirely when
+        // `[resource_budget] max_cost` is not declared.
+        let mut cost_gate_fired = false;
+        let mut cost_accrual: Option<oxo_flow_core::cost_budget::CostAccrual> = None;
+        if let Some(budget) = &cost_budget {
+            let rules = {
+                let ck = checkpoint.lock().await;
+                oxo_flow_core::resource_ledger::build_resource_ledger(&ck, None, None, None).rules
+            };
+            let accrual = oxo_flow_core::cost_budget::accrue_cost(&rules, budget);
+            if accrual.must_stop() {
+                cost_gate_fired = true;
+                cost_accrual = Some(accrual);
+            }
+        }
+
         // Submit every rule whose dependencies are now satisfied — capped to
         // the free -j slots so the semaphore queue never builds, and the
         // ready list (aged by age_ready_list) decides dispatch order fairly.
@@ -613,9 +643,13 @@ pub(crate) async fn run_scheduler_loop(ctx: SchedulerLoopContext<'_>) -> anyhow:
         // jobs was clamped to >= 1 at run_command entry, so a raw 0 can
         // never silently suppress all submissions (issue #136 fix 1).
         // Under #843 Hold, new dispatches are withheld entirely — in-flight
-        // rules continue to completion.
-        let available = if disk_thresholds.is_some()
-            && disk_monitor.last_level() >= oxo_flow_core::scheduler::DiskPressureLevel::Hold
+        // rules continue to completion. #1400 cost gate: once the declared
+        // budget is reached (or unknowable under `refuse`, or a currency
+        // mismatch fired) no NEW rule is dispatched either; in-flight rules
+        // still run to completion.
+        let available = if cost_gate_fired
+            || (disk_thresholds.is_some()
+                && disk_monitor.last_level() >= oxo_flow_core::scheduler::DiskPressureLevel::Hold)
         {
             0
         } else {
@@ -625,6 +659,38 @@ pub(crate) async fn run_scheduler_loop(ctx: SchedulerLoopContext<'_>) -> anyhow:
         for name in ready.iter().skip(available) {
             *waited_rounds.entry(name.clone()).or_insert(0) += AGING_STEP;
         }
+
+        // #1400 cost-budget abort: the gate fired, nothing is in flight, and
+        // ready work remains that may never be dispatched — no progress is
+        // possible. Take the same abort path as the #843 disk-pressure ladder:
+        // persist the checkpoint, then fail the run with a structured status.
+        if let Some(accrual) = &cost_accrual
+            && sched.running_count() == 0
+            && join_set.is_empty()
+            && !ready.is_empty()
+        {
+            {
+                let ck = checkpoint.lock().await;
+                if let Err(save_err) = ck.save_to_file_async(checkpoint_path).await {
+                    tracing::warn!(
+                        "Failed to save checkpoint before cost-budget abort: {save_err}"
+                    );
+                }
+            }
+            progress.finish_and_clear();
+            let counts = RunCounts {
+                succeeded: success_count.load(std::sync::atomic::Ordering::Relaxed),
+                skipped: skipped_count.load(std::sync::atomic::Ordering::Relaxed),
+                failed: fail_count.load(std::sync::atomic::Ordering::Relaxed),
+                non_required_failed: non_required_fail_count
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                blocked: blocked.lock().await.len(),
+            };
+            json_summary.set_cost_budget(cost_budget_detail(accrual, &ready));
+            json_summary.emit("cost_budget_exceeded", &counts, vec![]);
+            anyhow::bail!("{}", cost_budget_abort_message(accrual, ready.len()));
+        }
+
         for rule_name in &to_submit {
             // Skip rules blocked by a failed — or no-output-skipped — upstream
             // dependency. Optional rules are exempt: they evaluate their own
@@ -1404,4 +1470,61 @@ pub(crate) async fn run_scheduler_loop(ctx: SchedulerLoopContext<'_>) -> anyhow:
         json_summary,
     })
     .await
+}
+
+/// The `cost_budget` detail object embedded in the `--json` run summary when
+/// the #1400 gate fires. Mirrors [`oxo_flow_core::cost_budget::CostAccrual`]
+/// and adds the rules still ready but never dispatched.
+pub(crate) fn cost_budget_detail(
+    accrual: &oxo_flow_core::cost_budget::CostAccrual,
+    pending_ready: &[String],
+) -> serde_json::Value {
+    serde_json::json!({
+        "currency": accrual.currency,
+        "limit": accrual.limit,
+        "accrued": accrual.accrued,
+        "method": accrual.method,
+        "on_unknown": accrual.on_unknown,
+        "cpu_seconds": accrual.cpu_seconds,
+        "gb_seconds": accrual.gb_seconds,
+        "cpu_cost": accrual.cpu_cost,
+        "gb_cost": accrual.gb_cost,
+        "unknown_rules": accrual.unknown_rules,
+        "currency_mismatch": accrual.currency_mismatch,
+        "pending_ready": pending_ready,
+    })
+}
+
+/// The human abort message for a cost-budget stop, naming the method, cap, and
+/// (when unknown) the recalcitrant rules so the operator knows what to fix.
+pub(crate) fn cost_budget_abort_message(
+    accrual: &oxo_flow_core::cost_budget::CostAccrual,
+    pending_ready: usize,
+) -> String {
+    let accrued = match accrual.accrued {
+        Some(v) => format!("{v:.6} {}", accrual.currency),
+        None => "unknown".to_string(),
+    };
+    let mut message = format!(
+        "cost budget exceeded: accrued {accrued} (method: {}) against the \
+         [resource_budget] max_cost cap of {} {}, with {pending_ready} rule(s) ready but \
+         undispatched and nothing in flight — the run cannot make progress. Raise the cap, \
+         lower the rates, or resume from the checkpoint after freeing budget.",
+        accrual.method, accrual.limit, accrual.currency
+    );
+    if !accrual.currency_mismatch.is_empty() {
+        message.push_str(&format!(
+            " Currency mismatch on executed rule(s): {}.",
+            accrual.currency_mismatch.join(", ")
+        ));
+    }
+    if !accrual.unknown_rules.is_empty() {
+        message.push_str(&format!(
+            " Unknown accrual under on_unknown={}: executed rule(s) missing a configured-rate \
+             metric: {}.",
+            accrual.on_unknown,
+            accrual.unknown_rules.join(", ")
+        ));
+    }
+    message
 }

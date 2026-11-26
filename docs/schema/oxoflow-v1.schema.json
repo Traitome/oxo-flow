@@ -505,6 +505,57 @@
         "max_jobs": {
           "type": "integer",
           "description": "Cap on concurrently running jobs; clamps the requested -j concurrency (local) or the in-flight submission cap (cluster)."
+        },
+        "max_cost": {
+          "type": "object",
+          "description": "User-declared cost budget (issue #1400): the scheduler stops dispatching new work once the cost accrued from rules that already executed reaches amount, in currency. Rates are applied to the ledger's measured CPU-seconds and GB-seconds; unknown metrics are never treated as zero.",
+          "required": [
+            "amount",
+            "currency"
+          ],
+          "anyOf": [
+            {
+              "required": [
+                "cpu_second_rate"
+              ]
+            },
+            {
+              "required": [
+                "gb_second_rate"
+              ]
+            }
+          ],
+          "properties": {
+            "amount": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "description": "The cap, in currency. Must be finite and greater than 0."
+            },
+            "currency": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Currency label; compared for equality only. Must be non-empty."
+            },
+            "cpu_second_rate": {
+              "type": "number",
+              "minimum": 0,
+              "description": "Cost per accrued CPU-second, summed across executed rules. 0 is allowed (that metric is then not priced)."
+            },
+            "gb_second_rate": {
+              "type": "number",
+              "minimum": 0,
+              "description": "Cost per accrued GB-second (max_rss_bytes/1e9 * wall_time_secs), summed across executed rules. 0 is allowed (that metric is then not priced)."
+            },
+            "on_unknown": {
+              "type": "string",
+              "enum": [
+                "refuse",
+                "report"
+              ],
+              "default": "refuse",
+              "description": "What to do when a configured rate's input metric is missing for an executed rule: \"refuse\" (default) fails closed; \"report\" keeps scheduling but records the unbounded residual."
+            }
+          }
         }
       }
     },

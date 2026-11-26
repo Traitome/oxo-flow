@@ -107,7 +107,7 @@ pub async fn validate_command(
             };
             if cfg.rules.is_empty() {
                 if json {
-                    let output = serde_json::json!({
+                    let mut output = serde_json::json!({
                         "command": "validate",
                         "workflow": workflow.display().to_string(),
                         "valid": !metadata_report.has_errors(),
@@ -119,6 +119,20 @@ pub async fn validate_command(
                         "metadata": metadata_findings_json(&metadata_report.findings),
                         "metadata_digest": &cfg.metadata_digest,
                     });
+                    // Issue #1400: the declared `[resource_budget] max_cost`
+                    // cap, at plan time — inserted ONLY when declared, so a
+                    // workflow without `max_cost` keeps its exact prior bytes.
+                    // No rule has executed, so the run-time accrual is
+                    // unestimable (accrued null, estimate_available false) —
+                    // never a fabricated estimate.
+                    if let Some(budget) = cfg
+                        .resource_budget
+                        .as_ref()
+                        .and_then(|b| b.max_cost.as_ref())
+                    {
+                        output["budget"] =
+                            oxo_flow_core::cost_budget::plan_time_budget_json(budget);
+                    }
                     println!("{}", serde_json::to_string_pretty(&output)?);
                 } else {
                     eprintln!("{} {} — 0 rules", "✓".green().bold(), workflow.display());
@@ -291,7 +305,7 @@ pub async fn validate_command(
                                 .iter()
                                 .map(|d| diagnostic_json_value(d, false))
                                 .collect();
-                            let output = serde_json::json!({
+                            let mut output = serde_json::json!({
                                 "command": "validate",
                                 "workflow": workflow.display().to_string(),
                                 "valid": false,
@@ -303,6 +317,17 @@ pub async fn validate_command(
                                 "metadata": metadata_findings_json(&metadata_report.findings),
                                 "metadata_digest": &cfg.metadata_digest,
                             });
+                            // Issue #1400: inserted ONLY when `max_cost` is
+                            // declared, so workflows without it keep their
+                            // exact prior bytes.
+                            if let Some(budget) = cfg
+                                .resource_budget
+                                .as_ref()
+                                .and_then(|b| b.max_cost.as_ref())
+                            {
+                                output["budget"] =
+                                    oxo_flow_core::cost_budget::plan_time_budget_json(budget);
+                            }
                             println!("{}", serde_json::to_string_pretty(&output)?);
                         } else {
                             eprintln!(
@@ -326,7 +351,7 @@ pub async fn validate_command(
                     .iter()
                     .map(|d| diagnostic_json_value(d, false))
                     .collect();
-                let output = serde_json::json!({
+                let mut output = serde_json::json!({
                     "command": "validate",
                     "workflow": workflow.display().to_string(),
                     "valid": error_count == 0,
@@ -338,6 +363,15 @@ pub async fn validate_command(
                     "metadata": metadata_findings_json(&metadata_report.findings),
                     "metadata_digest": &cfg.metadata_digest,
                 });
+                // Issue #1400: inserted ONLY when `max_cost` is declared, so
+                // workflows without it keep their exact prior bytes.
+                if let Some(budget) = cfg
+                    .resource_budget
+                    .as_ref()
+                    .and_then(|b| b.max_cost.as_ref())
+                {
+                    output["budget"] = oxo_flow_core::cost_budget::plan_time_budget_json(budget);
+                }
                 println!("{}", serde_json::to_string_pretty(&output)?);
             } else {
                 if error_count == 0 {
@@ -371,6 +405,20 @@ pub async fn validate_command(
                     if let Some(ref suggestion) = d.suggestion {
                         eprintln!("    hint: {}", suggestion);
                     }
+                }
+
+                // Issue #1400: report the declared cost cap at plan time with an
+                // explicit UNESTIMABLE marker — validate never fabricates a
+                // number for work that has not run.
+                if let Some(cost) = cfg
+                    .resource_budget
+                    .as_ref()
+                    .and_then(|b| b.max_cost.as_ref())
+                {
+                    eprintln!(
+                        "  cost cap from [resource_budget]: max_cost = {} {} (accrual unestimable at plan time)",
+                        cost.amount, cost.currency,
+                    );
                 }
 
                 if !missing_inputs.is_empty() {

@@ -1,7 +1,7 @@
 {
   "version": 1,
   "source": "docs/schema/oxoflow-v1.schema.json",
-  "schemaSha256": "d0cc7bbf8b2709c5fa833539854a2ed8c36e29dc35386e2c2dfca643513c9030",
+  "schemaSha256": "7f68d09a481f28a1568fb9a37eb14a75bc6ef57d2d504891ef8ce5aeebca47e0",
   "contexts": {
     "root": {
       "keys": [
@@ -274,6 +274,11 @@
     },
     "resource_budget": {
       "keys": [
+        {
+          "key": "max_cost",
+          "description": "User-declared cost budget (issue #1400): the scheduler stops dispatching new work once the cost accrued from rules that already executed reaches amount, in currency. Rates are applied to the ledger's measured CPU-seconds and GB-seconds; unknown metrics are never treated as zero.",
+          "type": "object"
+        },
         {
           "key": "max_jobs",
           "description": "Cap on concurrently running jobs; clamps the requested -j concurrency (local) or the in-flight submission cap (cluster).",

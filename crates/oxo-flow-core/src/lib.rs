@@ -47,6 +47,7 @@ pub mod cluster;
 pub mod config;
 pub mod config_impact;
 pub mod container;
+pub mod cost_budget;
 pub mod dag;
 pub mod deep_check;
 pub mod diagnostics;

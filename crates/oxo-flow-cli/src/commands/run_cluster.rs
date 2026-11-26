@@ -147,11 +147,16 @@ pub(crate) struct ClusterRunSummary {
     /// successful run, even when every interrupted rule was
     /// `required = false`.
     pub interrupt_exit_code: Option<i32>,
+    /// #1400 structured cost-budget detail, present only when the cluster
+    /// cost gate fired (the driver stops NEW dispatch, in-flight jobs settle
+    /// honestly, and the run ends `cost_budget_exceeded`). `None` for every
+    /// ordinary run so the JSON summary stays byte-identical to before.
+    pub cost_budget: Option<serde_json::Value>,
 }
 
 impl ClusterRunSummary {
     pub fn is_success(&self) -> bool {
-        self.failed == 0 && self.interrupt_exit_code.is_none()
+        self.failed == 0 && self.interrupt_exit_code.is_none() && self.cost_budget.is_none()
     }
 }
 
@@ -861,6 +866,7 @@ pub(crate) async fn run_on_cluster(
         non_required_failed: 0,
         skipped: 0,
         interrupt_exit_code: None,
+        cost_budget: None,
     };
 
     if to_run.is_empty() {
@@ -1127,6 +1133,62 @@ pub(crate) async fn run_on_cluster(
                 Ok(())
             })
         });
+    // #1400 enforced cost budget: the driver consults this async gate once per
+    // round before the submit wave, reusing the SAME canonical accrual the
+    // local scheduler uses (`resource_ledger` + `cost_budget`) over the shared
+    // checkpoint — never a hand copy. `Some(message)` withholds every NEW
+    // dispatch; in-flight jobs settle honestly (they are never killed). The
+    // structured detail is stashed so the terminal contract can still report
+    // `cost_budget_exceeded` after the driver's error is caught below.
+    let cost_slot: std::sync::Arc<std::sync::Mutex<Option<serde_json::Value>>> =
+        std::sync::Arc::new(std::sync::Mutex::new(None));
+    let cost_gate: Option<oxo_flow_core::backend::driver::CostGateHook<'_>> = args
+        .config
+        .resource_budget
+        .as_ref()
+        .and_then(|b| b.max_cost.clone())
+        .map(|budget| {
+            let gate_ck = args.checkpoint.clone();
+            let slot = cost_slot.clone();
+            let names: Vec<String> = to_run.iter().cloned().collect();
+            Box::new(move || {
+                let ck = gate_ck.clone();
+                let slot = slot.clone();
+                let budget = budget.clone();
+                let names = names.clone();
+                Box::pin(async move {
+                    let (rules, pending_names) = {
+                        let ck = ck.lock().await;
+                        let rules = oxo_flow_core::resource_ledger::build_resource_ledger(
+                            &ck, None, None, None,
+                        )
+                        .rules;
+                        let pending: Vec<String> = names
+                            .iter()
+                            .filter(|r| {
+                                !ck.completed_rules.contains(*r) && !ck.failed_rules.contains(*r)
+                            })
+                            .cloned()
+                            .collect();
+                        (rules, pending)
+                    };
+                    let accrual = oxo_flow_core::cost_budget::accrue_cost(&rules, &budget);
+                    if !accrual.must_stop() {
+                        return None;
+                    }
+                    let message = crate::commands::run::cost_budget_abort_message(
+                        &accrual,
+                        pending_names.len(),
+                    );
+                    *slot.lock().unwrap() = Some(crate::commands::run::cost_budget_detail(
+                        &accrual,
+                        &pending_names,
+                    ));
+                    Some(message)
+                })
+                    as std::pin::Pin<Box<dyn std::future::Future<Output = Option<String>> + Send>>
+            }) as oxo_flow_core::backend::driver::CostGateHook<'_>
+        });
     let run_result = driver
         .run(
             &mut plan,
@@ -1138,6 +1200,7 @@ pub(crate) async fn run_on_cluster(
                 sensitive_values: args.sensitive_values,
                 on_submit: Some(Box::new(on_submit)),
                 on_settle: Some(on_settle),
+                cost_gate,
             },
         )
         .await;
@@ -1166,7 +1229,22 @@ pub(crate) async fn run_on_cluster(
             summary.interrupt_exit_code = Some(exit_code);
             interrupted
         }
-        Err(e) => return Err(anyhow::anyhow!("cluster execution failed: {e}")),
+        Err(e) => {
+            // #1400: the cost gate fired and ended the run with a structured
+            // `Config` error. In-flight jobs already settled through the
+            // `on_settle` hook, so the checkpoint holds their truth; surface
+            // the terminal contract through `summary.cost_budget` instead of
+            // swallowing it into a bare error (the caller maps it to the
+            // observable `cost_budget_exceeded` outcome).
+            let cost_detail = cost_slot.lock().unwrap().take();
+            if let Some(detail) = cost_detail {
+                eprintln!("{} {}", "Cost budget:".red().bold(), e);
+                summary.cost_budget = Some(detail);
+                warn_if_nothing_recorded(&args).await;
+                return Ok(summary);
+            }
+            return Err(anyhow::anyhow!("cluster execution failed: {e}"));
+        }
     };
 
     for record in &records {
@@ -1359,6 +1437,7 @@ mod tests {
             max_threads: None,
             max_memory: Some("64G".to_string()),
             max_jobs: None,
+            max_cost: None,
         };
         let err = check_budget(&plan, &to_run, &budget).unwrap_err();
         let msg = err.to_string();
@@ -1381,6 +1460,7 @@ mod tests {
             max_threads: Some(16),
             max_memory: None,
             max_jobs: None,
+            max_cost: None,
         };
         let msg = check_budget(&plan, &to_run, &budget)
             .unwrap_err()
@@ -1400,6 +1480,7 @@ mod tests {
             max_threads: Some(16),
             max_memory: Some("64G".to_string()),
             max_jobs: None,
+            max_cost: None,
         };
         assert!(check_budget(&plan, &to_run, &budget).is_ok());
     }
@@ -1414,6 +1495,7 @@ mod tests {
             max_threads: None,
             max_memory: None,
             max_jobs,
+            max_cost: None,
         };
         let resolved = 50_usize; // driver default, as if no flag/profile set
 
@@ -1439,6 +1521,7 @@ mod tests {
             max_threads: Some(1),
             max_memory: Some("1G".to_string()),
             max_jobs: None,
+            max_cost: None,
         };
         assert!(check_budget(&plan, &std::collections::HashSet::new(), &budget).is_ok());
     }
@@ -1921,6 +2004,7 @@ shell = "mkdir -p out/S1 && echo started > out/S1/done.txt && sleep 45 && echo d
             max_threads: None,
             max_memory: Some("lots".to_string()),
             max_jobs: None,
+            max_cost: None,
         };
         let msg = check_budget(&plan, &to_run, &budget)
             .unwrap_err()

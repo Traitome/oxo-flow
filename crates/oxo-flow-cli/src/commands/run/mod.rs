@@ -1438,6 +1438,14 @@ async fn run_command_inner(
         return Err(e);
     }
 
+    // A malformed [resource_budget].max_cost (issue #1400) could never
+    // trip; reject it before any rule runs.
+    if let Err(e) = validate_cost_budget(config.resource_budget.as_ref()) {
+        progress.finish_and_clear();
+        json_summary.emit("failed", &RunCounts::default(), vec![]);
+        return Err(e);
+    }
+
     // ── CPU-oversubscription guard (issue #1080 R1) ──────────────────────
     // The memory path warns when a cgroup cap bites; CPU had no equivalent
     // signal, so `-j 8` with 8-thread rules silently occupied a 64-core

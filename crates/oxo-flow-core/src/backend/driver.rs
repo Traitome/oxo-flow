@@ -144,6 +144,24 @@ pub type SettleHook<'a> = Box<
         + 'a,
 >;
 
+/// Cost-budget gate hook (issue #1400): awaited once per dispatch round,
+/// before the submit wave. `Some(message)` when the declared
+/// `[resource_budget] max_cost` stop condition holds — the driver then
+/// stops submitting NEW ready rules (jobs already in flight settle
+/// honestly, they are never killed) and, once nothing is in flight and
+/// rules remain pending, ends the run with [`OxoFlowError::Config`]
+/// carrying `message` (the caller maps that to the observable
+/// `cost_budget_exceeded` outcome). `None` keeps dispatching.
+///
+/// Async because the caller's accrual reads live checkpoint state behind
+/// an async mutex; the driver awaits the gate inline, next to the submit
+/// wave, so the decision sees the current round's settled records.
+pub type CostGateHook<'a> = Box<
+    dyn FnMut() -> std::pin::Pin<Box<dyn std::future::Future<Output = Option<String>> + Send + 'a>>
+        + Send
+        + 'a,
+>;
+
 /// Per-run hooks: checkpoint re-entry (issue #78 P3).
 pub struct DriverOptions<'a> {
     /// Run directory root: `events.jsonl` + `jobs/<rule>/` below it.
@@ -161,6 +179,11 @@ pub struct DriverOptions<'a> {
     pub on_submit: Option<SubmitHook>,
     /// Invoked as each job settles with its terminal record (issue #1083).
     pub on_settle: Option<SettleHook<'a>>,
+    /// Cost-budget dispatch gate (issue #1400): called once per round
+    /// before the submit wave. `Some(message)` stops NEW dispatch; the
+    /// message rides in the terminal [`OxoFlowError::Config`] once the
+    /// in-flight wave drains (see [`CostGateHook`]).
+    pub cost_gate: Option<CostGateHook<'a>>,
 }
 
 /// Executes a static plan through a backend.
@@ -429,6 +452,10 @@ impl BackendDriver {
         // Consecutive polls a job has been invisible to BOTH the live
         // queue and the accounting/terminal probes (issue #244 guard).
         let mut unknown_rounds: HashMap<String, u32> = HashMap::new();
+        // Cost-budget stop message (issue #1400): latched once the caller's
+        // gate fires so a later, partially-costed total can never un-stop a
+        // run the operator already budget-capped.
+        let mut cost_stop: Option<String> = None;
 
         macro_rules! cancel_on_error {
             ($expr:expr) => {
@@ -495,7 +522,16 @@ impl BackendDriver {
             // ordered by effective priority (aging, issue #134); the tail
             // passed over this round ages +1.
             let mut submitted_this_round = 0usize;
-            if inflight.len() < self.config.max_submitted {
+            // Cost-budget gate (issue #1400): consulted once per round. A
+            // stop latches for the run so a later, partially-costed total
+            // can never un-stop a run the operator already budget-capped.
+            if cost_stop.is_none()
+                && let Some(gate) = opts.cost_gate.as_mut()
+                && let Some(message) = gate().await
+            {
+                cost_stop = Some(message);
+            }
+            if cost_stop.is_none() && inflight.len() < self.config.max_submitted {
                 let ready_now: Vec<String> = plan
                     .order
                     .iter()
@@ -1541,13 +1577,29 @@ impl BackendDriver {
             if all_done && inflight.is_empty() {
                 break;
             }
+            // Cost-budget stop (issue #1400): the gate fired, every job it
+            // allowed to start has settled (none were killed), and rules
+            // remain pending — the run cannot make progress under the cap,
+            // so end it with the gate's message. Emitted before the generic
+            // stall guard so a budget stop is never mis-reported as a
+            // plan/dependency stall.
+            if let Some(message) = cost_stop.as_ref()
+                && inflight.is_empty()
+                && !all_done
+            {
+                emit(&mut events, "FAILED", "-", None, Some(message));
+                return Err(OxoFlowError::Config {
+                    message: message.clone(),
+                });
+            }
             // A stall is "nothing in flight, nothing submitted AND nothing
             // settled this round": the wave above already tried every ready
             // rule, so the remaining pending rules are blocked on deps that
             // can never finish (plan/dependency mismatch). Settling counts —
             // a completion can unblock dependents that the NEXT round's wave
             // will pick up.
-            if !all_done
+            if cost_stop.is_none()
+                && !all_done
                 && inflight.is_empty()
                 && submitted_this_round == 0
                 && settled_this_round == 0
@@ -2302,6 +2354,7 @@ output = ["out/{{sample}}/d.txt"]
                     sensitive_values: &[],
                     on_submit: None,
                     on_settle: None,
+                    cost_gate: None,
                 },
             ))
             .unwrap();
@@ -2362,6 +2415,7 @@ output = ["out/{{sample}}/d.txt"]
                     sensitive_values: &[],
                     on_submit: None,
                     on_settle: Some(Box::new(on_settle)),
+                    cost_gate: None,
                 },
             ))
             .unwrap();
@@ -2451,6 +2505,7 @@ output = ["out/{{sample}}/d.txt"]
                     sensitive_values: &[],
                     on_submit: None,
                     on_settle: Some(Box::new(on_settle)),
+                    cost_gate: None,
                 },
             ))
             .unwrap();
@@ -2522,6 +2577,7 @@ output = ["out/{{sample}}/d.txt"]
                 sensitive_values: &[],
                 on_submit: None,
                 on_settle: Some(Box::new(on_settle)),
+                cost_gate: None,
             },
         ));
         match result {
@@ -2579,6 +2635,7 @@ output = ["out/{{sample}}/d.txt"]
                 sensitive_values: &[],
                 on_submit: None,
                 on_settle: None,
+                cost_gate: None,
             },
         ));
         match result {
@@ -2617,6 +2674,7 @@ output = ["out/{{sample}}/d.txt"]
                     sensitive_values: &[],
                     on_submit: None,
                     on_settle: None,
+                    cost_gate: None,
                 },
             ))
             .unwrap();
@@ -2665,6 +2723,7 @@ output = ["out/{{sample}}/d.txt"]
                     sensitive_values: &[],
                     on_submit: None,
                     on_settle: None,
+                    cost_gate: None,
                 },
             ))
             .unwrap();
@@ -2743,6 +2802,7 @@ output = ["out/{{sample}}/d.txt"]
                     sensitive_values: &[],
                     on_submit: None,
                     on_settle: Some(on_settle),
+                    cost_gate: None,
                 },
             ))
             .unwrap();
@@ -2816,6 +2876,7 @@ output = ["out/{{sample}}/d.txt"]
                     sensitive_values: &[],
                     on_submit: None,
                     on_settle: None,
+                    cost_gate: None,
                 },
             ))
             .unwrap();
@@ -2865,6 +2926,7 @@ output = ["out/{{sample}}/d.txt"]
                     sensitive_values: &[],
                     on_submit: None,
                     on_settle: None,
+                    cost_gate: None,
                 },
             ))
             .expect("a fresh dependency must not stall the driver");
@@ -2918,6 +2980,7 @@ output = ["out/{{sample}}/d.txt"]
                     sensitive_values: &[],
                     on_submit: None,
                     on_settle: None,
+                    cost_gate: None,
                 },
             ))
             .unwrap_err();
@@ -2963,6 +3026,7 @@ output = ["out/{{sample}}/d.txt"]
                     sensitive_values: &[],
                     on_submit: None,
                     on_settle: None,
+                    cost_gate: None,
                 },
             ))
             .unwrap();
@@ -3027,6 +3091,7 @@ shell = "cat {input} > merged.txt"
                     sensitive_values: &[],
                     on_submit: None,
                     on_settle: None,
+                    cost_gate: None,
                     run_dir: fx.run_dir.path(),
                     on_checkpoint: None,
                     merge: None,
@@ -3156,6 +3221,7 @@ shell = "echo asm > out/{assembler}.txt"
                     sensitive_values: &[],
                     on_submit: None,
                     on_settle: None,
+                    cost_gate: None,
                 },
             ))
             .unwrap_err();
@@ -3216,6 +3282,7 @@ shell = "echo asm > out/{assembler}.txt"
                         sensitive_values: &[],
                         on_submit: None,
                         on_settle: None,
+                        cost_gate: None,
                     },
                 ))
                 .unwrap_err();
@@ -3269,6 +3336,7 @@ shell = "echo asm > out/{assembler}.txt"
                     sensitive_values: &["s3cr3t-token-42".to_string()],
                     on_submit: None,
                     on_settle: None,
+                    cost_gate: None,
                 },
             ))
             .unwrap();
@@ -3336,6 +3404,7 @@ shell = "echo asm > out/{assembler}.txt"
                     sensitive_values: &[],
                     on_submit: None,
                     on_settle: None,
+                    cost_gate: None,
                 },
             ))
             .unwrap_err();
@@ -3387,6 +3456,7 @@ shell = "echo asm > out/{assembler}.txt"
                     sensitive_values: &[],
                     on_submit: None,
                     on_settle: None,
+                    cost_gate: None,
                 },
             ))
             .unwrap_err();
@@ -3450,6 +3520,7 @@ shell = "echo asm > out/{assembler}.txt"
                     sensitive_values: &[],
                     on_submit: None,
                     on_settle: None,
+                    cost_gate: None,
                 },
             ))
             .unwrap_err();
@@ -3519,6 +3590,7 @@ shell = "echo asm > out/{assembler}.txt"
                     sensitive_values: &[],
                     on_submit: None,
                     on_settle: None,
+                    cost_gate: None,
                 },
             ))
             .unwrap_err();
@@ -3793,6 +3865,7 @@ shell = "echo asm > out/{assembler}.txt"
                     sensitive_values: &[],
                     on_submit: None,
                     on_settle: None,
+                    cost_gate: None,
                 },
             ))
             .unwrap();
@@ -3886,6 +3959,7 @@ shell = "echo asm > out/{assembler}.txt"
                     sensitive_values: &[],
                     on_submit: None,
                     on_settle: None,
+                    cost_gate: None,
                 },
             ))
             .unwrap();
@@ -3994,6 +4068,7 @@ shell = "echo asm > out/{assembler}.txt"
                     sensitive_values: &[],
                     on_submit: None,
                     on_settle: None,
+                    cost_gate: None,
                 },
             ))
             .unwrap();
@@ -4101,6 +4176,7 @@ shell = "echo asm > out/{assembler}.txt"
                     sensitive_values: &[],
                     on_submit: None,
                     on_settle: None,
+                    cost_gate: None,
                 },
             ))
             .unwrap();
@@ -4215,6 +4291,7 @@ shell = "echo asm > out/{assembler}.txt"
                     sensitive_values: &[],
                     on_submit: None,
                     on_settle: None,
+                    cost_gate: None,
                 },
             ))
             .unwrap();
@@ -4311,6 +4388,7 @@ shell = "echo asm > out/{assembler}.txt"
                     sensitive_values: &[],
                     on_submit: None,
                     on_settle: None,
+                    cost_gate: None,
                 },
             ))
             .unwrap();
@@ -4365,6 +4443,7 @@ shell = "echo asm > out/{assembler}.txt"
                     sensitive_values: &[],
                     on_submit: None,
                     on_settle: None,
+                    cost_gate: None,
                 },
             ))
             .expect("the blind-settlement guard must end the run");
@@ -4431,6 +4510,7 @@ shell = "echo asm > out/{assembler}.txt"
                     sensitive_values: &[],
                     on_submit: None,
                     on_settle: None,
+                    cost_gate: None,
                 },
             ))
             .unwrap_err();
@@ -4495,6 +4575,7 @@ shell = "echo asm > out/{assembler}.txt"
                     sensitive_values: &[],
                     on_submit: Some(Box::new(on_submit)),
                     on_settle: None,
+                    cost_gate: None,
                 },
             ))
             .unwrap();
@@ -4565,6 +4646,7 @@ shell = "echo asm > out/{assembler}.txt"
                     sensitive_values: &[],
                     on_submit: None,
                     on_settle: None,
+                    cost_gate: None,
                 },
             ))
             .unwrap_err();
@@ -4622,6 +4704,7 @@ shell = "echo asm > out/{assembler}.txt"
                     sensitive_values: &[],
                     on_submit: None,
                     on_settle: None,
+                    cost_gate: None,
                 },
             ))
             .unwrap_err();
@@ -4663,6 +4746,7 @@ shell = "echo asm > out/{assembler}.txt"
                     sensitive_values: &[],
                     on_submit: None,
                     on_settle: None,
+                    cost_gate: None,
                 },
             ))
             .unwrap_err();
@@ -4711,6 +4795,7 @@ shell = "echo asm > out/{assembler}.txt"
                     sensitive_values: &[],
                     on_submit: None,
                     on_settle: None,
+                    cost_gate: None,
                 },
             ))
             .unwrap_err();
@@ -4785,6 +4870,7 @@ shell = "echo asm > out/{assembler}.txt"
                     sensitive_values: &[],
                     on_submit: None,
                     on_settle: None,
+                    cost_gate: None,
                 },
             ))
             .unwrap();
@@ -4841,6 +4927,7 @@ shell = "echo asm > out/{assembler}.txt"
                     sensitive_values: &[],
                     on_submit: None,
                     on_settle: None,
+                    cost_gate: None,
                 },
             ))
             .unwrap_err();
@@ -4913,6 +5000,7 @@ shell = "echo asm > out/{assembler}.txt"
                     sensitive_values: &[],
                     on_submit: None,
                     on_settle: None,
+                    cost_gate: None,
                 },
             ))
             .unwrap();
@@ -5020,6 +5108,7 @@ shell = "echo asm > out/{assembler}.txt"
                     sensitive_values: &[sentinel.to_string()],
                     on_submit: None,
                     on_settle: None,
+                    cost_gate: None,
                 },
             ))
             .unwrap();
@@ -5133,6 +5222,7 @@ shell = "echo asm > out/{assembler}.txt"
                     sensitive_values: &[sentinel.to_string()],
                     on_submit: None,
                     on_settle: None,
+                    cost_gate: None,
                 },
             ))
             .unwrap_err();
@@ -5192,6 +5282,7 @@ shell = "echo asm > out/{assembler}.txt"
                     sensitive_values: &[],
                     on_submit: None,
                     on_settle: None,
+                    cost_gate: None,
                 },
             ))
             .unwrap();
@@ -5247,6 +5338,7 @@ shell = "mkdir -p out && printf '%s' '{config.api_token}' > out/{assembler}.txt"
                     sensitive_values: &[sentinel.to_string()],
                     on_submit: None,
                     on_settle: None,
+                    cost_gate: None,
                 },
             ))
             .unwrap();
@@ -5327,6 +5419,7 @@ shell = "mkdir -p out && printf '%s' '{config.api_token}' > out/{assembler}.txt"
                     sensitive_values: &[sentinel.to_string()],
                     on_submit: None,
                     on_settle: None,
+                    cost_gate: None,
                 },
             ))
             .unwrap();
@@ -5429,6 +5522,7 @@ shell = "mkdir -p out && printf '%s' '{config.api_token}' > out/{assembler}.txt"
                     sensitive_values: &[fresh_secret.to_string()],
                     on_submit: Some(Box::new(on_submit)),
                     on_settle: None,
+                    cost_gate: None,
                 },
             ))
             .unwrap();
@@ -5512,6 +5606,7 @@ shell = "mkdir -p out && printf '%s' '{config.api_token}' > out/{assembler}.txt"
                     sensitive_values: &[sentinel.to_string()],
                     on_submit: None,
                     on_settle: None,
+                    cost_gate: None,
                 },
             ))
             .unwrap_err();

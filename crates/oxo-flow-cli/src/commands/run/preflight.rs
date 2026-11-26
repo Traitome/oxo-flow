@@ -270,6 +270,21 @@ pub(crate) fn validate_resource_budget(
     )
 }
 
+/// Validate a declared `[resource_budget].max_cost` table before any rule
+/// runs (issue #1400). Delegates to the shared core validator so `run` and
+/// `dry-run` reject the same malformed budgets the dispatcher would otherwise
+/// have to defend against. A `None` budget is a no-op (no cost enforcement).
+pub(crate) fn validate_cost_budget(
+    budget: Option<&oxo_flow_core::config::ResourceBudget>,
+) -> Result<()> {
+    if let Some(b) = budget
+        && let Some(max_cost) = b.max_cost.as_ref()
+    {
+        oxo_flow_core::cost_budget::validate_cost_budget(max_cost).map_err(anyhow::Error::from)?;
+    }
+    Ok(())
+}
+
 /// Disk pre-flight (issue #75): warn when a rule's declared `resources.disk`
 /// exceeds available free space in the workdir, or when the workdir starts below
 /// the configured `[engine] min_free_disk` threshold (issue #843).

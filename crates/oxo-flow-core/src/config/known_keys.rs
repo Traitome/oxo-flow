@@ -236,7 +236,7 @@ const REFERENCE_KEYS: &[&str] = &[
 ];
 
 /// Keys of the `[resource_budget]` table.
-const RESOURCE_BUDGET_KEYS: &[&str] = &["max_jobs", "max_memory", "max_threads"];
+const RESOURCE_BUDGET_KEYS: &[&str] = &["max_cost", "max_jobs", "max_memory", "max_threads"];
 
 /// Keys of the `[engine]` table (issue #843 disk-pressure monitoring;
 /// issue #907 global temp-directory routing; issue #935 protected-tree

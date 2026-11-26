@@ -1098,6 +1098,38 @@ pub struct ReferenceDef {
     pub description: Option<String>,
 }
 
+/// User-declared cost budget (issue #1400). This is enforcement on top of the
+/// resource/cost ledger (issue #1371): the scheduler stops dispatching **new**
+/// work once the accrued cost reaches `amount`, in `currency`.
+///
+/// It is *not* authoritative billing — the rates are declared by the operator
+/// and applied to the ledger's measured CPU-seconds and GB-seconds. See
+/// [`crate::cost_budget`] for the accrual formula.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct CostBudget {
+    /// The cap, in `currency`. Must be finite and `> 0`.
+    #[serde(default)]
+    pub amount: f64,
+    /// ISO-ish currency label; compared for equality only. Must be non-empty.
+    #[serde(default)]
+    pub currency: String,
+    /// Cost per accrued CPU-second, summed across executed rules.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cpu_second_rate: Option<f64>,
+    /// Cost per accrued GB-second (`max_rss_bytes / 1e9 * wall_time_secs`),
+    /// summed across executed rules.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gb_second_rate: Option<f64>,
+    /// What to do when a configured rate's input metric is missing for an
+    /// executed rule: `"refuse"` (default) fails closed; `"report"` keeps
+    /// scheduling but records the unbounded residual.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub on_unknown: Option<String>,
+}
+
 /// Resource budget constraints for the entire workflow.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ResourceBudget {
@@ -1113,6 +1145,11 @@ pub struct ResourceBudget {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_jobs: Option<usize>,
+    /// User-declared cost budget (issue #1400). `None` = no cost enforcement,
+    /// and the dispatch loop does zero extra work.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_cost: Option<CostBudget>,
 }
 
 /// Effective local-execution ceilings after combining explicit CLI limits
