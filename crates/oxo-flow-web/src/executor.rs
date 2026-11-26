@@ -1161,6 +1161,36 @@ pub(crate) async fn finalize_run(run_id: &str, exit_code: Option<i32>, log_path:
         error!("Run {run_id}: forced terminal write failure (test seam)");
         return;
     }
+    // Read the log once, bounded to the head window: both consumers below
+    // (dry-run preview JSON, invalidation summary) print at run start,
+    // before any rule executes — a tail window would miss them, and the
+    // old whole-file read buffered a multi-GB log at every run's terminal
+    // path (issue #734).
+    let head_path = log_path.to_path_buf();
+    let log_content = tokio::task::spawn_blocking(move || {
+        checkpoint_status::read_head_bounded(&head_path, 16 * 1024 * 1024)
+    })
+    .await
+    .unwrap_or_default();
+    let log = (!log_content.is_empty()).then_some(log_content);
+    // Persist the dry-run preview (instance-level plan) next to the log so
+    // /api/runs/{id}/preview can serve it without re-parsing the log.
+    //
+    // Written BEFORE the terminal row is committed: a client that observes
+    // the run as terminal must be able to read the preview immediately.
+    // The reverse order raced — the terminal row was visible while the
+    // preview file was still being written, so an immediate GET could
+    // answer NO_PREVIEW for a completed dry-run under load.
+    if let Some(dir) = log_path.parent()
+        && let Some(log) = log.as_deref()
+        && let Some(preview) = extract_dry_run_preview(log)
+        && let Ok(json) = serde_json::to_string_pretty(&preview)
+        && let Err(e) = tokio::fs::write(dir.join("dry-run-preview.json"), json).await
+    {
+        // Not fatal: the run's state and log are unaffected, but the
+        // preview endpoint will answer NO_PREVIEW for this run.
+        tracing::warn!("Run {run_id}: failed to persist dry-run preview: {e}");
+    }
     match backend
         .record_run_terminal(run_id, final_state, final_state, &end_str)
         .await
@@ -1188,27 +1218,6 @@ pub(crate) async fn finalize_run(run_id: &str, exit_code: Option<i32>, log_path:
             // attribute the true outcome on its next sweep.
             error!("Failed to update final status for run {run_id} via backend: {e}");
         }
-    }
-    // Read the log once, bounded to the head window: both consumers below
-    // (dry-run preview JSON, invalidation summary) print at run start,
-    // before any rule executes — a tail window would miss them, and the
-    // old whole-file read buffered a multi-GB log at every run's terminal
-    // path (issue #734).
-    let head_path = log_path.to_path_buf();
-    let log_content = tokio::task::spawn_blocking(move || {
-        checkpoint_status::read_head_bounded(&head_path, 16 * 1024 * 1024)
-    })
-    .await
-    .unwrap_or_default();
-    let log = (!log_content.is_empty()).then_some(log_content);
-    // Persist the dry-run preview (instance-level plan) next to the log so
-    // /api/runs/{id}/preview can serve it without re-parsing the log.
-    if let Some(log) = log.as_deref()
-        && let Some(preview) = extract_dry_run_preview(log)
-        && let Ok(json) = serde_json::to_string_pretty(&preview)
-        && let Some(dir) = log_path.parent()
-    {
-        let _ = tokio::fs::write(dir.join("dry-run-preview.json"), json).await;
     }
     info!("Run {run_id} finished: {final_state}");
 

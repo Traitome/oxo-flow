@@ -994,7 +994,7 @@ The full run row: `{ id, user_id, pipeline_id, workflow_name, pipeline_snapshot,
 ```
 GET /api/runs/{id}/preview
 ```
-The instance-level dry-run plan (`checkpoint_preview` + execution order), persisted by the executor as `dry-run-preview.json` when a dry-run completes. Returns `404 NO_PREVIEW` for runs that never produced one — or when the workdir path is not a regular file (a rule-writable workdir may contain special files). Files above the 16 MiB server-written maximum return `413 PREVIEW_TOO_LARGE`.
+The instance-level dry-run plan (`checkpoint_preview` + execution order), persisted by the executor as `dry-run-preview.json` when a dry-run completes. The preview is written **before** the run's terminal state is committed, so a client that observes the run as terminal can read the preview immediately (the reverse order raced under load: a completed dry-run briefly answered `404 NO_PREVIEW`). Returns `404 NO_PREVIEW` for runs that never produced one, when the preview write itself failed (logged as a warning), or when the workdir path is not a regular file (a rule-writable workdir may contain special files). Files above the 16 MiB server-written maximum return `413 PREVIEW_TOO_LARGE`.
 
 ### Protected-Tree Drift Preview
 ```
