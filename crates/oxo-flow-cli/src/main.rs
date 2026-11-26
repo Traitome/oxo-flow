@@ -1416,6 +1416,12 @@ pub enum ClusterAction {
             help = "Run directory written by `run --profile` (default: .oxo-flow/runs/latest when it exists)"
         )]
         run_dir: Option<PathBuf>,
+        #[arg(
+            long,
+            value_name = "QUEUE",
+            help = "Location (gcp-batch) or availability zone (tencent-batch) that addresses the job; gcloud/tccli need it to resolve a bare job id"
+        )]
+        queue: Option<String>,
         #[arg(long, value_name = "N", help = "Print only the last N log lines")]
         tail: Option<usize>,
     },
@@ -2669,7 +2675,7 @@ async fn main() -> Result<()> {
 
 #[cfg(test)]
 mod cluster_json_tests {
-    use super::{Cli, json_supported};
+    use super::{Cli, ClusterAction, Commands, json_supported};
     use clap::Parser;
 
     /// Parse a CLI in a thread with a generous stack.
@@ -2702,6 +2708,26 @@ mod cluster_json_tests {
             let cli = parse_cli(&args);
             assert!(cli.json, "{args:?}");
             assert!(json_supported(&cli.command), "{args:?}");
+        }
+    }
+
+    #[test]
+    fn cluster_logs_accepts_queue_for_cloud_regions() {
+        // GCP needs the location and Tencent the zone to resolve a bare id;
+        // AWS reads its region from the AWS config.
+        let cli = parse_cli(&[
+            "oxo-flow",
+            "cluster",
+            "logs",
+            "job-1",
+            "--queue",
+            "ap-shanghai-5",
+        ]);
+        match cli.command {
+            Commands::Cluster {
+                action: ClusterAction::Logs { queue, .. },
+            } => assert_eq!(queue.as_deref(), Some("ap-shanghai-5")),
+            _ => panic!("expected cluster logs"),
         }
     }
 

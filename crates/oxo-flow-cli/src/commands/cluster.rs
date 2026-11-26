@@ -1592,6 +1592,7 @@ pub async fn cluster_command(action: ClusterAction, json: bool) -> Result<()> {
             backend,
             job_id,
             run_dir,
+            queue,
             tail,
         } => {
             // Issue #1085 C3: `logs` used to REQUIRE the accounting store
@@ -1639,7 +1640,7 @@ pub async fn cluster_command(action: ClusterAction, json: bool) -> Result<()> {
                 cluster_backend,
                 oxo_flow_core::cluster::ClusterJobConfig {
                     backend: cluster_backend,
-                    queue: None,
+                    queue: queue.clone(),
                     account: None,
                     walltime: None,
                     extra_args: Vec::new(),
@@ -1838,6 +1839,7 @@ mod tests {
                 backend: Some("ge".to_string()),
                 job_id: "1".to_string(),
                 run_dir: None,
+                queue: None,
                 tail: None,
             },
         ];

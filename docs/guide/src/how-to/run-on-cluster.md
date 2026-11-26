@@ -54,6 +54,19 @@ backends:
 `--queue` where the cloud CLI needs it to resolve a bare job id (the GCP
 location, the Tencent zone). AWS Batch's raw listing uses it as the
 `list-jobs --job-queue` selector, falling back to the submit default.
+`cluster logs` takes `--queue` for the same reason on GCP/Tencent; AWS reads
+its region from the AWS config.
+
+Cloud compute nodes do not share the submit host's filesystem. A cloud rule
+without `[cluster.volume]` runs in the vendor agent's default directory (the
+engine drops the submit-host `cd` guard instead of failing on a missing
+path); file inputs and outputs still need a shared mount. Declare
+`[cluster.volume]` whose `volume_root` contains the run workdir and whose
+`mount_root` is the path the compute nodes have the volume mounted at — the
+rendered command is rewritten onto it. Cloud **array** jobs require that
+declaration: their per-index `cmd.N.sh` files are read from the command
+directory on every node and are not uploaded to the vendor, so an array
+without a shared volume is rejected before submission.
 
 ---
 
