@@ -83,14 +83,56 @@ verified `ok: true` with 42 events. The orphaned rule process was terminated
 and the test row marked failed manually for cleanup.
 
 This is a measured crash-recovery gap, not a correctness failure of the
-chain. Fixing it needs an owner lease/heartbeat (or an explicit
-single-instance startup reconciliation) so a second live instance's runs are
-not misclassified; that is a design follow-up, not implemented here.
+chain. The restarted instance can still cancel the ghost through
+`POST /api/runs/{id}/cancel` (200, status `cancelled` in a follow-up probe),
+so it is recoverable manually. Automatic reconciliation is what is missing:
+fixing it needs an owner lease/heartbeat (or an explicit single-instance
+startup reconciliation) so a second live instance's runs are not
+misclassified; that is a design follow-up, not implemented here.
+
+## Multi-user team mode probe (single host)
+
+Team mode against PostgreSQL (`oxo_users`), fixed admin/user/viewer
+accounts:
+
+- user created 3 runs (all 200), admin created 1 (200), viewer's create was
+  denied (403).
+- The user's run list showed its own 3; the admin's list showed all 4.
+- Audit chain verified `ok: true`, 0 findings, 13 events; the export's
+  distinct `user_id` values were the admin UUID, `user`, and `viewer` (the
+  denied viewer request is audited).
+
+Limits: three fixed accounts, one host, no per-user quota/concurrent-login
+campaign, and no OAuth/API-key path in this probe.
+
+## Network-namespace pair and asymmetric partition
+
+Two web instances ran in **separate Linux network namespaces**
+(`10.200.0.2:18121` and `10.200.0.3:18122`, team mode), connected to the
+same PostgreSQL database through a host TCP forwarder
+(`10.200.0.1:15432 -> 127.0.0.1:5432`) and sharing one workspace:
+
+- 10 concurrent create-run requests (5 per instance) all returned 200.
+- Both admin views listed the same 22 runs (shared database; includes
+  earlier probes); both audit chains verified `ok: true`, 0 findings with
+  **70 events**, and the two exports were byte-identical
+  (`sha256:2d5e1ca061888bcea93879297f55358d539b29696e58b9230c9fa7a13ff67213`).
+- **Asymmetric partition**: an `OUTPUT` DROP to the database inside the
+  first namespace only made that instance's run-list request hit the 5 s
+  client cap (`000`) while the second instance answered 200; removing the
+  rule restored the first instance to 200 within 2 s.
+
+Limits: both namespaces are on the same physical host and the database is
+reached through a TCP forwarder, not a real inter-host network; there is no
+packet loss/latency injection, and the partition is an outbound DROP rather
+than a routing partition. This is the network-namespace step of #1402, not
+a multi-host claim.
 
 ## Limits
 
-- One host, two processes, one database; no separate hosts or network
-  namespaces. The partition probe is a full outbound block on one host
+- One physical host; the network-namespace pair uses a host TCP forwarder,
+  not separate hosts. No packet-loss/latency injection or routing
+  partition. The partition probe is a full outbound block on one host
   (not asymmetric/partial); the restart probe is a clean service restart;
   the crash probe kills only the web process. Network-namespace isolation,
   asymmetric partitions, database corruption, and kill-mid-transaction
