@@ -122,12 +122,41 @@ bwa mem \
 conda = "bioconda::bwa=0.7.17"
 ```
 
+### Choosing each rule's environment: system vs conda/container
+
+- **System environment (omit `[rules.environment]`)**: use it when the shell
+  runs ONLY shell builtins (`echo`, `printf`, `test`, variable expansion,
+  redirections, control flow) and/or standard POSIX utilities (`cat`, `cut`,
+  `sort`, `head`, `tail`, `wc`, `mkdir`, `cp`, `mv`, `sed`, `grep`, `awk`) —
+  no external bioinformatics or scientific tool. The engine executes such a
+  rule directly on the host.
+- **conda/container environment (required)**: use it when the shell invokes
+  ANY external bioinformatics or scientific tool (`fastp`, `bwa`, `samtools`,
+  `bcftools`, `python`, `Rscript`, …). Declare a version-pinned
+  `[rules.environment]`.
+
+NEVER declare a conda/container environment just to provide a builtin or POSIX
+utility (`coreutils` for `echo`, a `sed`/`grep` package, …): the pin turns a
+hello-world into an environment-creation dependency and the rule fails on any
+host without conda.
+
+System-only rule example (NO `[rules.environment]` table):
+
+```toml
+[[rules]]
+name = "hello"
+output = ["out.txt"]
+shell = """
+echo "hello" > {{output[0]}}
+"""
+```
+
 ### KEY SYNTAX RULES (MEMORIZE THESE):
 1. Template variables use SINGLE braces: `{{config.key}}`, `{{input[0]}}`, `{{output[0]}}`, `{{threads}}`, `{{memory}}`
 2. NEVER use `{{{{var}}}}` (double-brace) — this is Python/Go syntax, NOT oxo-flow
 3. NEVER use `shell +=` — this is Python/Snakemake, NOT valid TOML
 4. NEVER concatenate strings with `+` in TOML
-5. Environment tables [rules.environment] MUST appear directly after their [[rules]] block
+5. When declared, environment tables [rules.environment] MUST appear directly after their [[rules]] block
 6. depends_on arrays list rule names, not file names
 7. ALL conda packages MUST include version: `bioconda::tool=X.Y.Z`
 8. NO `foreach`, `inputs`/`outputs` maps, or `[resources]` section — per-rule `threads`/`memory` fields
@@ -142,6 +171,9 @@ database (6000+ tools with current versions and descriptions). Use it to:
 - Get the CURRENT version for pinning (e.g. `lookup_tool("samtools")` → 1.23.x)
 - Discover alternative tools by purpose keyword (e.g. `lookup_tool("peak calling")`)
 - Check platform support before recommending a tool
+- Do NOT look up or pin packages for shell builtins or POSIX utilities — a
+  builtin-only rule uses the system environment (see "Choosing each rule's
+  environment")
 
 ## Skill Documentation (lookup_doc)
 Full SKILL.md protocol docs for the embedded pipeline skills are available.
@@ -162,7 +194,7 @@ Full SKILL.md protocol docs for the embedded pipeline skills are available.
 
 ## Safety Rules (NON-NEGOTIABLE)
 1. **Resource constraints required**: Every [[rules]] block MUST have threads and memory fields.
-2. **Environment required**: Every rule MUST declare [rules.environment] with conda or container.
+2. **Environment selection**: A rule invoking ANY external bioinformatics/scientific tool MUST declare [rules.environment] with conda or container. A rule using only shell builtins and standard POSIX utilities MUST omit the environment table (system environment) and MUST NOT pin a conda/container package for those utilities.
 3. **Version pinning required**: conda packages MUST include version (e.g., `bioconda::star=2.7.11b`).
 4. **QC mandatory**: Include QC steps at critical junctures.
 5. **No destructive commands**: NEVER use `rm -rf`, `>|` (force redirect), or unlink.
@@ -177,12 +209,12 @@ Your TOML MUST include:
 1. Complete [workflow] header with name derived from user intent
 2. [config] section with configurable paths/parameters as variables
 3. Well-named [[rules]] forming a coherent DAG via depends_on
-4. Every rule has: threads, memory, shell, and [rules.environment]
+4. Every rule has: threads, memory, and shell; every rule invoking an external tool also has [rules.environment] (builtin/POSIX-only rules omit it)
 5. Functional shell commands using SINGLE-brace template syntax: `{{input[0]}}`, `{{output[0]}}`, `{{threads}}`, `{{config.key}}`
 
 ## Quality Checklist (self-verify before responding)
 - [ ] Every rule has threads AND memory set
-- [ ] Every rule has [rules.environment] with version-pinned package
+- [ ] Every rule invoking an external tool has [rules.environment] with a version-pinned package; builtin/POSIX-only rules have NO environment table
 - [ ] All depends_on references exist as rule names
 - [ ] Template variables use SINGLE braces: `{{var}}` NOT `{{{{var}}}}`
 - [ ] NO `shell +=`, `foreach`, or string concatenation — valid TOML only
@@ -676,6 +708,73 @@ mod tests {
         assert!(p.contains("lookup_tool"));
         assert!(p.contains("lookup_doc"));
         assert!(p.contains("NO `foreach`"));
+    }
+
+    #[test]
+    fn system_prompt_allows_system_environment_for_builtin_only_rules() {
+        // Issue #1415: `template --ai` pinned `conda = "bioconda::coreutils=8.25"`
+        // onto a rule whose shell only used the bash `echo` builtin. The old
+        // unconditional "every rule declares an environment" rule forced that
+        // pin; the prompt and the checklist must now state the exception.
+        let p = generation_system_prompt();
+        assert!(
+            p.contains("system environment"),
+            "prompt must name the system environment"
+        );
+        assert!(
+            p.contains("shell builtins"),
+            "prompt must scope the exception to shell builtins/POSIX utilities"
+        );
+        assert!(
+            p.contains("NEVER declare a conda/container environment just to provide a builtin"),
+            "prompt must forbid pinning a package for a builtin"
+        );
+        assert!(
+            !p.contains("Every rule MUST declare [rules.environment]"),
+            "the unconditional environment requirement must stay gone"
+        );
+        // The external-tool half of the contract must survive.
+        assert!(p.contains(
+            "invoking ANY external bioinformatics/scientific tool MUST declare [rules.environment]"
+        ));
+        assert!(p.contains("builtin/POSIX-only rules have NO environment table"));
+    }
+
+    #[test]
+    fn agent_accepts_system_only_builtin_rule() {
+        // Issue #1415: the engine runs a rule with no [rules.environment] on
+        // the host (system backend). The generator's own acceptance path —
+        // extraction plus the structural floor — must accept such a rule and
+        // must not demand an environment table.
+        let draft = concat!(
+            "[workflow]\n",
+            "name = \"hello\"\n",
+            "\n",
+            "[config]\n",
+            "message = \"hello\"\n",
+            "\n",
+            "[[rules]]\n",
+            "name = \"hello\"\n",
+            "threads = 1\n",
+            "memory = \"1G\"\n",
+            "output = [\"out.txt\"]\n",
+            "shell = \"\"\"\n",
+            "echo \"{config.message}\" > {output[0]}\n",
+            "\"\"\"\n",
+        );
+        let agent = PipelineGenAgent::new(
+            "one rule using only bash built-ins and the system environment, writes hello to out.txt",
+        );
+        let extracted = agent
+            .extract_content(&format!("```toml\n{draft}\n```"))
+            .expect("system-only draft extracted");
+        assert!(!extracted.contains("[rules.environment]"));
+        let verdict = agent.validate(&extracted, &test_ctx());
+        assert!(
+            verdict.passed,
+            "system-only rule rejected: {:?}",
+            verdict.errors
+        );
     }
 
     #[test]

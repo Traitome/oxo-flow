@@ -518,8 +518,13 @@ The agent:
 3. Selects tools from the reference table, verifying current versions via the Bioconda database
 4. Designs a DAG with proper dependencies (optionally consulting the pipeline graph for topology)
 5. Sets resource allocations based on tool requirements
-6. Generates valid `.oxoflow` TOML
-7. Validates against the engine schema; on failure the errors feed back
+6. Chooses each rule's environment: a version-pinned conda/container environment
+   for rules invoking external tools, and the system environment (no
+   `[rules.environment]` table) for rules that use only shell builtins or
+   standard POSIX utilities — never a conda pin just to provide `echo` or
+   `coreutils`
+7. Generates valid `.oxoflow` TOML
+8. Validates against the engine schema; on failure the errors feed back
    into the correction loop (bounded by `--ai-max-retries`), so
    wrong-dialect output is repaired instead of written with a warning
    (one shared generation persona across CLI and web)

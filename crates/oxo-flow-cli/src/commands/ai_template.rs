@@ -1049,6 +1049,37 @@ mod tests {
     }
 
     #[test]
+    fn engine_validator_accepts_system_only_builtin_rule() {
+        // Issue #1415: `template --ai` pinned conda for an `echo`-only rule.
+        // The CLI generation validator is the structural floor plus the core
+        // engine schema — a rule with no [rules.environment] must pass both,
+        // and the engine must classify it as the always-available system
+        // backend instead of requiring conda on the host.
+        let toml = concat!(
+            "[workflow]\n",
+            "name = \"hello\"\n",
+            "\n",
+            "[config]\n",
+            "message = \"hello\"\n",
+            "\n",
+            "[[rules]]\n",
+            "name = \"hello\"\n",
+            "threads = 1\n",
+            "memory = \"1G\"\n",
+            "output = [\"out.txt\"]\n",
+            "shell = \"\"\"\n",
+            "echo \"{config.message}\" > {output[0]}\n",
+            "\"\"\"\n",
+        );
+        assert!(validate_basic_structure(toml).is_ok());
+        let config: oxo_flow_core::config::WorkflowConfig =
+            toml::from_str(toml).expect("engine schema accepts a system-only rule");
+        let rule = &config.rules[0];
+        assert!(rule.environment.is_empty());
+        assert_eq!(rule.environment.kind(), "system");
+    }
+
+    #[test]
     fn derived_file_name_uses_first_three_words() {
         assert_eq!(
             derived_file_name("RNA seq analysis of tumor"),
