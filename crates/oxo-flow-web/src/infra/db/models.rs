@@ -83,6 +83,25 @@ pub struct RunRow {
     pub created_at: String,
 }
 
+/// A live run whose owner lease has gone stale (issue #1402).
+///
+/// Returned by [`super::StorageBackend::stale_run_leases`] and consumed by
+/// the run-lease reaper: the owning web process stopped heartbeating past
+/// the lease TTL, so the run must be finalized by another instance.
+/// `workdir` is carried so the reaper can read the wrapper's `.exit-code`
+/// record (and log) for the same terminal attribution the live executor
+/// uses, when the directory is reachable from the reaping instance;
+/// otherwise the run is marked `failed`.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct StaleRunLease {
+    pub id: String,
+    pub user_id: String,
+    pub status: String,
+    pub workdir: Option<String>,
+    pub owner_instance: Option<String>,
+    pub heartbeat_at: Option<String>,
+}
+
 /// Whether a run status is terminal — final and never overwritable.
 ///
 /// Single definition shared by the handlers and the storage layer's

@@ -23,8 +23,14 @@ type ApiResult<T> = Result<Json<T>, (StatusCode, Json<ApiError>)>;
 )]
 /// GET /api/health
 pub async fn health() -> ApiResult<HealthResponse> {
+    // Bounded probe (issue #1402): a database partition used to hold this
+    // endpoint for the full sqlx pool acquire timeout (~30 s) before it
+    // could report `degraded`. A load balancer with a shorter timeout would
+    // take the whole server out of rotation as if it were dead. The endpoint
+    // still returns the structured 200 `degraded` body; only the wait is
+    // bounded.
     let db_healthy = if let Some(backend) = crate::infra::db::global_backend() {
-        backend.health().await.unwrap_or(false)
+        service::probe_database(backend.health(), service::HEALTH_DB_PROBE_TIMEOUT).await
     } else {
         false
     };

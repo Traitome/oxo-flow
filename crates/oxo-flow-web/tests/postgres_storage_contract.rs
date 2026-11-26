@@ -288,6 +288,53 @@ async fn storage_backend_contract_round_trips_on_postgres() {
             .await
             .expect("mark run running")
     );
+
+    // Owner lease (issue #1402): the live row is owned and heartbeated by
+    // this process, ownership can be taken over, and stale selection
+    // excludes the current instance. A cutoff in the future makes every
+    // stored heartbeat stale without touching the row.
+    assert!(
+        backend
+            .heartbeat_runs(oxo_flow_web::infra::run_lease::instance_id(), &now())
+            .await
+            .expect("heartbeat runs")
+            >= 1,
+        "the live run's heartbeat is renewed"
+    );
+    assert!(
+        backend
+            .claim_run_owner(&run.id, "other-instance", &now())
+            .await
+            .expect("claim owner"),
+        "a live run can be re-owned by a recovering instance"
+    );
+    let future = (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
+    let stale = backend
+        .stale_run_leases("current-instance", &future, 10)
+        .await
+        .expect("stale leases");
+    assert!(
+        stale.iter().any(|row| row.id == run.id),
+        "another instance sees the stale-looking lease"
+    );
+    let own_stale = backend
+        .stale_run_leases("other-instance", &future, 10)
+        .await
+        .expect("stale leases excluding own rows");
+    assert!(
+        !own_stale.iter().any(|row| row.id == run.id),
+        "an instance never selects its own rows for reaping"
+    );
+    assert!(
+        backend
+            .claim_run_owner(
+                &run.id,
+                oxo_flow_web::infra::run_lease::instance_id(),
+                &now()
+            )
+            .await
+            .expect("reclaim owner"),
+    );
     backend
         .upsert_run_node(&models::RunNodeRow {
             run_id: run.id.clone(),

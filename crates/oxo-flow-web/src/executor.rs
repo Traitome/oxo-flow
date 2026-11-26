@@ -1000,6 +1000,25 @@ async fn run_is_cancelled(run_id: &str) -> bool {
     }
 }
 
+/// Read the wrapper's `.exit-code` record from a run workdir, if present.
+///
+/// The wrapper shell writes the CLI's exit code there the moment it exits,
+/// so a run whose owning web process is gone can still be attributed by
+/// outcome instead of guessed. Stat first: the workdir is rule-writable and
+/// opening a writer-less FIFO planted at `.exit-code` would block forever
+/// (issue #735). Shared by SQLite startup recovery and the run-lease
+/// reaper, so both attribute identically.
+pub(crate) fn read_exit_record(workdir: &std::path::Path) -> Option<i32> {
+    let path = workdir.join(".exit-code");
+    if !std::fs::metadata(&path)
+        .map(|m| m.is_file())
+        .unwrap_or(false)
+    {
+        return None;
+    }
+    std::fs::read_to_string(&path).ok()?.trim().parse().ok()
+}
+
 pub(crate) async fn finalize_run(run_id: &str, exit_code: Option<i32>, log_path: &std::path::Path) {
     crate::process_control::unregister(run_id);
     let success = exit_code == Some(0);

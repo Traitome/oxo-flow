@@ -1,9 +1,25 @@
 use async_trait::async_trait;
+use std::time::Duration;
 
 pub mod models;
 #[cfg(feature = "postgres")]
 pub mod postgres;
 pub mod sqlite;
+
+/// Upper bound on waiting for a pooled **PostgreSQL** connection.
+///
+/// sqlx's default acquire timeout is 30 s. Under an unreachable or exhausted
+/// PostgreSQL server that bound held every `/api/runs*` request (and
+/// `/api/health`) for 10-30 s before it could answer (issue #1402 campaign,
+/// measured on `tx-ubuntu`). Five seconds is deliberately above any normal
+/// pool wait — these are short OLTP queries — and below a typical load
+/// balancer / client timeout, so a broken database surfaces as a structured
+/// error instead of an apparent hang. It bounds connection acquisition only;
+/// a query that has already acquired a connection keeps its own database
+/// timeout. The local SQLite pool keeps sqlx's default (its contention under
+/// parallel test load is legitimate and short), while `/api/health` bounds
+/// its probe for both backends.
+pub const DB_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(5);
 
 static GLOBAL_BACKEND: std::sync::OnceLock<std::sync::Arc<dyn StorageBackend>> =
     std::sync::OnceLock::new();
@@ -31,16 +47,30 @@ pub fn global_backend() -> Option<std::sync::Arc<dyn StorageBackend>> {
 /// Both the guarded insert and the plain `create_run` insert are built from
 /// this one list, so a column added to one path cannot silently drift from
 /// the other (audit RB-02).
+///
+/// The trailing `owner_instance`/`heartbeat_at` pair is the owner lease
+/// (issue #1402): every insert is owned by the inserting process and starts
+/// heartbeating immediately, so a run whose owning web process dies can be
+/// reclaimed by another instance after the lease TTL expires. Both columns
+/// are nullable only for rows written before the lease migration.
 pub(crate) const RUN_INSERT_COLUMNS: &str = "id, user_id, pipeline_id, pipeline_snapshot, \
      workflow_name, status, phase, dry_run, pid, workdir, config_overrides, \
-     artifacts_incomplete, cluster_id, started_at, finished_at, created_at";
+     artifacts_incomplete, cluster_id, started_at, finished_at, created_at, \
+     owner_instance, heartbeat_at";
+
+/// Number of bound values in [`RUN_INSERT_COLUMNS`], derived from the one
+/// list so the placeholders and the binds cannot drift when a column is
+/// added.
+fn run_insert_value_count() -> usize {
+    RUN_INSERT_COLUMNS.split(',').count()
+}
 
 /// Run statuses that count as live for admission guards.
 pub(crate) const RUN_LIVE_STATUSES_SQL: &str = "('queued', 'running', 'paused')";
 
 /// Build the unguarded run insert used by `create_run`.
 pub(crate) fn plain_run_insert_sql(placeholder: impl Fn(usize) -> String) -> String {
-    let values: Vec<String> = (1..=16).map(&placeholder).collect();
+    let values: Vec<String> = (1..=run_insert_value_count()).map(&placeholder).collect();
     format!(
         "INSERT INTO runs ({RUN_INSERT_COLUMNS}) VALUES ({})",
         values.join(", ")
@@ -69,13 +99,15 @@ pub(crate) fn guarded_run_insert_sql(
     guard_column: &str,
     placeholder: impl Fn(usize) -> String,
 ) -> String {
-    let values: Vec<String> = (1..=16).map(&placeholder).collect();
+    let value_count = run_insert_value_count();
+    let values: Vec<String> = (1..=value_count).map(&placeholder).collect();
     format!(
         "INSERT INTO runs ({RUN_INSERT_COLUMNS}) SELECT {} WHERE NOT EXISTS \
          (SELECT 1 FROM runs WHERE {guard_column} = {} AND status IN {RUN_LIVE_STATUSES_SQL}) \
          ON CONFLICT DO NOTHING",
         values.join(", "),
-        placeholder(17)
+        // The guard value is bound after every row value.
+        placeholder(value_count + 1)
     )
 }
 
@@ -667,4 +699,42 @@ pub trait StorageBackend: Send + Sync {
     /// startup so a crash between admission and the run-row insert cannot
     /// pin quota forever.
     async fn quota_stale_reservations(&self) -> Result<Vec<String>, String>;
+
+    // ── Owner lease for in-flight runs (issue #1402) ─────────────────────
+    //
+    // A web process is the only component that can attribute its spawned
+    // runs: it waits on the CLI, reads `.exit-code`, and writes the terminal
+    // row. If it dies (kill -9), the row stays `running` forever — a ghost
+    // run. Each process therefore owns the runs it created and renews a
+    // heartbeat; another instance may finalize a live run only once its
+    // owner's heartbeat is older than the lease TTL. A process never reaps
+    // its own rows (it is still monitoring them), and terminal rows are
+    // never selected. Rows written before this migration have a NULL owner
+    // and are not selected — pre-upgrade ghosts stay manually cancellable,
+    // as documented in the campaign evidence.
+
+    /// Take ownership of an existing live run (crash recovery re-attach).
+    /// Returns `true` when a live row was claimed; `false` when the row is
+    /// gone or already terminal.
+    async fn claim_run_owner(
+        &self,
+        run_id: &str,
+        instance_id: &str,
+        heartbeat_at: &str,
+    ) -> Result<bool, String>;
+
+    /// Renew the heartbeat for every live run owned by `instance_id`.
+    /// Returns the number of rows touched (0 is normal when idle).
+    async fn heartbeat_runs(&self, instance_id: &str, heartbeat_at: &str) -> Result<u64, String>;
+
+    /// Live runs owned by another instance whose last heartbeat is older
+    /// than `cutoff` (RFC 3339), oldest first. `current_instance` is
+    /// excluded even if its own heartbeat looks stale — a process is the
+    /// authority for the runs it is still monitoring.
+    async fn stale_run_leases(
+        &self,
+        current_instance: &str,
+        cutoff: &str,
+        limit: u32,
+    ) -> Result<Vec<models::StaleRunLease>, String>;
 }

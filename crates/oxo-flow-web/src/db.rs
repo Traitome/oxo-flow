@@ -73,23 +73,31 @@ pub async fn recover_orphaned_runs() -> Result<()> {
                     // Re-attach: the CLI is the group leader (spawned with
                     // `process_group(0)`), so its pid doubles as the pgid.
                     crate::process_control::register(&id, pid);
+                    // The restarted process becomes the owner again (issue
+                    // #1402): the lease heartbeat must resume, or another
+                    // instance would reap a run this process is monitoring.
+                    if let Some(backend) = crate::infra::db::global_backend()
+                        && let Err(e) = backend
+                            .claim_run_owner(
+                                &id,
+                                crate::infra::run_lease::instance_id(),
+                                &crate::infra::run_lease::heartbeat_timestamp(),
+                            )
+                            .await
+                    {
+                        tracing::warn!("Run {id}: failed to claim owner lease after restart: {e}");
+                    }
                     tracing::info!("Run {id}: re-attached live CLI (pid {pid}) after restart");
                     if let Some(wd) = workdir {
                         crate::executor::resume_monitoring(id, pid, wd.into());
                     }
                 } else {
                     // The CLI died while the server was down: attribute from
-                    // the exit record instead of guessing. Stat first — a
-                    // planted FIFO at .exit-code would hang startup recovery
-                    // (issue #735).
+                    // the exit record instead of guessing (the stat-first
+                    // FIFO guard lives in the shared reader, issue #735).
                     let workdir = workdir.unwrap_or_default();
-                    let exit_path = std::path::Path::new(&workdir).join(".exit-code");
-                    let exit_code = std::fs::metadata(&exit_path)
-                        .map(|m| m.is_file())
-                        .unwrap_or(false)
-                        .then(|| std::fs::read_to_string(&exit_path).ok())
-                        .flatten()
-                        .and_then(|c| c.trim().parse::<i32>().ok());
+                    let exit_code =
+                        crate::executor::read_exit_record(std::path::Path::new(&workdir));
                     tracing::info!(
                         "Run {id}: CLI already dead after restart (exit record: {exit_code:?}) — attributing"
                     );

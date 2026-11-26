@@ -13,6 +13,7 @@
 
 use async_trait::async_trait;
 use sqlx::PgPool;
+use sqlx::postgres::PgPoolOptions;
 use uuid::Uuid;
 
 use super::models;
@@ -61,7 +62,12 @@ pub struct PostgresBackend {
 impl PostgresBackend {
     /// Create a new `PostgresBackend` with a connection pool.
     pub async fn new(database_url: &str) -> Result<Self, String> {
-        let pool = PgPool::connect(database_url)
+        // `acquire_timeout` bounds every handler's wait for a connection:
+        // sqlx's 30 s default let an unreachable/exhausted server hold API
+        // requests (and /api/health) for tens of seconds (issue #1402).
+        let pool = PgPoolOptions::new()
+            .acquire_timeout(crate::infra::db::DB_ACQUIRE_TIMEOUT)
+            .connect(database_url)
             .await
             .map_err(|e| format!("Failed to connect to PostgreSQL: {e}"))?;
         Ok(Self { pool })
@@ -169,6 +175,10 @@ impl PostgresBackend {
         .bind(&run.started_at)
         .bind(&run.finished_at)
         .bind(&run.created_at)
+        // Owner lease (issue #1402): the inserting process owns the run
+        // from the first instant.
+        .bind(crate::infra::run_lease::instance_id())
+        .bind(crate::infra::run_lease::heartbeat_timestamp())
         .bind(guard_value)
         .execute(&self.pool)
         .await
@@ -299,7 +309,11 @@ impl StorageBackend for PostgresBackend {
                 cluster_id TEXT,
                 started_at TEXT,
                 finished_at TEXT,
-                created_at TEXT NOT NULL
+                created_at TEXT NOT NULL,
+                -- Owner lease (issue #1402): see the SQLite twin. NULL only
+                -- on rows written before the lease migration.
+                owner_instance TEXT,
+                heartbeat_at TEXT
             );
 
             CREATE TABLE IF NOT EXISTS run_nodes (
@@ -562,6 +576,19 @@ impl StorageBackend for PostgresBackend {
             .await
             .map_err(|e| format!("PG migration cluster_id: {e}"))?;
 
+        // Owner lease (issue #1402), parity with the SQLite columns.
+        // Historical rows default to NULL and are never reaped; manual
+        // cancellation still works. The partial index is created after the
+        // admission repair below, in this same locked transaction.
+        sqlx::query("ALTER TABLE runs ADD COLUMN IF NOT EXISTS owner_instance TEXT")
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| format!("PG migration owner_instance: {e}"))?;
+        sqlx::query("ALTER TABLE runs ADD COLUMN IF NOT EXISTS heartbeat_at TEXT")
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| format!("PG migration heartbeat_at: {e}"))?;
+
         // Optimistic-concurrency token on pipelines (issue #1136), with the
         // same semantics as the SQLite column: historical rows start at 1.
         sqlx::query(
@@ -686,6 +713,16 @@ impl StorageBackend for PostgresBackend {
         .execute(&mut *tx)
         .await
         .map_err(|e| format!("PG admission index (workdir): {e}"))?;
+
+        // Sweep index for the owner lease (issue #1402). Partial, like the
+        // admission indexes, so terminal history does not bloat it.
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_runs_lease ON runs(heartbeat_at) \
+             WHERE status IN ('queued', 'running', 'paused')",
+        )
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| format!("PG run-lease index: {e}"))?;
 
         // AI config flags are part of the public model as i64 (matching
         // SQLite); PostgreSQL INT4 columns cannot decode into that type.
@@ -1133,6 +1170,8 @@ impl StorageBackend for PostgresBackend {
         .bind(&row.started_at)
         .bind(&row.finished_at)
         .bind(&row.created_at)
+        .bind(crate::infra::run_lease::instance_id())
+        .bind(crate::infra::run_lease::heartbeat_timestamp())
         .execute(&self.pool)
         .await
         .map_err(|e| e.to_string())?;
@@ -1295,10 +1334,16 @@ impl StorageBackend for PostgresBackend {
     }
 
     async fn mark_run_running(&self, id: &str, started_at: &str) -> Result<bool, String> {
+        // The spawner also (re)takes ownership (issue #1402): a queued row
+        // written before the lease migration or by a previous process is
+        // adopted by the process that actually starts the CLI.
         let res = sqlx::query(
-            "UPDATE runs SET status = 'running', phase = 'executing', started_at = $1 WHERE id = $2 AND status = 'queued'",
+            "UPDATE runs SET status = 'running', phase = 'executing', started_at = $1, \
+             owner_instance = $2, heartbeat_at = $3 WHERE id = $4 AND status = 'queued'",
         )
         .bind(started_at)
+        .bind(crate::infra::run_lease::instance_id())
+        .bind(crate::infra::run_lease::heartbeat_timestamp())
         .bind(id)
         .execute(&self.pool)
         .await
@@ -2826,6 +2871,62 @@ impl StorageBackend for PostgresBackend {
         .map_err(|e| e.to_string())?;
         Ok(rows.into_iter().map(|(id,)| id).collect())
     }
+
+    async fn claim_run_owner(
+        &self,
+        run_id: &str,
+        instance_id: &str,
+        heartbeat_at: &str,
+    ) -> Result<bool, String> {
+        let res = sqlx::query(
+            "UPDATE runs SET owner_instance = $1, heartbeat_at = $2 \
+             WHERE id = $3 AND status IN ('queued', 'running', 'paused')",
+        )
+        .bind(instance_id)
+        .bind(heartbeat_at)
+        .bind(run_id)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(res.rows_affected() > 0)
+    }
+
+    async fn heartbeat_runs(&self, instance_id: &str, heartbeat_at: &str) -> Result<u64, String> {
+        let res = sqlx::query(
+            "UPDATE runs SET heartbeat_at = $1 \
+             WHERE owner_instance = $2 AND status IN ('queued', 'running', 'paused')",
+        )
+        .bind(heartbeat_at)
+        .bind(instance_id)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(res.rows_affected())
+    }
+
+    async fn stale_run_leases(
+        &self,
+        current_instance: &str,
+        cutoff: &str,
+        limit: u32,
+    ) -> Result<Vec<models::StaleRunLease>, String> {
+        // heartbeat_at is always written by `run_lease::heartbeat_timestamp`
+        // (UTC RFC 3339 with a fixed `+00:00` suffix), so the TEXT
+        // comparison orders chronologically.
+        sqlx::query_as::<_, models::StaleRunLease>(
+            "SELECT id, user_id, status, workdir, owner_instance, heartbeat_at FROM runs \
+             WHERE status IN ('queued', 'running', 'paused') \
+               AND owner_instance IS NOT NULL AND owner_instance <> $1 \
+               AND heartbeat_at IS NOT NULL AND heartbeat_at < $2 \
+             ORDER BY heartbeat_at ASC LIMIT $3",
+        )
+        .bind(current_instance)
+        .bind(cutoff)
+        .bind(i64::from(limit))
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| e.to_string())
+    }
 }
 
 /// Read a user's durable quota counters inside (or outside) a transaction.
@@ -3036,6 +3137,77 @@ mod tests {
             nodes[0].finished_at.as_deref(),
             Some("2026-01-01T00:05:00+00:00")
         );
+    }
+
+    /// Owner-lease storage contract on live PostgreSQL (issue #1402): a
+    /// fresh run is owned and heartbeated by this process, ownership can be
+    /// taken over, and stale selection excludes the current instance.
+    #[tokio::test]
+    async fn test_run_lease_smoke() {
+        let Some(backend) = connect().await else {
+            return;
+        };
+        let user = backend
+            .create_user(&unique_username(), "user", None)
+            .await
+            .expect("create_user");
+        let run = backend
+            .create_run(&sample_run(&user.id))
+            .await
+            .expect("create_run");
+
+        assert!(
+            backend
+                .heartbeat_runs(
+                    crate::infra::run_lease::instance_id(),
+                    &PostgresBackend::now(),
+                )
+                .await
+                .expect("heartbeat_runs")
+                >= 1,
+            "the just-created run is owned and heartbeated by this process"
+        );
+
+        assert!(
+            backend
+                .claim_run_owner(&run.id, "other-instance", &PostgresBackend::now())
+                .await
+                .expect("claim_run_owner"),
+            "a live run can be re-owned by a recovering instance"
+        );
+        // A cutoff in the future makes every stored heartbeat stale without
+        // touching the row.
+        let future = (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
+        let stale = backend
+            .stale_run_leases("current-instance", &future, 1000)
+            .await
+            .expect("stale_run_leases");
+        assert!(
+            stale.iter().any(|row| row.id == run.id),
+            "another instance sees the stale-looking lease"
+        );
+        let own = backend
+            .stale_run_leases("other-instance", &future, 1000)
+            .await
+            .expect("stale_run_leases excluding own rows");
+        assert!(
+            !own.iter().any(|row| row.id == run.id),
+            "an instance never selects its own rows for reaping"
+        );
+
+        assert!(
+            backend
+                .claim_run_owner(
+                    &run.id,
+                    crate::infra::run_lease::instance_id(),
+                    &PostgresBackend::now()
+                )
+                .await
+                .expect("reclaim_run_owner")
+        );
+
+        backend.delete_run(&run.id).await.expect("cleanup run");
+        backend.delete_user(&user.id).await.expect("cleanup user");
     }
 
     /// The PostgreSQL twin of the SQLite CAS test (RB-07 / #1256): a guarded
