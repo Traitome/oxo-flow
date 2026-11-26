@@ -29,11 +29,46 @@ on one host against one PostgreSQL database.
 - Restarting one instance (health ok) leaves the chain verifiable with the
   same 40 events.
 
+## Partition probe (single host)
+
+A second probe blocked all outbound PostgreSQL traffic (`iptables -A OUTPUT
+-p tcp --dport 5432 -j DROP`) against one running instance:
+
+- 10 concurrent `GET /api/runs` requests all hit a 5 s client cap (`000`),
+  i.e. the server did not answer within 5 s while the database was
+  unreachable.
+- `GET /api/health` with a 35 s budget answered after **30 s** with HTTP 200
+  `status: "degraded"`, `components.database.status: "error"`,
+  `latency_ms: null`.
+- Removing the rule restored `health` and `runs` to 200 within 2 s; no
+  restart was needed.
+
+Observation: the health probe does not fail fast under a database partition
+— it waits for the pool/DB timeout (~30 s) before reporting degraded. That
+is a measurable availability residual for load balancers with short health
+timeouts; it is not a correctness failure. A health-specific DB probe
+timeout is a candidate follow-up, not implemented here.
+
+## Database restart probe (single host)
+
+One running instance was exercised across a clean PostgreSQL restart
+(`systemctl restart postgresql`):
+
+- Before: `health` 200, `runs` 200.
+- After `pg_isready` reported ready: `health` 200 `status: "ok"` in 0 s with
+  `database.status: "ok"`; `runs` 200; the audit chain verified `ok: true`
+  with 40 events. The web process was not restarted — the pool reconnected.
+
+Limits: a clean service restart, not a crash/kill -9 or corruption, and no
+in-flight write was deliberately overlapped.
+
 ## Limits
 
 - One host, two processes, one database; no separate hosts or network
-  namespaces, no network partition, no pool exhaustion, no database
-  restart, and no kill-mid-transaction.
+  namespaces. The partition probe is a full outbound block on one host
+  (not asymmetric/partial); the restart probe is a clean service restart.
+  Pool exhaustion, crash/kill -9 recovery, corruption, and
+  kill-mid-transaction remain unmeasured.
 - Personal mode only; no multi-user RBAC or per-user quota interaction.
 - The 10-run cap is the configured concurrent-run quota, not a defect.
 - No production-scale or crash-recovery claim is made. The full #1402
