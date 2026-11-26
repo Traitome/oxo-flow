@@ -4628,7 +4628,7 @@ reason.</p>
 </tr>
 <tr>
 <td>Run execution</td>
-<td>Backend-routed code exists for SQLite and PostgreSQL; schema bootstrap + core CRUD are CI-smoke-verified on live PostgreSQL, while concurrency/crash-recovery/multi-instance remain unvalidated. Team mode has no OS-level tenant execution boundary, so expose it only to fully trusted workflow authors</td>
+<td>Backend-routed code exists for SQLite and PostgreSQL; schema bootstrap + core CRUD are CI-smoke-verified on live PostgreSQL, and a 2026-11-26 campaign measured two instances (same host and separate network namespaces), partitions, connection exhaustion, clean/crash restarts, per-user quota, and owner-lease ghost-run reconciliation. Separate physical hosts, production scale, per-query network timeouts, and database media corruption remain unvalidated. Team mode has no OS-level tenant execution boundary, so expose it only to fully trusted workflow authors</td>
 </tr>
 <tr>
 <td>Auth</td>
@@ -4817,10 +4817,16 @@ defaults to <code>sqlite://oxo-flow.db</code> in the working directory) stays SQ
   for run-record persistence. CI runs a live-PostgreSQL smoke test (a
   <code>services: postgres</code> container) that verifies the schema bootstrap and
   the core <code>StorageBackend</code> CRUD surface — users, runs, run nodes, audit
-  logs, webhook config, chat sessions — against a real server. That does
-  NOT extend to production parity: concurrency, crash recovery, and
-  multi-instance behavior remain unvalidated, so test them before
-  relying on PostgreSQL for execution metadata. The runs gate is
+  logs, webhook config, chat sessions — against a real server. The
+  2026-11-26 #1402 campaign additionally measured two instances on one host
+  and in separate Linux network namespaces, full and asymmetric partitions,
+  connection exhaustion, clean and crash restarts, per-user quota, and the
+  owner-lease reconciliation of a <code>kill -9</code> ghost run
+  (<code>docs/superpowers/audits/postgres-two-instance-2026-11-26.md</code>). That still
+  does NOT extend to production parity: separate physical hosts, production
+  scale, per-query network timeouts, and database media corruption remain
+  unvalidated, so test them before relying on PostgreSQL for execution
+  metadata. The runs gate is
   backend-agnostic in behavior — any initialized storage backend passes
   — and answers <code>503 RUNS_REQUIRE_STORAGE_BACKEND</code> only when no backend
   was initialized at all.</li>
@@ -4954,11 +4960,26 @@ prototype-grade:</p>
   yet reconciled through monotonic compare-and-set transitions.</li>
 <li><strong>Pause/resume</strong> sends SIGSTOP/SIGCONT, but persistence failures and missing
   process groups can leave the database state inconsistent with the process.</li>
-<li><strong>Crash restart</strong> attempts to probe and re-attach unfinished runs. The
-  backend does not yet provide restart-safe multi-instance ownership or proof
-  that a terminal state cannot be overwritten in every race. There is no
-  cross-instance lease: two servers pointed at the same database can both
-  adopt the same run after a restart.</li>
+<li><strong>Crash restart</strong> on SQLite probes and re-attaches unfinished runs by pid
+  (one web process per database file: SQLite recovery force-adopts live
+  rows); on PostgreSQL, runs carry an owner lease
+  (<code>owner_instance</code>/<code>heartbeat_at</code>, renewed every 10 s while an executor
+  guard is registered — created at claim time, before pre-spawn staging —
+  90 s TTL) and a 30 s reaper finalizes a live run whose web process died,
+  attributing the wrapper's <code>.exit-code</code> read-only and only when it
+  postdates this run's <code>started_at</code> (a reused workdir's predecessor record
+  is rejected; for a remote run no predecessor record survives, and the
+  pulled record's mtime comes from the submit host's clock, so it is not a
+  reliable freshness signal under clock skew — a documented residual). The
+  record is removed
+  only after the terminal write succeeds, so a transient write failure is
+  retried on the next sweep. A process never reaps a row it still monitors
+  but does reap its own unmonitored rows; pre-lease rows are skipped. The
+  lease does not make every race provably safe: an orphaned CLI is not
+  signalled, a live owner partitioned from the database longer than the
+  TTL can be finalized by another instance, and lease comparisons assume
+  loosely synchronized clocks (one host measured). A reaper finalization
+  writes no audit row (it has no acting user).</li>
 </ul>
 <p>Do not present these controls as crash-consistent or compliance-grade;
 treat run records written under crash/restart races as provisional until

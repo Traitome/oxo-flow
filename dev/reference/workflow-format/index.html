@@ -7043,7 +7043,7 @@ for the <code>budget</code> / <code>cost_accrual</code> fields the ledger surfac
 </tr>
 <tr>
 <td>Transform with <code>cleanup=true</code></td>
-<td>Chunk files cleaned after the whole run finishes successfully (kept on failed runs for debugging; re-runs recompute the map rules)</td>
+<td>Chunk files cleaned after the whole run finishes successfully (kept on failed runs for debugging). The map rules are tombstoned like <code>temporary</code> outputs: a re-run skips them while the combine stays complete, and regenerates them via cascade-up when the combine needs them again</td>
 </tr>
 <tr>
 <td>Success + <code>temporary = true</code></td>
@@ -9684,7 +9684,13 @@ literal. <code>n = "3"</code> alone does neither.</p>
 <div class="language-toml highlight"><pre><span></span><code><span id="__span-108-1"><a id="__codelineno-108-1" name="__codelineno-108-1" href="#__codelineno-108-1"></a><span class="k">[rules.transform]</span>
 </span><span id="__span-108-2"><a id="__codelineno-108-2" name="__codelineno-108-2" href="#__codelineno-108-2"></a><span class="n">cleanup</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
 </span></code></pre></div>
-<p>Failed runs keep their chunks for debugging. Because chunk deletion makes the map outputs "missing", a re-run always recomputes the map rules — that is the disk-space trade-off of <code>cleanup = true</code>.</p>
+<p>Failed runs keep their chunks for debugging. Cleanup records a <strong>tombstone</strong>
+on each chunk-producing map rule (the same deleted-by-design marker
+<code>temporary = true</code> uses): a later run skips the map rules while the combine
+stays complete, and regenerates them via cascade-up when the combine has to
+run again (its output was deleted, inputs changed, etc.), cleaning them up
+afterwards. This keeps strict <code>resume</code> output verification from treating the
+engine-deleted chunks as missing artifacts.</p>
 <h3 id="failure-and-retry-logic">Failure and Retry Logic<a class="headerlink" href="#failure-and-retry-logic" title="Permanent link">#</a></h3>
 <p>In a scatter-gather process, failures are handled at the chunk (map) level:</p>
 <ul>

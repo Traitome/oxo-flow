@@ -2751,6 +2751,17 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#output-verification-strict-by-default" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Output verification (strict by default)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#checkpoint-format-version" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4244,6 +4255,17 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#output-verification-strict-by-default" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Output verification (strict by default)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#checkpoint-format-version" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4385,6 +4407,85 @@ instances (pair/sample <code>when</code>, <code>{meta.*}</code> baking) re-judge
 and may drift from the recorded instance set. Re-pass the original
 overrides with <code>oxo-flow run</code> (which auto-resumes) to reproduce the
 recorded instance set exactly.</p>
+<p>Checkpoint re-entry and runtime-discovered <code>output_pattern</code> domains recorded
+in the checkpoint are replayed on <strong>every</strong> resume — including a resume routed
+to a cluster profile — before execution planning. The deferred rule instances
+re-join the plan (their completed records are reused under the same
+output-manifest verification). This is intentional: a cluster resume now
+rebuilds the recorded plan instead of silently skipping replay and
+under-executing it. A recorded re-entry that conflicts with the current
+workflow can therefore fail the plan with a re-entry diagnostic (<code>E015</code> pair
+conflict / <code>E016</code> name collision) where a cluster resume previously ignored
+it; remove the conflicting rule or start a fresh run if the divergence is
+intentional.</p>
+<h3 id="output-verification-strict-by-default">Output verification (strict by default)<a class="headerlink" href="#output-verification-strict-by-default" title="Permanent link">#</a></h3>
+<p>Every successful rule records a declared-output <strong>manifest</strong> in the
+checkpoint (issue #1426): each expanded output path with its size and, for
+regular files up to <code>OXO_FLOW_MANIFEST_HASH_MAX_BYTES</code> (default 64 MiB), a
+<code>sha256</code> content hash. The manifest is written by both execution paths
+(local executor and cluster settle hook) and does <strong>not</strong> require
+<code>--provenance</code>.</p>
+<p><code>resume</code> verifies that manifest before reusing a completed rule. A rule is
+skipped only when the existing freshness gate passes <strong>and</strong> every currently
+expanded declared output has a manifest entry, exists, matches its recorded
+size, and — when the entry carries one — matches its recomputed content hash
+(hashed in full, regardless of the recording cap). Otherwise the rule
+re-executes with a warning naming the rule, path, and reason. This closes the
+silent-acceptance hole where a completed-but-truncated artifact (a BAM cut
+short by a killed job, a half-written VCF) was reused because its mtime
+looked newer than its inputs:</p>
+<div class="language-console highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="go">WARN strict output verification failed — re-executing the rule instead of</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="go">     trusting size+mtime evidence ... rule=align path=aln/S1.bam</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="go">     reason="output 'aln/S1.bam' is 500 bytes but the manifest recorded 1024"</span>
+</span></code></pre></div>
+<p>The check runs in two places, and both are required: a <strong>pre-plan pass</strong>
+verifies every checkpoint-completed rule in the run's FINAL execution set —
+it runs after the checkpoint re-entry and output_pattern replay, so instances
+rebuilt from the checkpoint are verified too — and, on failure, invalidates
+the rule <strong>together with its completed downstream</strong> in the checkpoint and
+forces the closure to re-execute (a dependent whose own output is intact but
+was built from the damaged artifact must not be skipped). That invalidation
+also feeds the tombstone cascade-up, so temporary/transform-cleaned producers
+of a forced rule regenerate instead of being skipped with deleted inputs. The
+<strong>executor's freshness gate</strong> re-verifies any rule that still reaches it
+(crash-leftover outputs with no completion record, targeted subsets). On a
+cluster resume the pre-plan pass seeds the submission plan, whose downstream
+cascade resubmits affected completed rules.</p>
+<p>The failed rule and its downstream re-run together; the run does not exit 0
+with dependents derived from the damaged artifact. The safe default has
+three deliberate consequences:</p>
+<ul>
+<li>A <strong>legacy checkpoint</strong> (written before output manifests existed) has no
+  manifest for its completed rules, so those rules re-run on the next
+  <code>resume</code> — once. Their fresh completions record manifests.</li>
+<li>An output <strong>above the hash cap</strong> records size only and is therefore
+  <strong>unverified</strong>: strict resume re-runs it. <code>--provenance</code> does <strong>not</strong> relax
+  this — its <code>checksums</code> map is a separate audit trail and the manifest entry
+  still has no <code>sha256</code>, so an over-cap output remains unverified until the
+  cap is raised (or <code>--trust-mtime</code> accepts mtime evidence). Same-size
+  corruption of an output above the cap is only detectable once the cap is
+  raised.</li>
+<li>A declared output that is a <strong>directory</strong> (or another non-regular file)
+  has no content hash and is treated as unverified, so such rules re-run
+  under the strict default.</li>
+</ul>
+<p>Pass <code>--trust-mtime</code> to opt out and keep the historical size+mtime verdict
+(existence and mtime only) — including for cluster re-attach adoption, where
+it prevents resubmitting an already-successful scheduler job over an
+unverifiable (over-cap/directory) output. This is the escape hatch for
+large-output or directory-output workflows where re-hashing/re-running is
+unacceptable. Plain <code>oxo-flow run</code> keeps the historical size+mtime gate;
+<code>run --verify-outputs</code> opts a plain run (for example a retry wrapper) into the
+same strict behavior, and <code>resume</code> applies it by default.</p>
+<p><strong>Coverage boundary.</strong> Only the <code>resume</code> command (<code>resume-checkpoint</code> on the
+web surface) and <code>run --verify-outputs</code> apply strict verification. The web
+retry path spawns <code>run --resume-failed</code>, which keeps the historical
+size+mtime gate until it is wired to <code>--verify-outputs</code>; a retry of a run
+whose outputs were damaged after completion does not re-verify them.
+Similarly, <code>OXO_FLOW_MANIFEST_HASH_MAX_BYTES</code> is honored by direct CLI runs
+but is not yet forwarded into the web server's spawn environment allowlist,
+so web-spawned runs and their resumes use the 64 MiB default. Both are
+planned follow-ups, not silent guarantees.</p>
 <h3 id="checkpoint-format-version">Checkpoint format version<a class="headerlink" href="#checkpoint-format-version" title="Permanent link">#</a></h3>
 <p>Every checkpoint records a <code>checkpoint_format_version</code> marker. If the version
 recorded is <strong>newer</strong> than the running engine's — i.e. the checkpoint was
@@ -4421,10 +4522,13 @@ clears the persisted in-flight set or re-plans execution (issue #1427):</p>
   never resubmitted;</li>
 <li>terminal success with every declared output present → the rule is
   marked completed (a <code>recorded_as: "adopted from &lt;backend&gt; job &lt;id&gt;"</code>
-  benchmark is written only when no measured benchmark exists). A rule
-  whose outputs are declared only through <code>output_pattern</code> has no fixed
-  files to verify at adoption time; its scheduler-confirmed success is
-  adopted without a per-instance file check;</li>
+  benchmark is written only when no measured benchmark exists). When
+  the checkpoint carries a recorded output manifest for that rule, the
+  outputs must also verify against it (size and content hash, issue
+  #1426); a failing manifest leaves the rule for a normal re-run. A
+  rule whose outputs are declared only through <code>output_pattern</code> has no
+  fixed files to verify at adoption time; its scheduler-confirmed
+  success is adopted without a per-instance file check;</li>
 <li>terminal success whose declared outputs are missing → a warning, and
   the rule re-runs;</li>
 <li>terminal failure or cancellation → recorded, and the normal resume
@@ -4528,6 +4632,11 @@ longer needs cannot undo that, and refusing to resume forever would be worse.</p
 <td>Cancel the scheduler jobs recorded in the checkpoint instead of re-attaching and waiting, then re-run their rules (locally when no usable profile exists)</td>
 </tr>
 <tr>
+<td><code>--trust-mtime</code></td>
+<td>—</td>
+<td>Accept the size+mtime freshness verdict for completed rules instead of verifying their recorded output manifests (issue #1426). See <a href="#output-verification-strict-by-default">Output verification</a></td>
+</tr>
+<tr>
 <td><code>--background</code> / <code>--detach</code></td>
 <td>—</td>
 <td>Detach the resumed run into a background process and exit 0 immediately (see <a href="../run/#background-runs-background">Background runs (--background)</a>); <code>--detach</code> is an alias</td>
@@ -4545,16 +4654,16 @@ narration — the banner, the <code>Resume:</code> line, execution progress — 
 stderr, so a monitor can parse stdout without scrubbing prose. This is the
 same contract as <a href="../status/"><code>status</code></a> and the rest of the run-lifecycle
 family (<a href="../run/#json-output"><code>run</code></a>).</p>
-<div class="language-json highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="p">{</span>
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span><span class="nt">"command"</span><span class="p">:</span><span class="w"> </span><span class="s2">"resume"</span><span class="p">,</span>
-</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">  </span><span class="nt">"workflow"</span><span class="p">:</span><span class="w"> </span><span class="s2">"/abs/path/w.oxoflow"</span><span class="p">,</span>
-</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">  </span><span class="nt">"checkpoint"</span><span class="p">:</span><span class="w"> </span><span class="s2">"/abs/path/.oxo-flow/checkpoint.json"</span><span class="p">,</span>
-</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">  </span><span class="nt">"status"</span><span class="p">:</span><span class="w"> </span><span class="s2">"completed"</span><span class="p">,</span>
-</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">  </span><span class="nt">"completed"</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span>
-</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">  </span><span class="nt">"failed"</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span>
-</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">  </span><span class="nt">"remaining"</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
-</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">  </span><span class="nt">"skipped_by_when"</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span>
-</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="p">}</span>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="p">{</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="nt">"command"</span><span class="p">:</span><span class="w"> </span><span class="s2">"resume"</span><span class="p">,</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span><span class="nt">"workflow"</span><span class="p">:</span><span class="w"> </span><span class="s2">"/abs/path/w.oxoflow"</span><span class="p">,</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">  </span><span class="nt">"checkpoint"</span><span class="p">:</span><span class="w"> </span><span class="s2">"/abs/path/.oxo-flow/checkpoint.json"</span><span class="p">,</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">  </span><span class="nt">"status"</span><span class="p">:</span><span class="w"> </span><span class="s2">"completed"</span><span class="p">,</span>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">  </span><span class="nt">"completed"</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span>
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">  </span><span class="nt">"failed"</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span>
+</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">  </span><span class="nt">"remaining"</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
+</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="w">  </span><span class="nt">"skipped_by_when"</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span>
+</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="p">}</span>
 </span></code></pre></div>
 <table>
 <thead>
@@ -4590,7 +4699,7 @@ family (<a href="../run/#json-output"><code>run</code></a>).</p>
 </tr>
 <tr>
 <td><code>remaining</code></td>
-<td>Rules this resume will execute (workflow rule count minus <code>completed</code>; wildcards expand later)</td>
+<td>Rules this resume expects to execute (workflow rule count minus <code>completed</code>; wildcards expand later). Under strict output verification a completed rule may additionally re-run when its manifest fails or is missing, so the executed count can exceed this value</td>
 </tr>
 <tr>
 <td><code>skipped_by_when</code></td>
@@ -4620,14 +4729,17 @@ and, under <code>--json</code>, the shared structured error envelope
 (<code>{"command":"resume","errors":[{"code":...,"message":...}]}</code>) instead of
 empty stdout.</p>
 <h2 id="examples">Examples<a class="headerlink" href="#examples" title="Permanent link">#</a></h2>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># Resume from the default checkpoint</span>
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>oxo-flow<span class="w"> </span>resume<span class="w"> </span>.oxo-flow/checkpoint.json
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>
-</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="c1"># Resume with 4 parallel jobs</span>
-</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>oxo-flow<span class="w"> </span>resume<span class="w"> </span>.oxo-flow/checkpoint.json<span class="w"> </span>-j<span class="w"> </span><span class="m">4</span>
-</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>
-</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="c1"># Machine-readable resume status</span>
-</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>oxo-flow<span class="w"> </span>resume<span class="w"> </span>.oxo-flow/checkpoint.json<span class="w"> </span>--json
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="c1"># Resume from the default checkpoint</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>oxo-flow<span class="w"> </span>resume<span class="w"> </span>.oxo-flow/checkpoint.json
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="c1"># Resume with 4 parallel jobs</span>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>oxo-flow<span class="w"> </span>resume<span class="w"> </span>.oxo-flow/checkpoint.json<span class="w"> </span>-j<span class="w"> </span><span class="m">4</span>
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>
+</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="c1"># Accept size+mtime freshness instead of verifying output manifests</span>
+</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>oxo-flow<span class="w"> </span>resume<span class="w"> </span>.oxo-flow/checkpoint.json<span class="w"> </span>--trust-mtime
+</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a>
+</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="c1"># Machine-readable resume status</span>
+</span><span id="__span-3-11"><a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a>oxo-flow<span class="w"> </span>resume<span class="w"> </span>.oxo-flow/checkpoint.json<span class="w"> </span>--json
 </span></code></pre></div>
 <h2 id="notes">Notes<a class="headerlink" href="#notes" title="Permanent link">#</a></h2>
 <ul>

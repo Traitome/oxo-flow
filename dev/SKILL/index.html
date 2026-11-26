@@ -4536,6 +4536,16 @@ ends with a <strong>Done when</strong> condition — do not proceed without it.<
   jobs (<code>--profile &lt;NAME&gt;</code>, defaulting to the recorded profile) and fails
   closed without one; <code>resume --abandon-jobs</code> cancels them first. A plain
   <code>run</code> does not re-attach.</li>
+<li><code>resume</code> verifies each completed rule's recorded output manifest by
+  default (size + a capped sha256, <code>OXO_FLOW_MANIFEST_HASH_MAX_BYTES</code>,
+  default 64 MiB): a missing, resized, or content-changed output re-runs
+  the rule <strong>and its completed downstream</strong> instead of being reported up to
+  date (<code>run --verify-outputs</code> opts a plain run into the same check).
+  Outputs above the cap and non-regular outputs are unverified under this
+  default — raise the cap or pass <code>--trust-mtime</code> to accept the historical
+  size+mtime verdict. The web retry path (<code>run --resume-failed</code>) still uses
+  the historical gate; <code>resume</code>/<code>resume-checkpoint</code> and
+  <code>run --verify-outputs</code> are the strict entries today.</li>
 <li>Retry budget: max 3 correction loops, then escalate to the human.</li>
 <li>Done when: all rules complete, evidenced by checkpoint state.</li>
 </ul>

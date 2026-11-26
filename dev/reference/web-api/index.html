@@ -4906,6 +4906,7 @@ below name the codes each route can return.</p>
 <p><div class="language-text highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>GET /api/health
 </span></code></pre></div>
 Returns status, version, mode, uptime, component health (database, filesystem, scheduler, AI provider), resource usage, and license info.</p>
+<p><code>components.database</code> is probed with a <strong>4 s bound</strong> (issue #1402): when the database is unreachable, or the pool cannot hand out a connection within that bound, the endpoint still answers HTTP 200 with <code>status: "degraded"</code> and <code>components.database.status: "error"</code> — it does not hold a load balancer for the pool's acquire timeout (measured at ~30 s under a partition before the fix). A request that already holds a connection to a black-holed server can still block in TCP retransmission; this endpoint cannot bound that.</p>
 <p>In <code>hpc</code> mode, <code>components.scheduler</code> reports <code>{"status":"ok"}</code> when a scheduler backend is detected (the same cached probe <code>/api/hpc</code> uses); it is <code>null</code> in other modes or when no backend is installed.</p>
 <p><code>components.ai_key_storage</code> is <code>"encrypted"</code> when <code>OXO_FLOW_MASTER_KEY</code> is set, <code>"plaintext"</code> otherwise.</p>
 <p><code>components.ai_provider</code> is <code>{"status": "connected", "latency_ms": null}</code> while a provider is active and <code>{"status": "disabled", "latency_ms": null}</code> when AI is off — explicitly pinned with <code>OXO_FLOW_AI_PROVIDER=disabled</code>, disabled at runtime, or nothing resolved. The pin outranks every persisted tier: <code>~/.oxo-flow/ai_config.json</code>, the platform config file, and DB-persisted settings can supply credentials for any other provider value but cannot resurrect a disabled registry. In that state the AI endpoints answer the structured <code>AI_NOT_CONFIGURED</code> error without any outbound request. Configuration updates follow the same rule with one distinction: the runtime-only <code>POST /api/ai/config</code> answers <code>409 AI_DISABLED_BY_ENV</code> (it has no durable tier, so refusing is the only honest answer), while the persisted <code>PUT /api/ai/config/server</code> and <code>PUT /api/ai/config/user</code> still save (200, <code>applied_to_runtime: false</code>) — subject to the blank-key contract (a key-requiring provider with no usable stored/request key answers <code>400 AI_KEY_REQUIRED</code>) — Settings stays usable and the saved config applies after an unpinned restart — but never reconfigure the pinned runtime. <code>POST /api/ai/test</code> answers <code>success: false</code> with <code>provider: "disabled"</code> without constructing a provider or opening a connection (see the AI endpoints section below).</p>
@@ -5025,9 +5026,14 @@ a one-row <code>audit_chain_head</code> cursor (<code>seq</code>, <code>hash</co
 serialized — SQLite inside <code>BEGIN IMMEDIATE</code>, PostgreSQL behind a
 <code>SELECT … FOR UPDATE</code> on the head row — so the sequence is gapless and
 monotonic under concurrent writers. This is true by construction (the lock is
-the serialization point); the measured PostgreSQL evidence is single-host,
-single-instance PostgreSQL 16.15, and multi-instance deployment remains
-unmeasured. The
+the serialization point). The measured PostgreSQL evidence is one host: two
+instances on that host and two instances in separate Linux network namespaces
+produced byte-identical 40- and 70-event exports, an asymmetric partition and
+a <code>SIGKILL</code> crash during an uncommitted transaction both left a verifiable
+chain, and a connection-exhaustion run verified (<a href="../../../superpowers/audits/postgres-two-instance-2026-11-26.md">#1402
+campaign</a>). Separate
+physical hosts, production-scale concurrency, database media corruption, and
+cross-host clock skew remain unmeasured. The
 <code>(audit_id, phase)</code> unique index makes a retried finalize idempotent; the
 first terminal outcome wins and a conflicting later outcome appends nothing.</p>
 <p>The mutable <code>audit_logs</code> row remains the listing/UI surface. The chain is
@@ -5381,8 +5387,14 @@ verifies the schema bootstrap and the core <code>StorageBackend</code> CRUD surf
 and the storage contract was live-verified against <code>postgres:16</code>
 (dated 2026-11-05 historical evidence: full contract round-trip passed,
 the web suite passed 554 tests / 0 failed with the <code>postgres</code> feature);
-these exact totals are not presented as current CI evidence. Concurrency, crash recovery, and
-multi-instance behavior remain unvalidated. The runs gate is
+these exact totals are not presented as current CI evidence. The
+2026-11-26 #1402 campaign measured two instances on one host and in
+separate Linux network namespaces, full and asymmetric outbound
+partitions, connection exhaustion, a clean restart, a <code>SIGKILL</code> crash
+during an uncommitted transaction, and per-user quota isolation
+(<a href="../../../superpowers/audits/postgres-two-instance-2026-11-26.md">campaign report</a>);
+separate physical hosts, production scale, per-query network timeouts, and
+database media corruption remain unvalidated. The runs gate is
 backend-agnostic: if no storage backend is initialized at all, these
 endpoints return
 <code>503 {"code": "RUNS_REQUIRE_STORAGE_BACKEND", "message", "detail", "suggestion"}</code>.
@@ -5483,15 +5495,42 @@ no ghost <code>queued</code> row survives:</p>
   covers the cluster-resolution paths: a <code>cluster_id</code> that fails to load
   (<code>500 DB_ERROR</code>) or resolves to no enabled cluster (<code>404 CLUSTER_NOT_FOUND</code>)
   also removes the row and workdir rather than leaving a ghost <code>queued</code> run
-  nothing will ever execute. (Orphan recovery scans <code>running</code>/<code>paused</code>
-  rows only; a <code>queued</code> row that never spawned would otherwise be
-  unreachable, which is why the row is removed rather than left behind.)</li>
+  nothing will ever execute. (SQLite startup recovery scans
+  <code>running</code>/<code>paused</code> rows only; a <code>queued</code> row that never spawned would
+  otherwise be unreachable, which is why the row is removed rather than
+  left behind.)</li>
 <li>The spawn happens only after the workflow, its includes, the resolved
   snapshot, the staged inputs, and the run row are durably committed, so a
   client never sees a <code>2xx</code> for a run whose workdir is incomplete. A losing
   concurrent create still answers <code>409</code> with no trace (see the
   saved-pipeline slot rule above).</li>
 </ul>
+<p>Every run row also carries an <strong>owner lease</strong> (<code>owner_instance</code>,
+<code>heartbeat_at</code>, issue #1402): the executor guard is created at claim time
+(before pre-spawn staging) and moved into the spawn task, and its process
+renews the heartbeat every 10 s; any instance may finalize a live run whose
+owner has been silent for 90 s (swept every 30 s). A queued row with no
+executor task is not heartbeated, so a failed pre-spawn step cannot pin it
+forever. When the orphan's workdir is reachable and holds a wrapper
+<code>.exit-code</code> record that postdates <strong>this</strong> run's <code>started_at</code>, the run is
+attributed to that outcome (<code>completed</code> for 0); otherwise it is marked
+<code>failed</code>. Only a <code>running</code> row is attributed from a record (never a
+<code>queued</code> or <code>paused</code> one), and the record is removed only after the
+terminal write succeeds — a failed write is retried on the next sweep with
+the outcome preserved, and a retried/resumed run reusing a predecessor's
+workdir cannot inherit its result because every local spawn clears the
+record first. A process never reaps a row it is still monitoring, but it
+does reap its own unmonitored rows; rows written before the lease migration
+(NULL owner) are not reaped — a rolling upgrade does not misclassify an old
+instance's live run. The measured <code>kill -9</code> ghost row is now reconciled
+automatically in about 90-120 s; a lease longer than the TTL cannot be
+renewed from a database partition, so another instance may finalize that
+run first. Lease comparisons assume loosely synchronized clocks (one host
+was measured). <code>/api/health</code> bounds its
+database probe to 4 s and every PostgreSQL pool acquire to 5 s, so a broken
+database surfaces as <code>degraded</code> / <code>500 DB_ERROR</code> in seconds instead of a
+30 s hang; a request that already holds a connection to a black-holed server
+can still block in TCP retransmission.</p>
 <p><code>pipeline_id</code> (optional) only <em>associates</em> the run with a saved pipeline —
 the TOML still comes from <code>toml_content</code>. Every run created through this
 endpoint, saved-pipeline or ad-hoc, gets its own immutable workdir
