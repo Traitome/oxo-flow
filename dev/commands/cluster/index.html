@@ -5106,6 +5106,9 @@ order:</p>
 clusters with accounting storage disabled — a failed <code>sacct</code> falls through
 instead of ending the command. <code>--tail N</code> prints only the last N lines and
 <code>--json</code> emits <code>{job_id, instance, source, logs}</code>.</p>
+<p>On a cloud backend that resolves a bare job id by region or location, pass
+<code>--queue</code> (the GCP location or the Tencent availability zone); AWS reads its
+region from the AWS config.</p>
 <p>On SLURM clusters <strong>without slurmdbd</strong>, settlement in <code>oxo-flow run</code> falls
 back to <code>scontrol show job &lt;id&gt;</code>, which reads the controller's in-memory
 record (state + exit code; no Elapsed/RSS/CPU). A job that has left both the

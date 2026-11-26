@@ -4863,14 +4863,14 @@
 </tr>
 <tr>
 <td><strong>Tencent Batch</strong></td>
-<td>Supported (spec generation)</td>
-<td>Prototype — CLI wrapper (<code>tccli batch</code>, API 2017-03-12); payload/state/cancel/log shapes verified against tccli's own <code>api.json</code>/<code>examples.json</code> (2026-11-25 audit). Live smoke (2026-11-25, issue #1389): a named compute environment (<code>TENCENTBATCH_ENV_ID</code>) submit ran to <code>SUCCEED</code>; anonymous inline-env creation failed on the qualification account, so use <code>TENCENTBATCH_ENV_ID</code> when it does. Poll/log/cancel/array paths remain mock-verified only, and arrays settle on the base job verdict (no per-instance <code>DescribeTask</code> call yet) — <a href="../../../superpowers/audits/cloud-cli-accuracy-2026-11-26.md">Audit evidence</a>.</td>
+<td>Supported (spec generation + live core path)</td>
+<td>Prototype — CLI wrapper (<code>tccli batch</code>, API 2017-03-12); payload/state/cancel/log shapes verified against tccli's <code>api.json</code>/<code>examples.json</code>. <strong>Live campaign 2026-11-26</strong> (issue #1389): a named compute environment (<code>TENCENTBATCH_ENV_ID</code>) submit ran to <code>SUCCEED</code>; state poll, <code>DescribeTaskLogs</code> decode, and <code>TerminateJob</code> cancel verified; inline job-level env also provisioned on a second account; a single-rule engine run exposed the submit-host <code>cd</code> defect fixed in PR #1421 (cloud commands are stripped or mapped onto <code>[cluster.volume].mount_root</code>; arrays require the volume and fail closed otherwise). Array/artifact-pull and cross-region evidence remain outstanding; arrays settle on the base job verdict (no per-instance <code>DescribeTask</code>) — <a href="../../../superpowers/audits/tencent-batch-live-2026-11-26.md">Live evidence</a>, <a href="../../../superpowers/audits/cloud-cli-accuracy-2026-11-26.md">static audit</a>.</td>
 <td><code>tencent-batch</code></td>
 </tr>
 </tbody>
 </table>
 <p><strong>Per-element outcomes.</strong> Array elements settle on their own scheduler record whenever the backend exposes one: SLURM <code>squeue</code> element ids, Kubernetes Indexed Job completion indexes (<code>status.completedIndexes</code> / <code>status.failedIndexes</code>), AWS Batch child job ids (<code>{parent}:{arrayIndex}</code>), and GCP Batch task indexes (<code>gcloud batch tasks list</code>; <code>UNEXECUTED</code> tasks settle failed). One element failing never turns its successful siblings into failures, and a missing accounting record leaves the exit code unknown rather than reporting <code>0</code>. PBS/LSF/SGE and Tencent Batch are polled by the array base id in this adapter (Tencent's per-instance records sit behind a separate <code>DescribeTask</code> call); their per-instance records name that aggregate provenance in <code>skip_reason</code> and carry no base-level exit code or resource numbers, so an array-level verdict is never presented as an independently observed element outcome.</p>
-<p>AWS Batch and GCP Batch are not qualified by a live campaign, and Tencent Batch has only the single named-env submit smoke noted above: every cloud backend's maturity label stays <strong>Prototype</strong> until the per-backend submit/queue/run/cancel/fail/retry/artifact campaign tracked by CL-05 (#1158) exists.</p>
+<p>AWS Batch and GCP Batch are not qualified by a live campaign, and Tencent Batch has live submit/poll/log/cancel evidence but no live array or artifact-pull campaign: every cloud backend's maturity label stays <strong>Prototype</strong> until the CL-05 (#1158) fail/retry/artifact matrix exists.</p>
 <h3 id="cloud-backend-profile-keys">Cloud backend profile keys<a class="headerlink" href="#cloud-backend-profile-keys" title="Permanent link">#</a></h3>
 <p>The shared <code>[cluster]</code> keys carry a backend-specific meaning on cloud
 backends, the same way <code>partition</code> names a scheduler partition on the HPC
@@ -4908,7 +4908,19 @@ backends:</p>
 <p><code>cluster status</code> / <code>cluster cancel</code> take the same value through
 <code>--queue</code> where the cloud CLI needs it to resolve a bare job id (the GCP
 location, the Tencent zone). AWS Batch's raw listing uses it as the
-<code>list-jobs --job-queue</code> selector, falling back to the submit default.</p>
+<code>list-jobs --job-queue</code> selector, falling back to the submit default.
+<code>cluster logs</code> takes <code>--queue</code> for the same reason on GCP/Tencent; AWS reads
+its region from the AWS config.</p>
+<p>Cloud compute nodes do not share the submit host's filesystem. A cloud rule
+without <code>[cluster.volume]</code> runs in the vendor agent's default directory (the
+engine drops the submit-host <code>cd</code> guard instead of failing on a missing
+path); file inputs and outputs still need a shared mount. Declare
+<code>[cluster.volume]</code> whose <code>volume_root</code> contains the run workdir and whose
+<code>mount_root</code> is the path the compute nodes have the volume mounted at — the
+rendered command is rewritten onto it. Cloud <strong>array</strong> jobs require that
+declaration: their per-index <code>cmd.N.sh</code> files are read from the command
+directory on every node and are not uploaded to the vendor, so an array
+without a shared volume is rejected before submission.</p>
 <hr />
 <h2 id="container-environments-on-kubernetes">Container environments on Kubernetes<a class="headerlink" href="#container-environments-on-kubernetes" title="Permanent link">#</a></h2>
 <p>A rule's <strong>container environment becomes the pod image</strong> (issue #1388) instead of
