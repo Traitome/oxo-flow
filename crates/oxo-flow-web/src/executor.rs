@@ -1053,6 +1053,51 @@ const EXIT_RECORD_MAX_BYTES: u64 = 64;
 /// run started).
 const EXIT_RECORD_MTIME_TOLERANCE_MS: i64 = 2_000;
 
+/// Bound on the finalization-time log read and preview write.
+///
+/// Both steps precede the terminal DB commit (the dry-run preview must exist
+/// before the run is observable as terminal), so a hung workdir must not be
+/// able to park the run forever. A 16 MiB local read and a KB-scale write
+/// are well under a second; on expiry the preview and invalidation summary
+/// are skipped with a warning and the terminal write proceeds.
+const FINALIZE_PREVIEW_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Atomically persist the dry-run preview in `dir`.
+///
+/// Writes a uniquely named temp file in the same directory, then renames it
+/// over `dry-run-preview.json`. Readers therefore observe either the old
+/// document or the complete new one, never a truncated write — which matters
+/// because the preview write precedes the terminal commit and a competing
+/// finalizer may write the same path. The unique temp name also keeps a
+/// planted symlink or FIFO in the rule-writable workdir from being opened.
+///
+/// A caller-side timeout may drop this future mid-write, leaving the hidden
+/// temp file behind; it is never renamed into place, so the endpoint still
+/// sees the previous complete document or none at all.
+async fn persist_preview_atomically(run_id: &str, dir: &std::path::Path, json: String) {
+    let final_path = dir.join("dry-run-preview.json");
+    let tmp_path = dir.join(format!(
+        ".dry-run-preview.json.{}.{}.tmp",
+        std::process::id(),
+        uuid::Uuid::new_v4()
+    ));
+    if let Err(e) = tokio::fs::write(&tmp_path, json).await {
+        // Not fatal: the run's state and log are unaffected, but the
+        // preview endpoint will answer NO_PREVIEW for this run.
+        tracing::warn!(
+            "Run {run_id}: failed to write dry-run preview temp file {}: {e}",
+            tmp_path.display()
+        );
+        // `fs::write` can fail after creating the file (partial write).
+        let _ = tokio::fs::remove_file(&tmp_path).await;
+        return;
+    }
+    if let Err(e) = tokio::fs::rename(&tmp_path, &final_path).await {
+        tracing::warn!("Run {run_id}: failed to persist dry-run preview: {e}");
+        let _ = tokio::fs::remove_file(&tmp_path).await;
+    }
+}
+
 /// Read the wrapper's `.exit-code` record, accepting it only when it is a
 /// regular file written for **this** execution.
 ///
@@ -1161,6 +1206,70 @@ pub(crate) async fn finalize_run(run_id: &str, exit_code: Option<i32>, log_path:
         error!("Run {run_id}: forced terminal write failure (test seam)");
         return;
     }
+    // Read the log once, bounded to the head window: both consumers below
+    // (dry-run preview JSON, invalidation summary) print at run start,
+    // before any rule executes — a tail window would miss them, and the
+    // old whole-file read buffered a multi-GB log at every run's terminal
+    // path (issue #734). The read now precedes the terminal commit (so the
+    // preview exists before the run is observable as terminal), which makes
+    // a pathological workdir able to delay the commit — bound the wait and
+    // proceed without the preview/summary instead of parking the run.
+    let head_path = log_path.to_path_buf();
+    let log_content = match tokio::time::timeout(
+        FINALIZE_PREVIEW_TIMEOUT,
+        tokio::task::spawn_blocking(move || {
+            checkpoint_status::read_head_bounded(&head_path, 16 * 1024 * 1024)
+        }),
+    )
+    .await
+    {
+        Ok(joined) => joined.unwrap_or_default(),
+        Err(_) => {
+            tracing::warn!(
+                "Run {run_id}: timed out after {}s reading the log head; \
+                 the dry-run preview and invalidation summary are unavailable",
+                FINALIZE_PREVIEW_TIMEOUT.as_secs()
+            );
+            String::new()
+        }
+    };
+    let log = (!log_content.is_empty()).then_some(log_content);
+    // Persist the dry-run preview (instance-level plan) next to the log so
+    // /api/runs/{id}/preview can serve it without re-parsing the log.
+    //
+    // Written BEFORE the terminal row is committed: a client that observes
+    // the run as terminal must be able to read the preview immediately.
+    // The reverse order raced — the terminal row was visible while the
+    // preview file was still being written, so an immediate GET could
+    // answer NO_PREVIEW for a completed dry-run under load.
+    //
+    // The write is an atomic temp-file replace: a losing finalizer (the
+    // already-terminal `Ok(false)` path) or a concurrent GET must never
+    // observe a truncated document, and rename replaces a planted symlink
+    // instead of writing through it.
+    if let Some(dir) = log_path.parent()
+        && let Some(preview) = log.as_deref().and_then(extract_dry_run_preview)
+    {
+        match serde_json::to_string_pretty(&preview) {
+            Ok(json) => {
+                if tokio::time::timeout(
+                    FINALIZE_PREVIEW_TIMEOUT,
+                    persist_preview_atomically(run_id, dir, json),
+                )
+                .await
+                .is_err()
+                {
+                    tracing::warn!(
+                        "Run {run_id}: timed out persisting the dry-run preview; \
+                         the terminal write proceeds"
+                    );
+                }
+            }
+            Err(e) => {
+                tracing::warn!("Run {run_id}: failed to serialize dry-run preview: {e}");
+            }
+        }
+    }
     match backend
         .record_run_terminal(run_id, final_state, final_state, &end_str)
         .await
@@ -1188,27 +1297,6 @@ pub(crate) async fn finalize_run(run_id: &str, exit_code: Option<i32>, log_path:
             // attribute the true outcome on its next sweep.
             error!("Failed to update final status for run {run_id} via backend: {e}");
         }
-    }
-    // Read the log once, bounded to the head window: both consumers below
-    // (dry-run preview JSON, invalidation summary) print at run start,
-    // before any rule executes — a tail window would miss them, and the
-    // old whole-file read buffered a multi-GB log at every run's terminal
-    // path (issue #734).
-    let head_path = log_path.to_path_buf();
-    let log_content = tokio::task::spawn_blocking(move || {
-        checkpoint_status::read_head_bounded(&head_path, 16 * 1024 * 1024)
-    })
-    .await
-    .unwrap_or_default();
-    let log = (!log_content.is_empty()).then_some(log_content);
-    // Persist the dry-run preview (instance-level plan) next to the log so
-    // /api/runs/{id}/preview can serve it without re-parsing the log.
-    if let Some(log) = log.as_deref()
-        && let Some(preview) = extract_dry_run_preview(log)
-        && let Ok(json) = serde_json::to_string_pretty(&preview)
-        && let Some(dir) = log_path.parent()
-    {
-        let _ = tokio::fs::write(dir.join("dry-run-preview.json"), json).await;
     }
     info!("Run {run_id} finished: {final_state}");
 
@@ -2146,5 +2234,42 @@ mod preview_tests {
         let log = "{\"checkpoint_preview\":{\"summary\":{\"will_run\":1,\"will_skip\":0,\"protected_outside\":0},\"plan\":[{\"name\":\"a\",\"status\":\"run-never-completed\",\"cascaded_from\":null}],\"cascade_chains\":[]},\"command\":\"dry-run\",\"execution_order\":[\"a\"]}";
         let preview = extract_dry_run_preview(log).expect("nested preview must parse");
         assert_eq!(preview["command"], "dry-run");
+    }
+
+    /// The workdir is rule-writable: a planted symlink at the final preview
+    /// path must be replaced, not written through, and no temp file may
+    /// linger after a successful persist.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn persists_preview_atomically_replacing_a_planted_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        let victim = dir.path().join("victim.txt");
+        std::fs::write(&victim, "keep me").unwrap();
+        let final_path = dir.path().join("dry-run-preview.json");
+        std::os::unix::fs::symlink(&victim, &final_path).unwrap();
+
+        persist_preview_atomically("run-test", dir.path(), "{\"ok\":true}".to_string()).await;
+
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep me");
+        assert!(
+            std::fs::symlink_metadata(&final_path)
+                .unwrap()
+                .file_type()
+                .is_file()
+        );
+        assert_eq!(
+            std::fs::read_to_string(&final_path).unwrap(),
+            "{\"ok\":true}"
+        );
+        let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.ends_with(".tmp"))
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "temp files left behind: {leftovers:?}"
+        );
     }
 }
