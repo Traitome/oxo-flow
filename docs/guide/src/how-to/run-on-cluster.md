@@ -566,6 +566,15 @@ On clusters, the scheduler enforces resources based on the generated directives.
     interrupted rule is `required = false` — an interrupt is never
     reported as a completed run.
 
+    A driver that died WITHOUT a signal (crash, OOM) leaves accepted jobs
+    running under the scheduler. The checkpoint records their job ids, so
+    `oxo-flow resume <checkpoint>` (with `--profile <NAME>`, or the profile
+    the checkpoint recorded) polls them to terminal and adopts verified
+    successes instead of re-running them; `resume --abandon-jobs` cancels
+    them first. Without a usable profile, resume fails closed rather than
+    duplicating the computation. A plain `run` does not reconcile — see
+    [resume](../commands/resume.md#cluster-runs-reattach-or-abandon).
+
 !!! note "What environment a cloud job sees"
     Cloud jobs (Kubernetes, AWS Batch, GCP Batch, Tencent Batch) never inherit the
     submitting host's environment. The generated manifest/spec carries the

@@ -1126,6 +1126,62 @@ fn available_profiles(workflow_dir: &Path) -> Vec<String> {
     names
 }
 
+/// Whether a profile name is a single path component.
+///
+/// Profile files live directly under `<workflow-dir>/profiles/`. A name with
+/// a path separator, a drive/stream colon, or `.`/`..` traversal would let a
+/// `--profile` value read a file outside that directory — `run` always
+/// joined the name, but `resume` now takes the profile from a checkpoint and
+/// exposes the same lookup, so the boundary is enforced in one place.
+///
+/// Only the path SHAPE is restricted: any non-empty component that is not a
+/// traversal is accepted, so a legitimate `profiles/测试.toml` (or one with a
+/// space) stays reachable instead of being listed as available yet reported
+/// "not found".
+fn is_valid_profile_name(profile_name: &str) -> bool {
+    !profile_name.is_empty()
+        && profile_name != "."
+        && profile_name != ".."
+        && !profile_name.contains(['/', '\\', ':'])
+}
+
+/// Resolve a profile name to its file under `<workflow_dir>/profiles/`
+/// (`.toml` before `.oxoflow`) — the single lookup both `merge_profile` and
+/// `resume`'s cluster re-attach use, so "is this profile available?" can
+/// never be answered differently by the two paths (issue #1427).
+pub(crate) fn profile_file(workflow_dir: &Path, profile_name: &str) -> Option<std::path::PathBuf> {
+    if !is_valid_profile_name(profile_name) {
+        return None;
+    }
+    [
+        workflow_dir
+            .join("profiles")
+            .join(format!("{profile_name}.toml")),
+        workflow_dir
+            .join("profiles")
+            .join(format!("{profile_name}.oxoflow")),
+    ]
+    .into_iter()
+    .find(|p| p.exists())
+}
+
+/// The one "profile not found" diagnostic `run`/`resume` share: names the
+/// missing profile and lists what IS available, so a typo (or a profile file
+/// deleted after the original run) is actionable from the message alone.
+pub(crate) fn profile_not_found(workflow_dir: &Path, profile_name: &str) -> anyhow::Error {
+    let available = available_profiles(workflow_dir);
+    let hint = if available.is_empty() {
+        "the profiles/ directory does not exist or contains no .toml/.oxoflow profile files"
+            .to_string()
+    } else {
+        format!("available profiles: {}", available.join(", "))
+    };
+    anyhow::anyhow!(
+        "profile '{}' not found in profiles/ directory ({hint})",
+        profile_name
+    )
+}
+
 /// Merge a profile's `[config]` table into the workflow config — the same
 /// semantics `run` applies. Profile values only FILL IN keys the workflow
 /// does not set (`or_insert`); profile lookup is workflow-dir-only:
@@ -1139,29 +1195,28 @@ pub(crate) fn merge_profile(
 ) -> Result<()> {
     use colored::Colorize;
 
-    let profile_paths = [
-        workflow_dir
-            .join("profiles")
-            .join(format!("{profile_name}.toml")),
-        workflow_dir
-            .join("profiles")
-            .join(format!("{profile_name}.oxoflow")),
-    ];
-    let profile_path = profile_paths.iter().find(|p| p.exists());
-    let Some(path) = profile_path else {
-        let available = available_profiles(workflow_dir);
-        let hint = if available.is_empty() {
-            "the profiles/ directory does not exist or contains no .toml/.oxoflow profile files"
-                .to_string()
-        } else {
-            format!("available profiles: {}", available.join(", "))
-        };
-        return Err(anyhow::anyhow!(
-            "profile '{}' not found in profiles/ directory ({hint})",
-            profile_name
-        ));
+    merge_profile_silent(config, profile_name, workflow_dir)?;
+    eprintln!(
+        "{} Applied config values from profile '{}'",
+        "Profile:".bold().cyan(),
+        profile_name
+    );
+    Ok(())
+}
+
+/// [`merge_profile`] without the narration line — callers that will re-merge
+/// the same profile through another surface (`resume` delegates to `run`,
+/// which prints once) use this so the operator sees one "Profile: Applied…"
+/// line, not two.
+pub(crate) fn merge_profile_silent(
+    config: &mut WorkflowConfig,
+    profile_name: &str,
+    workflow_dir: &Path,
+) -> Result<()> {
+    let Some(path) = profile_file(workflow_dir, profile_name) else {
+        return Err(profile_not_found(workflow_dir, profile_name));
     };
-    let profile_content = std::fs::read_to_string(path)
+    let profile_content = std::fs::read_to_string(&path)
         .with_context(|| format!("failed to read profile {}", path.display()))?;
     // NOTE: `toml::Value::from_str` in toml 1.x parses a SINGLE inline
     // value, not a document — `[config]` would fail with "unexpected
@@ -1175,11 +1230,6 @@ pub(crate) fn merge_profile(
     config
         .merge_profile(&profile_toml)
         .map_err(|e| anyhow::anyhow!("profile '{}' merge failed: {e}", profile_name))?;
-    eprintln!(
-        "{} Applied config values from profile '{}'",
-        "Profile:".bold().cyan(),
-        profile_name
-    );
     Ok(())
 }
 
@@ -1542,6 +1592,43 @@ threshold = 5
             Some("fast"),
             "missing keys are filled in"
         );
+    }
+
+    #[test]
+    fn profile_names_cannot_escape_the_profiles_directory() {
+        // Issue #1427 review (minor): `resume --profile ../x` must not read
+        // outside `<workflow>/profiles/` — but a legitimate non-ASCII or
+        // space-bearing single component must stay reachable (and must not be
+        // listed as "available" while being reported "not found").
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("profiles")).unwrap();
+        std::fs::write(dir.path().join("profiles/batch.toml"), "[config]\n").unwrap();
+        std::fs::write(dir.path().join("profiles/测试.toml"), "[config]\n").unwrap();
+        std::fs::write(dir.path().join("profiles/my profile.toml"), "[config]\n").unwrap();
+        std::fs::write(dir.path().join("evil.toml"), "[config]\n").unwrap();
+
+        for good in ["batch", "测试", "my profile"] {
+            assert!(
+                profile_file(dir.path(), good).is_some(),
+                "profile name {good:?} must resolve"
+            );
+        }
+        for bad in ["../evil", "a/b", "a\\b", "..", ".", "", "C:evil"] {
+            assert!(
+                profile_file(dir.path(), bad).is_none(),
+                "profile name {bad:?} must be rejected"
+            );
+        }
+        let mut config =
+            WorkflowConfig::parse("[workflow]\nname = \"t\"\nversion = \"1.0\"\n").unwrap();
+        let error = merge_profile(&mut config, "../evil", dir.path())
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("not found"), "{error}");
+        // The non-ASCII profile actually merges (its name is not a typo).
+        let mut config =
+            WorkflowConfig::parse("[workflow]\nname = \"t\"\nversion = \"1.0\"\n").unwrap();
+        merge_profile(&mut config, "测试", dir.path()).unwrap();
     }
 
     #[test]

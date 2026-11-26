@@ -106,6 +106,10 @@ ends with a **Done when** condition — do not proceed without it.
   automatic rerun: the engine emits `REPAIR_APPLIED` then
   `REPAIR_RERUN_SUCCEEDED`/`REPAIR_RERUN_FAILED`/`REPAIR_RERUN_SKIPPED`
   contract lines and records `repair_record` in the checkpoint.
+- After a crashed CLUSTER run, resume re-attaches to the recorded scheduler
+  jobs (`--profile <NAME>`, defaulting to the recorded profile) and fails
+  closed without one; `resume --abandon-jobs` cancels them first. A plain
+  `run` does not re-attach.
 - Retry budget: max 3 correction loops, then escalate to the human.
 - Done when: all rules complete, evidenced by checkpoint state.
 

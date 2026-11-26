@@ -62,6 +62,80 @@ cross-version contract in
 [docs/superpowers/audits/reentry-2026-11.md](https://github.com/traitome/oxo-flow/blob/main/docs/superpowers/audits/reentry-2026-11.md)
 (§5.2/§5.3).
 
+### Cluster runs: re-attach or abandon
+
+A `run --profile <NAME>` cluster run records, in the checkpoint, the profile
+name/backend/queue it submitted through **and** the scheduler job id of every
+accepted job. Each id is removed as its job settles, so the checkpoint's
+`cluster_jobs` map holds exactly the jobs an interrupted driver never
+observed reaching a terminal state.
+
+`resume` reconciles those recorded jobs with the scheduler **before** it
+clears the persisted in-flight set or re-plans execution (issue #1427):
+
+- **No profile recorded and none supplied** — fail closed. Nothing is
+  cleared, persisted, or executed; the error names every recorded job and
+  the two escape hatches.
+- **Profile available** — the explicit `--profile`, else the profile the
+  checkpoint recorded if its file still exists under the workflow's
+  `profiles/` directory. Resume re-attaches through the backend recorded at
+  submit time:
+    - queued/running → waits, polling, until the job is terminal; it is
+      never resubmitted;
+    - terminal success with every declared output present → the rule is
+      marked completed (a `recorded_as: "adopted from <backend> job <id>"`
+      benchmark is written only when no measured benchmark exists). A rule
+      whose outputs are declared only through `output_pattern` has no fixed
+      files to verify at adoption time; its scheduler-confirmed success is
+      adopted without a per-instance file check;
+    - terminal success whose declared outputs are missing → a warning, and
+      the rule re-runs;
+    - terminal failure or cancellation → recorded, and the normal resume
+      re-runs the rule;
+    - scheduler unreachable, or a job neither in the live queue nor in the
+      accounting store → fail closed with the job named.
+- **`--abandon-jobs`** — cancel the recorded live jobs through the backend
+  that owns them (`scancel`/`qdel`/`bkill`/…), clear their records, and
+  re-run the rules. With a usable profile the rerun keeps the cluster route;
+  without one it continues **locally** (announced on stderr). A cancel the
+  scheduler **rejects** fails closed: a job that may still be running is
+  never reported as abandoned. An accepted `scancel`/`qdel`/… is the
+  scheduler's acknowledgement that the signal was delivered, not proof the
+  process has already stopped — a brief termination window remains. If the
+  scheduler reports the id no longer exists (a purged record), cancel cannot
+  confirm anything: verify with `oxo-flow cluster status`, then remove that
+  rule's `cluster_jobs` entry from the checkpoint manually (or complete the
+  rule) before resuming.
+
+Reconciliation always uses the backend recorded **on each job**, never the
+backend a (possibly edited) profile resolves to today. A checkpoint whose
+unsettled jobs span more than one scheduler (a crash on one backend followed
+by a run on another) is reconciled group by group, each through the scheduler
+that owns it — a job id is never handed to a different backend. When a
+group's backend differs from the checkpoint's recorded run, an error's
+recovery command cannot know that scheduler's location/zone; add its
+`--queue` value manually (GCP location / Tencent availability zone). A resume
+with no recorded cluster jobs still routes through the recorded profile (when
+its file still exists), so the remaining rules keep running on the scheduler
+instead of silently falling back to the local executor.
+
+Checkpoints written before this feature carry no job ids; their resume
+behavior is unchanged (their rules re-run), and `run` deliberately never
+consults `cluster_jobs` — after a crashed cluster driver, use `resume`
+(not a fresh `run`) to re-attach.
+
+A recorded job whose rule an intervening invocation completed **and which is
+no longer marked in flight** is treated as **settled**: `resume` drops the
+stale id (and persists the cleanup) instead of polling a scheduler record
+that may since have been purged. The in-flight mark is the discriminator: a
+`run --rerun` re-submits a completed rule and records its NEW job id while
+the rule deliberately stays complete, so that shape — completed AND running —
+is treated as **live**: resume polls or cancels the job instead of dropping
+it, and never lets a dependent run against outputs it is still rewriting. If
+a genuinely superseded job was in fact still live, the intervening completion
+already raced it — reconciling an id the checkpoint's completion set no
+longer needs cannot undo that, and refusing to resume forever would be worse.
+
 ## Options
 
 | Option | Short | Description |
@@ -73,6 +147,8 @@ cross-version contract in
 | `--keep-going` | `-k` | Continue execution when a job fails (same semantics as `run`) |
 | `--timeout <SECS>` | — | Timeout per job in seconds (0 = disabled), or a duration like `1h`/`30m` |
 | `--no-report-snapshot` | — | Skip the automatic report snapshot after the resumed run (same flag as `run`) |
+| `--profile <NAME>` | — | Re-attach recorded cluster jobs through this profile (and run the remaining rules on that scheduler). Defaults to the profile the checkpoint records; without either, a checkpoint holding unsettled cluster jobs fails closed |
+| `--abandon-jobs` | — | Cancel the scheduler jobs recorded in the checkpoint instead of re-attaching and waiting, then re-run their rules (locally when no usable profile exists) |
 | `--background` / `--detach` | — | Detach the resumed run into a background process and exit 0 immediately (see [Background runs (--background)](run.md#background-runs-background)); `--detach` is an alias |
 | `--json` | — | Emit one machine-readable JSON document to stdout (human logs stay on stderr); see [JSON output](#json-output) |
 
@@ -108,12 +184,18 @@ family ([`run`](run.md#json-output)).
 | `remaining` | Rules this resume will execute (workflow rule count minus `completed`; wildcards expand later) |
 | `skipped_by_when` | Present when rules were skipped by a `when` gate; re-judged on this resume |
 | `running` | Present when the checkpoint recorded rules still running (the prior run died mid-flight); they re-run |
+| `adopted` | Present when a cluster reconciliation ran: how many recorded scheduler jobs were adopted as completed (their declared outputs were verified first) |
+| `cancelled_jobs` | Present when a cluster reconciliation ran: how many recorded scheduler jobs `--abandon-jobs` cancelled before re-running |
 
-The non-`--json` path is unchanged: exit codes and output are byte-identical
-to prior releases. A malformed checkpoint or a missing workflow still fails
-with a non-zero exit and, under `--json`, the shared structured error
-envelope (`{"command":"resume","errors":[{"code":...,"message":...}]}`)
-instead of empty stdout.
+For a **local** checkpoint the non-`--json` path is unchanged: exit codes and
+output are byte-identical to prior releases. A cluster checkpoint that records
+scheduler jobs additionally narrates the re-attach (one line per reconciled
+job) and may wait for live jobs before the run loop starts — that narration is
+new (issue #1427), and a fail-closed reconciliation exits non-zero. A
+malformed checkpoint or a missing workflow still fails with a non-zero exit
+and, under `--json`, the shared structured error envelope
+(`{"command":"resume","errors":[{"code":...,"message":...}]}`) instead of
+empty stdout.
 
 ## Examples
 
@@ -144,7 +226,10 @@ oxo-flow resume .oxo-flow/checkpoint.json --json
   is re-judged on this resume anyway.
 - A rule recorded as still **`running`** in the checkpoint (its process was
   killed mid-execution) is always re-run on resume — its partial outputs
-  never pass the freshness gate (issue #1083).
+  never pass the freshness gate (issue #1083). On a **cluster** checkpoint
+  this holds only for rules whose scheduler job the re-attach could not
+  reconcile; a job confirmed completed is adopted instead (see
+  [Cluster runs: re-attach or abandon](#cluster-runs-reattach-or-abandon)).
 - `--background` / `--detach` detaches the resumed run (see
   [run's Background runs section](run.md#background-runs-background)).
 

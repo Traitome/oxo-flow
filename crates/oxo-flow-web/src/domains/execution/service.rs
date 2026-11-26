@@ -407,7 +407,10 @@ pub fn run_row_to_list_item(r: &models::RunRow) -> serde_json::Value {
         // express an incomplete-while-terminal run.
         "artifacts_incomplete": r.artifacts_incomplete,
         // Durable cluster routing fact (issue #1257 / audit RB-05); `null` for
-        // local runs and for retry/resume rows, which re-execute locally.
+        // local runs and for retry rows (which re-execute locally). A resume
+        // row is also `null` here even though the spawned CLI `resume` may
+        // re-attach through the checkpoint's recorded cluster profile
+        // (issue #1427) — the web layer does not own that routing.
         "cluster_id": r.cluster_id,
         "started_at": r.started_at,
         "finished_at": r.finished_at,

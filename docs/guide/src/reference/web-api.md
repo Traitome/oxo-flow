@@ -947,7 +947,7 @@ The full run row: `{ id, user_id, pipeline_id, workflow_name, pipeline_snapshot,
 
 `artifacts_incomplete` (also on list items) is non-null only when a cluster run's result pull failed: the remote execution finished but its outputs could not be transferred back, so the local workdir — the source for the run's logs, preview and report — is missing or stale. It carries the pull error text (including the remote exit code). Such a run is **never** reported as `completed`: it is failed through the same non-success path a non-zero remote exit uses, so `status` reads `failed` with `phase` `failed` and the reason is both logged and persisted here for the UI (issue #1112 / audit RB-05).
 
-`cluster_id` (also on list items) records the cluster a run was routed to, persisted at dispatch. It is `null` for local runs and for runs that carry no cluster routing fact (retry/resume re-execute locally). It is the durable source of truth for cancellation (see Cancel below): it survives a server restart, which the in-memory routing registry does not (issue #1257 / audit RB-05).
+`cluster_id` (also on list items) records the cluster a run was routed to, persisted at dispatch. It is `null` for local runs and for runs that carry no web cluster-domain routing fact — retry re-executes locally, and a resume row also carries `null` even though the spawned CLI `resume` may re-attach through the checkpoint's recorded cluster profile (issue #1427). It is the durable source of truth for cancellation (see Cancel below): it survives a server restart, which the in-memory routing registry does not (issue #1257 / audit RB-05).
 
 ### Run Preview
 ```
@@ -1979,8 +1979,14 @@ POST /api/runs/{id}/clean              # CLI clean on the run's workdir
 POST /api/runs/{id}/resume-checkpoint  # CLI resume from .oxo-flow/checkpoint.json
 ```
 `resume-checkpoint` continues an unfinished run in place as a NEW run row
-(`{"max_jobs": 2}` optional). Both are ownership-checked like every other
-run endpoint.
+(`{"max_jobs": 2}` optional). It spawns the CLI's `resume`, which re-attaches
+to the scheduler jobs the checkpoint records through the profile the original
+cluster run recorded (issue #1427): live jobs are waited for and verified
+successes adopted. The endpoint deliberately passes no `--abandon-jobs`, so a
+recorded job is never cancelled from the web surface; if unsettled jobs are
+recorded and no usable profile exists, the spawned resume fails closed (the
+row ends `failed`) rather than duplicating the work. Both are ownership-checked
+like every other run endpoint.
 
 ## Webhooks
 

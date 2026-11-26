@@ -3913,8 +3913,10 @@ pub async fn resume_checkpoint(
         // workdir already carries the original run's baked configuration.
         config_overrides: None,
         artifacts_incomplete: None,
-        // Resume re-executes locally, so the new row carries no cluster
-        // routing fact (issue #1257 / audit RB-05).
+        // The spawned CLI `resume` re-attaches through the checkpoint's
+        // recorded cluster profile when one exists (issue #1427), but the web
+        // layer itself submits no cluster job, so this row carries no web
+        // cluster-domain routing fact (issue #1257 / audit RB-05).
         cluster_id: None,
         started_at: None,
         finished_at: None,

@@ -34,6 +34,14 @@ struct ResumeJson {
     skipped_by_when: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     running: Option<usize>,
+    /// Recorded scheduler jobs this resume adopted as completed (issue
+    /// #1427) — present only when a cluster reconciliation ran.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    adopted: Option<usize>,
+    /// Recorded scheduler jobs `--abandon-jobs` cancelled before re-running
+    /// (issue #1427) — present only when a cluster reconciliation ran.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cancelled_jobs: Option<usize>,
 }
 
 impl ResumeJson {
@@ -60,6 +68,8 @@ pub async fn resume_command(
     timeout: String,
     workdir: Option<PathBuf>,
     no_report_snapshot: bool,
+    profile: Option<String>,
+    abandon_jobs: bool,
     json: bool,
 ) -> Result<()> {
     let checkpoint_for_error = checkpoint.clone();
@@ -73,6 +83,8 @@ pub async fn resume_command(
         timeout,
         workdir,
         no_report_snapshot,
+        profile,
+        abandon_jobs,
         json,
         &mut json_written,
     )
@@ -101,6 +113,8 @@ async fn resume_command_inner(
     timeout: String,
     workdir: Option<PathBuf>,
     no_report_snapshot: bool,
+    profile: Option<String>,
+    abandon_jobs: bool,
     json: bool,
     json_written: &mut bool,
 ) -> Result<()> {
@@ -137,7 +151,7 @@ async fn resume_command_inner(
     // Execute mode; gating here keeps the resume banner and its early
     // `nothing_to_resume` return honest too — no surface reads a newer
     // format's completion state without refusing first.
-    let state = super::gate_checkpoint_format(state, &checkpoint, CheckpointLoadMode::Execute)?;
+    let mut state = super::gate_checkpoint_format(state, &checkpoint, CheckpointLoadMode::Execute)?;
 
     // Get workflow path from checkpoint
     let workflow_path = match &state.workflow_path {
@@ -165,6 +179,44 @@ async fn resume_command_inner(
     let workflow_display = workflow_path.display().to_string();
     let checkpoint_display = checkpoint.display().to_string();
 
+    eprintln!(
+        "{} Resuming workflow '{}'",
+        "Resume:".bold().cyan(),
+        workflow_path.display()
+    );
+    eprintln!("  Checkpoint: {}", checkpoint.display());
+
+    // Workdir precedence (issue #68): explicit --workdir > the directory the
+    // original run recorded in the checkpoint > the workflow's directory.
+    // Resolved here because the cluster re-attach's output checks need the
+    // same directory the delegated run will use.
+    let effective_workdir = workdir
+        .clone()
+        .or_else(|| state.workdir.clone().map(PathBuf::from));
+    let execution_workdir = effective_workdir
+        .clone()
+        .unwrap_or_else(|| oxo_flow_core::parent_dir(&workflow_path).to_path_buf());
+
+    // ── Cluster re-attach (issue #1427) ─────────────────────────────────
+    // MUST run before the delegated run loop: that loop clears the persisted
+    // `running` set and re-plans execution, which is exactly the destructive
+    // step that used to re-submit (or locally re-run) jobs the scheduler
+    // still owns. Reconciliation also resolves the profile name the run must
+    // carry — `profile: None` routed a resumed cluster checkpoint to the
+    // local executor. On a fail-closed error nothing has been cleared or
+    // persisted here.
+    let cluster_plan = super::resume_cluster::prepare_cluster_resume(
+        &mut state,
+        &checkpoint,
+        &workflow_path,
+        profile.as_deref(),
+        abandon_jobs,
+        &execution_workdir,
+    )
+    .await?;
+    let adopted = cluster_plan.outcome.as_ref().map(|o| o.adopted.len());
+    let cancelled_jobs = cluster_plan.outcome.as_ref().map(|o| o.cancelled.len());
+
     let completed = state.completed_rules.len();
     // Issue #690: don't count stale when-gated entries as failures in the
     // resume banner either — they are skips, and the executor will re-judge
@@ -175,14 +227,10 @@ async fn resume_command_inner(
     let skipped_count = skipped_when_false.len();
     // Issue #685: entries persisting in the running set mean the prior run
     // died mid-flight; run_command clears them (with a warning) on start.
+    // Cluster jobs the re-attach just reconciled are already out of this
+    // set, so what remains describes a local (or unreconcilable) process.
     let running_count = state.running_rules().len();
 
-    eprintln!(
-        "{} Resuming workflow '{}'",
-        "Resume:".bold().cyan(),
-        workflow_path.display()
-    );
-    eprintln!("  Checkpoint: {}", checkpoint.display());
     // Remaining = the rules this resume will actually execute: everything
     // the checkpoint has not completed (failed rules are retried). The
     // checkpoint records only what ran, so the workflow supplies the total
@@ -233,6 +281,8 @@ async fn resume_command_inner(
                 remaining,
                 skipped_by_when: (skipped_count > 0).then_some(skipped_count),
                 running: (running_count > 0).then_some(running_count),
+                adopted,
+                cancelled_jobs,
             }
             .emit();
             *json_written = true;
@@ -249,9 +299,6 @@ async fn resume_command_inner(
         oxo_flow_core::plural(jobs, "parallel job", "parallel jobs")
     );
 
-    // Workdir precedence (issue #68): explicit --workdir > the directory the
-    // original run recorded in the checkpoint > the workflow's directory.
-    let effective_workdir = workdir.or_else(|| state.workdir.clone().map(PathBuf::from));
     eprintln!(
         "  Workdir: {}",
         effective_workdir
@@ -273,7 +320,10 @@ async fn resume_command_inner(
         timeout,
         // user can re-run with --resume-failed in 'run'
         resume_failed: false,
-        profile: None,
+        // Issue #1427: the explicit --profile, or the profile the checkpoint
+        // recorded. Passing None here was the defect — it forced every
+        // resumed cluster checkpoint onto the local executor.
+        profile: cluster_plan.run_profile,
         max_threads: 0,
         max_memory: 0,
         skip_env_setup: false,
@@ -335,6 +385,8 @@ async fn resume_command_inner(
             remaining,
             skipped_by_when: (skipped_count > 0).then_some(skipped_count),
             running: (running_count > 0).then_some(running_count),
+            adopted,
+            cancelled_jobs,
         }
         .emit();
         *json_written = true;

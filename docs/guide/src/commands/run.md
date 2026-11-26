@@ -673,12 +673,18 @@ profile file exists but its TOML fails to parse or merge.
 #### Cluster submission
 
 A profile that also carries a `[cluster]` block makes `run --profile` submit
-to a scheduler instead of executing locally: the run expands rules into
-per-instance jobs, submits at most `max_submitted` at a time (grouped into
-scheduler arrays where possible), tracks them to completion, and writes the
-checkpoint exactly as a local run does. Both conditions are required — a
+to a scheduler instead of executing locally. Both conditions are required — a
 `[cluster]` block in effect **and** a profile named; adding either one alone
 never changes an existing local run.
+
+Rules become jobs after wildcard expansion, so a 100-sample scatter is 100
+jobs, and dependencies are chained per instance. The run submits at most
+`max_submitted` at a time (grouped into scheduler arrays where possible),
+tracks them to completion, and writes the checkpoint exactly as a local run
+does. The checkpoint also records the run's profile/backend/queue and each
+accepted job's scheduler id, removed as the job settles — the evidence
+[`resume`](resume.md#cluster-runs-reattach-or-abandon) uses to re-attach to a
+crashed run's live jobs (or to abandon them) instead of executing them again.
 
 The full story — the `[cluster]` TOML reference and driver-default fallbacks,
 profile lookup rules, `TMPDIR` exports on job scripts, the `scratch = true`
@@ -1084,6 +1090,16 @@ partially-written outputs, so a killed job's half-finished outputs are not
 mistaken for finished work (issue #1083). Rules with no checkpoint entry at
 all keep their historical freshness semantics — output existence alone
 decides, as before (issue #77).
+
+On a **cluster** run the checkpoint also carries each accepted scheduler job
+id plus the run's profile/backend, so `oxo-flow resume` does not blindly
+re-run a rule whose job may still be live: it re-attaches through the
+recorded profile, waits for the recorded jobs to settle, adopts verified
+terminal successes, and re-runs only proven failures — or, with
+`--abandon-jobs`, cancels the recorded jobs first. Without a usable profile it
+fails closed, naming the jobs. A plain `oxo-flow run` does not reconcile; use
+[`resume`](resume.md#cluster-runs-reattach-or-abandon) after a crashed or
+interrupted cluster run.
 
 ### Variant checkpoints (`--checkpoint`)
 

@@ -35,6 +35,7 @@ mod reentry;
 mod refs;
 mod repair;
 pub mod resume;
+mod resume_cluster;
 mod run_log;
 mod scheduler_loop;
 pub(crate) mod signals;
@@ -1217,6 +1218,10 @@ async fn run_command_inner(
                 checkpoint_path: &checkpoint_path,
                 workdir: workdir_actual.as_ref(),
                 wildcard_values: wildcard_values.as_ref(),
+                // The routing predicate requires a name, so this is Some
+                // here; the recorded identity is what resume re-resolves
+                // (issue #1427).
+                profile_name: profile.as_deref().unwrap_or_default(),
                 sensitive_keys: &sensitive_keys,
                 sensitive_values: &sensitive_values,
                 force_rules: &force_rules,

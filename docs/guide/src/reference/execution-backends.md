@@ -168,9 +168,12 @@ Indexed array settling per element across both nodes, a dependent rule
 forced onto the second node by resource fit, outputs returned through the
 shared volume, `provenance verify` 3/3). Its remaining gaps are PVC
 provisioning, HA/multi-control-plane, cloud-provider volumes, image mode
-combined with a multi-node `[cluster.volume]`, re-attach to in-flight
-jobs, cancellation reconciliation across process restarts, and crash
-recovery. **Tencent Batch** has a 2026-11-26 live campaign: a named-env submit reached
+combined with a multi-node `[cluster.volume]`, cancellation reconciliation
+across process restarts, and crash recovery. Re-attach to in-flight jobs is
+implemented engine-level (issue #1427: `resume` polls the checkpoint's
+recorded job ids, adopts verified successes, and fails closed on an
+unconfirmable scheduler) and covered by mock-scheduler tests, but it has not
+been live-qualified on Kubernetes. **Tencent Batch** has a 2026-11-26 live campaign: a named-env submit reached
 `SUCCEED`, state polling, `DescribeTaskLogs` decoding, and `TerminateJob`
 cancel were verified, and a single-rule engine run exposed the submit-host
 `cd` defect fixed in PR #1421 (cloud commands are stripped or mapped onto

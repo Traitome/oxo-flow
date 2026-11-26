@@ -16,7 +16,9 @@ use oxo_flow_core::cluster::{ClusterBackend, ClusterJobConfig};
 use oxo_flow_core::config::{ClusterProfile, WorkflowConfig};
 use oxo_flow_core::dag::WorkflowDag;
 use oxo_flow_core::environment::EnvironmentResolver;
-use oxo_flow_core::executor::checkpoint::{BenchmarkRecord, CheckpointState};
+use oxo_flow_core::executor::checkpoint::{
+    BenchmarkRecord, CheckpointState, ClusterJobRecord, ClusterRunRecord,
+};
 use oxo_flow_core::executor::{JobRecord, JobStatus};
 use oxo_flow_core::rule::Rule;
 use std::collections::{HashMap, HashSet};
@@ -83,6 +85,11 @@ pub(crate) struct ClusterRunArgs<'a> {
     pub checkpoint_path: &'a Path,
     pub workdir: &'a Path,
     pub wildcard_values: &'a HashMap<String, String>,
+    /// Profile name this cluster run was launched with (`--profile`, or the
+    /// profile `resume` resolved from the checkpoint). Recorded in the
+    /// checkpoint (issue #1427) so a later `resume` can re-resolve the same
+    /// profile without asking the operator to retype it.
+    pub profile_name: &'a str,
     pub sensitive_keys: &'a HashSet<String>,
     /// Sensitive config values masked out of recorded job commands
     /// (issue #99 B1, cluster path).
@@ -639,6 +646,11 @@ async fn fold_record(args: &ClusterRunArgs<'_>, record: &JobRecord) {
         // Skipped records carry no completion credit — nothing to persist.
         _ => {}
     }
+    // The job's fate is now recorded, so its scheduler id is no longer
+    // evidence of a live submission (issue #1427). Persisted in the same
+    // save as the terminal record: a resume can never see a charted job
+    // whose verdict this checkpoint already holds.
+    ck.clear_cluster_job(&record.rule);
     // M-7: the local scheduler loop saves through the async API at every
     // site; the cluster path must not serialize submissions behind fsync
     // latency either.
@@ -912,6 +924,25 @@ pub(crate) async fn run_on_cluster(
 
     let run_dir = create_run_dir(args.workdir)?;
 
+    // Record the cluster identity before anything is submitted (issue
+    // #1427): a later `resume` re-resolves the profile/backend/queue from the
+    // checkpoint instead of guessing. An up-to-date run returns before this
+    // point (it creates no run directory either), keeping the predecessor's
+    // identity.
+    {
+        let mut ck = args.checkpoint.lock().await;
+        ck.set_cluster_run(Some(ClusterRunRecord {
+            profile: args.profile_name.to_string(),
+            backend: backend.to_string(),
+            queue: cluster_config.queue.clone(),
+            account: cluster_config.account.clone(),
+            run_dir: Some(run_dir.to_string_lossy().into_owned()),
+        }));
+        if let Err(e) = ck.save_to_file_async(args.checkpoint_path).await {
+            tracing::warn!("Failed to save checkpoint cluster identity: {e}");
+        }
+    }
+
     // A rule that alone exceeds the workflow's own declared budget would be
     // rejected by the queue (or run into swap) after the fact — say so before
     // anything leaves for the scheduler.
@@ -1023,16 +1054,22 @@ pub(crate) async fn run_on_cluster(
     let driver = BackendDriver::new(Arc::new(executor), driver_config);
     // Submit-time checkpoint recording (issue #136 H6): a crashed driver
     // leaves truthful RUNNING entries for accepted jobs, so `resume` /
-    // `--resume-failed` re-queue them instead of losing them.
+    // `--resume-failed` re-queue them instead of losing them. The scheduler
+    // job id (and an array element's base id) is recorded alongside
+    // (issue #1427), which is what lets `resume` re-attach to a live job
+    // instead of blindly resubmitting it.
     let submit_ck = args.checkpoint.clone();
     let submit_path = args.checkpoint_path.to_path_buf();
+    let backend_name = backend.to_string();
     let on_submit = move |rule: String,
-                          _job: String|
+                          job: String,
+                          array_base: Option<String>|
           -> std::pin::Pin<
         Box<dyn std::future::Future<Output = oxo_flow_core::error::Result<()>> + Send>,
     > {
         let ck = submit_ck.clone();
         let path = submit_path.clone();
+        let backend_name = backend_name.clone();
         let output_tail_bytes = oxo_flow_core::executor::output_tail_bytes_from_env();
         Box::pin(async move {
             let mut ck = ck.lock().await;
@@ -1041,6 +1078,15 @@ pub(crate) async fn run_on_cluster(
             // "was this rule submitted and never settled" when the driver
             // dies (issue #1083).
             ck.mark_running(&rule);
+            ck.record_cluster_job(
+                &rule,
+                ClusterJobRecord {
+                    job_id: job,
+                    array_base,
+                    backend: backend_name,
+                    submitted_at: chrono::Utc::now(),
+                },
+            );
             ck.record_run(
                 &oxo_flow_core::executor::JobRecord {
                     resources: None,
@@ -1963,6 +2009,7 @@ shell = "mkdir -p out/S1 && echo started > out/S1/done.txt && sleep 45 && echo d
                 checkpoint_path: &self.checkpoint_path,
                 workdir: &self.workdir,
                 wildcard_values: &self.wildcard_values,
+                profile_name: "test-profile",
                 sensitive_keys: &sensitive_keys,
                 sensitive_values: &[],
                 force_rules: &force_rules,

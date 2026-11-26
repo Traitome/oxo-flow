@@ -494,6 +494,58 @@ impl ClusterImageRecord {
     pub const SYSTEM: &'static str = "system";
 }
 
+/// One scheduler submission a cluster run recorded for a rule instance
+/// (issue #1427).
+///
+/// Written by the driver's submit hook the moment the scheduler accepts the
+/// job, and removed when the job settles. An entry still present in a
+/// checkpoint therefore means exactly "submitted, never settled by the
+/// writing process" — the evidence `resume` needs to re-attach to a live
+/// job instead of re-running the rule.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClusterJobRecord {
+    /// Scheduler-assigned job id. For a job-array element this is the element
+    /// handle the driver polls (`{base}_{index}` on SLURM).
+    pub job_id: String,
+    /// Base id of the array submission (`None` for a plain job). Schedulers
+    /// that report arrays only by their base id (PBS/SGE/LSF) poll and cancel
+    /// through it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub array_base: Option<String>,
+    /// Backend the job was submitted to (`slurm`, `pbs`, …), as
+    /// [`crate::cluster::ClusterBackend`] renders it. Re-attach reconciles
+    /// through the backend that actually owns the job id — never through a
+    /// guess derived from a profile that may since have changed.
+    pub backend: String,
+    /// When the scheduler accepted the job (UTC).
+    pub submitted_at: DateTime<Utc>,
+}
+
+/// Identity of the cluster run that wrote a checkpoint (issue #1427).
+///
+/// Recorded once when a cluster run starts, before its first submission, so
+/// a later `resume` can answer "which profile/backend/queue produced these
+/// job ids?" without asking the operator to reconstruct it. Absent in
+/// checkpoints written by local runs and by older binaries.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClusterRunRecord {
+    /// Profile name the run was launched with (`run --profile <NAME>`).
+    pub profile: String,
+    /// Scheduler backend the profile resolved to.
+    pub backend: String,
+    /// Partition/queue the profile carried (GCP location / Tencent zone for
+    /// the cloud backends).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queue: Option<String>,
+    /// Billing account the profile carried.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
+    /// The run's `.oxo-flow/runs/<timestamp>/` directory (submit-host path),
+    /// for `cluster status`-style inspection of the recorded jobs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_dir: Option<String>,
+}
+
 /// Persistent checkpoint state for resumable workflow execution.
 ///
 /// Tracks which rules have completed or failed so that a restarted workflow
@@ -749,6 +801,26 @@ pub struct CheckpointState {
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub cluster_images: BTreeMap<String, ClusterImageRecord>,
 
+    /// Identity of the cluster run that wrote this checkpoint (issue #1427):
+    /// profile name, backend, queue/account, and run directory. Written
+    /// before the first submission and left in place after the run ends (it
+    /// describes the checkpoint's origin, not its liveness). Absent for
+    /// local runs, legacy checkpoints, and workflows resumed locally.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cluster_run: Option<ClusterRunRecord>,
+
+    /// Scheduler jobs a cluster run submitted and never observed settling
+    /// (issue #1427), keyed by rule instance name for stable JSON ordering.
+    ///
+    /// Written by the driver's submit hook and removed as each job settles,
+    /// so a non-empty map means exactly "these job ids may still be live".
+    /// `resume` refuses to re-run those rules locally without a profile or an
+    /// explicit `--abandon-jobs`, and re-attaches by polling these ids.
+    /// Legacy checkpoints (pre-#1427) load with an empty map — their lost job
+    /// ids cannot be reconstructed, so their resume behavior is unchanged.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub cluster_jobs: BTreeMap<String, ClusterJobRecord>,
+
     /// Normalized per-rule resource measurements (issue #1371): I/O bytes,
     /// scheduler queue wait, node/core allocation, and the source metadata
     /// every number needs. Kept beside — not inside — `benchmarks` because it
@@ -920,6 +992,8 @@ impl CheckpointState {
             repair_record: None,
             env_lock_identity: BTreeMap::new(),
             cluster_images: BTreeMap::new(),
+            cluster_run: None,
+            cluster_jobs: BTreeMap::new(),
             resource_usage: BTreeMap::new(),
             skipped_attempts: BTreeMap::new(),
             lock_digest: None,
@@ -1070,6 +1144,12 @@ impl CheckpointState {
         // other workflow's cleaned intermediates against this one's
         // provenance view.
         self.cleaned_checksums.clear();
+        // A foreign checkpoint's cluster identity and unsettled job ids
+        // describe another workflow's scheduler submissions (issue #1427):
+        // re-attaching to them from this workflow would poll and cancel jobs
+        // that belong to a different run.
+        self.cluster_run = None;
+        self.cluster_jobs.clear();
     }
 
     /// Invalidate checkpoint records for a set of rules so that they will be
@@ -1098,6 +1178,10 @@ impl CheckpointState {
             self.rule_runs.remove(rule);
             self.resource_usage.remove(rule);
             self.skipped_attempts.remove(rule);
+            // Deliberately NOT `cluster_jobs`: invalidation is about reuse,
+            // not scheduler liveness — a job the previous run submitted may
+            // still be running, and dropping its id here would hide it from
+            // the resume re-attach (issue #1427).
             self.reentries.retain(|r| r.rule != *rule);
         }
     }
@@ -1168,6 +1252,37 @@ impl CheckpointState {
     /// A re-submitted rule's entry is overwritten with its current rendering.
     pub fn record_cluster_images(&mut self, images: BTreeMap<String, ClusterImageRecord>) {
         self.cluster_images.extend(images);
+    }
+
+    /// Record the identity of the cluster run that owns this checkpoint
+    /// (issue #1427). `None` clears it — used when a foreign checkpoint's
+    /// records are discarded, so another workflow's origin cannot be
+    /// presented as this one's.
+    pub fn set_cluster_run(&mut self, record: Option<ClusterRunRecord>) {
+        self.cluster_run = record;
+    }
+
+    /// Record one accepted scheduler submission for a rule instance (issue
+    /// #1427). Called by the driver's submit hook; the entry survives until
+    /// [`Self::clear_cluster_job`] observes the job settling.
+    pub fn record_cluster_job(&mut self, rule: &str, record: ClusterJobRecord) {
+        self.cluster_jobs.insert(rule.to_string(), record);
+    }
+
+    /// Drop a rule's recorded scheduler submission once its fate is known
+    /// (settled, adopted, cancelled, or deliberately abandoned).
+    pub fn clear_cluster_job(&mut self, rule: &str) {
+        self.cluster_jobs.remove(rule);
+    }
+
+    /// Every rule with a submitted-but-never-settled scheduler job, sorted by
+    /// rule name (the map is a `BTreeMap`, so iteration order is stable).
+    /// Resume refuses to re-run these rules without first reconciling them
+    /// with the scheduler (issue #1427).
+    pub fn unsettled_cluster_jobs(&self) -> impl Iterator<Item = (&str, &ClusterJobRecord)> {
+        self.cluster_jobs
+            .iter()
+            .map(|(rule, job)| (rule.as_str(), job))
     }
 
     /// Resolve the HEAD commit SHA of the git repository containing
@@ -2862,6 +2977,91 @@ mod tests {
             back.cluster_images["align"].spec, "busybox:1.37",
             "a re-submitted rule's record is refreshed"
         );
+    }
+
+    #[test]
+    fn cluster_resume_records_are_additive_and_legacy_bytes_unchanged() {
+        // Issue #1427: the cluster identity + per-rule job ids are additive.
+        // A checkpoint carrying neither serializes exactly as before (no new
+        // key appears), and a pre-#1427 checkpoint round-trips byte-stably.
+        let empty = CheckpointState::new();
+        let json = serde_json::to_string(&empty).unwrap();
+        assert!(
+            !json.contains("cluster_run"),
+            "absent record must not serialize"
+        );
+        assert!(
+            !json.contains("cluster_jobs"),
+            "empty map must not serialize"
+        );
+
+        // The exact pre-#1427 shape: every field here is required or
+        // non-default, and no new key may be introduced by re-serialization.
+        let legacy = r#"{"checkpoint_format_version":1,"completed_rules":["a"],"failed_rules":[],"benchmarks":{},"workflow_path":"/wf/p.oxoflow"}"#;
+        let loaded: CheckpointState = serde_json::from_str(legacy).unwrap();
+        assert!(loaded.cluster_run.is_none());
+        assert!(loaded.cluster_jobs.is_empty());
+        assert_eq!(
+            serde_json::to_string(&loaded).unwrap(),
+            legacy,
+            "a legacy checkpoint must serialize back to the same bytes"
+        );
+
+        // Recorded state round-trips, round-ordered by rule (the BTreeMap
+        // ordering is part of the persisted artifact contract).
+        let mut ck = CheckpointState::new();
+        ck.set_cluster_run(Some(ClusterRunRecord {
+            profile: "slurm".to_string(),
+            backend: "slurm".to_string(),
+            queue: Some("gpu".to_string()),
+            account: None,
+            run_dir: Some("/wf/.oxo-flow/runs/20260101-000000".to_string()),
+        }));
+        let submitted_at = DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        ck.record_cluster_job(
+            "z_rule",
+            ClusterJobRecord {
+                job_id: "44_1".to_string(),
+                array_base: Some("44".to_string()),
+                backend: "slurm".to_string(),
+                submitted_at,
+            },
+        );
+        ck.record_cluster_job(
+            "a_rule",
+            ClusterJobRecord {
+                job_id: "45".to_string(),
+                array_base: None,
+                backend: "slurm".to_string(),
+                submitted_at,
+            },
+        );
+        let with_jobs = ck.to_json().unwrap();
+        assert!(
+            with_jobs.find("\"a_rule\"").unwrap() < with_jobs.find("\"z_rule\"").unwrap(),
+            "job records must persist in key order"
+        );
+        assert!(
+            !with_jobs.contains("\"array_base\": null"),
+            "a plain job must not persist a null array base"
+        );
+        let mut back: CheckpointState = serde_json::from_str(&with_jobs).unwrap();
+        assert_eq!(back.cluster_run, ck.cluster_run);
+        assert_eq!(back.cluster_jobs, ck.cluster_jobs);
+        assert_eq!(
+            back.unsettled_cluster_jobs()
+                .map(|(r, _)| r)
+                .collect::<Vec<_>>(),
+            vec!["a_rule", "z_rule"]
+        );
+
+        // Terminal transitions clear the per-rule record, so a settled job is
+        // never re-attached by a later resume; the cluster identity stays.
+        back.clear_cluster_job("a_rule");
+        assert!(!back.cluster_jobs.contains_key("a_rule"));
+        assert!(back.cluster_run.is_some());
     }
 
     #[test]
