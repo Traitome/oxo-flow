@@ -145,13 +145,17 @@ test/claim gaps; all five are closed in the follow-up commit:
 
 ## Residual / blocked
 
-- **Live campaigns (#1390)**: no AWS credentials and no reachable GCP
-  endpoint. No live claim is made for polling, logs, cancellation, or
-  arrays on any cloud. The maturity labels stay **Prototype**.
-- **#1389 is not closed by this work.** The recorded live smoke
-  (2026-11-25) is a named compute environment (`TENCENTBATCH_ENV_ID`)
-  submit reaching `SUCCEED`; anonymous inline-env creation failed on that
-  account. Poll/log/cancel/array paths remain mock-verified only.
+- **Live AWS/GCP campaigns (#1390)**: not run — no AWS credentials and no
+  reachable GCP endpoint. Issue #1390 is closed as not planned for the live
+  campaign; the prerequisites, protocol, and remaining work are recorded in
+  [`cloud-live-campaigns-todo-2026-11-26.md`](cloud-live-campaigns-todo-2026-11-26.md).
+  No live claim is made for polling, logs, cancellation, or arrays on those
+  backends; their maturity labels stay **Prototype**.
+- **#1389** is closed by the 2026-11-26 live campaign
+  ([`tencent-batch-live-2026-11-26.md`](tencent-batch-live-2026-11-26.md)):
+  named-env submit `SUCCEED`, state poll, `DescribeTaskLogs` decode, and
+  `TerminateJob` cancel; arrays require `[cluster.volume]` and fail closed
+  without it.
 - Tencent per-instance settlement via `DescribeTask` remains the RB-06
   residual: arrays settle on the base job verdict and record that
   aggregate provenance in `skip_reason`. `DescribeTaskLogs` is read as one
