@@ -330,6 +330,25 @@ pub enum Commands {
             help = "Skip the automatic report snapshot after the resumed run"
         )]
         no_report_snapshot: bool,
+        /// Re-attach a cluster run to the scheduler jobs its previous process
+        /// recorded (issue #1427). Resolves the backend/queue from the
+        /// checkpoint; the name is the profile the original run used.
+        #[arg(
+            long,
+            value_name = "NAME",
+            help = "Re-attach to the cluster jobs recorded in the checkpoint through this profile. \
+                    Defaults to the profile the checkpoint records; without either, resume fails \
+                    closed when unsettled scheduler jobs are recorded"
+        )]
+        profile: Option<String>,
+        /// Cancel the scheduler jobs recorded in the checkpoint instead of
+        /// waiting for them, then re-run their rules.
+        #[arg(
+            long,
+            help = "Cancel the scheduler jobs recorded in the checkpoint, then re-run their rules \
+                    (instead of re-attaching and waiting for them)"
+        )]
+        abandon_jobs: bool,
         /// Detach the resumed run into a background process: the foreground
         /// invocation spawns a detached child that re-runs `resume` without
         /// the flag, writes its pid to .oxo-flow/background.pid, prints a
@@ -2023,6 +2042,8 @@ async fn main() -> Result<()> {
             timeout,
             workdir,
             no_report_snapshot,
+            profile,
+            abandon_jobs,
             background,
         } => {
             // ── Background resume (issue #158) ───────────────────────────
@@ -2053,6 +2074,8 @@ async fn main() -> Result<()> {
                 timeout,
                 workdir,
                 no_report_snapshot,
+                profile,
+                abandon_jobs,
                 cli.json,
             )
             .await?

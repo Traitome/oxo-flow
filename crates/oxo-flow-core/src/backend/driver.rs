@@ -113,10 +113,16 @@ pub type PlanMerge<'a> = Box<dyn FnMut(&mut ScheduledPlan, &[String]) -> Result<
 /// moment its job is accepted — a crashed driver then leaves truthful
 /// pending state instead of nothing (issue #136 H6, terminal-state-only
 /// recording). Errors are logged, not fatal.
+///
+/// `(rule, job_id, array_base)`: `array_base` is `Some(base)` for a job-array
+/// element, whose cancel/poll target is the base id on schedulers that report
+/// arrays only by base (issue #1427 — the caller persists it so a resume can
+/// re-attach through the right handle).
 pub type SubmitHook = Box<
     dyn FnMut(
             String,
             String,
+            Option<String>,
         ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send>>
         + Send,
 >;
@@ -855,7 +861,11 @@ impl BackendDriver {
                                 ));
                                 emit(&mut events, "SUBMITTED", c_name, Some(&element_id), None);
                                 if let Some(ref mut hook) = opts.on_submit {
-                                    let fut = hook(c_name.clone(), element_id.clone());
+                                    let fut = hook(
+                                        c_name.clone(),
+                                        element_id.clone(),
+                                        Some(base_id.clone()),
+                                    );
                                     if let Err(e) = fut.await {
                                         tracing::warn!(rule = %c_name, error = %e, "checkpoint submit hook failed");
                                     }
@@ -945,7 +955,7 @@ impl BackendDriver {
                             submitted_this_round += 1;
                             emit(&mut events, "SUBMITTED", c_name, Some(&job_id), None);
                             if let Some(ref mut hook) = opts.on_submit {
-                                let fut = hook(c_name.clone(), job_id.clone());
+                                let fut = hook(c_name.clone(), job_id.clone(), None);
                                 if let Err(e) = fut.await {
                                     tracing::warn!(rule = %c_name, error = %e, "checkpoint submit hook failed");
                                 }
@@ -4433,18 +4443,24 @@ shell = "echo asm > out/{assembler}.txt"
         );
     }
 
+    /// One `(rule, job_id, array_base)` submit-hook observation.
+    type SubmitObservation = (String, String, Option<String>);
+
     #[test]
     fn on_submit_hook_records_every_accepted_job() {
         // H6: submit-time checkpoint recording sees each accepted job.
+        // Issue #1427: an array element also carries its base id, the handle
+        // a scheduler that reports arrays only by base polls/cancels.
         let fx = setup();
         let plan = sibling_plan(fx.workdir.path(), 2);
         let to_run: HashSet<String> = plan.order.iter().cloned().collect();
-        let seen: Arc<std::sync::Mutex<Vec<String>>> = Arc::new(std::sync::Mutex::new(vec![]));
+        let seen: Arc<std::sync::Mutex<Vec<SubmitObservation>>> =
+            Arc::new(std::sync::Mutex::new(vec![]));
         let hook_seen = seen.clone();
-        let on_submit = move |rule: String, _job: String| {
+        let on_submit = move |rule: String, job: String, array_base: Option<String>| {
             let seen = hook_seen.clone();
             Box::pin(async move {
-                seen.lock().unwrap().push(rule);
+                seen.lock().unwrap().push((rule, job, array_base));
                 Ok(())
             })
                 as std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send>>
@@ -4488,6 +4504,14 @@ shell = "echo asm > out/{assembler}.txt"
             2,
             "every accepted job must hit the hook: {seen:?}"
         );
+        for (rule, job, base) in seen.iter() {
+            assert!(!job.is_empty(), "the hook must carry the element id");
+            assert_eq!(
+                base.as_deref(),
+                job.rsplit_once('_').map(|(b, _)| b),
+                "an array element's hook record must carry its base id ({rule})"
+            );
+        }
     }
 
     // ─── cluster-path audit findings ───────────────────────────────────────
@@ -5383,7 +5407,7 @@ shell = "mkdir -p out && printf '%s' '{config.api_token}' > out/{assembler}.txt"
         let seen_at_submit: Arc<std::sync::Mutex<Option<bool>>> =
             Arc::new(std::sync::Mutex::new(None));
         let probe_slot = seen_at_submit.clone();
-        let on_submit = move |_rule: String, _job: String| {
+        let on_submit = move |_rule: String, _job: String, _base: Option<String>| {
             let path = stale_probe.clone();
             let slot = probe_slot.clone();
             Box::pin(async move {

@@ -1126,6 +1126,40 @@ fn available_profiles(workflow_dir: &Path) -> Vec<String> {
     names
 }
 
+/// Resolve a profile name to its file under `<workflow_dir>/profiles/`
+/// (`.toml` before `.oxoflow`) — the single lookup both `merge_profile` and
+/// `resume`'s cluster re-attach use, so "is this profile available?" can
+/// never be answered differently by the two paths (issue #1427).
+pub(crate) fn profile_file(workflow_dir: &Path, profile_name: &str) -> Option<std::path::PathBuf> {
+    [
+        workflow_dir
+            .join("profiles")
+            .join(format!("{profile_name}.toml")),
+        workflow_dir
+            .join("profiles")
+            .join(format!("{profile_name}.oxoflow")),
+    ]
+    .into_iter()
+    .find(|p| p.exists())
+}
+
+/// The one "profile not found" diagnostic `run`/`resume` share: names the
+/// missing profile and lists what IS available, so a typo (or a profile file
+/// deleted after the original run) is actionable from the message alone.
+pub(crate) fn profile_not_found(workflow_dir: &Path, profile_name: &str) -> anyhow::Error {
+    let available = available_profiles(workflow_dir);
+    let hint = if available.is_empty() {
+        "the profiles/ directory does not exist or contains no .toml/.oxoflow profile files"
+            .to_string()
+    } else {
+        format!("available profiles: {}", available.join(", "))
+    };
+    anyhow::anyhow!(
+        "profile '{}' not found in profiles/ directory ({hint})",
+        profile_name
+    )
+}
+
 /// Merge a profile's `[config]` table into the workflow config — the same
 /// semantics `run` applies. Profile values only FILL IN keys the workflow
 /// does not set (`or_insert`); profile lookup is workflow-dir-only:
@@ -1139,29 +1173,10 @@ pub(crate) fn merge_profile(
 ) -> Result<()> {
     use colored::Colorize;
 
-    let profile_paths = [
-        workflow_dir
-            .join("profiles")
-            .join(format!("{profile_name}.toml")),
-        workflow_dir
-            .join("profiles")
-            .join(format!("{profile_name}.oxoflow")),
-    ];
-    let profile_path = profile_paths.iter().find(|p| p.exists());
-    let Some(path) = profile_path else {
-        let available = available_profiles(workflow_dir);
-        let hint = if available.is_empty() {
-            "the profiles/ directory does not exist or contains no .toml/.oxoflow profile files"
-                .to_string()
-        } else {
-            format!("available profiles: {}", available.join(", "))
-        };
-        return Err(anyhow::anyhow!(
-            "profile '{}' not found in profiles/ directory ({hint})",
-            profile_name
-        ));
+    let Some(path) = profile_file(workflow_dir, profile_name) else {
+        return Err(profile_not_found(workflow_dir, profile_name));
     };
-    let profile_content = std::fs::read_to_string(path)
+    let profile_content = std::fs::read_to_string(&path)
         .with_context(|| format!("failed to read profile {}", path.display()))?;
     // NOTE: `toml::Value::from_str` in toml 1.x parses a SINGLE inline
     // value, not a document — `[config]` would fail with "unexpected

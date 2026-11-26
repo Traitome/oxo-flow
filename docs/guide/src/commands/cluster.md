@@ -521,9 +521,12 @@ jobs, and dependencies are chained per instance. The run submits at most
 checkpoint exactly as a local run does — `status`, `resume`, and re-run
 invalidation behave identically, and a second `run --profile slurm` with
 nothing changed submits nothing. Terminal verdicts are folded into the
-checkpoint as each job settles, and a rule still recorded as
-`running`/`pending` after a driver crash is re-queued rather than trusted
-because its output file exists (a killed job can leave a partial file).
+checkpoint as each job settles; the accepted job id (and its array base) is
+recorded at submit time and removed on settle, so a checkpoint's
+`cluster_jobs` map holds exactly the submissions a crashed driver never saw
+finish. A rule still recorded as `running`/`pending` after a driver crash is
+reconciled by `resume` — never trusted merely because its output file exists
+(a killed job can leave a partial file).
 
 The run's scratch directory (`[engine] tmp_dir` / `OXO_FLOW_TMPDIR`, issue
 #907) travels onto the cluster too: every submitted job script exports
@@ -747,16 +750,21 @@ interrupted rule is `required = false`: it is never reported as completed.
 Signals are watched on the cluster path only; the local executor has its
 own (pre-existing) signal handling.
 
-What remains out of scope is *re-attaching*: a driver that died without a
-signal (crash, OOM) cannot adopt the scheduler job ids of a previous
-process. Those jobs keep running under the scheduler; a subsequent
-`resume` (checkpoint path argument) or `run --resume-failed` re-queues their rules from the checkpoint's
-RUNNING entries rather than reusing the live job ids — verdicts the driver
-had already observed settling were folded into the checkpoint, so their work
-is not repeated. Until a
-re-attach path exists, use `oxo-flow cluster status` (run-aware; `--all`
-for the raw scheduler view) and `oxo-flow cluster cancel <JOB_ID>...` to
-inspect or clean up jobs orphaned by a crashed driver.
+Re-attaching is a `resume` feature: the checkpoint records the run's
+profile/backend/queue and every accepted job id, all removed as jobs settle.
+`oxo-flow resume <checkpoint>` re-attaches through the recorded profile (or an
+explicit `--profile`), polls the recorded jobs to a terminal state, adopts a
+success only after verifying the rule's declared outputs, records failures for
+a normal re-run, and fails closed when the scheduler cannot confirm a job.
+`--abandon-jobs` cancels the recorded live jobs through the backend that owns
+them, then reruns their rules. See
+[resume → Cluster runs](../commands/resume.md#cluster-runs-reattach-or-abandon).
+
+A plain `run` is NOT a re-attach path: `run --profile` re-plans from the
+checkpoint's completion set and submits whatever is not complete, so after a
+crashed driver use `resume` rather than a fresh `run`. `oxo-flow cluster
+status` (run-aware; `--all` for the raw scheduler view) and `oxo-flow cluster
+cancel <JOB_ID>...` remain the raw inspection/cleanup surfaces.
 
 ### Crash-safe checkpoint folding (issue #1083)
 
