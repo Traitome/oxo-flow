@@ -2193,12 +2193,14 @@ pub async fn retry_run(
     // subsumes them (the from-rule itself is always re-executed, and every
     // transitive dependent is invalidated before the freshness gate runs).
     //
-    // Without `from_rule`, the spawn must match the plan `compute_retry_plan`
-    // returned: `will_skip` is non-empty exactly when `skip_succeeded` is
-    // set, and `--rerun` force-re-executes every rule (force_rerun in the
-    // CLI), silently contradicting that promise — a retry of one failed
+    // Without `from_rule`, the spawn must follow the reuse decision
+    // `compute_retry_plan` returned: `will_skip` is non-empty exactly when
+    // `skip_succeeded` is set, so `--rerun` (which force-re-executes every
+    // rule) would silently contradict that skip set — a retry of one failed
     // rule re-ran all succeeded ones too (live-verified). The mapping lives
-    // in `retry_spawn_flags` so the promise and the spawn share one source.
+    // in `retry_spawn_flags` so the plan and the spawn share one decision.
+    // The skip set is advisory: the spawn always carries `--verify-outputs`,
+    // so strict manifest verification can only expand the executed set.
     let (resume_failed, rerun) = service::retry_spawn_flags(from_rule.is_some(), skip_succeeded);
 
     // Same workdir → checkpoint-driven partial re-execution.

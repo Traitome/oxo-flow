@@ -174,15 +174,6 @@ async fn retry_spawn_verifies_outputs_and_forwards_manifest_hash_cap() {
         "OXO_FLOW_WORKSPACE",
         root.join("workspace").to_str().unwrap(),
     );
-    // Hermetic AI config (repo test rule): a non-existent path containing
-    // `.oxo-flow`. This binary never reads or writes provider config, and
-    // the single test owns the process (no env races).
-    set_env(
-        "OXO_FLOW_AI_CONFIG",
-        root.join("hermetic/.oxo-flow/ai_config.json")
-            .to_str()
-            .unwrap(),
-    );
     // The operator knob whose forwarding is under test.
     set_env("OXO_FLOW_MANIFEST_HASH_MAX_BYTES", MANIFEST_HASH_CAP);
 
@@ -194,6 +185,16 @@ async fn retry_spawn_verifies_outputs_and_forwards_manifest_hash_cap() {
     let create_env_record = root.join("env-create.txt");
 
     common::ensure_db().await;
+    // Hermetic AI config (repo test rule): `ensure_db` points the shared
+    // override at this process's scratch file, so set ours after it or the
+    // setting is dead. This binary never reads or writes provider config,
+    // and the single test owns the process (no env races).
+    set_env(
+        "OXO_FLOW_AI_CONFIG",
+        root.join("hermetic/.oxo-flow/ai_config.json")
+            .to_str()
+            .unwrap(),
+    );
     oxo_flow_web::domains::execution::handlers::set_run_rate_limit_for_tests(0);
     let app = server::build_router("personal");
 

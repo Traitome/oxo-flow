@@ -118,10 +118,10 @@ ends with a **Done when** condition — do not proceed without it.
   Outputs above the cap and non-regular outputs are unverified under this
   default — raise the cap or pass `--trust-mtime` to accept the historical
   size+mtime verdict. The web retry path (`run --resume-failed`) and
-  `resume`/`resume-checkpoint` apply the same strict check; web-spawned
-  runs forward `OXO_FLOW_MANIFEST_HASH_MAX_BYTES`, so the operator's cap
-  applies there too. A plain `run` keeps the historical gate unless
-  `run --verify-outputs` opts in.
+  `resume`/`resume-checkpoint` apply the same strict check; locally
+  web-spawned runs forward `OXO_FLOW_MANIFEST_HASH_MAX_BYTES`, so the
+  operator's cap applies there too. A plain `run` keeps the historical gate
+  unless `run --verify-outputs` opts in.
 - Retry budget: max 3 correction loops, then escalate to the human.
 - Done when: all rules complete, evidenced by checkpoint state.
 

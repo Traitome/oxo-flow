@@ -1104,15 +1104,22 @@ Like every `ApiResult` error, the 429 carries no `Retry-After` header
 (the typed tuple cannot carry headers) — the countdown lives in the
 error `message` instead (`retry in {wait_secs}s`).
 `skip_succeeded` (default `true`) chooses which rules re-execute. The
-returned plan and the spawned CLI flags are derived from the same mapping
-(`retry_spawn_flags`), so the promise and the execution cannot drift:
+returned plan and the spawned CLI flags are derived from the same decision
+(`retry_spawn_flags`): the flags decide which checkpoint records the CLI may
+reuse. The plan is **pre-verification** and advisory — the retry spawn also
+carries `--verify-outputs`, so strict manifest verification can only *expand*
+the executed set (a rule listed in `will_skip` whose output fails
+re-executes with its completed downstream); it never skips a rule whose
+output failed verification. `will_rerun` is an estimate too: it adds the
+failed/cancelled rules plus their direct dependents, while the engine's
+runtime invalidation may cascade transitively:
 
 - `skip_succeeded: true` — the retry spawns with `--resume-failed` (no
   `--rerun`). Failed and cancelled rules re-execute, the checkpoint's
   cascade invalidation re-runs their downstream dependents, and completed
-  rules outside that closure keep their checkpoint records and are skipped.
-  `will_rerun` lists the re-executed set; `will_skip` lists the skipped
-  completed rules.
+  rules outside that closure keep their checkpoint records and are listed
+  in `will_skip` (advisory — strict verification may still re-run one).
+  `will_rerun` lists the expected re-executed set.
 - `skip_succeeded: false` — the retry spawns with `--rerun`, which
   re-executes EVERY rule regardless of checkpoint state. `will_rerun` lists
   every rule in the workflow (DAG order) and `will_skip` is empty — the same
@@ -1131,7 +1138,8 @@ record, so they re-execute as well; the plan lists them in `will_rerun`
 alongside the downstream closure. `--from-rule` subsumes
 `skip_succeeded` for the re-executed set: completed rules outside that set
 keep their checkpoint state, so the plan lists them in `will_skip`
-regardless of `skip_succeeded`. A `from_rule` naming a rule not in the DAG
+regardless of `skip_succeeded` (advisory: strict verification may still
+re-run a listed rule). A `from_rule` naming a rule not in the DAG
 surfaces as a `400 RuleNotFound` from the spawned CLI's own DAG walk.
 
 The spawned CLI also carries `--verify-outputs` (issue #1426): a retry is a
@@ -1141,15 +1149,15 @@ instead of the historical size+mtime gate. A rule whose output is missing,
 resized, content-changed, or unhashed — plus its completed downstream —
 re-executes before the run reports it up to date. The flag is sent for all
 three retry shapes above; with `--rerun` every rule executes, so the check
-is a no-op there. The web spawn environment allowlist also forwards
+is a no-op there. The local web spawn environment allowlist also forwards
 `OXO_FLOW_MANIFEST_HASH_MAX_BYTES`, so a retry hashes with the operator's
 cap rather than the 64 MiB default. Plain create is unaffected: it is a
 fresh `run` and keeps the historical gate by design.
 
 The retry **really executes**: the returned `new_run_id` is a real run in
 the database (same workdir, same owner), spawned with the flag pair above so
-the rules the plan lists re-execute despite their existing outputs and the
-checkpoint's cascade invalidation re-runs their downstream dependents.
+the rules `will_rerun` lists re-execute despite their existing outputs and
+the checkpoint's cascade invalidation re-runs their downstream dependents.
 The retry **replays the original run's `config_overrides`**:
 the new row carries the stored overrides forward and the spawned CLI
 receives the same `--arg=KEY=VALUE` entries, so a retry re-executes with the
@@ -1163,8 +1171,9 @@ When `from_rule` is set, the plan's `will_rerun` list contains the named
 rule plus every transitive dependent (the downstream closure) and any
 failed/cancelled rule in its upstream target set (those re-execute too,
 since they have no success checkpoint record), and `will_skip` contains the
-remaining completed rules — the same set the engine will execute at run
-start.
+remaining completed rules — the pre-verification reuse estimate; strict
+manifest verification can still re-run one of them (and its completed
+downstream).
 
 ### Apply Reviewed Repair
 ```
@@ -2142,7 +2151,7 @@ Declared resources are enforced, not only counted:
   process count (it is a fork-bomb backstop, not a per-run quota). Both are
   Linux-only; off Linux the install is a no-op.
 
-- **Child environment allowlist (web spawn path)**: the spawned CLI no longer
+- **Child environment allowlist (local web spawn path)**: the spawned CLI no longer
   inherits the server's environment. The web spawn path reuses the engine's own
   rule-shell policy (`apply_rule_env_allowlist`), so the child sees only
   `PATH`/`HOME`/`LANG`/`LC_*`, the engine's non-secret configuration knobs

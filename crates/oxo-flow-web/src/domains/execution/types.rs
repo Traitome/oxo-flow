@@ -493,7 +493,15 @@ pub struct ResourceBottleneck {
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct RetryResponse {
     pub new_run_id: String,
+    /// Rules the retry expects to re-execute. Advisory: the plan adds the
+    /// failed/cancelled rules plus their direct dependents, while the
+    /// engine's runtime invalidation may cascade transitively; strict output
+    /// verification can only expand this set.
     pub will_rerun: Vec<String>,
+    /// Completed rules the retry expects to reuse. PRE-VERIFICATION and
+    /// ADVISORY: the spawned retry carries `--verify-outputs`, so a listed
+    /// rule whose recorded output manifest fails re-executes together with
+    /// its completed downstream. This list never suppresses a failed rule.
     pub will_skip: Vec<String>,
     /// Honesty note when the plan cannot describe the retry (issue #760):
     /// a previous run that failed before executing any rule yields an

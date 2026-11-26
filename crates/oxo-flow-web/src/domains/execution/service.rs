@@ -215,16 +215,21 @@ pub fn compute_overall_status(nodes: &[NodeStatusItem], db_status: Option<&str>)
 }
 
 /// The CLI flag pair (`--resume-failed`, `--rerun`) that makes a retry's
-/// spawned execution match what [`compute_retry_plan`] promised.
+/// spawned execution follow the same reuse decision as [`compute_retry_plan`].
 ///
 /// - `from_rule` set: the CLI's `--from-rule` transitive-closure
 ///   invalidation subsumes both flags (issue #1017), so both are suppressed.
-/// - `skip_succeeded`: the plan promises a non-empty `will_skip`; the
-///   checkpoint skip set delivers it, and `--resume-failed` clears the
-///   failed-rule markers so exactly the failed set re-executes. `--rerun`
-///   force-re-executes every rule and contradicts the promise.
-/// - `!skip_succeeded`: the plan promises nothing is skipped — `--rerun`
-///   is what makes that true.
+/// - `skip_succeeded`: the plan lists a pre-verification skip set
+///   (`will_skip`); the checkpoint skip set applies it, and `--resume-failed`
+///   clears the failed-rule markers so the failed set re-executes.
+///   `--rerun` force-re-executes every rule and contradicts that skip set.
+/// - `!skip_succeeded`: the plan lists nothing as skipped — `--rerun` is what
+///   makes that true.
+///
+/// The plan is advisory, not a promise: the spawned retry always carries
+/// `--verify-outputs`, so strict manifest verification can only EXPAND the
+/// executed set (a listed skip whose recorded output fails re-executes with
+/// its completed downstream) — it never skips a rule whose output failed.
 pub fn retry_spawn_flags(from_rule: bool, skip_succeeded: bool) -> (bool, bool) {
     if from_rule {
         (false, false)
@@ -233,11 +238,20 @@ pub fn retry_spawn_flags(from_rule: bool, skip_succeeded: bool) -> (bool, bool) 
     }
 }
 
-/// Compute retry plan: which rules to rerun and which to skip.
+/// Compute retry plan: the expected re-executed set and a pre-verification
+/// skip set.
+///
+/// The plan is advisory. `will_skip` lists completed rules the retry expects
+/// to reuse; the spawned retry verifies their recorded output manifests
+/// before reuse, so a failed entry re-executes (with its completed
+/// downstream). `will_rerun` is an estimate, not the final executed set: it
+/// adds the failed/cancelled rules and their direct dependents, while the
+/// engine's runtime invalidation may cascade transitively.
 ///
 /// - `skip_succeeded` (default true): reruns the failed/cancelled set plus
 ///   their downstream dependents; completed rules outside that closure are
-///   skipped via the checkpoint.
+///   listed in `will_skip` (pre-verification — strict manifest verification
+///   can still re-run one of them).
 /// - `!skip_succeeded`: the spawn receives `--rerun`, which re-executes
 ///   EVERY rule, so `will_rerun` lists every rule in the DAG and
 ///   `will_skip` is empty.
@@ -245,7 +259,8 @@ pub fn retry_spawn_flags(from_rule: bool, skip_succeeded: bool) -> (bool, bool) 
 ///   plus any failed/cancelled rule in the named rule's upstream target set
 ///   (those have no success checkpoint, so the spawned run re-executes
 ///   them); completed rules outside that set keep their checkpoint state
-///   (the flag pair is suppressed), so they are listed in `will_skip`.
+///   (the flag pair is suppressed), so they are listed in `will_skip`
+///   (again pre-verification: strict verification can expand the run).
 pub fn compute_retry_plan(
     run_nodes: &[NodeStatusItem],
     dag: &WorkflowDag,
@@ -344,8 +359,10 @@ pub fn compute_retry_plan(
     }
 
     // Reached only when `skip_succeeded` is true (the full-rerun case
-    // returned above): completed rules outside the failed closure are
-    // skipped by the checkpoint.
+    // returned above): completed rules outside the failed closure are listed
+    // as pre-verification skips. The retry's strict manifest verification
+    // can still re-run a listed rule (and its downstream), so this list is
+    // advisory — it never suppresses a rule whose output failed to verify.
     let will_skip: Vec<String> = run_nodes
         .iter()
         .filter(|n| n.status == NodeStatus::Success && !will_rerun.contains(&n.rule))
@@ -547,11 +564,11 @@ mod tests {
     }
 
     #[test]
-    fn retry_spawn_flags_honor_the_plan_promise() {
+    fn retry_spawn_flags_follow_the_plan_decision() {
         // skip_succeeded → checkpoint-driven partial retry: --resume-failed
-        // on, --rerun off (the plan promised will_skip).
+        // on, --rerun off (the plan lists a pre-verification will_skip set).
         assert_eq!(retry_spawn_flags(false, true), (true, false));
-        // no skip → force the full pass (the plan promised nothing skipped).
+        // no skip → force the full pass (the plan lists nothing skipped).
         assert_eq!(retry_spawn_flags(false, false), (false, true));
         // from_rule → the closure invalidation subsumes both flags.
         assert_eq!(retry_spawn_flags(true, true), (false, false));
@@ -792,9 +809,9 @@ output = ["b.txt"]
 
     /// `skip_succeeded: false` spawns `--rerun`, which re-executes EVERY
     /// rule (including succeeded ones). The plan must list the same set —
-    /// otherwise `will_rerun` is a promise the execution breaks (review
-    /// wave 2 MEDIUM-3: a succeeded "a" appeared in neither list while the
-    /// retry re-ran it).
+    /// otherwise `will_rerun` understates the execution (review wave 2
+    /// MEDIUM-3: a succeeded "a" appeared in neither list while the retry
+    /// re-ran it).
     #[test]
     fn test_compute_retry_full_rerun_lists_every_rule() {
         let toml = r#"
@@ -842,8 +859,9 @@ output = ["c.txt"]
     /// upstream rule has no success checkpoint record, so the spawned run
     /// re-executes it too — it used to appear in neither `will_rerun` nor
     /// `will_skip` (review wave 3 LOW-2). The plan must list every rule the
-    /// run actually executes; a failed rule in an unrelated branch is
-    /// outside the target closure and must stay out.
+    /// retry is expected to execute; a failed rule in an unrelated branch is
+    /// outside the target closure and must stay out (strict verification can
+    /// later expand the executed set, never shrink it).
     #[test]
     fn test_compute_retry_from_rule_lists_failed_upstream_rule() {
         let toml = r#"

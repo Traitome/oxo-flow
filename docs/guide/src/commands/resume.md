@@ -129,13 +129,15 @@ verification. The web retry spawns `run --resume-failed --verify-outputs`
 `--from-rule`), so a retry of a run whose outputs were damaged after
 completion re-executes the affected rule and its completed downstream
 instead of silently reusing them. `OXO_FLOW_MANIFEST_HASH_MAX_BYTES` is
-forwarded into the web server's spawn environment allowlist, so web-spawned
-runs, retries, and their resumes hash with the operator's cap exactly like a
-direct CLI run. Plain web create remains a `run` and keeps the historical
+forwarded into the local web server spawn environment allowlist, so locally
+web-spawned runs, retries, and their resumes hash with the operator's cap
+exactly like a direct CLI run. Web cluster runs execute the staged copy on
+the remote host with the remote CLI's own environment, so a cap must be set
+there too. Plain web create remains a `run` and keeps the historical
 size+mtime gate by design, and `dry-run`/`status` previews do not verify.
-Same-size corruption of an output above the hash cap stays undetectable
-unless the cap is raised (or `resume --trust-mtime` explicitly accepts the
-size+mtime verdict).
+Same-size corruption of an output above the hash cap remains unverified
+(size-only), so strict verification re-runs it; raise the cap for content
+identity, or `--trust-mtime` accepts the size+mtime verdict.
 
 ### Checkpoint format version
 
