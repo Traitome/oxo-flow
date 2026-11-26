@@ -130,6 +130,12 @@ pub(crate) struct ClusterRunArgs<'a> {
     /// `TMPDIR`/`TMP`/`TEMP` into every cluster job shell, matching the
     /// local executor's process-env injection.
     pub tmp_dir: Option<&'a Path>,
+    /// Issue #1426: `resume`'s strict output verification (`false` for
+    /// plain `run` and `--trust-mtime`). A rule the plan would skip is
+    /// submitted instead when its recorded output manifest does not verify,
+    /// so a resumed cluster checkpoint cannot reuse a damaged artifact
+    /// merely because it exists.
+    pub strict_output_verification: bool,
 }
 
 /// Outcome of a cluster run, mirroring what the local loop reports.
@@ -475,22 +481,24 @@ fn cluster_env_cache_dir(cache_dir: Option<&Path>, workdir: &Path) -> PathBuf {
         .unwrap_or_else(|| workdir.join(".oxo-flow").join("env-cache"))
 }
 
-/// Schedule output-checksum recording for this rule instance, mirroring
-/// the local executor's `--provenance` / per-rule `checksum = "…"`
-/// contract (issue #1093 F1).
+/// Schedule output-record collection for this rule instance: the always-on
+/// declared-output manifest (issue #1426) plus, when requested, the
+/// `--provenance` / per-rule `checksum = "…"` digests (issue #1093 F1).
 ///
-/// The collection itself is [`oxo_flow_core::executor::output_checksums::collect_output_checksums`]
-/// — the same routine the local executor calls — so a cluster checkpoint
-/// carries identical entries (keys, algorithms) for the same workflow.
+/// The collection routines are the same ones the local executor calls
+/// ([`oxo_flow_core::executor::output_checksums::collect_output_manifest`] /
+/// [`oxo_flow_core::executor::output_checksums::collect_output_checksums`]),
+/// so a cluster checkpoint carries identical entries (keys, algorithms) for
+/// the same workflow.
 ///
 /// It runs as a background task rather than inline at the settle point:
 /// the driver awaits its settle hook between polls, and hashing a
 /// multi-GB output there would stall scheduling, Ctrl-C handling, and the
 /// submission of dependents — while the completion verdict is already
-/// persisted by the time this is scheduled. Hashing is deduplicated per
+/// persisted by the time this is scheduled. Recording is deduplicated per
 /// rule within one run (the record is folded twice), and the tasks are
 /// joined by [`ClusterProvenance::join_pending`] before the run reports.
-async fn schedule_output_checksums(args: &ClusterRunArgs<'_>, rule: &Rule, rule_name: &str) {
+async fn schedule_output_records(args: &ClusterRunArgs<'_>, rule: &Rule, rule_name: &str) {
     {
         let mut hashed = match args.provenance.rules_hashed.lock() {
             Ok(guard) => guard,
@@ -510,6 +518,7 @@ async fn schedule_output_checksums(args: &ClusterRunArgs<'_>, rule: &Rule, rule_
     for (k, v) in args.config.instance_bindings(rule_name) {
         wildcard_scope.insert(k, v);
     }
+    let wants_checksums = args.provenance.requested || rule.checksum.is_some();
     let rule = rule.clone();
     let workdir = args.workdir.to_path_buf();
     let checkpoint = args.checkpoint.clone();
@@ -519,37 +528,52 @@ async fn schedule_output_checksums(args: &ClusterRunArgs<'_>, rule: &Rule, rule_
     let rule_name = rule_name.to_string();
     let handle = tokio::spawn(async move {
         // File I/O off the async workers: outputs are routinely tens of GB.
-        let entries = match tokio::task::spawn_blocking(move || {
-            oxo_flow_core::executor::output_checksums::collect_output_checksums(
+        let (manifest, entries) = match tokio::task::spawn_blocking(move || {
+            let manifest = oxo_flow_core::executor::output_checksums::collect_output_manifest(
                 &rule,
                 &workdir,
                 &wildcard_scope,
-            )
+                oxo_flow_core::executor::checkpoint::output_manifest_hash_max_bytes(),
+            );
+            let entries = if wants_checksums {
+                oxo_flow_core::executor::output_checksums::collect_output_checksums(
+                    &rule,
+                    &workdir,
+                    &wildcard_scope,
+                )
+            } else {
+                Vec::new()
+            };
+            (manifest, entries)
         })
         .await
         {
-            Ok(entries) => entries,
+            Ok(records) => records,
             Err(e) => {
                 // A panicked collector must not disappear into a silent
                 // default: the operator needs to know which rule lost its
-                // provenance evidence. The completion verdict is already
-                // saved and hashing is best-effort, so the run continues.
+                // provenance/manifest evidence. The completion verdict is
+                // already saved and collection is best-effort, so the run
+                // continues (strict `resume` will re-run this rule).
                 tracing::warn!(
                     rule = %rule_name,
                     error = %e,
-                    "output checksum collection failed — checksums for this rule were not recorded"
+                    "output record collection failed — manifest/checksums for this rule were not recorded"
                 );
-                Vec::new()
+                (Vec::new(), Vec::new())
             }
         };
         let recorded_here = entries.len();
-        if recorded_here > 0 {
+        {
             let mut ck = checkpoint.lock().await;
+            ck.record_output_manifest(&rule_name, manifest);
             for (path, checksum) in entries {
                 ck.record_checksum(&path, checksum);
             }
+            // Always save: the output manifest is recorded regardless of
+            // whether provenance checksums were requested (issue #1426).
             if let Err(e) = ck.save_to_file_async(&checkpoint_path).await {
-                tracing::warn!("Failed to save provenance checksums: {e}");
+                tracing::warn!("Failed to save output records (manifest/checksums): {e}");
             }
         }
         if count {
@@ -619,16 +643,14 @@ async fn fold_record(args: &ClusterRunArgs<'_>, record: &JobRecord) {
             {
                 ck.record_input_manifest(&record.rule, manifest);
             }
-            // Output checksums (issue #1093 F1): `--provenance` and
-            // per-rule `checksum = "…"` are recorded from the same settle
-            // point that persists completion, so cluster checkpoints stop
-            // diverging from local ones. Scheduled off this path — the
+            // Output records (issue #1093 F1 + #1426): the always-on output
+            // manifest and, when requested, `--provenance` / per-rule
+            // `checksum = "…"` digests are recorded from the same settle
+            // point that persists completion. Scheduled off this path — the
             // verdict above is saved before any hashing starts, and the
             // driver's poll loop keeps running while outputs are hashed.
-            if let Some(rule) = rule
-                && (args.provenance.requested || rule.checksum.is_some())
-            {
-                schedule_output_checksums(args, rule, &record.rule).await;
+            if let Some(rule) = rule {
+                schedule_output_records(args, rule, &record.rule).await;
             }
         }
         JobStatus::Failed => {
@@ -733,6 +755,7 @@ fn plan_submissions(
     rerun: bool,
     resume_failed: bool,
     force_rules: &HashSet<String>,
+    strict_output_verification: bool,
 ) -> SubmissionPlan {
     let preview = crate::commands::run_preview::preview_run_plan(
         ck,
@@ -761,10 +784,56 @@ fn plan_submissions(
             .filter(|name| force_rules.contains(*name))
             .cloned(),
     );
+    // Strict resume (issue #1426): the read-only preview classifies skips
+    // from existence, mtime, and recorded checksums — it does not verify the
+    // output manifest. Re-check every rule the plan would skip and submit it
+    // when its manifest does not verify, so a resumed cluster checkpoint
+    // cannot reuse a damaged artifact. `when`-false rules and tombstoned
+    // temporaries are exempt: they are skipped by design, not by artifact
+    // evidence.
+    if strict_output_verification {
+        for entry in &preview.plan {
+            if !entry.status.is_skip()
+                || matches!(
+                    entry.status,
+                    crate::commands::run_preview::RuleStatus::SkippedByWhen
+                )
+                || ck.tombstones.contains_key(&entry.name)
+            {
+                continue;
+            }
+            let Some(rule) = config.get_rule(&entry.name) else {
+                continue;
+            };
+            // Same merged expansion scope the executor's gate uses for this
+            // instance.
+            let mut scope = wildcard_values.clone();
+            for (key, value) in config.instance_bindings(&entry.name) {
+                scope.insert(key, value);
+            }
+            let manifest = ck.output_manifests.get(&entry.name).map(Vec::as_slice);
+            if let Err(failure) = oxo_flow_core::executor::checkpoint::verify_output_manifest(
+                rule, workdir, &scope, manifest,
+            ) {
+                tracing::warn!(
+                    rule = %entry.name,
+                    path = failure.path().unwrap_or("<rule>"),
+                    reason = %failure.describe(),
+                    "strict output verification failed — submitting the rule instead of \
+                     reusing its recorded outputs (resume default; pass --trust-mtime to \
+                     accept mtime evidence instead)"
+                );
+                to_run.insert(entry.name.clone());
+            }
+        }
+    }
     let skipped_fresh = preview
         .plan
         .iter()
-        .filter(|p| p.status == crate::commands::run_preview::RuleStatus::SkippedFresh)
+        .filter(|p| {
+            p.status == crate::commands::run_preview::RuleStatus::SkippedFresh
+                && !to_run.contains(&p.name)
+        })
         .map(|p| p.name.clone())
         .collect();
     SubmissionPlan {
@@ -818,6 +887,7 @@ pub(crate) async fn run_on_cluster(
             args.rerun,
             args.resume_failed,
             args.force_rules,
+            args.strict_output_verification,
         )
     };
     let to_run = submission.to_run;
@@ -1527,6 +1597,7 @@ shell = "mkdir -p out/S1 && echo started > out/S1/done.txt && sleep 45 && echo d
             false,
             false,
             &std::collections::HashSet::new(),
+            false,
         );
         assert!(
             plan.to_run.contains("emit"),
@@ -1553,9 +1624,87 @@ shell = "mkdir -p out/S1 && echo started > out/S1/done.txt && sleep 45 && echo d
             false,
             false,
             &std::collections::HashSet::new(),
+            false,
         );
         assert!(!plan.to_run.contains("emit"));
         assert_eq!(plan.skipped_fresh, vec!["emit".to_string()]);
+    }
+
+    /// Issue #1426: a rule the preview would skip is submitted when strict
+    /// resume's recorded output manifest does not verify — existence/mtime
+    /// evidence alone is not enough.
+    #[test]
+    fn strict_verification_submits_a_rule_whose_manifest_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let wf = dir.path().join("wf.oxoflow");
+        std::fs::write(
+            &wf,
+            "[workflow]\nname = \"strict\"\n[[rules]]\nname = \"emit\"\n\
+             output = [\"out.txt\"]\nshell = \"true\"\n",
+        )
+        .unwrap();
+        let mut config = WorkflowConfig::from_file(&wf).unwrap();
+        config.apply_defaults();
+        let dag = WorkflowDag::from_rules(&config.rules).unwrap();
+        let order = dag.execution_order().unwrap();
+        let values = config.config_placeholder_values();
+        let checkpoint_path = dir.path().join("checkpoint.json");
+        std::fs::write(dir.path().join("out.txt"), "hello").unwrap();
+
+        let mut ck = CheckpointState::new();
+        ck.mark_completed_quiet("emit");
+        ck.record_output_manifest(
+            "emit",
+            vec![oxo_flow_core::executor::checkpoint::OutputManifestEntry {
+                path: "out.txt".to_string(),
+                size: 99,
+                sha256: None,
+            }],
+        );
+
+        let historical = plan_submissions(
+            &ck,
+            &config,
+            &dag,
+            &order,
+            dir.path(),
+            &values,
+            &std::collections::HashSet::new(),
+            &config.workflow.interpreter_map,
+            &checkpoint_path,
+            false,
+            false,
+            &std::collections::HashSet::new(),
+            false,
+        );
+        assert!(
+            !historical.to_run.contains("emit"),
+            "without strict verification the existing skip stands"
+        );
+
+        let strict = plan_submissions(
+            &ck,
+            &config,
+            &dag,
+            &order,
+            dir.path(),
+            &values,
+            &std::collections::HashSet::new(),
+            &config.workflow.interpreter_map,
+            &checkpoint_path,
+            false,
+            false,
+            &std::collections::HashSet::new(),
+            true,
+        );
+        assert!(
+            strict.to_run.contains("emit"),
+            "a failing output manifest must force a submission"
+        );
+        assert!(
+            strict.skipped_fresh.is_empty(),
+            "the forced rule must not be reported as a fresh skip"
+        );
     }
 
     /// A plan whose single rule declares checkpoint re-entry.
@@ -2022,6 +2171,7 @@ shell = "mkdir -p out/S1 && echo started > out/S1/done.txt && sleep 45 && echo d
                 ai_recover: false,
                 provenance,
                 tmp_dir: None,
+                strict_output_verification: false,
             };
             fold_record(&args, &record).await;
             // Checksum collection is scheduled off the settle path; settle

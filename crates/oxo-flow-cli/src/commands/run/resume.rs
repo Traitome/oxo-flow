@@ -70,6 +70,7 @@ pub async fn resume_command(
     no_report_snapshot: bool,
     profile: Option<String>,
     abandon_jobs: bool,
+    trust_mtime: bool,
     json: bool,
 ) -> Result<()> {
     let checkpoint_for_error = checkpoint.clone();
@@ -85,6 +86,7 @@ pub async fn resume_command(
         no_report_snapshot,
         profile,
         abandon_jobs,
+        trust_mtime,
         json,
         &mut json_written,
     )
@@ -115,6 +117,7 @@ async fn resume_command_inner(
     no_report_snapshot: bool,
     profile: Option<String>,
     abandon_jobs: bool,
+    trust_mtime: bool,
     json: bool,
     json_written: &mut bool,
 ) -> Result<()> {
@@ -242,6 +245,13 @@ async fn resume_command_inner(
         .map(|cfg| cfg.rules.len().saturating_sub(completed))
         .unwrap_or(failed);
     eprintln!("  State: {completed} completed, {failed} failed, {remaining} remaining");
+    if !trust_mtime {
+        eprintln!(
+            "  Note: verifying recorded output manifests for completed rules — a missing, \
+             resized, content-changed, or unhashed output re-runs (pass --trust-mtime to keep \
+             the size+mtime verdict)."
+        );
+    }
     if !skipped_when_false.is_empty() {
         eprintln!(
             "  Note: {} {} skipped by their `when` condition (recorded false); the gate is re-judged on this resume.",
@@ -330,8 +340,15 @@ async fn resume_command_inner(
         // resume: refs already built
         skip_ref_build: true,
         cache_dir: None,
-        // checkpoint already has checksums
+        // Issue #1426: the checkpoint's output manifests are verified for
+        // every completed rule (size + content hash), not just recorded
+        // provenance checksums — `--provenance` was opt-in and never covered
+        // large outputs, so a plain run → interrupt → resume sequence could
+        // silently reuse a truncated artifact.
         provenance: false,
+        // `--trust-mtime` restores the historical size+mtime verdict.
+        verify_outputs: true,
+        trust_mtime,
         // resume delegates to the run loop, which narrates to stderr; the
         // `resume` document is the one emitted below, so the run summary
         // would be a competing `{"command":"run"}` document.

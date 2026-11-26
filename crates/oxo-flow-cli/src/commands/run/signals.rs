@@ -174,9 +174,22 @@ pub(crate) async fn reclaim_rule_outputs(
             return Ok(0);
         }
         ck.tombstones.insert(candidate.rule.clone(), paths.clone());
+        // Issue #1426: the reclaimed outputs are about to disappear, so their
+        // manifest entries must go with them — a later strict resume must not
+        // verify reuse against files the engine deleted by design.
+        let previous_manifest = ck.output_manifests.get(&candidate.rule).cloned();
+        ck.clear_output_manifest_paths(&candidate.rule, &paths);
         if let Err(e) = ck.save_to_file_async(checkpoint_path).await {
             // Roll back the in-memory migration; the outputs stay on disk.
             ck.tombstones.remove(&candidate.rule);
+            match previous_manifest {
+                Some(manifest) => {
+                    ck.output_manifests.insert(candidate.rule.clone(), manifest);
+                }
+                None => {
+                    ck.output_manifests.remove(&candidate.rule);
+                }
+            }
             for path in &paths {
                 if let Some(sha) = ck.cleaned_checksums.remove(path) {
                     ck.checksums.insert(path.clone(), sha);

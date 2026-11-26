@@ -565,6 +565,13 @@ pub(crate) async fn handle_run_completion(ctx: CompletionContext<'_>) -> anyhow:
             // tombstones + the cleaned migration BEFORE deleting, and skip
             // the deletion when the persistence fails.
             let mut rollback: Vec<String> = Vec::new();
+            // Issue #1426: snapshot each rule's manifest so the tombstoned
+            // outputs' entries can be dropped atomically with the tombstone
+            // (and restored if persistence fails).
+            let mut manifest_rollback: Vec<(
+                String,
+                Option<oxo_flow_core::executor::checkpoint::OutputManifest>,
+            )> = Vec::new();
             for (rule, paths) in &new_tombstones {
                 ctx.checkpoint
                     .tombstones
@@ -575,6 +582,11 @@ pub(crate) async fn handle_run_completion(ctx: CompletionContext<'_>) -> anyhow:
                         rollback.push(path.clone());
                     }
                 }
+                manifest_rollback.push((
+                    rule.clone(),
+                    ctx.checkpoint.output_manifests.get(rule).cloned(),
+                ));
+                ctx.checkpoint.clear_output_manifest_paths(rule, paths);
             }
             if let Err(e) = ctx.checkpoint.save_to_file(ctx.checkpoint_path) {
                 tracing::warn!(
@@ -583,6 +595,16 @@ pub(crate) async fn handle_run_completion(ctx: CompletionContext<'_>) -> anyhow:
                 );
                 for (rule, _) in &new_tombstones {
                     ctx.checkpoint.tombstones.remove(rule);
+                }
+                for (rule, manifest) in manifest_rollback {
+                    match manifest {
+                        Some(manifest) => {
+                            ctx.checkpoint.output_manifests.insert(rule, manifest);
+                        }
+                        None => {
+                            ctx.checkpoint.output_manifests.remove(&rule);
+                        }
+                    }
                 }
                 for path in &rollback {
                     if let Some(sha) = ctx.checkpoint.cleaned_checksums.remove(path) {

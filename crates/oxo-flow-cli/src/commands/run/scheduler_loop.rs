@@ -54,6 +54,12 @@ pub(crate) struct SchedulerLoopContext<'a> {
     /// forwarded to the failure-abort handler, which applies it through the
     /// same verified-repair path `--ai-recover` uses.
     pub apply_patch: Option<&'a Path>,
+    /// Issue #1426: strict output verification (`resume`, unless
+    /// `--trust-mtime`). A checkpoint-completed rule is pre-skipped only when
+    /// its recorded output manifest verifies; otherwise it flows into normal
+    /// scheduling, where the executor's freshness gate re-checks it and
+    /// re-executes.
+    pub strict_output_verification: bool,
 }
 
 /// Record a post-completion processing failure (checkpoint re-entry,
@@ -138,6 +144,13 @@ enum PreSkipDecision {
         Box<oxo_flow_core::Rule>,
         oxo_flow_core::wildcard::WildcardValues,
         std::collections::BTreeMap<String, String>,
+    ),
+    /// Strict resume (issue #1426): reuse requires the recorded output
+    /// manifest to verify — existence/mtime alone is not evidence enough.
+    Strict(
+        Box<oxo_flow_core::Rule>,
+        oxo_flow_core::wildcard::WildcardValues,
+        Option<oxo_flow_core::executor::checkpoint::OutputManifest>,
     ),
 }
 
@@ -230,6 +243,7 @@ pub(crate) async fn run_scheduler_loop(ctx: SchedulerLoopContext<'_>) -> anyhow:
         workflow,
         apply_patch,
         json_summary,
+        strict_output_verification,
     } = ctx;
 
     let success_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -318,6 +332,18 @@ pub(crate) async fn run_scheduler_loop(ctx: SchedulerLoopContext<'_>) -> anyhow:
             for (key, value) in config.instance_bindings(rule_name) {
                 scope.insert(key, value);
             }
+            // Strict resume (issue #1426): the recorded output manifest is
+            // the reuse evidence, verified after the lock is released.
+            // Existence/mtime alone cannot prove a completed-but-truncated
+            // artifact is the one the rule produced.
+            if strict_output_verification {
+                let manifest = ck.output_manifests.get(rule_name).cloned();
+                pre_skip_decisions.push((
+                    rule_name.clone(),
+                    PreSkipDecision::Strict(Box::new(rule.clone()), scope, manifest),
+                ));
+                continue;
+            }
             let expanded_outputs: Vec<String> = rule
                 .output
                 .iter()
@@ -392,6 +418,45 @@ pub(crate) async fn run_scheduler_loop(ctx: SchedulerLoopContext<'_>) -> anyhow:
                 // else: a recorded hash diverges from the file on disk —
                 // decline the skip and leave the rule unsubmitted so the
                 // executor's freshness gate re-executes it (issue #1013 E6).
+            }
+            PreSkipDecision::Strict(rule, scope, manifest) => {
+                // Issue #1426: strict resume. The manifest is the reuse
+                // evidence; the verifier hashes on the blocking pool.
+                let verdict = oxo_flow_core::executor::checkpoint::verify_output_manifest_async(
+                    *rule,
+                    workdir_actual.as_ref().to_path_buf(),
+                    scope,
+                    manifest,
+                )
+                .await;
+                match verdict {
+                    Ok(()) => {
+                        mark_pre_completed(
+                            &rule_name,
+                            &mut submitted,
+                            &mut sched,
+                            config,
+                            workdir_actual.as_ref(),
+                            skipped_count.as_ref(),
+                            is_tty,
+                            Some(run_log),
+                            progress,
+                            checkpoint,
+                        )
+                        .await;
+                    }
+                    Err(failure) => {
+                        // Decline the skip: leave the rule unsubmitted so the
+                        // executor's freshness gate re-executes it (and emits
+                        // the operator-facing warning with the same reason).
+                        tracing::debug!(
+                            rule = %rule_name,
+                            path = failure.path().unwrap_or("<rule>"),
+                            reason = %failure.describe(),
+                            "strict output verification declined the pre-skip; the rule will re-execute"
+                        );
+                    }
+                }
             }
         }
     }

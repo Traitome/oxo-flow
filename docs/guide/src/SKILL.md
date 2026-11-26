@@ -110,6 +110,12 @@ ends with a **Done when** condition — do not proceed without it.
   jobs (`--profile <NAME>`, defaulting to the recorded profile) and fails
   closed without one; `resume --abandon-jobs` cancels them first. A plain
   `run` does not re-attach.
+- `resume` verifies each completed rule's recorded output manifest by
+  default (size + a capped sha256, `OXO_FLOW_MANIFEST_HASH_MAX_BYTES`,
+  default 64 MiB): a missing, resized, or content-changed output re-runs
+  instead of being reported up to date. Outputs above the cap and
+  non-regular outputs are unverified under this default — raise the cap or
+  pass `--trust-mtime` to accept the historical size+mtime verdict.
 - Retry budget: max 3 correction loops, then escalate to the human.
 - Done when: all rules complete, evidenced by checkpoint state.
 

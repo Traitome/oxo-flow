@@ -401,6 +401,13 @@ flags these with warning [W019](./glossary.md#diagnostic-codes)).
   reuse is decided by **content identity**, not mtime — a `touch` or
   clock skew cannot fake freshness, and diverging content re-executes
   (outputs beyond the hash cap keep the mtime comparison).
+- Independently of `--provenance`, every successful rule records a
+  declared-output manifest (size + a capped `sha256`). `resume` verifies
+  it by default: a completed rule whose output is missing, resized, or
+  content-changed re-executes instead of being reported up to date. Outputs
+  above `OXO_FLOW_MANIFEST_HASH_MAX_BYTES` (default 64 MiB) and non-regular
+  outputs are unverified under this default — raise the cap or pass
+  `resume --trust-mtime` (issue #1426).
 - Rule timeouts and aborts terminate the rule subtree with a **SIGTERM
   grace period** (10s) before escalating to SIGKILL, so well-behaved
   tools get a chance to flush state; descendants spawned during the

@@ -350,6 +350,17 @@ pub enum Commands {
                     rerun continues locally"
         )]
         abandon_jobs: bool,
+        /// Trust size+mtime freshness for completed rules instead of
+        /// verifying their recorded output manifests (issue #1426).
+        #[arg(
+            long,
+            help = "Accept the size+mtime freshness verdict for completed rules instead of \
+                    verifying their recorded output manifests. By default `resume` re-runs a \
+                    completed rule whose outputs are missing, resized, content-changed, \
+                    unhashed (larger than OXO_FLOW_MANIFEST_HASH_MAX_BYTES), or recorded by a \
+                    pre-manifest checkpoint"
+        )]
+        trust_mtime: bool,
         /// Detach the resumed run into a background process: the foreground
         /// invocation spawns a detached child that re-runs `resume` without
         /// the flag, writes its pid to .oxo-flow/background.pid, prints a
@@ -2031,6 +2042,11 @@ async fn main() -> Result<()> {
                 strict_envs,
                 apply_patch,
                 locked,
+                // `run` keeps the historical size+mtime freshness gate
+                // (issue #1426); strict output verification is `resume`'s
+                // safe default.
+                verify_outputs: false,
+                trust_mtime: false,
             })
             .await?
         }
@@ -2045,6 +2061,7 @@ async fn main() -> Result<()> {
             no_report_snapshot,
             profile,
             abandon_jobs,
+            trust_mtime,
             background,
         } => {
             // ── Background resume (issue #158) ───────────────────────────
@@ -2077,6 +2094,7 @@ async fn main() -> Result<()> {
                 no_report_snapshot,
                 profile,
                 abandon_jobs,
+                trust_mtime,
                 cli.json,
             )
             .await?
@@ -2637,6 +2655,10 @@ async fn main() -> Result<()> {
                         // [engine] locked key still enforces through the run
                         // path.
                         locked: false,
+                        // `test` mirrors plain `run`'s size+mtime freshness
+                        // gate (issue #1426) — no strict output verification.
+                        verify_outputs: false,
+                        trust_mtime: false,
                     })
                     .await
                 );

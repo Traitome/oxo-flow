@@ -34,7 +34,7 @@ oxo-flow is a high-performance bioinformatics pipeline engine built in Rust. It 
 - 🌐 **Modern Web Studio & Desktop shell** — Embedded React 19 SPA with interactive DAG canvas (React Flow + d3-dag), CodeMirror 6 TOML editor, and native desktop app (`oxo-flow-desktop`, wry + tao).
 - 🧩 **First-party VS Code IDE** — `traitome.oxo-flow` extension published on both [Open VSX](https://open-vsx.org/extension/traitome/oxo-flow) and the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=traitome.oxo-flow): schema-driven completion, background diagnostics, canonical formatting, and one-click run/dry-run/graph/resume actions.
 - 📊 **Reporting designed for clinical review** — Deterministic HTML, JSON, Markdown, and PDF reports generated from checkpoint data; real tool QC metric parsing (fastp, STAR, bcftools, etc.), R-friendly TSV export (`--r-data`), and automated run snapshots. Clinical qualification is a separate evidence and governance process.
-- 🗄️ **Checkpoint resume** — JSON-persisted execution state; resume interrupted workflows from the last checkpointed rule, with reuse governed by recorded freshness and provenance checks.
+- 🗄️ **Checkpoint resume** — JSON-persisted execution state; resume interrupted workflows from the last checkpointed rule, with reuse governed by recorded freshness, output-manifest content verification, and provenance checks.
 - 🚀 **Three deployment modes** — Personal workstation, team server with OAuth2 (ORCID/GitHub), or HPC cluster submit panel — all from the exact same binary.
 
 ### Architecture at a glance

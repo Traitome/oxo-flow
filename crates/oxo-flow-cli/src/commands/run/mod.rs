@@ -198,6 +198,15 @@ pub struct RunRequest {
     /// executes and fail closed on drift. The workflow's
     /// `[engine] locked = true` key is the persistent form; this flag wins.
     pub locked: bool,
+    /// Issue #1426: strict output verification. `resume` sets this so a
+    /// completed rule is reused only when its recorded output manifest
+    /// verifies (every declared output present, size match, content hash
+    /// match). Plain `run` keeps the historical size+mtime freshness gate.
+    pub verify_outputs: bool,
+    /// Issue #1426 (`resume --trust-mtime`): accept the size+mtime freshness
+    /// verdict without requiring the content manifest. Only meaningful with
+    /// `verify_outputs`.
+    pub trust_mtime: bool,
 }
 
 pub async fn run_command(request: RunRequest) -> Result<()> {
@@ -244,6 +253,8 @@ async fn run_command_inner(
         strict_envs,
         apply_patch,
         locked,
+        verify_outputs,
+        trust_mtime,
     }: RunRequest,
     status: &crate::run_status::RunStatusHandle,
 ) -> Result<()> {
@@ -1243,6 +1254,9 @@ async fn run_command_inner(
                 // the cluster (issue #1013 C2) — the same resolved value
                 // the local path injects into its process envs.
                 tmp_dir: tmp_dir_resolved.as_deref(),
+                // Issue #1426: `resume` verifies recorded output manifests
+                // before skipping a completed rule, on the cluster path too.
+                strict_output_verification: verify_outputs && !trust_mtime,
             },
             &mut json_summary,
             &workflow,
@@ -1417,6 +1431,10 @@ async fn run_command_inner(
             .engine
             .as_ref()
             .and_then(|engine| engine.strict_placeholders),
+        // Issue #1426: `resume` opts into content verification of completed
+        // rules; `run` keeps the historical size+mtime gate.
+        verify_outputs,
+        trust_mtime,
     };
 
     // Fail fast if any rule's declared request can never fit an explicit
@@ -1690,6 +1708,7 @@ async fn run_command_inner(
         workflow: &workflow,
         apply_patch: apply_patch.as_deref(),
         json_summary: &mut json_summary,
+        strict_output_verification: verify_outputs && !trust_mtime,
     })
     .await
 }

@@ -44,6 +44,51 @@ and may drift from the recorded instance set. Re-pass the original
 overrides with `oxo-flow run` (which auto-resumes) to reproduce the
 recorded instance set exactly.
 
+### Output verification (strict by default)
+
+Every successful rule records a declared-output **manifest** in the
+checkpoint (issue #1426): each expanded output path with its size and, for
+regular files up to `OXO_FLOW_MANIFEST_HASH_MAX_BYTES` (default 64 MiB), a
+`sha256` content hash. The manifest is written by both execution paths
+(local executor and cluster settle hook) and does **not** require
+`--provenance`.
+
+`resume` verifies that manifest before reusing a completed rule. A rule is
+skipped only when the existing freshness gate passes **and** every currently
+expanded declared output has a manifest entry, exists, matches its recorded
+size, and — when the entry carries one — matches its recomputed content hash
+(hashed in full, regardless of the recording cap). Otherwise the rule
+re-executes with a warning naming the rule, path, and reason. This closes the
+silent-acceptance hole where a completed-but-truncated artifact (a BAM cut
+short by a killed job, a half-written VCF) was reused because its mtime
+looked newer than its inputs:
+
+```console
+WARN strict output verification failed — re-executing the rule instead of
+     trusting size+mtime evidence ... rule=align path=aln/S1.bam
+     reason="output 'aln/S1.bam' is 500 bytes but the manifest recorded 1024"
+```
+
+The safe default has three deliberate consequences:
+
+- A **legacy checkpoint** (written before output manifests existed) has no
+  manifest for its completed rules, so those rules re-run on the next
+  `resume` — once. Their fresh completions record manifests.
+- An output **above the hash cap** records size only and is therefore
+  **unverified**: strict resume re-runs it. Raise
+  `OXO_FLOW_MANIFEST_HASH_MAX_BYTES` to content-hash larger artifacts at a
+  proportionally higher per-completion cost. Same-size corruption of an
+  output above the cap is only detectable once the cap is raised.
+- A declared output that is a **directory** (or another non-regular file)
+  has no content hash and is treated as unverified, so such rules re-run
+  under the strict default.
+
+Pass `--trust-mtime` to opt out and keep the historical size+mtime verdict
+(existence and mtime only). This is the escape hatch for large-output or
+directory-output workflows where re-hashing/re-running is unacceptable.
+Plain `oxo-flow run` keeps the historical size+mtime gate; only `resume`
+verifies manifests.
+
 ### Checkpoint format version
 
 Every checkpoint records a `checkpoint_format_version` marker. If the version
@@ -84,10 +129,13 @@ clears the persisted in-flight set or re-plans execution (issue #1427):
       never resubmitted;
     - terminal success with every declared output present → the rule is
       marked completed (a `recorded_as: "adopted from <backend> job <id>"`
-      benchmark is written only when no measured benchmark exists). A rule
-      whose outputs are declared only through `output_pattern` has no fixed
-      files to verify at adoption time; its scheduler-confirmed success is
-      adopted without a per-instance file check;
+      benchmark is written only when no measured benchmark exists). When
+      the checkpoint carries a recorded output manifest for that rule, the
+      outputs must also verify against it (size and content hash, issue
+      #1426); a failing manifest leaves the rule for a normal re-run. A
+      rule whose outputs are declared only through `output_pattern` has no
+      fixed files to verify at adoption time; its scheduler-confirmed
+      success is adopted without a per-instance file check;
     - terminal success whose declared outputs are missing → a warning, and
       the rule re-runs;
     - terminal failure or cancellation → recorded, and the normal resume
@@ -149,6 +197,7 @@ longer needs cannot undo that, and refusing to resume forever would be worse.
 | `--no-report-snapshot` | — | Skip the automatic report snapshot after the resumed run (same flag as `run`) |
 | `--profile <NAME>` | — | Re-attach recorded cluster jobs through this profile (and run the remaining rules on that scheduler). Defaults to the profile the checkpoint records; without either, a checkpoint holding unsettled cluster jobs fails closed |
 | `--abandon-jobs` | — | Cancel the scheduler jobs recorded in the checkpoint instead of re-attaching and waiting, then re-run their rules (locally when no usable profile exists) |
+| `--trust-mtime` | — | Accept the size+mtime freshness verdict for completed rules instead of verifying their recorded output manifests (issue #1426). See [Output verification](#output-verification-strict-by-default) |
 | `--background` / `--detach` | — | Detach the resumed run into a background process and exit 0 immediately (see [Background runs (--background)](run.md#background-runs-background)); `--detach` is an alias |
 | `--json` | — | Emit one machine-readable JSON document to stdout (human logs stay on stderr); see [JSON output](#json-output) |
 
@@ -181,7 +230,7 @@ family ([`run`](run.md#json-output)).
 | `status` | `nothing_to_resume` (nothing executed yet; exit 0, nothing re-run), `completed`, or `failed` |
 | `completed` | Rules already complete in the checkpoint (the "already-complete" half) |
 | `failed` | Rules recorded as failed and retried by this resume |
-| `remaining` | Rules this resume will execute (workflow rule count minus `completed`; wildcards expand later) |
+| `remaining` | Rules this resume expects to execute (workflow rule count minus `completed`; wildcards expand later). Under strict output verification a completed rule may additionally re-run when its manifest fails or is missing, so the executed count can exceed this value |
 | `skipped_by_when` | Present when rules were skipped by a `when` gate; re-judged on this resume |
 | `running` | Present when the checkpoint recorded rules still running (the prior run died mid-flight); they re-run |
 | `adopted` | Present when a cluster reconciliation ran: how many recorded scheduler jobs were adopted as completed (their declared outputs were verified first) |
@@ -205,6 +254,9 @@ oxo-flow resume .oxo-flow/checkpoint.json
 
 # Resume with 4 parallel jobs
 oxo-flow resume .oxo-flow/checkpoint.json -j 4
+
+# Accept size+mtime freshness instead of verifying output manifests
+oxo-flow resume .oxo-flow/checkpoint.json --trust-mtime
 
 # Machine-readable resume status
 oxo-flow resume .oxo-flow/checkpoint.json --json
