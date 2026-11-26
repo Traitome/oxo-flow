@@ -178,9 +178,11 @@ cancel were verified, and a single-rule engine run exposed the submit-host
 Array and artifact-pull evidence remains outstanding — see
 [`tencent-batch-live-2026-11-26.md`](../../../superpowers/audits/tencent-batch-live-2026-11-26.md).
 **AWS Batch** and **GCP Batch** are blocked at CLI wrappers with
-mock/wire tests only (live campaign pending #1390; the GCP endpoint was
-unreachable from the qualification host). See the audit ledger before
-describing any backend as production-ready.
+mock/wire tests only: the live campaign was not run (no AWS credentials;
+the GCP endpoint was unreachable from the qualification host), #1390 is
+closed as not planned for live, and the prerequisites/protocol are in
+[`cloud-live-campaigns-todo-2026-11-26.md`](../../../superpowers/audits/cloud-live-campaigns-todo-2026-11-26.md).
+See the audit ledger before describing any backend as production-ready.
 
 Freshness note (2026-11-07): this evidence is a point-in-time campaign —
 the harness landed 2026-09-23 (#356, #405) and nothing re-runs it on a
