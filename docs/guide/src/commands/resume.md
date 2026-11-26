@@ -44,6 +44,18 @@ and may drift from the recorded instance set. Re-pass the original
 overrides with `oxo-flow run` (which auto-resumes) to reproduce the
 recorded instance set exactly.
 
+Checkpoint re-entry and runtime-discovered `output_pattern` domains recorded
+in the checkpoint are replayed on **every** resume — including a resume routed
+to a cluster profile — before execution planning. The deferred rule instances
+re-join the plan (their completed records are reused under the same
+output-manifest verification). This is intentional: a cluster resume now
+rebuilds the recorded plan instead of silently skipping replay and
+under-executing it. A recorded re-entry that conflicts with the current
+workflow can therefore fail the plan with a re-entry diagnostic (`E015` pair
+conflict / `E016` name collision) where a cluster resume previously ignored
+it; remove the conflicting rule or start a fresh run if the divergence is
+intentional.
+
 ### Output verification (strict by default)
 
 Every successful rule records a declared-output **manifest** in the
