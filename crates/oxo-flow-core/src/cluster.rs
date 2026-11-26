@@ -121,6 +121,73 @@ pub fn generate_submit_script(
 /// `secretKeyRef` block from the routed names themselves, and AWS Batch's
 /// `SubmitJob` has no secrets field at all (the job definition owns it — see
 /// [`crate::backend::aws_batch`]).
+/// Rewrite the plan builder's folded `cd '<submit-host-workdir>' &&` prefix
+/// for a cloud backend. Cloud compute nodes do not share the submit host's
+/// filesystem: without a declaration the path does not exist and the job
+/// dies on `cd` before the rule starts. When `[cluster.volume]` declares a
+/// shared volume, the command is mapped onto the node's mount root (the
+/// operator must mount that volume on the compute nodes); otherwise the
+/// prefix is stripped and the rule runs in the vendor agent's default
+/// directory. Absolute submit-host paths in the command still need shared
+/// storage — array dispatch always does, so cloud arrays require the volume.
+fn cloud_job_command(shell_cmd: &str, cluster_config: &ClusterJobConfig) -> Result<String> {
+    let Some(volume) = &cluster_config.volume else {
+        return Ok(strip_local_workdir_prefix(shell_cmd));
+    };
+    let Some(workdir) = crate::backend::k8s::workdir_from_shell_cmd(shell_cmd) else {
+        return Ok(shell_cmd.to_string());
+    };
+    let mapped =
+        volume
+            .in_pod_path(&workdir)
+            .ok_or_else(|| crate::error::OxoFlowError::Config {
+                message: format!(
+                    "[cluster.volume] the run workdir '{workdir}' is not under the declared \
+                 volume root — point volume_root (nfs: the export; pvc: the claim mount \
+                 point) at the directory containing it"
+                ),
+            })?;
+    Ok(crate::backend::k8s::rewrite_workdir_to_mount_root(
+        shell_cmd, &workdir, &mapped,
+    ))
+}
+
+/// Drop a leading `cd '<path>' &&` guard. The escaped-quote encoding never
+/// produces the `' && ` terminator inside a path, so the first match is the
+/// end of the prefix.
+fn strip_local_workdir_prefix(shell_cmd: &str) -> String {
+    let Some(rest) = shell_cmd.strip_prefix("cd '") else {
+        return shell_cmd.to_string();
+    };
+    match rest.find("' && ") {
+        Some(end) => rest[end + 5..].to_string(),
+        None => shell_cmd.to_string(),
+    }
+}
+
+/// Map an array command directory onto the declared shared volume. Cloud
+/// array dispatch reads `cmd.<N>.sh` from this directory on every node, so
+/// without a shared volume the job can never run — fail closed instead of
+/// submitting a guaranteed `cd`/file-not-found failure.
+fn cloud_array_cmd_dir(cmd_dir: &str, cluster_config: &ClusterJobConfig) -> Result<String> {
+    let Some(volume) = &cluster_config.volume else {
+        return Err(crate::error::OxoFlowError::Config {
+            message: "cloud array jobs require [cluster.volume] declaring the shared \
+                      filesystem mounted on the compute nodes — the per-index command \
+                      files live in the run workdir and are not uploaded to the vendor"
+                .to_string(),
+        });
+    };
+    volume
+        .in_pod_path(cmd_dir)
+        .ok_or_else(|| crate::error::OxoFlowError::Config {
+            message: format!(
+                "[cluster.volume] the array command directory '{cmd_dir}' is not under \
+                 the declared volume root"
+            ),
+        })
+}
+
 pub fn generate_submit_script_with_secrets(
     backend: &ClusterBackend,
     rule: &Rule,
@@ -128,6 +195,16 @@ pub fn generate_submit_script_with_secrets(
     secret_refs: &std::collections::BTreeMap<String, String>,
     cluster_config: &ClusterJobConfig,
 ) -> Result<String> {
+    let cloud = matches!(
+        backend,
+        ClusterBackend::AwsBatch | ClusterBackend::GcpBatch | ClusterBackend::TencentBatch
+    );
+    let cloud_cmd = if cloud {
+        Some(cloud_job_command(shell_cmd, cluster_config)?)
+    } else {
+        None
+    };
+    let shell_cmd = cloud_cmd.as_deref().unwrap_or(shell_cmd);
     match backend {
         ClusterBackend::Slurm => Ok(generate_slurm_script(rule, shell_cmd, cluster_config)),
         ClusterBackend::Pbs => Ok(generate_pbs_script(rule, shell_cmd, cluster_config)),
@@ -216,6 +293,15 @@ pub fn generate_array_submit_script_with_secrets(
     extras: &ArrayBodyExtras,
     config: &ClusterJobConfig,
 ) -> Result<String> {
+    let cloud_cmd_dir = if matches!(
+        backend,
+        ClusterBackend::AwsBatch | ClusterBackend::GcpBatch | ClusterBackend::TencentBatch
+    ) {
+        Some(cloud_array_cmd_dir(cmd_dir, config)?)
+    } else {
+        None
+    };
+    let cmd_dir = cloud_cmd_dir.as_deref().unwrap_or(cmd_dir);
     match backend {
         ClusterBackend::Kubernetes => {
             return crate::backend::k8s::generate_k8s_array_job_manifest(
@@ -2318,5 +2404,128 @@ mod tests {
                 .unwrap();
 
         assert!(script.contains("#$ -l gpu=4"));
+    }
+    // -- Cloud workdir mapping (submit-host path vs shared volume) ----------
+
+    fn cloud_rule() -> Rule {
+        Rule {
+            name: "hello".into(),
+            ..Default::default()
+        }
+    }
+
+    fn cloud_config(backend: ClusterBackend) -> ClusterJobConfig {
+        ClusterJobConfig {
+            backend,
+            queue: Some("ap-shanghai-5".to_string()),
+            account: Some("img-live".to_string()),
+            walltime: None,
+            extra_args: vec![],
+            name_scope: None,
+            volume: None,
+        }
+    }
+
+    fn shared_volume() -> crate::config::ClusterVolume {
+        crate::config::ClusterVolume {
+            kind: "nfs".into(),
+            server: Some("nfs.example".into()),
+            path: Some("/srv/oxo".into()),
+            mount_root: Some("/mnt/oxo".into()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn cloud_commands_drop_the_local_workdir_without_a_shared_volume() {
+        let config = cloud_config(ClusterBackend::TencentBatch);
+        assert_eq!(
+            cloud_job_command("cd '/srv/oxo/run' && echo hi", &config).unwrap(),
+            "echo hi"
+        );
+        assert_eq!(
+            cloud_job_command("echo hi", &config).unwrap(),
+            "echo hi",
+            "a command without the folded cd is unchanged"
+        );
+    }
+
+    #[test]
+    fn cloud_commands_map_the_workdir_onto_the_shared_volume() {
+        let mut config = cloud_config(ClusterBackend::TencentBatch);
+        config.volume = Some(shared_volume());
+        assert_eq!(
+            cloud_job_command(
+                "cd '/srv/oxo/run' && echo hi > /srv/oxo/run/out.txt",
+                &config
+            )
+            .unwrap(),
+            "cd '/mnt/oxo/run' && echo hi > /mnt/oxo/run/out.txt"
+        );
+    }
+
+    #[test]
+    fn cloud_commands_reject_a_workdir_outside_the_volume_root() {
+        let mut config = cloud_config(ClusterBackend::TencentBatch);
+        config.volume = Some(shared_volume());
+        let err = cloud_job_command("cd '/elsewhere/run' && echo hi", &config).unwrap_err();
+        assert!(err.to_string().contains("not under the declared"));
+    }
+
+    #[test]
+    fn cloud_array_requires_a_shared_volume() {
+        let config = cloud_config(ClusterBackend::TencentBatch);
+        let err = generate_array_submit_script(
+            &ClusterBackend::TencentBatch,
+            &cloud_rule(),
+            "/srv/oxo/run/array",
+            2,
+            &[],
+            Some("/srv/oxo/run"),
+            &config,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("require [cluster.volume]"));
+    }
+
+    #[test]
+    fn cloud_array_maps_the_command_directory_onto_the_volume() {
+        let mut config = cloud_config(ClusterBackend::TencentBatch);
+        config.volume = Some(shared_volume());
+        let spec = generate_array_submit_script(
+            &ClusterBackend::TencentBatch,
+            &cloud_rule(),
+            "/srv/oxo/run/array",
+            2,
+            &[],
+            Some("/srv/oxo/run"),
+            &config,
+        )
+        .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&spec).unwrap();
+        let command = value["Job"]["Tasks"][0]["Application"]["Command"]
+            .as_str()
+            .unwrap();
+        assert!(
+            command.contains("/mnt/oxo/run/array/cmd."),
+            "command must read cmd files from the mounted volume: {command}"
+        );
+    }
+
+    #[test]
+    fn tencent_submit_drops_the_submit_host_cd() {
+        let config = cloud_config(ClusterBackend::TencentBatch);
+        let spec = generate_submit_script(
+            &ClusterBackend::TencentBatch,
+            &cloud_rule(),
+            "cd '/srv/oxo/run' && echo tencent-live-ok",
+            &config,
+        )
+        .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&spec).unwrap();
+        assert_eq!(
+            value["Job"]["Tasks"][0]["Application"]["Command"],
+            "echo tencent-live-ok"
+        );
     }
 }

@@ -1,5 +1,10 @@
 # Cloud CLI accuracy audit — AWS Batch, GCP Batch, Tencent Batch (2026-11-26)
 
+> **Update (2026-11-26):** a live Tencent campaign was run after this static
+> audit — see [`tencent-batch-live-2026-11-26.md`](tencent-batch-live-2026-11-26.md).
+> AWS Batch and GCP Batch remain static-only (no credentials / unreachable
+> endpoint).
+
 Code-side evidence for **issue #1390** (cloud backends are CLI-wrapper /
 mock-tested only). Every vendor CLI invocation and JSON field the three
 cloud backends generate or read was compared against the vendors' own

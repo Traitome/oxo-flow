@@ -170,10 +170,13 @@ shared volume, `provenance verify` 3/3). Its remaining gaps are PVC
 provisioning, HA/multi-control-plane, cloud-provider volumes, image mode
 combined with a multi-node `[cluster.volume]`, re-attach to in-flight
 jobs, cancellation reconciliation across process restarts, and crash
-recovery. **Tencent Batch** has a live named-env submit smoke
-(2026-11-25): a job reached `SUCCEED` against a pre-created compute
-environment, while poll/log/cancel/array paths remain mock-verified only
-and inline anonymous-env creation failed on the qualification account.
+recovery. **Tencent Batch** has a 2026-11-26 live campaign: a named-env submit reached
+`SUCCEED`, state polling, `DescribeTaskLogs` decoding, and `TerminateJob`
+cancel were verified, and a single-rule engine run exposed the submit-host
+`cd` defect fixed in PR #1421 (cloud commands are stripped or mapped onto
+`[cluster.volume].mount_root`; arrays fail closed without the volume).
+Array and artifact-pull evidence remains outstanding — see
+[`tencent-batch-live-2026-11-26.md`](../../../superpowers/audits/tencent-batch-live-2026-11-26.md).
 **AWS Batch** and **GCP Batch** are blocked at CLI wrappers with
 mock/wire tests only (live campaign pending #1390; the GCP endpoint was
 unreachable from the qualification host). See the audit ledger before

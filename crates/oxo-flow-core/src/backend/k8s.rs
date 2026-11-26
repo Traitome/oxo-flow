@@ -20,7 +20,7 @@ use std::collections::BTreeSet;
 /// for the rule's declared outputs (and the engine's checkpoint/log files) to
 /// land on the shared host tree. Returns `None` when the prefix is absent
 /// (backends/plans that do not fold `cd`, e.g. hand-written commands).
-fn workdir_from_shell_cmd(shell_cmd: &str) -> Option<String> {
+pub(crate) fn workdir_from_shell_cmd(shell_cmd: &str) -> Option<String> {
     // The plan builder escapes a literal quote as '\'' (four shell bytes:
     // quote, backslash, quote, quote) inside the single-quoted path.
     const ESCAPED_QUOTE: &str = "'\\''";
@@ -249,7 +249,11 @@ fn shared_volume_entry(volume: &ClusterVolume, name: &str) -> serde_json::Value 
 /// — and `mount_root`/…`/` substitution happens before the manifest renders
 /// (expand-before-derive: the checkpoint keeps the submit-host path; only
 /// the RENDERED command is mapped).
-fn rewrite_workdir_to_mount_root(shell_cmd: &str, workdir: &str, mount_root: &str) -> String {
+pub(crate) fn rewrite_workdir_to_mount_root(
+    shell_cmd: &str,
+    workdir: &str,
+    mount_root: &str,
+) -> String {
     shell_cmd
         .replace(&format!("{workdir}/"), &format!("{mount_root}/"))
         .replace(&format!("cd '{workdir}'"), &format!("cd '{mount_root}'"))
