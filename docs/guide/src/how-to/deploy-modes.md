@@ -374,7 +374,7 @@ caches the verdict. If the mode cannot be installed, the spawn is refused
 with the remediation named — it never silently runs unisolated. Both modes
 apply to **local** runs only; cluster/remote runs execute on the remote
 host under that host's controls. See the
-[web API reference](../reference/web-api.md#per-run-user--pid-namespace-isolation)
+[web API reference](../reference/web-api.md#per-run-user-pid-namespace-isolation)
 for the enforced-vs-residual matrix, including the honest residuals
 (single-uid mapping, `RLIMIT_NPROC` counted per real uid, UDP/ICMP,
 namespace-only mode not confining files).
