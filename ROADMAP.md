@@ -403,7 +403,7 @@ framework extensibility, code quality, and documentation.
 - [ ] Property-based testing with proptest (Expert 6.9)
 - [ ] Fuzz testing for parser and wildcard engine (Expert 9.6)
 - [ ] FHIR/HL7 report output format (Expert 30.6)
-- [ ] Multi-tenancy (directory separation plus the dimensional #1129 OS boundary are landed: environment allowlist, Linux CPU/memory/process rlimits, and an opt-in Landlock filesystem/TCP sandbox; per-user quotas, PID/uid/container isolation, and default-on sandboxing remain open)
+- [ ] Multi-tenancy (directory separation plus the dimensional #1129 OS boundary are landed: environment allowlist, Linux CPU/memory/process rlimits, and opt-in Landlock and per-run user + PID namespace modes (#1401); per-run uid/container isolation and default-on sandboxing remain open)
 - [x] Job arrays for cluster backends (Expert 13.6) — SLURM/PBS/SGE/LSF array submission plus k8s/AWS/GCP array specs
 - [ ] Node feature matching for HPC scheduling (Expert 13.4)
 - [ ] Spot/preemptible instance support (Expert 14.10)

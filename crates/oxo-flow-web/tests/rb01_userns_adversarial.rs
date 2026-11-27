@@ -473,13 +473,23 @@ shell = "echo rb01u-probe"
         "no CLI or wrapper may execute when the requested isolation is unavailable"
     );
     let backend = oxo_flow_web::infra::db::global_backend();
-    let usage = oxo_flow_web::infra::quota::usage(backend.as_deref(), A_ID)
-        .await
-        .expect("quota usage");
-    assert_eq!(
-        usage.active_runs, 0,
-        "a failed spawn must release the quota reservation"
-    );
+    // mark_run_failed writes the terminal state BEFORE releasing the quota
+    // reservation, so wait_terminal can return first: poll briefly instead
+    // of racing the async release.
+    let quota_deadline = Instant::now() + Duration::from_secs(5);
+    let usage = loop {
+        let usage = oxo_flow_web::infra::quota::usage(backend.as_deref(), A_ID)
+            .await
+            .expect("quota usage");
+        if usage.active_runs == 0 {
+            break usage;
+        }
+        assert!(
+            Instant::now() < quota_deadline,
+            "a failed spawn must release the quota reservation; still {usage:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    };
     eprintln!(
         "RB01U fail-closed: run={fail_id} status=failed log_names_reason=true \
          no_cli_executed=true quota_active_runs={}",

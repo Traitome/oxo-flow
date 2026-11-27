@@ -31,16 +31,18 @@
 //! ## Cancellation
 //!
 //! The executor spawns the whole wrapper in its own process group, so the
-//! supervisor's `killpg` reaches `sh`, `unshare`, and the namespace.
-//! `--kill-child=SIGTERM` makes the `unshare` parent forward SIGTERM to the
-//! namespace init when the parent is terminated, giving a CLI that traps
-//! SIGTERM a graceful shutdown window. A PID namespace's init (PID 1)
-//! ignores catchable signals it has no handler for, so for a CLI that does
-//! not trap SIGTERM the supervisor's existing 5 s SIGKILL escalation is the
-//! guaranteed path: it kills init directly, and the kernel tears down every
-//! remaining member of the PID namespace. SIGKILL and SIGSTOP (the final
-//! kill and the pause/resume signals) are kernel-only and are delivered to
-//! namespace init directly.
+//! supervisor's `killpg` reaches `sh`, `unshare`, and the namespace init
+//! DIRECTLY. That group SIGTERM is what gives a CLI that traps SIGTERM a
+//! graceful shutdown window (util-linux `unshare` ignores SIGINT/SIGTERM
+//! while it waits for its child and does not forward them).
+//! `--kill-child=SIGTERM` is a BACKSTOP: it only fires when the `unshare`
+//! parent itself terminates (SIGKILL, crash), at which point it signals the
+//! init. A PID namespace's init (PID 1) ignores catchable signals it has no
+//! handler for, so for a CLI that does not trap SIGTERM the supervisor's
+//! existing 5 s SIGKILL escalation is the guaranteed teardown: it kills init
+//! directly, and the kernel tears down every remaining member of the PID
+//! namespace. SIGKILL and SIGSTOP (the final kill and the pause/resume
+//! signals) are kernel-only and are delivered to namespace init directly.
 //!
 //! ## Composition
 //!
@@ -95,12 +97,15 @@ pub const ISOLATION_MODE_ENV: &str = "OXO_FLOW_WEB_ISOLATION";
 /// The util-linux program that installs the namespaces.
 const UNSHARE_PROGRAM: &str = "unshare";
 
-/// Namespace flags, in argv order. `--kill-child=SIGTERM` makes the unshare
-/// parent forward SIGTERM to the namespace init when the parent is
-/// terminated: a CLI that traps SIGTERM can shut down gracefully, and one
-/// that does not is covered by the supervisor's SIGKILL escalation (PID 1
-/// ignores catchable signals without a handler). `--` ends option parsing
-/// before the wrapped command and is part of the probed argv too.
+/// Namespace flags, in argv order. `--kill-child=SIGTERM` is a BACKSTOP:
+/// when the `unshare` parent itself terminates (SIGKILL, crash) it signals
+/// the namespace init. It is NOT how a normal cancel reaches the CLI — the
+/// supervisor's process-group SIGTERM reaches the init directly (unshare
+/// ignores SIGINT/SIGTERM while waiting and does not forward them), and an
+/// init that ignores SIGTERM is covered by the supervisor's 5 s SIGKILL
+/// escalation (PID 1 ignores catchable signals without a handler). `--`
+/// ends option parsing before the wrapped command and is part of the probed
+/// argv too.
 const UNSHARE_FLAGS: &[&str] = &[
     "--user",
     "--map-root-user",

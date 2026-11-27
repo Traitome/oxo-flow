@@ -412,10 +412,11 @@ controls on the CLI process tree (and therefore every rule shell it forks):
    cannot grant without re-exposing host `/proc`.
 5. **Process-group bookkeeping (always on)** — the run owns a process
    group, so cancel/pause/resume signal the whole tree; with a namespace,
-   `--kill-child=SIGTERM` forwards the supervisor's SIGTERM to the namespace
-   init (a CLI that traps it shuts down gracefully; an init that ignores it
-   is covered by the 5 s SIGKILL escalation), so cancel tears down every
-   process in the namespace.
+   the group SIGTERM reaches `sh`, `unshare`, and the namespace init
+   directly (a CLI that traps it shuts down gracefully), while
+   `--kill-child=SIGTERM` is the backstop if the `unshare` parent itself
+   terminates, and the 5 s SIGKILL escalation tears the namespace down when
+   the init ignores SIGTERM.
 
 The implementation lives in `crates/oxo-flow-web/src/executor.rs` (the spawn
 choke point and the rlimit `pre_exec` hooks), `crates/oxo-flow-web/src/sandbox.rs`

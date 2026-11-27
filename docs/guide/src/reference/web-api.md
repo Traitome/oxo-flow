@@ -2318,10 +2318,13 @@ can name, and the no-fork self-mapping shape is denied after exec too. Only
 a host-`/proc` grant would cover it, which would re-expose every process —
 the disclosure both modes exist to prevent. Run one mode at a time.
 
-**Cancellation.** The supervisor's process-group kill reaches `sh`,
-`unshare`, and the namespace; `--kill-child=SIGTERM` forwards the
-supervisor's SIGTERM to the namespace init, so a CLI that traps SIGTERM gets
-a graceful shutdown window. An init that ignores it (PID 1 ignores catchable
+**Cancellation.** The supervisor's process-group SIGTERM reaches `sh`,
+`unshare`, and the namespace init DIRECTLY — that direct signal is what
+gives a CLI that traps SIGTERM a graceful shutdown window (util-linux
+`unshare` ignores SIGINT/SIGTERM while it waits for its child and does not
+forward them). `--kill-child=SIGTERM` is a **backstop**: it fires only when
+the `unshare` parent itself terminates (SIGKILL, crash), at which point it
+signals the init. An init that ignores SIGTERM (PID 1 ignores catchable
 signals without a handler) is covered by the existing 5 s SIGKILL
 escalation, after which the kernel tears down the namespace. SIGKILL and
 SIGSTOP — the final kill and pause/resume — are kernel-only signals and are

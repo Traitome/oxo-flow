@@ -166,7 +166,7 @@ fn cmdline_is_oxo_flow(args: &str, binary_hint: Option<&str>) -> bool {
     // resolved binary path.
     if let Some(binary) = binary_hint {
         let mut rest = args;
-        while let Some(pos) = rest.find(".exit-code") {
+        while let Some(pos) = find_exit_record(rest) {
             let after = &rest[pos + ".exit-code".len()..];
             if payload_command_is_binary(after, binary) {
                 return true;
@@ -238,7 +238,16 @@ fn payload_command_is_binary(after_exit_record: &str, binary: &str) -> bool {
 fn payload_is_oxo_flow(tokens: &[&str]) -> bool {
     let mut rest = tokens;
     if rest.first() == Some(&"sudo") {
-        // `sudo -n -u <user>` — exactly four tokens.
+        // Validate the executor's exact shape (`sudo -n -u <user>`) instead
+        // of blindly skipping four tokens: a forged `sudo -x -u <user>`
+        // must not pass this fast path.
+        let Some(flags) = rest.get(1..4) else {
+            return false;
+        };
+        if flags[0] != "-n" || flags[1] != "-u" || flags[2].is_empty() || flags[2].starts_with('-')
+        {
+            return false;
+        }
         rest = rest.get(4..).unwrap_or_default();
     }
     if rest.first() == Some(&"unshare") {
@@ -250,6 +259,28 @@ fn payload_is_oxo_flow(tokens: &[&str]) -> bool {
         rest = rest.get(sep + 1..).unwrap_or_default();
     }
     rest.first().is_some_and(|t| is_oxo_flow_token(t))
+}
+
+/// Byte offset of an exit-record token in a raw `ps args=` line.
+///
+/// The occurrence must START a token: `a.exit-code` is not the executor's
+/// record. (The token loop above already matches whole tokens; this raw
+/// scan is for binary paths containing spaces, where tokenization fails.)
+fn find_exit_record(args: &str) -> Option<usize> {
+    let mut base = 0usize;
+    while let Some(pos) = args[base..].find(".exit-code") {
+        let abs = base + pos;
+        let starts_token = abs == 0
+            || args[..abs]
+                .chars()
+                .next_back()
+                .is_some_and(|c| c.is_whitespace() || c == '/');
+        if starts_token {
+            return Some(abs);
+        }
+        base = abs + 1;
+    }
+    None
 }
 
 fn is_oxo_flow_token(token: &str) -> bool {
@@ -459,6 +490,17 @@ mod tests {
             "sh -c x sh /tmp/run/.exit-code unshare --user --pid -- /bin/sleep 30",
             None
         ));
+        // The token fast path must validate the sudo shape too: a forged
+        // `-x` must not skip the check even when the binary path has no
+        // spaces (hint present or absent).
+        assert!(!super::cmdline_is_oxo_flow(
+            "sh -c x sh /tmp/run/.exit-code sudo -x -u bioinfo /usr/local/bin/oxo-flow run wf",
+            Some("/usr/local/bin/oxo-flow")
+        ));
+        assert!(!super::cmdline_is_oxo_flow(
+            "sh -c x sh /tmp/run/.exit-code sudo -x -u bioinfo /usr/local/bin/oxo-flow run wf",
+            None
+        ));
     }
 
     /// The resolved binary path fixes the two token-heuristic blind spots: a
@@ -501,6 +543,11 @@ mod tests {
         // A different binary after the wrapper must fail even with a hint.
         assert!(!super::cmdline_is_oxo_flow(
             "sh -c x sh /tmp/run/.exit-code unshare --user -- /bin/sleep 30",
+            Some(binary)
+        ));
+        // A file named `a.exit-code` is not the executor's exit record.
+        assert!(!super::cmdline_is_oxo_flow(
+            "sh -c x sh /tmp/run/a.exit-code unshare --user -- /opt/my tools/bin/oxo-flow run wf",
             Some(binary)
         ));
     }

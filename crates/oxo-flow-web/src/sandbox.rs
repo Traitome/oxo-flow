@@ -167,9 +167,15 @@ pub fn configure(
     sudo_mode: bool,
     oxo_bin: &Path,
 ) -> Result<Option<SandboxPlan>, String> {
-    // Fail closed on a knob that is set but not valid UTF-8: `.ok()` would
-    // turn it into "unset" and silently disable the requested sandbox.
+    // The mode decides whether anything below is used, and it is fail-closed
+    // on its own. The auxiliary knobs are validated only when the sandbox is
+    // ON: an unused non-UTF-8 NET/PATHS value must not fail every spawn when
+    // the operator never enabled the sandbox (the docs say those knobs only
+    // take effect then).
     let mode = env_utf8(SANDBOX_MODE_ENV)?;
+    if parse_mode(mode.as_deref())?.is_none() {
+        return Ok(None);
+    }
     let net = env_utf8(SANDBOX_NET_ENV)?;
     let read_paths = env_utf8(SANDBOX_READ_PATHS_ENV)?;
     let write_paths = env_utf8(SANDBOX_WRITE_PATHS_ENV)?;

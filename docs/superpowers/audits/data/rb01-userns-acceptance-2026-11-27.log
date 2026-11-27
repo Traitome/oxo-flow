@@ -7,9 +7,11 @@
 #        cargo test -p oxo-flow-web --test rb01_userns_adversarial --no-run --locked
 # The suite was re-run after the review fixes (SIGTERM cancel, exact probe
 # argv, success-only probe cache, fail-closed leg, ownership and SIGTERM-only
-# legs); this file carries the final run's output.
+# legs) and again after the delta review (quota polling, cancel-mechanism
+# docs); this file carries the final delta run's output. The binary was
+# rebuilt incrementally (3m 03s) on top of the full build below.
 #
-=== build result ===
+=== build result (full build) ===
     Finished `test` profile [unoptimized + debuginfo] target(s) in 6m 19s
   Executable tests/rb01_userns_adversarial.rs (/home/ubuntu/oxo-build-target-1401/debug/deps/rb01_userns_adversarial-bbb0e71c35c9a0c7)
 
@@ -36,11 +38,11 @@ variant=proc-self-dir exit=1
 
 === adversarial suite (--nocapture --test-threads=1) ===
 running 1 test
-test userns_run_is_isolated_from_host_and_tenants ... RB01U fail-closed: run=85db1f02-088e-4876-b0f9-e62e024af50b status=failed log_names_reason=true no_cli_executed=true quota_active_runs=0
+test userns_run_is_isolated_from_host_and_tenants ... RB01U fail-closed: run=46417099-116a-4e8d-987e-a9bff03aab6b status=failed log_names_reason=true no_cli_executed=true quota_active_runs=0
 RB01U CONTROL probe results:
 RB01U   nproc: 14566
 RB01U   proc-environ: LEAKED
-RB01U   proc-pid-count: 215
+RB01U   proc-pid-count: 210
 RB01U   proc-server-visible: VISIBLE
 RB01U   signal-server: SIGNALLED
 RB01U   signal-tenantb: SIGNALLED
@@ -58,11 +60,11 @@ RB01U   signal-victim: denied
 RB01U   uid: 0
 RB01U   workdir-write: pass
 RB01U exit-code run: status=failed (CLI exit 7 through unshare)
-RB01U cancel: run=a2f3b13d-1fa8-4de8-8451-e7a818dcebc7 status=cancelled tenant_b_host_pid=1673564 marker=rb01u-b-marker-1673541 namespace_has_no_survivor=true
-RB01U sigterm-only teardown: elapsed=11.091675ms namespace_has_no_survivor=true
+RB01U cancel: run=0de244ca-c4eb-49c1-9b7c-304a97cd7ab2 status=cancelled tenant_b_host_pid=1723477 marker=rb01u-b-marker-1723462 namespace_has_no_survivor=true
+RB01U sigterm-only teardown: elapsed=10.857427ms namespace_has_no_survivor=true
 ok
 
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.84s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.82s
 
 # The run was launched as uid 1000 (not root) so the user namespace is a real
 # unprivileged creation, and the AppArmor profile was verified independently

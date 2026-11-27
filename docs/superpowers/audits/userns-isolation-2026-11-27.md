@@ -60,7 +60,7 @@ The full run log (including the build) stayed on the campaign host.
 | `kill -0 <server pid>` | SIGNALLED | **denied** |
 | `kill -0 <host victim pid>` | SIGNALLED | **denied** |
 | `kill -0 <tenant B host pid>` | SIGNALLED | **denied** |
-| numeric entries in `/proc` | 215 (host) | **4** (private PID namespace) |
+| numeric entries in `/proc` | 210 (host) | **4** (private PID namespace) |
 | `ulimit -u` (operator `RLIMIT_NPROC=4096`) | 14566 (host limit) | **4096** (inherited through `unshare`) |
 | write the run's own workdir | pass | **pass** (file owned by uid 1000 on the host) |
 
@@ -71,13 +71,15 @@ The full run log (including the build) stayed on the campaign host.
   refusal reason persisted in `execution.log`, no CLI or wrapper executed,
   and the quota reservation released (`active_runs=0`).
 - **Cancel**: tenant B's run reached `cancelled`; its namespaced process
-  (host pid 1673564) disappeared and no process carrying the marker survived
-  — group kill + `--kill-child=SIGTERM`, with the 5 s SIGKILL escalation as
-  the guaranteed path for an init that does not trap SIGTERM.
+  (host pid 1723477) disappeared and no process carrying the marker survived.
+  The supervisor's group SIGTERM reaches the namespace init directly;
+  `--kill-child=SIGTERM` is the backstop for when the `unshare` parent itself
+  terminates, and the 5 s SIGKILL escalation is the guaranteed teardown for
+  an init that ignores SIGTERM.
 - **SIGTERM-only teardown**: with no SIGKILL sent at all, the namespace was
-  gone in **11.1 ms** (`namespace_has_no_survivor=true`) — the graceful
+  gone in **10.9 ms** (`namespace_has_no_survivor=true`) — the graceful
   SIGTERM path has a real, measured window.
-- The suite finished in 5.84 s with `1 passed; 0 failed`.
+- The suite finished in 5.82 s with `1 passed; 0 failed` (final delta run).
 
 ## Landlock composition — re-measured as uid 1000
 
