@@ -5404,12 +5404,17 @@ the web spawn path along four axes: the child environment is allowlisted, so
 server secrets (<code>DATABASE_URL</code>, <code>OXO_FLOW_MASTER_KEY</code>, provider/MCP
 credentials) never reach a tenant-authored rule shell; operator-wide
 <code>RLIMIT_CPU</code>/<code>RLIMIT_NPROC</code> ceilings join the existing <code>RLIMIT_DATA</code> on
-Linux; and the opt-in <code>OXO_FLOW_WEB_SANDBOX=landlock</code> mode installs a
+Linux; the opt-in <code>OXO_FLOW_WEB_SANDBOX=landlock</code> mode installs a
 kernel Landlock ruleset so the spawned tree can only reach the run's own
 workdir and an explicit grant set (other tenants' workspaces, the server
 database, the operator's <code>$HOME</code>, <code>/proc</code>, and <code>/etc</code> are denied by the
-kernel; TCP bind/connect is denied on kernel 6.7+). The enforcement is
-<strong>opt-in and Linux-only</strong> — with the sandbox off, a workflow that guesses
+kernel; TCP bind/connect is denied on kernel 6.7+); and the opt-in
+<code>OXO_FLOW_WEB_ISOLATION=userns</code> mode (issue #1401) runs the CLI in a
+per-run user + PID namespace (root inside, the server uid outside; a
+private <code>/proc</code>; the run cannot see or signal host or sibling-tenant
+processes — host-side signals still reach it, which is exactly how cancel
+works). The enforcement
+is <strong>opt-in and Linux-only</strong> — with both modes off, a workflow that guesses
 another tenant's absolute path can still read (and write) it, and the
 residual matrix in <a href="#tenant-isolation-and-the-run-sandbox">Tenant isolation and the run
 sandbox</a> says exactly what remains
@@ -6863,24 +6868,124 @@ every probe would catch a regression):</p>
 <tr>
 <td>Signals to outside processes / abstract UNIX sockets</td>
 <td>Landlock scoped</td>
-<td>kernel 6.10+/6.12+</td>
+<td>kernel 6.10+/6.12+, sandbox enabled</td>
+</tr>
+<tr>
+<td>uid inside the run</td>
+<td>user namespace (<code>OXO_FLOW_WEB_ISOLATION=userns</code>)</td>
+<td>Linux, host allows unprivileged userns, mode enabled</td>
+</tr>
+<tr>
+<td>Host process visibility (<code>/proc</code>)</td>
+<td>PID namespace + private <code>/proc</code></td>
+<td>same</td>
+</tr>
+<tr>
+<td>Run → host / cross-tenant signals</td>
+<td>PID namespace boundary</td>
+<td>same</td>
+</tr>
+<tr>
+<td>Cancel/SIGTERM teardown of the whole tree</td>
+<td>process-group kill + <code>unshare --kill-child=SIGTERM</code></td>
+<td>same</td>
 </tr>
 </tbody>
 </table>
 <p>Not enforced (residual, honest list): with the sandbox <strong>off</strong> (default),
 none of the filesystem/network rows apply — today's behavior is unchanged;
 on non-Linux platforms the sandbox is unavailable (a requested mode fails
-closed); UDP and ICMP are outside the Landlock ABI on 6.x kernels; there is
-no PID namespace (the run shares the kernel process table — mitigated,
-not eliminated, by the <code>/proc</code> denial); already-open inherited file
-descriptors (the execution-log handle) stay writable; a granted
+closed); UDP and ICMP are outside the Landlock ABI on 6.x kernels; without
+<code>OXO_FLOW_WEB_ISOLATION=userns</code> there is no PID namespace (the run shares
+the kernel process table — mitigated, not eliminated, by the <code>/proc</code>
+denial); already-open inherited file descriptors (the execution-log handle)
+stay writable; a granted
 <code>OXO_FLOW_MODULE_CACHE</code>/<code>OXO_FLOW_ENV_STORE</code>/write path is a shared
 same-uid channel across all runs; git-based remote <code>[[include]]</code> needs
 <code>OXO_FLOW_MODULE_CACHE</code> set and may still fail reading the operator's
 <code>~/.gitconfig</code> (vendored includes are the sandboxed pattern); per-run uid
-isolation (<code>sudo</code>-prefixed spawns) and per-tenant containers remain
-deployment modes, not enforced features. Remote (cluster) runs execute on
-the cluster host under the cluster's own controls, outside this boundary.</p>
+isolation via dedicated accounts (<code>sudo</code>-prefixed spawns) and per-tenant
+containers remain deployment modes, not enforced features. Remote (cluster)
+runs execute on the cluster host under the cluster's own controls, outside
+this boundary.</p>
+<h3 id="per-run-user-pid-namespace-isolation">Per-run user + PID namespace isolation<a class="headerlink" href="#per-run-user-pid-namespace-isolation" title="Permanent link">#</a></h3>
+<p><code>OXO_FLOW_WEB_ISOLATION</code> (issue #1401, the RB-01 residual) adds an
+independent, opt-in boundary for <strong>local</strong> web-spawned runs:</p>
+<ul>
+<li>unset, empty, or <code>off</code> — disabled (the default; behavior is unchanged);</li>
+<li><code>userns</code> — the CLI is spawned through
+  <code>unshare --user --map-root-user --pid --fork --mount-proc --kill-child=SIGTERM -- …</code>.
+  The server uid maps to uid 0 inside the namespace, so files created on the
+  run workdir (checkpoint, logs, outputs) keep the server uid outside and
+  ownership is unchanged. The CLI becomes PID 1 of a fresh PID namespace,
+  reaps its rule shells, and sees a private <code>/proc</code>; host processes and
+  other tenants' runs are invisible, and the run cannot signal them or any
+  host process. The boundary is <strong>one-directional</strong>: host-side signals keep
+  working — an ancestor PID namespace can signal every descendant, which is
+  exactly how cancel reaches the namespace. The <code>.exit-code</code> wrapper is
+  preserved:
+  <code>unshare</code> exits with the CLI's status, so run outcomes are recorded
+  exactly as before;</li>
+<li>any other value — a configuration error that <strong>fails the spawn</strong> (a typo
+  never silently disables the requested isolation).</li>
+</ul>
+<p><strong>Fail-closed availability.</strong> The mode is probed before use with the exact
+wrapper argv (<code>… --kill-child=SIGTERM -- true</code>, the same shape a run uses)
+as the server uid; a successful probe is cached for the server process
+lifetime, while a failed probe is retried on the next spawn (a transient
+failure must not disable the mode until restart). A requested-but-unavailable
+mode refuses the spawn
+and marks the run failed with a structured reason naming the host
+prerequisite — it never degrades to an unisolated run. The host
+requirements are:</p>
+<ul>
+<li>unprivileged user namespaces enabled (<code>kernel.unprivileged_userns_clone=1</code>);</li>
+<li>on Ubuntu 24.04, an AppArmor profile granting <code>userns,</code> to the server
+  binary (or <code>kernel.apparmor_restrict_unprivileged_userns=0</code>; relaxing the
+  sysctl is a host-wide decision and is not done by the server);</li>
+<li>util-linux <code>unshare</code> installed.</li>
+</ul>
+<p><strong>Composition.</strong> <code>RLIMIT_DATA</code>/<code>RLIMIT_CPU</code>/<code>RLIMIT_NPROC</code> are installed on
+the wrapper and inherited by <code>unshare</code>, the CLI, and every rule shell.
+<code>userns</code> and <code>OXO_FLOW_WEB_SANDBOX=landlock</code> are <strong>mutually exclusive</strong>
+(fail-closed). This was measured on tx-ubuntu (Landlock ABI 4, util-linux
+2.39.3): granting <code>/proc/self/{uid_map,gid_map,setgroups}</code> — as file rules
+or as a rule on <code>/proc/self</code> — does not let <code>unshare</code> initialize; the map
+open returns <code>EACCES</code>. With <code>--fork</code> util-linux clones and the child writes
+its own dynamic <code>/proc/&lt;pid&gt;/uid_map</code>, an inode no pre-exec static ruleset
+can name, and the no-fork self-mapping shape is denied after exec too. Only
+a host-<code>/proc</code> grant would cover it, which would re-expose every process —
+the disclosure both modes exist to prevent. Run one mode at a time.</p>
+<p><strong>Cancellation.</strong> The supervisor's process-group SIGTERM reaches <code>sh</code>,
+<code>unshare</code>, and the namespace init DIRECTLY — that direct signal is what
+gives a CLI that traps SIGTERM a graceful shutdown window (util-linux
+<code>unshare</code> ignores SIGINT/SIGTERM while it waits for its child and does not
+forward them). <code>--kill-child=SIGTERM</code> is a <strong>backstop</strong>: it fires only when
+the <code>unshare</code> parent itself terminates (SIGKILL, crash), at which point it
+signals the init. An init that ignores SIGTERM (PID 1 ignores catchable
+signals without a handler) is covered by the existing 5 s SIGKILL
+escalation, after which the kernel tears down the namespace. SIGKILL and
+SIGSTOP — the final kill and pause/resume — are kernel-only signals and are
+delivered to init directly. The adversarial suite
+<code>crates/oxo-flow-web/tests/rb01_userns_adversarial.rs</code> asserts both the
+graceful SIGTERM-only teardown (no SIGKILL sent, completed inside the
+escalation window) and that the cancelled real run leaves no process in the
+namespace.</p>
+<p><strong>Residuals (not claimed as covered):</strong></p>
+<ul>
+<li>the mapping is single-uid: root inside, the server uid outside. Per-run
+  dedicated uids need subordinate ID ranges and are out of scope;</li>
+<li><code>RLIMIT_NPROC</code> is accounted per real uid and is not partitioned by
+  namespaces — a namespace does not give each tenant its own process budget
+  (PID exhaustion by a same-uid tenant remains a shared resource);</li>
+<li>UDP/ICMP and the network in general are unrestricted by namespaces;</li>
+<li>filesystem reachability is <strong>not</strong> restricted by namespaces — use the
+  Landlock mode (one mode at a time) if the run must not read host paths;</li>
+<li>hosts may disable unprivileged user namespaces; the mode then fails
+  closed with the remediation named;</li>
+<li><strong>local-only</strong>: cluster/remote runs execute on another host and are not
+  covered (the remote host's own controls apply).</li>
+</ul>
 <h2 id="cluster-connections-remote-execution">Cluster Connections &amp; Remote Execution<a class="headerlink" href="#cluster-connections-remote-execution" title="Permanent link">#</a></h2>
 <p><div class="language-text highlight"><pre><span></span><code><span id="__span-80-1"><a id="__codelineno-80-1" name="__codelineno-80-1" href="#__codelineno-80-1"></a>GET    /api/clusters                  # configured SSH connections
 </span><span id="__span-80-2"><a id="__codelineno-80-2" name="__codelineno-80-2" href="#__codelineno-80-2"></a>POST   /api/clusters                  # upsert (admin-only outside personal mode)

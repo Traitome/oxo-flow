@@ -4026,6 +4026,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Multi-Tenancy">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#execution-boundary-for-local-runs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Execution boundary for local runs
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -4416,6 +4433,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Multi-Tenancy">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#execution-boundary-for-local-runs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Execution boundary for local runs
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -4628,7 +4662,7 @@ reason.</p>
 </tr>
 <tr>
 <td>Run execution</td>
-<td>Backend-routed code exists for SQLite and PostgreSQL; schema bootstrap + core CRUD are CI-smoke-verified on live PostgreSQL, and a 2026-11-26 campaign measured two instances (same host and separate network namespaces), partitions, connection exhaustion, clean/crash restarts, per-user quota, and owner-lease ghost-run reconciliation. Separate physical hosts, production scale, per-query network timeouts, and database media corruption remain unvalidated. Team mode has no OS-level tenant execution boundary, so expose it only to fully trusted workflow authors</td>
+<td>Backend-routed code exists for SQLite and PostgreSQL; schema bootstrap + core CRUD are CI-smoke-verified on live PostgreSQL, and a 2026-11-26 campaign measured two instances (same host and separate network namespaces), partitions, connection exhaustion, clean/crash restarts, per-user quota, and owner-lease ghost-run reconciliation. Separate physical hosts, production scale, per-query network timeouts, and database media corruption remain unvalidated. Team mode's OS-level tenant boundary is opt-in and fail-closed when requested (<code>OXO_FLOW_WEB_SANDBOX=landlock</code> for filesystem/TCP, <code>OXO_FLOW_WEB_ISOLATION=userns</code> for a per-run user + PID namespace); with neither mode set, expose it only to fully trusted workflow authors</td>
 </tr>
 <tr>
 <td>Auth</td>
@@ -4904,6 +4938,46 @@ ignored.</p>
 <li><strong>Shared infrastructure</strong>: the server AI provider, webhook endpoint, and
   SSH cluster connections are admin-managed outside personal mode.</li>
 </ul>
+<h3 id="execution-boundary-for-local-runs">Execution boundary for local runs<a class="headerlink" href="#execution-boundary-for-local-runs" title="Permanent link">#</a></h3>
+<p>Directory scoping is not an OS boundary. The web spawn path always strips
+the server environment from the child (no <code>DATABASE_URL</code>, master key,
+provider/MCP credentials, or sign-in passwords), and two opt-in, fail-closed
+kernel modes add real isolation for locally executed runs:</p>
+<ul>
+<li><code>OXO_FLOW_WEB_SANDBOX=landlock</code> (Linux 5.13+) — a Landlock ruleset denies
+  <code>/proc</code>, <code>/sys</code>, <code>/etc</code>, the server <code>$HOME</code>, the workspace root, and other
+  tenants' workdirs; TCP is denied on kernel 6.7+. This is the mode to use
+  when tenant rules must not read host files.</li>
+<li><code>OXO_FLOW_WEB_ISOLATION=userns</code> — the CLI runs in a per-run user + PID
+  namespace (root inside, the server uid outside; a private <code>/proc</code>; the run
+  cannot signal or see host/sibling processes, while host-side signals still
+  reach it — that is how cancel works). It does <strong>not</strong> confine the
+  filesystem or network; run one mode at a time.</li>
+</ul>
+<p><code>userns</code> needs unprivileged user namespaces on the host. Ubuntu 24.04
+blocks them by default. Grant the server binary the permission with an
+AppArmor profile rather than relaxing the host-wide sysctl:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a># /etc/apparmor.d/oxo-flow-userns
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>abi &lt;abi/4.0&gt;,
+</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>include &lt;tunables/global&gt;
+</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>
+</span><span id="__span-10-5"><a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a>profile oxo-flow-userns /usr/local/bin/oxo-flow-web flags=(unconfined) {
+</span><span id="__span-10-6"><a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a>  userns,
+</span><span id="__span-10-7"><a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a>}
+</span></code></pre></div>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>sudo<span class="w"> </span>apparmor_parser<span class="w"> </span>-r<span class="w"> </span>/etc/apparmor.d/oxo-flow-userns
+</span></code></pre></div>
+<p>The server probes the exact <code>unshare --user --map-root-user --pid --fork
+--mount-proc --kill-child=SIGTERM -- true</code> invocation before the first run
+and caches a successful verdict; a failed probe is retried on the next
+spawn. If the mode cannot be installed, the spawn is refused
+with the remediation named — it never silently runs unisolated. Both modes
+apply to <strong>local</strong> runs only; cluster/remote runs execute on the remote
+host under that host's controls. See the
+<a href="../../reference/web-api/#per-run-user-pid-namespace-isolation">web API reference</a>
+for the enforced-vs-residual matrix, including the honest residuals
+(single-uid mapping, <code>RLIMIT_NPROC</code> counted per real uid, UDP/ICMP,
+namespace-only mode not confining files).</p>
 <h2 id="server-data-layout-oxo_flow_workspace">Server Data Layout (<code>OXO_FLOW_WORKSPACE</code>)<a class="headerlink" href="#server-data-layout-oxo_flow_workspace" title="Permanent link">#</a></h2>
 <p>The web server keeps all user-scoped data under one workspace root,
 <code>OXO_FLOW_WORKSPACE</code> (default: a relative <code>workspace/</code> directory under the
@@ -4988,33 +5062,33 @@ verified against the workspace files.</p>
 <p>Two pieces complete a production serve: a supervised service and — when
 users reach the server over a network — a reverse proxy in front of it.</p>
 <h3 id="systemd-service">systemd service<a class="headerlink" href="#systemd-service" title="Permanent link">#</a></h3>
-<div class="language-ini highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="c1"># /etc/systemd/system/oxo-flow.service</span>
-</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="k">[Unit]</span>
-</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="na">Description</span><span class="o">=</span><span class="s">oxo-flow web server</span>
-</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="na">After</span><span class="o">=</span><span class="s">network-online.target</span>
-</span><span id="__span-10-5"><a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="na">Wants</span><span class="o">=</span><span class="s">network-online.target</span>
-</span><span id="__span-10-6"><a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a>
-</span><span id="__span-10-7"><a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a><span class="k">[Service]</span>
-</span><span id="__span-10-8"><a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a><span class="na">Type</span><span class="o">=</span><span class="s">simple</span>
-</span><span id="__span-10-9"><a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a><span class="na">User</span><span class="o">=</span><span class="s">oxo</span>
-</span><span id="__span-10-10"><a id="__codelineno-10-10" name="__codelineno-10-10" href="#__codelineno-10-10"></a><span class="na">Group</span><span class="o">=</span><span class="s">oxo</span>
-</span><span id="__span-10-11"><a id="__codelineno-10-11" name="__codelineno-10-11" href="#__codelineno-10-11"></a><span class="na">WorkingDirectory</span><span class="o">=</span><span class="s">/opt/oxo-flow</span>
-</span><span id="__span-10-12"><a id="__codelineno-10-12" name="__codelineno-10-12" href="#__codelineno-10-12"></a><span class="na">EnvironmentFile</span><span class="o">=</span><span class="s">-/etc/oxo-flow/server.env</span>
-</span><span id="__span-10-13"><a id="__codelineno-10-13" name="__codelineno-10-13" href="#__codelineno-10-13"></a><span class="na">ExecStart</span><span class="o">=</span><span class="s">/usr/local/bin/oxo-flow serve</span>
-</span><span id="__span-10-14"><a id="__codelineno-10-14" name="__codelineno-10-14" href="#__codelineno-10-14"></a><span class="na">Restart</span><span class="o">=</span><span class="s">on-failure</span>
-</span><span id="__span-10-15"><a id="__codelineno-10-15" name="__codelineno-10-15" href="#__codelineno-10-15"></a><span class="na">RestartSec</span><span class="o">=</span><span class="s">2</span>
-</span><span id="__span-10-16"><a id="__codelineno-10-16" name="__codelineno-10-16" href="#__codelineno-10-16"></a><span class="na">TimeoutStopSec</span><span class="o">=</span><span class="s">15</span>
-</span><span id="__span-10-17"><a id="__codelineno-10-17" name="__codelineno-10-17" href="#__codelineno-10-17"></a>
-</span><span id="__span-10-18"><a id="__codelineno-10-18" name="__codelineno-10-18" href="#__codelineno-10-18"></a><span class="k">[Install]</span>
-</span><span id="__span-10-19"><a id="__codelineno-10-19" name="__codelineno-10-19" href="#__codelineno-10-19"></a><span class="na">WantedBy</span><span class="o">=</span><span class="s">multi-user.target</span>
+<div class="language-ini highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="c1"># /etc/systemd/system/oxo-flow.service</span>
+</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="k">[Unit]</span>
+</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="na">Description</span><span class="o">=</span><span class="s">oxo-flow web server</span>
+</span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="na">After</span><span class="o">=</span><span class="s">network-online.target</span>
+</span><span id="__span-12-5"><a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a><span class="na">Wants</span><span class="o">=</span><span class="s">network-online.target</span>
+</span><span id="__span-12-6"><a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a>
+</span><span id="__span-12-7"><a id="__codelineno-12-7" name="__codelineno-12-7" href="#__codelineno-12-7"></a><span class="k">[Service]</span>
+</span><span id="__span-12-8"><a id="__codelineno-12-8" name="__codelineno-12-8" href="#__codelineno-12-8"></a><span class="na">Type</span><span class="o">=</span><span class="s">simple</span>
+</span><span id="__span-12-9"><a id="__codelineno-12-9" name="__codelineno-12-9" href="#__codelineno-12-9"></a><span class="na">User</span><span class="o">=</span><span class="s">oxo</span>
+</span><span id="__span-12-10"><a id="__codelineno-12-10" name="__codelineno-12-10" href="#__codelineno-12-10"></a><span class="na">Group</span><span class="o">=</span><span class="s">oxo</span>
+</span><span id="__span-12-11"><a id="__codelineno-12-11" name="__codelineno-12-11" href="#__codelineno-12-11"></a><span class="na">WorkingDirectory</span><span class="o">=</span><span class="s">/opt/oxo-flow</span>
+</span><span id="__span-12-12"><a id="__codelineno-12-12" name="__codelineno-12-12" href="#__codelineno-12-12"></a><span class="na">EnvironmentFile</span><span class="o">=</span><span class="s">-/etc/oxo-flow/server.env</span>
+</span><span id="__span-12-13"><a id="__codelineno-12-13" name="__codelineno-12-13" href="#__codelineno-12-13"></a><span class="na">ExecStart</span><span class="o">=</span><span class="s">/usr/local/bin/oxo-flow serve</span>
+</span><span id="__span-12-14"><a id="__codelineno-12-14" name="__codelineno-12-14" href="#__codelineno-12-14"></a><span class="na">Restart</span><span class="o">=</span><span class="s">on-failure</span>
+</span><span id="__span-12-15"><a id="__codelineno-12-15" name="__codelineno-12-15" href="#__codelineno-12-15"></a><span class="na">RestartSec</span><span class="o">=</span><span class="s">2</span>
+</span><span id="__span-12-16"><a id="__codelineno-12-16" name="__codelineno-12-16" href="#__codelineno-12-16"></a><span class="na">TimeoutStopSec</span><span class="o">=</span><span class="s">15</span>
+</span><span id="__span-12-17"><a id="__codelineno-12-17" name="__codelineno-12-17" href="#__codelineno-12-17"></a>
+</span><span id="__span-12-18"><a id="__codelineno-12-18" name="__codelineno-12-18" href="#__codelineno-12-18"></a><span class="k">[Install]</span>
+</span><span id="__span-12-19"><a id="__codelineno-12-19" name="__codelineno-12-19" href="#__codelineno-12-19"></a><span class="na">WantedBy</span><span class="o">=</span><span class="s">multi-user.target</span>
 </span></code></pre></div>
 <p>Keep secrets in the EnvironmentFile (<code>chmod 600</code>), never inline in the
 unit:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="c1"># /etc/oxo-flow/server.env</span>
-</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="nv">OXO_FLOW_MODE</span><span class="o">=</span>team
-</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="nv">OXO_FLOW_HOST</span><span class="o">=</span><span class="m">127</span>.0.0.1
-</span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="nv">OXO_FLOW_ADMIN_PASSWORD</span><span class="o">=</span>…
-</span><span id="__span-11-5"><a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a><span class="nv">DEEPSEEK_API_KEY</span><span class="o">=</span>…
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="c1"># /etc/oxo-flow/server.env</span>
+</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="nv">OXO_FLOW_MODE</span><span class="o">=</span>team
+</span><span id="__span-13-3"><a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a><span class="nv">OXO_FLOW_HOST</span><span class="o">=</span><span class="m">127</span>.0.0.1
+</span><span id="__span-13-4"><a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a><span class="nv">OXO_FLOW_ADMIN_PASSWORD</span><span class="o">=</span>…
+</span><span id="__span-13-5"><a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a><span class="nv">DEEPSEEK_API_KEY</span><span class="o">=</span>…
 </span></code></pre></div>
 <p>A stop (<code>systemctl stop oxo-flow</code>) delivers SIGTERM; the server drains
 connections and exits. Runs in flight are not force-killed. Cancel them from
@@ -5031,36 +5105,36 @@ the proxy in front <strong>overwrites</strong> those headers on every request (b
 recipes below do, via <code>X-Real-IP $remote_addr</code>); if clients can reach
 the server without passing through it, a caller could spoof the header
 and bypass the limiter.</p>
-<div class="language-nginx highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="k">server</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="w">    </span><span class="kn">listen</span><span class="w"> </span><span class="mi">80</span><span class="p">;</span>
-</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="w">    </span><span class="kn">server_name</span><span class="w"> </span><span class="s">flows.lab.example.edu</span><span class="p">;</span>
-</span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a>
-</span><span id="__span-12-5"><a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a><span class="w">    </span><span class="kn">location</span><span class="w"> </span><span class="s">/oxo-flow/</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-12-6"><a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a><span class="w">        </span><span class="kn">proxy_pass</span><span class="w"> </span><span class="s">http://127.0.0.1:8080</span><span class="p">;</span><span class="w">   </span><span class="c1"># no trailing slash: keep the mount prefix</span>
-</span><span id="__span-12-7"><a id="__codelineno-12-7" name="__codelineno-12-7" href="#__codelineno-12-7"></a><span class="w">        </span><span class="kn">proxy_http_version</span><span class="w"> </span><span class="mi">1</span><span class="s">.1</span><span class="p">;</span>
-</span><span id="__span-12-8"><a id="__codelineno-12-8" name="__codelineno-12-8" href="#__codelineno-12-8"></a><span class="w">        </span><span class="kn">proxy_set_header</span><span class="w"> </span><span class="s">Host</span><span class="w"> </span><span class="nv">$host</span><span class="p">;</span>
-</span><span id="__span-12-9"><a id="__codelineno-12-9" name="__codelineno-12-9" href="#__codelineno-12-9"></a><span class="w">        </span><span class="kn">proxy_set_header</span><span class="w"> </span><span class="s">X-Real-IP</span><span class="w"> </span><span class="nv">$remote_addr</span><span class="p">;</span>
-</span><span id="__span-12-10"><a id="__codelineno-12-10" name="__codelineno-12-10" href="#__codelineno-12-10"></a><span class="w">        </span><span class="kn">proxy_set_header</span><span class="w"> </span><span class="s">X-Forwarded-For</span><span class="w"> </span><span class="nv">$proxy_add_x_forwarded_for</span><span class="p">;</span>
-</span><span id="__span-12-11"><a id="__codelineno-12-11" name="__codelineno-12-11" href="#__codelineno-12-11"></a><span class="w">        </span><span class="kn">proxy_set_header</span><span class="w"> </span><span class="s">X-Forwarded-Proto</span><span class="w"> </span><span class="nv">$scheme</span><span class="p">;</span>
-</span><span id="__span-12-12"><a id="__codelineno-12-12" name="__codelineno-12-12" href="#__codelineno-12-12"></a><span class="w">        </span><span class="c1"># Server-Sent Events (/api/events) require unbuffered streaming.</span>
-</span><span id="__span-12-13"><a id="__codelineno-12-13" name="__codelineno-12-13" href="#__codelineno-12-13"></a><span class="w">        </span><span class="kn">proxy_buffering</span><span class="w"> </span><span class="no">off</span><span class="p">;</span>
-</span><span id="__span-12-14"><a id="__codelineno-12-14" name="__codelineno-12-14" href="#__codelineno-12-14"></a><span class="w">        </span><span class="kn">proxy_read_timeout</span><span class="w"> </span><span class="s">300s</span><span class="p">;</span>
-</span><span id="__span-12-15"><a id="__codelineno-12-15" name="__codelineno-12-15" href="#__codelineno-12-15"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-12-16"><a id="__codelineno-12-16" name="__codelineno-12-16" href="#__codelineno-12-16"></a><span class="p">}</span>
+<div class="language-nginx highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="k">server</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="w">    </span><span class="kn">listen</span><span class="w"> </span><span class="mi">80</span><span class="p">;</span>
+</span><span id="__span-14-3"><a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a><span class="w">    </span><span class="kn">server_name</span><span class="w"> </span><span class="s">flows.lab.example.edu</span><span class="p">;</span>
+</span><span id="__span-14-4"><a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a>
+</span><span id="__span-14-5"><a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a><span class="w">    </span><span class="kn">location</span><span class="w"> </span><span class="s">/oxo-flow/</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-14-6"><a id="__codelineno-14-6" name="__codelineno-14-6" href="#__codelineno-14-6"></a><span class="w">        </span><span class="kn">proxy_pass</span><span class="w"> </span><span class="s">http://127.0.0.1:8080</span><span class="p">;</span><span class="w">   </span><span class="c1"># no trailing slash: keep the mount prefix</span>
+</span><span id="__span-14-7"><a id="__codelineno-14-7" name="__codelineno-14-7" href="#__codelineno-14-7"></a><span class="w">        </span><span class="kn">proxy_http_version</span><span class="w"> </span><span class="mi">1</span><span class="s">.1</span><span class="p">;</span>
+</span><span id="__span-14-8"><a id="__codelineno-14-8" name="__codelineno-14-8" href="#__codelineno-14-8"></a><span class="w">        </span><span class="kn">proxy_set_header</span><span class="w"> </span><span class="s">Host</span><span class="w"> </span><span class="nv">$host</span><span class="p">;</span>
+</span><span id="__span-14-9"><a id="__codelineno-14-9" name="__codelineno-14-9" href="#__codelineno-14-9"></a><span class="w">        </span><span class="kn">proxy_set_header</span><span class="w"> </span><span class="s">X-Real-IP</span><span class="w"> </span><span class="nv">$remote_addr</span><span class="p">;</span>
+</span><span id="__span-14-10"><a id="__codelineno-14-10" name="__codelineno-14-10" href="#__codelineno-14-10"></a><span class="w">        </span><span class="kn">proxy_set_header</span><span class="w"> </span><span class="s">X-Forwarded-For</span><span class="w"> </span><span class="nv">$proxy_add_x_forwarded_for</span><span class="p">;</span>
+</span><span id="__span-14-11"><a id="__codelineno-14-11" name="__codelineno-14-11" href="#__codelineno-14-11"></a><span class="w">        </span><span class="kn">proxy_set_header</span><span class="w"> </span><span class="s">X-Forwarded-Proto</span><span class="w"> </span><span class="nv">$scheme</span><span class="p">;</span>
+</span><span id="__span-14-12"><a id="__codelineno-14-12" name="__codelineno-14-12" href="#__codelineno-14-12"></a><span class="w">        </span><span class="c1"># Server-Sent Events (/api/events) require unbuffered streaming.</span>
+</span><span id="__span-14-13"><a id="__codelineno-14-13" name="__codelineno-14-13" href="#__codelineno-14-13"></a><span class="w">        </span><span class="kn">proxy_buffering</span><span class="w"> </span><span class="no">off</span><span class="p">;</span>
+</span><span id="__span-14-14"><a id="__codelineno-14-14" name="__codelineno-14-14" href="#__codelineno-14-14"></a><span class="w">        </span><span class="kn">proxy_read_timeout</span><span class="w"> </span><span class="s">300s</span><span class="p">;</span>
+</span><span id="__span-14-15"><a id="__codelineno-14-15" name="__codelineno-14-15" href="#__codelineno-14-15"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-14-16"><a id="__codelineno-14-16" name="__codelineno-14-16" href="#__codelineno-14-16"></a><span class="p">}</span>
 </span></code></pre></div>
 <p>Start the app with the matching mount point and the trusted-proxy flag
 (the headers the recipe sets above are what the limiter then reads):</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>oxo-flow<span class="w"> </span>serve<span class="w"> </span>--mode<span class="w"> </span>team<span class="w"> </span>--base-path<span class="w"> </span>/oxo-flow
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>oxo-flow<span class="w"> </span>serve<span class="w"> </span>--mode<span class="w"> </span>team<span class="w"> </span>--base-path<span class="w"> </span>/oxo-flow
 </span></code></pre></div>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="c1"># /etc/oxo-flow/server.env (append)</span>
-</span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="nv">OXO_FLOW_TRUSTED_PROXY</span><span class="o">=</span><span class="m">1</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="c1"># /etc/oxo-flow/server.env (append)</span>
+</span><span id="__span-16-2"><a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a><span class="nv">OXO_FLOW_TRUSTED_PROXY</span><span class="o">=</span><span class="m">1</span>
 </span></code></pre></div>
 <p>For TLS-terminating proxies (the common public deployment), also declare
 the public origin so minted share URLs tell the truth about the transport
 — by default they carry <code>oxo+http://</code> with the local bind
 host/port, which is unreachable from outside the proxy:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="c1"># /etc/oxo-flow/server.env (append) — public HTTPS entry point</span>
-</span><span id="__span-15-2"><a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a><span class="nv">OXO_FLOW_PUBLIC_URL</span><span class="o">=</span>https://flows.lab.example.edu/oxo-flow
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="c1"># /etc/oxo-flow/server.env (append) — public HTTPS entry point</span>
+</span><span id="__span-17-2"><a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a><span class="nv">OXO_FLOW_PUBLIC_URL</span><span class="o">=</span>https://flows.lab.example.edu/oxo-flow
 </span></code></pre></div>
 <p>Share URLs then become <code>oxo+https://flows.lab.example.edu/oxo-flow/share/&lt;token&gt;</code>
 (see <a href="../collaboration/">Collaboration</a>); the import API accepts both
@@ -5142,13 +5216,13 @@ asserts against the live server, and cleans up after itself:</p>
 </tr>
 </tbody>
 </table>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="c1"># Against the local debug build</span>
-</span><span id="__span-16-2"><a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a>scripts/deploy-smoke.sh
-</span><span id="__span-16-3"><a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a>
-</span><span id="__span-16-4"><a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a><span class="c1"># Against a release build / packaged app</span>
-</span><span id="__span-16-5"><a id="__codelineno-16-5" name="__codelineno-16-5" href="#__codelineno-16-5"></a><span class="nv">OXO_BIN</span><span class="o">=</span>target/release/oxo-flow<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-16-6"><a id="__codelineno-16-6" name="__codelineno-16-6" href="#__codelineno-16-6"></a><span class="nv">OXO_APP</span><span class="o">=</span>target/release/bundle/osx/oxo-flow.app<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-16-7"><a id="__codelineno-16-7" name="__codelineno-16-7" href="#__codelineno-16-7"></a>scripts/deploy-smoke.sh
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-18-1"><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="c1"># Against the local debug build</span>
+</span><span id="__span-18-2"><a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a>scripts/deploy-smoke.sh
+</span><span id="__span-18-3"><a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a>
+</span><span id="__span-18-4"><a id="__codelineno-18-4" name="__codelineno-18-4" href="#__codelineno-18-4"></a><span class="c1"># Against a release build / packaged app</span>
+</span><span id="__span-18-5"><a id="__codelineno-18-5" name="__codelineno-18-5" href="#__codelineno-18-5"></a><span class="nv">OXO_BIN</span><span class="o">=</span>target/release/oxo-flow<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-18-6"><a id="__codelineno-18-6" name="__codelineno-18-6" href="#__codelineno-18-6"></a><span class="nv">OXO_APP</span><span class="o">=</span>target/release/bundle/osx/oxo-flow.app<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-18-7"><a id="__codelineno-18-7" name="__codelineno-18-7" href="#__codelineno-18-7"></a>scripts/deploy-smoke.sh
 </span></code></pre></div>
 <p>Run it on every machine you deploy to — it exits non-zero on any failed
 assertion, so it doubles as a CI gate for packaging.</p>

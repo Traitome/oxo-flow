@@ -5183,14 +5183,16 @@ and an export without a head is malformed input (exit 4) to the offline
 verifier.</p>
 <h3 id="tenant-execution-boundary-rb-01">Tenant execution boundary (RB-01)<a class="headerlink" href="#tenant-execution-boundary-rb-01" title="Permanent link">#</a></h3>
 <p>Every locally executed run spawns through one choke point
-(<code>spawn_background_run_with_args</code>), which layers four independent OS-level
+(<code>spawn_background_run_with_args</code>), which layers five independent OS-level
 controls on the CLI process tree (and therefore every rule shell it forks):</p>
 <ol>
 <li><strong>Environment allowlist (always on, all platforms, RB-01a)</strong> — the child
    is rebuilt from the engine's rule-shell policy; server secrets never
    ride along.</li>
 <li><strong>Resource ceilings (Linux, opt-in)</strong> — <code>RLIMIT_DATA</code> from the declared
-   memory, plus operator-wide <code>RLIMIT_CPU</code>/<code>RLIMIT_NPROC</code> knobs.</li>
+   memory, plus operator-wide <code>RLIMIT_CPU</code>/<code>RLIMIT_NPROC</code> knobs. The
+   ceilings are installed on the wrapper and inherited through every
+   isolation layer below.</li>
 <li><strong>Kernel filesystem/network sandbox (Linux 5.13+, opt-in)</strong> —
    <code>OXO_FLOW_WEB_SANDBOX=landlock</code> installs a Landlock ruleset in a
    <code>pre_exec</code> hook: the spawned tree can read+execute system dirs and the
@@ -5200,16 +5202,37 @@ controls on the CLI process tree (and therefore every rule shell it forks):</p>
    the kernel level; TCP bind/connect is denied on kernel 6.7+ (ABI v4),
    abstract-UNIX-socket and signal scoping on 6.10+/6.12+ (ABI v5/v6).
    Fail-closed: an unhonorable sandbox request refuses the spawn.</li>
+<li><strong>User + PID namespace (Linux, opt-in, local runs, issue #1401)</strong> —
+   <code>OXO_FLOW_WEB_ISOLATION=userns</code> spawns the CLI through
+   <code>unshare --user --map-root-user --pid --fork --mount-proc --kill-child=SIGTERM</code>:
+   the run is root inside its own user namespace (the server uid outside, so
+   workdir ownership is unchanged), is PID 1 of a private PID namespace with
+   a private <code>/proc</code>, and can neither see nor signal host or sibling-tenant
+   processes (host-side signals still reach it — that is how cancel works). Availability is probed before use (AppArmor/sysctl host
+   prerequisites) and a requested-but-unavailable mode fails the spawn —
+   never a silent downgrade. Mutually exclusive with the Landlock mode:
+   measured on a Landlock ABI 4 host, the <code>unshare</code> map write targets the
+   dynamic <code>/proc/&lt;pid&gt;</code> of a forked child, which a pre-exec static ruleset
+   cannot grant without re-exposing host <code>/proc</code>.</li>
 <li><strong>Process-group bookkeeping (always on)</strong> — the run owns a process
-   group, so cancel/pause/resume signal the whole tree.</li>
+   group, so cancel/pause/resume signal the whole tree; with a namespace,
+   the group SIGTERM reaches <code>sh</code>, <code>unshare</code>, and the namespace init
+   directly (a CLI that traps it shuts down gracefully), while
+   <code>--kill-child=SIGTERM</code> is the backstop if the <code>unshare</code> parent itself
+   terminates, and the 5 s SIGKILL escalation tears the namespace down when
+   the init ignores SIGTERM.</li>
 </ol>
-<p>The implementation lives in <code>crates/oxo-flow-web/src/sandbox.rs</code>; the
+<p>The implementation lives in <code>crates/oxo-flow-web/src/executor.rs</code> (the spawn
+choke point and the rlimit <code>pre_exec</code> hooks), <code>crates/oxo-flow-web/src/sandbox.rs</code>
+(Landlock), and <code>crates/oxo-flow-web/src/userns.rs</code> (namespaces); the
 enforced-vs-residual matrix, the knob reference, and the two-tenant
-adversarial evidence are in
+adversarial evidence (<code>rb01_sandbox_adversarial.rs</code>,
+<code>rb01_userns_adversarial.rs</code>) are in
 <a href="../web-api/#tenant-isolation-and-the-run-sandbox">Create Run → Tenant isolation</a>.
-Per-run OS identities and per-tenant containers remain deployment modes,
-not enforced features — remote (cluster) runs execute on the cluster host
-under the cluster's own controls.</p>
+Per-run OS identities via dedicated accounts and per-tenant containers
+remain deployment modes, not enforced features — remote (cluster) runs
+execute on the cluster host under the cluster's own controls, and the
+namespace mode does not apply to them.</p>
 <hr />
 <h2 id="api-namespace">API Namespace<a class="headerlink" href="#api-namespace" title="Permanent link">#</a></h2>
 <p><div class="language-text highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>/api
