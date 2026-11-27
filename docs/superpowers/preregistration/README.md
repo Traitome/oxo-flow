@@ -1,12 +1,12 @@
 # Pre-Registration and Evidence Governance — Task 4.0
 
-**Status: artifacts frozen at version 1.0.3 (amendment 4, post-review
-erratum); independent sign-off PENDING. #1163 has collected governed
-confirmatory data under amendment 2 (the sealed corpus, its pre-run
-manifest, and the erratum are linked from §3); #1164, #1165, and #1166
-have collected no confirmatory data under this protocol.** Task 4.0 is not
-passed, and ledger Gate 3 remains unpassed. Artifact creation is not gate
-passage.
+**Status: artifacts frozen at version 1.0.3 (amendments 4–5, post-review
+erratum and PR-04 caveat); independent sign-off PENDING. #1163 has
+collected governed confirmatory data under amendment 2 (the sealed corpus,
+its pre-run manifest, and the erratum are linked from §3); #1164, #1165,
+and #1166 have collected no confirmatory data under this protocol.** Task
+4.0 is not passed, and ledger Gate 3 remains unpassed. Artifact creation
+is not gate passage.
 
 This directory is the governance layer required by
 [`docs/superpowers/plans/industrial-scientific-implementation-plan.md`](../plans/industrial-scientific-implementation-plan.md)
@@ -123,13 +123,13 @@ not. It must be updated only by amendment.
 
 | Item | Status |
 | :--- | :--- |
-| PR-01 through PR-06 written | Yes, version 1.0.3 (amendment 4), frozen |
-| Manifest hashes recorded | Yes; verify with `shasum -a 256 -c MANIFEST.sha256`. Current manifest `1d306904…4b4ec9`; the v1.0.0, v1.0.1, and v1.0.2 hashes are retained in `AMENDMENTS.md` §2.1. |
+| PR-01 through PR-06 written | Yes, version 1.0.3 (amendments 4–5), frozen |
+| Manifest hashes recorded | Yes; verify with `shasum -a 256 -c MANIFEST.sha256`. Current manifest `e3863f53…f97eb8e`; the v1.0.0, v1.0.1, v1.0.2, and pre-amendment-5 v1.0.3 hashes are retained in `AMENDMENTS.md` §2.1. |
 | Independent reviewer sign-off (#1163) | PENDING |
 | Independent reviewer sign-off (#1164) | PENDING |
 | Independent reviewer sign-off (#1165) | PENDING |
 | Independent reviewer sign-off (#1166) | PENDING |
-| #1163 confirmatory data | **Collected 2026-11-27 under amendment 2; erratum 2026-11-28 (amendment 4).** Sealed 116-case corpus: 83 expected-reject + 24 post-freeze authored controls + 9 pre-existing gallery controls whose accept outcome was already known (disclosed exposure). Result: 0/83 false accepts, exact 95% upper bound 4.3471% ≤ `τ_FA = 0.05`, POSITIVE ([report](../audits/biotype-truth-set-governed-2026-11-27.md); [erratum](../audits/biotype-truthset-governed-erratum-2026-11-28.md)). The ≥30 control floor is met by the 33 sealed controls but not by the held-out authored subset (24); PR-05 adjudicates. A separately sealed post-hoc supplement adds acceptance controls, including the missing `TYPE-005` contrast (descriptive only; not in the FA denominator). Independent reanalysis and PR-05 sign-off remain PENDING; the earlier 54-case set is exploratory/exposure. |
+| #1163 confirmatory data | **Collected 2026-11-27 under amendment 2; erratum 2026-11-28 (amendments 4–5).** Sealed 116-case corpus: 83 expected-reject + 24 post-freeze authored controls + 9 pre-existing gallery controls whose accept outcome was already known (disclosed exposure). Result: 0/83 false accepts, exact 95% upper bound 4.3471% ≤ `τ_FA = 0.05`, POSITIVE ([report](../audits/biotype-truth-set-governed-2026-11-27.md); [erratum](../audits/biotype-truthset-governed-erratum-2026-11-28.md)). The ≥30 control floor is met by the 33 sealed controls but not by the held-out authored subset (24); PR-05 adjudicates. A separately sealed post-hoc supplement adds acceptance controls, including the missing `TYPE-005` contrast (descriptive only; not in the FA denominator). Independent reanalysis and PR-05 sign-off remain PENDING; the earlier 54-case set is exploratory/exposure. |
 | #1164 confirmatory data | None; a ten-case pilot was measured on 2026-11-18 **before this freeze** (3/10 applied, 3/10 verified, 3/3 recovery-eligible). It is pilot evidence and cannot be cited as pre-registered or confirmatory. A held-out re-run is required. |
 | #1165 confirmatory data | None collected |
 | #1166 confirmatory data | None collected |

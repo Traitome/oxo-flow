@@ -2,14 +2,14 @@
 
 **Original freeze version:** 1.0.0
 
-**Current version:** 1.0.3 (amendment 4; amendment 3 is a status-ledger update only)
+**Current version:** 1.0.3 (amendments 4–5; amendment 3 is a status-ledger update only)
 
 **Freeze date:** 2026-11-18
 
 **Manifest file:** [`MANIFEST.sha256`](MANIFEST.sha256) — current SHA-256
-`1d3069043f53bdf13386b248392ba63ef35b296e46b65b764fac251d2e4b4ec9`; the
-superseded v1.0.0, v1.0.1, and v1.0.2 manifest hashes are retained in the
-history table in §2.1.
+`e3863f53fe0245b191a8215279623a8756f0b472e3a096e7f91ea3042f97eb8e`; the
+superseded v1.0.0, v1.0.1, v1.0.2, and pre-amendment-5 v1.0.3 manifest
+hashes are retained in the history table in §2.1.
 
 **Freeze commit:** `62d9161b2992` (the commit that introduced this
 directory). The amendment-1 commit is recorded in
@@ -33,6 +33,7 @@ hash that was actually signed.
 | 2 | 2026-11-27 | PR-01 §C1 and §5; PR-02 §C1; PR-03 §C1; PR-04 §C1; PR-06 §C1; AMENDMENTS §2, §2.1, §3 | v1.0.1 → v1.0.2, all frozen before any held-out case was authored or run: (a) #1163 `τ_FA` frozen at **0.05** (maximum acceptable false-accept proportion on expected-reject cases) with the exact two-sided Clopper–Pearson 95% interval and the PR-06 §0.1 lower-is-better mapping; (b) `N_min = 73` expected-reject cases plus at least 30 expected-accept acceptance controls — 73 was frozen with a one-case conservative margin (the true minimum is 72: `U = 1 − 0.025^(1/72) = 0.0499441`; 0/71 = 0.0506294); corrected by entry 4; (c) non-verdict limit frozen at **0** (any non-verdict ⇒ INVALID); (d) C1 pilot firewall: the 2026-11-20/22 N=54 operational set (32 TA / 0 FA / 22 TR / 0 FR) was measured while `τ_FA` was UNDECIDED, so it is **exploratory/exposure**, cannot be the confirmatory basis, cannot be pooled with the governed corpus, and its contract assertions may not be re-asserted by confirmatory cases; (e) corpus expansion protocol, independence rule (expected verdicts derived from the published contract only — schema, `workflow-format.md`, TYPE-* catalogue, published tool contracts — never the checker source or a prior run), and exclusion rules (pilot-disjointness, duplicate assertions, checker-derived verdicts); (f) single-arm measurement host, 60 s/case and 7200 s total static-only budget, and the pre-run-manifest seal location `preregistration/prerun/C1-governed-2026-11-27.json` + `.sha256`, whose `cases` array is the runner's single EXPECT source | PR-06 §C1 left `τ_FA` UNDECIDED; the issue #1396 acceptance requires a governed decision, which is impossible until the threshold is fixed before held-out data; the N=54 set cannot be the confirmatory basis (PR-06 §1 rule 2) | Pilot/exposure seen: the N=54 operational truth-set outcomes (2026-11-20/22) were observed while `τ_FA` was UNDECIDED. No expected-reject case and no authored acceptance control of the confirmatory corpus had been authored or run when this entry was committed; the 9 pre-existing gallery controls later included were already public and CI-validated, as disclosed in entry 4. | Confirmatory for the authored held-out subset only (83 expected-reject + 24 authored controls); 9 pre-existing gallery controls are exposure, and the pilot is exploratory/exposure and never pooled. No primary endpoint, direction, or denominator changed. | Campaign lead (maintainer), with independent review still PENDING (PR-05 C1) |
 | 3 | 2026-11-27 | README §3 status ledger only | Status-only update after the governed run: `#1163 confirmatory data` changed from "None collected" to the governed result (sealed 116-case corpus: 83 expected-reject + 24 authored controls + 9 pre-existing gallery controls; 33 TA / 0 FA / 83 TR / 0 FR; exact 95% upper bound 4.3471% ≤ `τ_FA = 0.05`; POSITIVE; report `docs/superpowers/audits/biotype-truth-set-governed-2026-11-27.md`), and the Task 4.0 row now records #1163's completed pre-run manifest, case seal, and analysis-script hash. PR-01 through PR-06 text is unchanged; the manifest was recomputed and is unchanged (`7aeb3ebb5f445d21141a4a0c64c191c66b13a2e689403b45e15ed9d9b07afb18`). | Record the governed campaign result truthfully in the status ledger. | Confirmatory outcome seen: yes (run 2026-11-27T16:50:33Z, results commit `365e563a`). | Reporting-only; no rule, endpoint, threshold, direction, or denominator changed. | Campaign lead (maintainer) |
 | 4 | 2026-11-28 | PR-06 §C1; PR-01 §C1; PR-02 §C1; PR-03 §C1; AMENDMENTS entry 2 (correction note); preregistration README §3; campaign report erratum | Post-review erratum (no endpoint change): (a) **control provenance** — 9 of the 33 expected-accept controls are pre-existing `examples/gallery/*.oxoflow` files validated by the gallery gates in `tests/cli_integration.rs` on every CI run before the freeze, so their accept outcomes were known; only 24 controls were authored post-freeze. The pre-registered "≥30 expected-accept controls" floor is met by the 33 sealed controls but not by the held-out authored subset (24); **PR-05 must adjudicate**. The 83 expected-reject cases — the FA primary analysis — were all authored post-freeze and are unaffected. A separately sealed post-hoc supplement of new authored acceptance controls, including the missing `TYPE-005` accept-side contrast, is added and reported descriptively; it is not part of the pre-registered confirmatory set and never enters the FA denominator. (b) **`N_min` rationale** — 72, not 73, is the smallest expected-reject N with a zero-event exact upper bound ≤ 0.05 (0/72 = 0.0499441; 0/71 = 0.0506294); the frozen value 73 is retained as a one-case conservative margin. (c) **toolchain** — the sealed manifest recorded the ambient shell toolchain (rustc/cargo 1.97.1), while the binary was built by `cargo build` in the repository, which honors `rust-toolchain.toml` (1.98.0); the binary SHA-256 is the binding identity and the erratum records the correction. (d) **case-body custody** — PR-03's "case bodies … sealed by SHA-256" wording is corrected: expected verdicts are sealed by the pre-run manifest's canonical `cases` array hash, and case bodies are pinned by the stamped commit and now checked byte-for-byte by `make truthset-stamp`; the gate also verifies the decision file's `results_sha256`. (e) **budget** — the sealed runner enforced the 60 s per-case timeout but not the 7200 s total as a hard timer; the observed campaign wall time was ~20 s, the distinction is recorded, and the supplement runner enforces both and records elapsed time. (f) **analysis-script hardening** — the optional `--tau`/`--n-min` overrides are removed from the sealed analysis script (new hash recorded; re-running it on the committed results reproduces the decision byte-identically). (g) stale present-tense text in the pilot, ledger, preregistration README, and typed-pipeline evidence is corrected or banner-marked. | Independent review of PR #1443 (1 HIGH, 4 MEDIUM, 5 LOW) | Confirmatory outcome seen (run 2026-11-27T16:50:33Z) | Reporting, custody, and coverage clarifications only. No primary endpoint, threshold, direction, denominator, or FA decision changed. The FA primary analysis remains 0/83; the POSITIVE category remains subject to PR-05 adjudication of the control-provenance deviation. | Campaign lead (maintainer), independent delta review PENDING |
+| 5 | 2026-11-28 | PR-04 §C1; AMENDMENTS §2.1; MANIFEST.sha256 | PR-04 1.0.2 → 1.0.3: the C1 "Independent author" sentence now names the **authored portion** of the governed corpus (83 expected-reject + 24 authored controls) and discloses the 9 pre-existing gallery controls as **exposure**, cross-referencing the campaign erratum §1. Manifest recomputed (`1d306904…4b4ec9` → `e3863f53…f97eb8e`). | Delta review of PR #1443, item 4 (LOW documentation consistency): PR-04 §C1's "held-out governed corpus" lacked the 9-gallery exposure caveat. | Confirmatory outcome seen (run 2026-11-27T16:50:33Z). | Reporting/custody wording only; no rule, endpoint, threshold, direction, or denominator changed. | Campaign lead (maintainer), independent delta review PENDING |
 
 ### 2.1 Hash history
 
@@ -47,7 +48,8 @@ commit `0a18b07afb54`.
 | 1.0.0 | 2026-11-18 | `df1cc1b084cf7f9312ffbdcf2e8e6afdc194a05c8551ac7b8cfca77e62c40450` | Original freeze commit `62d9161b2992`; superseded by amendment 1 |
 | 1.0.1 | 2026-11-18 | `d4fa650cf09afd42c7b23718e36674a0a54fdce8d326f2b757df3c89cde691b8` | Amendment 1; superseded by amendment 2 |
 | 1.0.2 | 2026-11-27 | `7aeb3ebb5f445d21141a4a0c64c191c66b13a2e689403b45e15ed9d9b07afb18` | Amendment 2 (`τ_FA` freeze); superseded by amendment 4 |
-| 1.0.3 | 2026-11-28 | `1d3069043f53bdf13386b248392ba63ef35b296e46b65b764fac251d2e4b4ec9` | Current; amendment 4 (post-review erratum) |
+| 1.0.3 | 2026-11-28 | `1d3069043f53bdf13386b248392ba63ef35b296e46b65b764fac251d2e4b4ec9` | Amendment 4 (post-review erratum); superseded by amendment 5 |
+| 1.0.3 | 2026-11-28 | `e3863f53fe0245b191a8215279623a8756f0b472e3a096e7f91ea3042f97eb8e` | Current; amendment 5 (PR-04 held-out caveat; manifest recomputed) |
 
 Original v1.0.0 artifact hashes:
 
@@ -83,6 +85,21 @@ v1.0.2 artifact hashes (amendment 2 manifest
 | PR-04 | `72263dc5faab2fa795b09153677bfd12452ef5f5b740880bc88e19806ff296c8` |
 | PR-05 | `9a65c632fcb8388fdc06b303578dad61ac413e603c8a2cbaa0ad0e6b08b1b5c5` |
 | PR-06 | `5b18570fd79bf027bdc7df2d36577d4cac71201c44ee500cbcac34567b95b4d4` |
+
+v1.0.3 artifact hashes (amendment-5 manifest
+`e3863f53fe0245b191a8215279623a8756f0b472e3a096e7f91ea3042f97eb8e`; the
+amendment-4 v1.0.3 manifest
+`1d3069043f53bdf13386b248392ba63ef35b296e46b65b764fac251d2e4b4ec9` had
+PR-04 at `72263dc5…96c8`):
+
+| Artifact | v1.0.3 SHA-256 |
+| :--- | :--- |
+| PR-01 | `97d67ec37efab4f8c112a355d02d457bbae1323b594eb5aa4624f8b3f39c69dc` |
+| PR-02 | `bc592383742aa54dc5e6c9fdf99d29a82822a4f7eae1fea39821f28900112c3c` |
+| PR-03 | `297d58bc9f60ec55796678c10f068ea65fadaee435bdec559ad3c8a9b2e61763` |
+| PR-04 | `013a4acb5a3d3a276e08ea36d964f1f6cdeb5c3b13350883a66c06cf7a9a899c` |
+| PR-05 | `9a65c632fcb8388fdc06b303578dad61ac413e603c8a2cbaa0ad0e6b08b1b5c5` |
+| PR-06 | `25040bb1f0c83e506b8b4cfc6dc16b73f7a608c6f960992ecde79b41782e20b6` |
 
 ## 3. Open values tracker (must be closed before data collection)
 
