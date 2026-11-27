@@ -54,7 +54,32 @@ python3 run_eval.py --variants unconstrained # cheapest sweep
 python3 run_eval.py --seeds 2                # 2 seeds per cell (variance)
 python3 run_eval.py --profile full           # Scientist Team roles (compact is default)
 python3 run_eval.py --binary /path/oxo-flow  # pin the binary for a whole campaign
+python3 run_eval.py --creds-from config      # spend only the operator's oxo-flow provider
+python3 run_eval.py --arm-a-protocol openai  # bare Arm A prompt over OpenAI chat-completions
 ```
+
+### Provider identity and protocol adaptation (issue #1395)
+
+Arm A's prompt is fixed, but its wire protocol follows the resolved
+provider: `claude` uses the Anthropic Messages protocol, while
+`openai` / `deepseek` / `ollama` use an OpenAI-compatible
+chat-completions call (`--arm-a-protocol` can pin either explicitly).
+Arms B/C run the real CLI under a child environment that pins
+`OXO_FLOW_AI_PROVIDER` plus the generic `OXO_FLOW_AI_API_KEY` /
+`OXO_FLOW_AI_API_URL` / `OXO_FLOW_AI_MODEL` trio from the resolved
+source; every ambient provider credential (`ANTHROPIC_*`, `OPENAI_*`,
+`DEEPSEEK_*`, `OLLAMA_*`) is scrubbed first, so a host shell's unrelated
+agent token is never spent. `--creds-from config` makes the operator's
+`~/.oxo-flow/ai_config.json` authoritative; `auto` keeps the historical
+env-then-config precedence.
+
+Each engine run writes `argv.json`, and `results.json` records the
+provider kind, requested and reported model (an endpoint alias that
+routes to a different backend model is visible, never substituted), the
+per-run argv, and content hashes of the binary, harness, and intent
+file. `statistical_report.py` reports the exact two-sided McNemar test
+(the pre-registered primary) alongside the historical asymptotic
+chi-square, plus a seed-clustered intent-level sensitivity table.
 
 The intent set (`intents.json`) spans 12 domains across three complexity
 tiers (5 easy / 14 medium / 17 hard), plus three deliberately
@@ -106,6 +131,14 @@ tokens, cost, latency).
   produce different workflows. Unconstrained numbers in PILOT_FINDINGS.md
   were drawn at provider default temperature (pre-pinning), so they are
   not strictly comparable to post-pinning runs.
+- The resolved model may be an endpoint ALIAS: the provider can route
+  `DeepSeek` (or any other alias) to a different backend model. The
+  reported identity is recorded per run (`reported_model`), and cost is a
+  static price-table estimate, not a billing receipt.
+- The harness runs cells serially in a fixed arm-major order (model →
+  arm → intent → seed). A time-varying provider or a warm-cache effect can
+  therefore confound arms; a governed campaign should record the order and
+  treat run-order randomization as an unmeasured limitation.
 - Since the #342 unification, `--ai-max-retries` sizes the orchestrator's
   combined tool + correction-round budget, and engine validation feeds the
   loop; numbers above the unification marker in PILOT_FINDINGS.md were
