@@ -39,9 +39,10 @@ accept outcome was therefore **known before the freeze**, so they are not
    PR-03 §C1, and PR-06 §C1 to state the true composition (83
    expected-reject + 24 authored controls + 9 pre-existing gallery
    controls) and to require PR-05 adjudication of the ≥30 floor. PR-04's
-   amendment-2 sentence ("For the held-out governed corpus …") is read as
-   the authored portion only — the 9 gallery controls are exposure; PR-04's
-   text is not edited here, to avoid another post-run manifest recompute.
+   C1 "Independent author" sentence is corrected by amendment 5 (commit
+   `00677a9b`): it now names the authored portion of the governed corpus
+   and discloses the 9 pre-existing gallery controls as exposure, pointing
+   to this erratum §1. The manifest was recomputed for amendment 5.
 2. The corpus report's title, status block, §1, §5.1, §6.2, and §11 now
    distinguish the authored held-out subset from the 9 exposed controls.
 3. A separately sealed **post-hoc supplement** (`§5` below) adds new
@@ -66,7 +67,8 @@ The zero-event exact 95% upper bound is `1 − 0.025^(1/N)`:
 bound. The frozen value **73 is retained** as a one-case conservative
 margin; the incorrect "smallest" rationale in AMENDMENTS entry 2,
 PR-06 §C1, PR-01 §C1, and the report is corrected. The manifest was
-recomputed for v1.0.3 (`1d306904…4b4ec9`).
+recomputed for v1.0.3 (`1d306904…4b4ec9`, superseded by amendment 5's
+`e3863f53…f97eb8e` after the PR-04 caveat).
 
 ## 3. MEDIUM — sealed toolchain fields recorded the ambient shell (fixed)
 
@@ -193,7 +195,9 @@ report §11; it is not execution evidence and not biological truth.
 | Artifact | Value |
 | :--- | :--- |
 | Amendment 4 commit | `ef42c6599a90861962484c96ce6ec9ede4bc94b6` |
-| v1.0.3 `MANIFEST.sha256` | `1d3069043f53bdf13386b248392ba63ef35b296e46b65b764fac251d2e4b4ec9` |
+| Amendment 5 commit (PR-04 caveat) | `00677a9be84c2ddf4ff0ba832d159f55e75af9f3` |
+| v1.0.3 `MANIFEST.sha256` (amendment 4) | `1d3069043f53bdf13386b248392ba63ef35b296e46b65b764fac251d2e4b4ec9` |
+| v1.0.3 `MANIFEST.sha256` (amendment 5, current) | `e3863f53fe0245b191a8215279623a8756f0b472e3a096e7f91ea3042f97eb8e` |
 | Supplement corpus + runner commit | `742a684b81be06a2a3c723f9b7dbfb7afbae1769` |
 | Supplement seal commit | `0204c1e44ea167b4598be8a27d6b67be13fea207` |
 | Supplement manifest SHA-256 | `757891a479948bb2c6933ee61ce3df96a233b8240bf92a4862ad25309e552fc3` |

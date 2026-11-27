@@ -81,7 +81,8 @@ case body was edited after an outcome was seen.
 | Pre-run manifest sealed | `6fbf38c1441c966aee49aa96ba2a211cbf5bfb3f` | `2026-11-27T16:50:17Z` | `preregistration/prerun/C1-governed-2026-11-27.json` (+`.sha256`) |
 | Confirmatory run | tree at `6fbf38c1` | `2026-11-27T16:50:33Z` | results JSON (§10) |
 | Results + decision committed | `365e563ac5bc35c31860182552a3571131937573` | `2026-11-27T16:51:17Z` | `audits/data/biotype-truthset-governed-{results,decision}.json` |
-| Post-review amendment 4 (erratum) | `ef42c6599a90861962484c96ce6ec9ede4bc94b6` | `2026-11-27T17:21:41Z` | PR-01/02/03/06 v1.0.3; manifest `1d306904…4b4ec9`; [erratum](biotype-truthset-governed-erratum-2026-11-28.md) |
+| Post-review amendment 4 (erratum) | `ef42c6599a90861962484c96ce6ec9ede4bc94b6` | `2026-11-27T17:21:41Z` | PR-01/02/03/06 v1.0.3; manifest `1d306904…4b4ec9` (superseded by amendment 5); [erratum](biotype-truthset-governed-erratum-2026-11-28.md) |
+| Post-review amendment 5 (PR-04 caveat) | `00677a9be84c2ddf4ff0ba832d159f55e75af9f3` | `2026-11-27T17:40:51Z` | PR-04 v1.0.3 (held-out caveat); manifest `e3863f53…f97eb8e` |
 | Supplement corpus + runner | `742a684b81be06a2a3c723f9b7dbfb7afbae1769` | `2026-11-27T17:21:45Z` | 7 post-hoc acceptance controls + `scripts/biotype-truthset-governed-supplement.py` |
 | Supplement manifest sealed | `0204c1e44ea167b4598be8a27d6b67be13fea207` | `2026-11-27T17:21:57Z` | `preregistration/prerun/C1-governed-supplement-2026-11-28.json` (+`.sha256`) |
 | Supplement run | tree at `0204c1e4` | `2026-11-27T17:21:59Z` | 7/7 accepted, 0.67 s (§8.2) |
@@ -498,25 +499,30 @@ and is unaffected here.
   WF-04 and §7 wave 7 record the campaign, its commit bindings, the
   erratum, and the remaining independent-reanalysis/sign-off gaps.
 - `docs/superpowers/preregistration/README.md` §3 and `AMENDMENTS.md`
-  entries 3–4: the #1163 confirmatory-data status, the control-provenance
-  erratum, and the post-hoc supplement are recorded.
+  entries 3–5: the #1163 confirmatory-data status, the control-provenance
+  erratum, the post-hoc supplement, and the PR-04 held-out caveat are
+  recorded.
 - `docs/superpowers/audits/biotype-truthset-governed-erratum-2026-11-28.md`:
   the review findings and every fix, with hashes and the PR-05 checklist.
 
 ## 13. References
 
 - `docs/superpowers/preregistration/PR-06-publication-decision-rule.md`
-  (v1.0.2, amendment 2) §C1 — `τ_FA`, `N_min`, the C1 pilot firewall, and
-  the decision rule.
+  (v1.0.3, amendments 2 and 4) §C1 — `τ_FA`, `N_min`, the C1 pilot
+  firewall, and the decision rule.
 - `docs/superpowers/preregistration/PR-01-outcomes-and-statistical-models.md`
-  (v1.0.2) §C1 and §0 rule 4 — endpoints, direction, exact interval.
-- `docs/superpowers/preregistration/PR-02-case-rules.md` (v1.0.2) §C1 —
-  inclusion/exclusion, expansion protocol, zero non-verdict limit.
-- `docs/superpowers/preregistration/PR-03-fixed-manifests.md` (v1.0.2)
-  §C1 — host, budget, dataset, and the pre-run manifest requirement.
-- `docs/superpowers/preregistration/PR-04-leakage-and-custody.md` (v1.0.2)
-  §C1 — custody record and seal.
-- `docs/superpowers/preregistration/AMENDMENTS.md` entries 2–4.
+  (v1.0.3, amendments 2 and 4) §C1 and §0 rule 4 — endpoints, direction,
+  exact interval.
+- `docs/superpowers/preregistration/PR-02-case-rules.md` (v1.0.3,
+  amendments 2 and 4) §C1 — inclusion/exclusion, expansion protocol, zero
+  non-verdict limit.
+- `docs/superpowers/preregistration/PR-03-fixed-manifests.md` (v1.0.3,
+  amendments 2 and 4) §C1 — host, budget, dataset, and the pre-run
+  manifest requirement.
+- `docs/superpowers/preregistration/PR-04-leakage-and-custody.md` (v1.0.3,
+  amendments 2 and 5) §C1 — custody record, seal, and the held-out
+  caveat.
+- `docs/superpowers/preregistration/AMENDMENTS.md` entries 2–5.
 - `docs/superpowers/audits/biotype-truthset-governed-erratum-2026-11-28.md`
   — the post-review erratum, control provenance, toolchain/custody
   corrections, and the supplement record.
