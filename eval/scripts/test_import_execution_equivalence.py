@@ -115,13 +115,13 @@ class MissingReasonTests(unittest.TestCase):
     def test_singularity_backend_probe_accepts_apptainer(self):
         # #1398: a Snakemake source arm run with --use-singularity must be
         # probed as singularity, not satisfied by docker alone.
-        have = lambda name: name == "apptainer"
+        have = lambda name: name in ("snakemake", "apptainer")
         self.assertIsNone(
             runner.missing_reason("snakemake", {"singularity"}, have))
         self.assertIn(
             "singularity",
             runner.missing_reason("snakemake", {"singularity"},
-                                  lambda n: n == "docker"))
+                                  lambda n: n in ("snakemake", "docker")))
 
 
 class ClassifyVerdictTests(unittest.TestCase):

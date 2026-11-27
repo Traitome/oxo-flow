@@ -211,7 +211,7 @@ EXPECTED = {
         "rule_specs": {
             "index_reference": {
                 "threads": None, "memory": None, "time_limit": None,
-                "environment": {"docker": "biocontainers/samtools:v1.3_cv3"},
+                "environment": {"docker": "community.wave.seqera.io/library/htslib_samtools:1.25--704fb80d75745bd4"},
                 "input": ["GENOME_PATH/GCF_000001215.4_Release_6_plus_ISO1_MT_genomic.fna"],
                 "output": ["GENOME_PATH/GCF_000001215.4_Release_6_plus_ISO1_MT_genomic.fna.fai"],
                 "shell_verb": "samtools",
@@ -221,7 +221,7 @@ EXPECTED = {
         "execution": {
             "source": ["snakemake", "-s", "{src}", "--cores", "2", "--use-singularity"],
             "source_backend": "singularity",
-            "container": "docker://biocontainers/samtools:v1.3_cv3",
+            "container": "docker://community.wave.seqera.io/library/htslib_samtools:1.25--704fb80d75745bd4",
             "timeout": 1200,
         },
     },
