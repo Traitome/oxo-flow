@@ -573,18 +573,25 @@ Current CLI simulation baseline (seeded fault-injection campaign, Round 2 with t
 **Current state (governance layer created, gate not passed)**: the six
 artifacts are frozen under
 [`docs/superpowers/preregistration/`](../preregistration/README.md)
-(`PR-01`–`PR-06`, version 1.0.1 — amendment 1, content hashes in
+(`PR-01`–`PR-06`, version 1.0.2 — amendment 2, content hashes in
 `preregistration/MANIFEST.sha256`), covering the confirmatory campaigns
 #1163, #1164, #1165, and #1166. Independent reviewer sign-off in PR-05 is
-PENDING, so the maturity stays **Planned / blocked**: signing, the per-campaign
-pre-run manifests, the sealed case sets, and the sealed analysis scripts are
-all still required before a campaign may collect confirmatory data. #1164
+PENDING, so the maturity stays **Planned / blocked** for publication. #1166
+now has a committed pre-run/final-run manifest, a sealed corpus and analysis
+script, and one governed campaign measured with PR-05 sign-off PENDING
+(24/24 declared artifacts SHA-256 identical across native x86_64 and native
+aarch64; category POSITIVE under the frozen rule — see
+[`../audits/cross-arch-provenance-governed-2026-11-27.md`](../audits/cross-arch-provenance-governed-2026-11-27.md)).
+The other campaigns still require their per-campaign pre-run manifests,
+sealed case sets, and sealed analysis scripts before collecting confirmatory
+data. #1164
 already carries a ten-case pilot measured before the freeze (3/10 applied,
 3/10 verified, 3/3 of the structurally recovery-eligible class); that pilot
 is disclosed in PR-01/PR-06 and is not confirmatory — a held-out re-run is
-required. No other campaign has collected confirmatory data. Commit
-binding: `62d9161b2992` (v1.0.0 freeze commit) and `0a18b07afb54`
-(v1.0.1 amendment-1 commit); verify with
+required. #1163 and #1165 have collected no confirmatory data. Commit
+binding: `62d9161b2992` (v1.0.0 freeze commit), `0a18b07afb54`
+(v1.0.1 amendment-1 commit), and `dd5dcd44ee91a2c93bfd24c29f189d8de32e87d5`
+(v1.0.2 amendment-2 parameter-freeze commit); verify with
 `shasum -a 256 -c docs/superpowers/preregistration/MANIFEST.sha256`.
 
 ### Task 4.1: Multi-Omics Ablation & Fault-Injection Benchmark (`eval/frontier/`)

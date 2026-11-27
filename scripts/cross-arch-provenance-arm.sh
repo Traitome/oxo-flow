@@ -33,8 +33,20 @@ repo="$(cd "$repo" && pwd)"
 bin="$(cd "$(dirname "$bin")" && pwd)/$(basename "$bin")"
 [ -x "$bin" ] || { echo "oxo-flow binary not executable: $bin" >&2; exit 2; }
 
-digest="sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b"
-tag="crossarch1397:pin"
+digest=""
+tag=""
+image_ref=""
+corpus="$repo/scripts/cross-arch-provenance-governed-corpus.json"
+[ -f "$corpus" ] || { echo "missing corpus manifest: $corpus" >&2; exit 2; }
+read -r image_ref digest tag <<< "$(python3 -I -c '
+import json, sys
+c = json.load(open(sys.argv[1]))["image"]
+print(c["ref"], c["manifest_list_digest"], c["staged_tag"])
+' "$corpus")"
+[ -n "$image_ref" ] && [ -n "$digest" ] && [ -n "$tag" ] || {
+  echo "corpus manifest is missing the image ref/digest/tag" >&2
+  exit 2
+}
 
 if command -v sha256sum >/dev/null 2>&1; then
   sha256_of() { sha256sum "$1" | awk '{print $1}'; }
@@ -62,9 +74,13 @@ fi
   echo "host-uname:      $(uname -a)"
   echo "host-arch:       $(uname -m)"
   echo "nproc:           $(nproc 2>/dev/null || sysctl -n hw.ncpu)"
-  echo "cpu-model:       $(sysctl -n machdep.cpu.brand_string 2>/dev/null || awk -F: '/model name/ {gsub(/^ +/, \"\", $2); print $2; exit}' /proc/cpuinfo 2>/dev/null || echo unknown)"
+  cpu_model="$(lscpu 2>/dev/null | awk -F: '/Model name/ {gsub(/^ +/, \"\", $2); print $2; exit}')"
+  [ -n "$cpu_model" ] || cpu_model="$(sysctl -n machdep.cpu.brand_string 2>/dev/null || echo unknown)"
+  echo "cpu-model:       $cpu_model"
   echo "os-release:      $(uname -s)"
   echo "kernel:          $(uname -r)"
+  echo "docker-version:  $(docker --version 2>/dev/null || echo unknown)"
+  echo "docker-server:   $(docker info --format '{{.ServerVersion}} {{.Architecture}} {{.OperatingSystem}}' 2>/dev/null || echo unknown)"
   echo "oxo-flow:        $("$bin" --version 2>/dev/null | head -1)"
   echo "binary-sha256:   $(sha256_of "$bin")"
   echo "engine-commit:   $engine_commit"
@@ -87,9 +103,9 @@ fi
 stage="${CROSSARCH_STAGE:-1}"
 if [ "$stage" = "1" ]; then
   docker rmi -f "$tag" >/dev/null 2>&1 || true
-  docker rmi -f "python@$digest" >/dev/null 2>&1 || true
-  docker pull --platform "$platform" "python@$digest" >/dev/null 2>&1
-  docker tag "python@$digest" "$tag"
+  docker rmi -f "$image_ref" >/dev/null 2>&1 || true
+  docker pull --platform "$platform" "$image_ref" >/dev/null 2>&1
+  docker tag "$image_ref" "$tag"
   staging="harness-pull"
 else
   staging="pre-staged"
@@ -111,7 +127,7 @@ actual_image_arch="$(docker image inspect "$tag" --format '{{.Architecture}}')"
 }
 
 {
-  echo "image-src:            python@$digest"
+  echo "image-src:            $image_ref"
   echo "manifest-list-digest: $digest"
   echo "staged-tag:           $tag"
   echo "platform:             $platform"
@@ -122,6 +138,7 @@ actual_image_arch="$(docker image inspect "$tag" --format '{{.Architecture}}')"
     echo "container-arch: $(uname -m)"
     echo "python3: $(python3 --version 2>&1)"
     echo "sort: $(sort --version 2>&1 | head -1)"
+    echo "wc: $(wc --version 2>&1 | head -1)"
     echo "gzip: $(gzip -V 2>&1 | head -1)"
     echo "sha256sum: $(sha256sum --version 2>&1 | head -1)"
     echo "libc: $(ldd --version 2>&1 | head -1)"

@@ -7,6 +7,9 @@ loaded by path because its filename is a script, not an importable module.
 
 import importlib.util
 import json
+import shutil
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -14,6 +17,9 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 ANALYZE_PATH = REPO / "scripts" / "cross-arch-provenance-governed-analyze.py"
 CORPUS_PATH = REPO / "scripts" / "cross-arch-provenance-governed-corpus.json"
+EVIDENCE = REPO / "docs/superpowers/audits/data/crossarch-1397"
+PREREGISTRATION = EVIDENCE / "preregistration.json"
+EXPECTED_COMMIT = "56b109c17b95e4c610a874aaf63fc0ae583a57a6"
 
 _spec = importlib.util.spec_from_file_location("crossarch_governed_analyze", ANALYZE_PATH)
 analyze = importlib.util.module_from_spec(_spec)
@@ -100,6 +106,7 @@ def write_arm(root, stem, *, hashes, control_hash, git_sha="a" * 40,
     tools = tools or {
         "python3": "Python 3.12.16",
         "sort": "sort (GNU coreutils) 9.7",
+        "wc": "wc (GNU coreutils) 9.7",
         "gzip": "gzip 1.13",
         "sha256sum": "sha256sum (GNU coreutils) 9.7",
         "libc": "ldd (Debian GLIBC 2.36-9+deb12u10) 2.36",
@@ -108,6 +115,7 @@ def write_arm(root, stem, *, hashes, control_hash, git_sha="a" * 40,
         "\n".join(
             [
                 "hostname: testhost",
+                "host-arch: %s" % ("arm64" if container_arch == "aarch64" else "x86_64"),
                 "engine-commit: %s" % git_sha,
                 "platform: %s" % platform,
                 "binary-sha256: %s" % ("c" * 64),
@@ -116,7 +124,9 @@ def write_arm(root, stem, *, hashes, control_hash, git_sha="a" * 40,
         + "\n"
     )
     container = {
+        "image-src": "python@sha256:" + "d" * 64,
         "manifest-list-digest": "sha256:" + "d" * 64,
+        "staged-tag": "crossarch1397:pin",
         "platform": platform,
         "image-arch": "amd64" if platform.endswith("amd64") else "arm64",
         "image-id": "sha256:" + "e" * 64,
@@ -163,7 +173,11 @@ def write_arm(root, stem, *, hashes, control_hash, git_sha="a" * 40,
 def write_corpus(root):
     corpus = {
         "format": "oxo-flow.crossarch-corpus/v1",
-        "image": {"manifest_list_digest": "sha256:" + "d" * 64},
+        "image": {
+            "ref": "python@sha256:" + "d" * 64,
+            "manifest_list_digest": "sha256:" + "d" * 64,
+            "staged_tag": "crossarch1397:pin",
+        },
         "workflows": [{"stem": "w", "file": "w.oxoflow"}],
         "classes": {"pure-text": ["w/a.txt", "w/b.txt", "w/c.txt"]},
         "negative_controls": ["w/control/os_arch.txt"],
@@ -273,6 +287,141 @@ class FrozenCorpusManifestTest(unittest.TestCase):
         lower = analyze.clopper_pearson(24, 24)[0]
         self.assertAlmostEqual(lower, 0.025 ** (1.0 / 24), places=10)
         self.assertGreater(lower, 0.80)
+
+    def test_manifest_records_freeze_and_final_run_hashes(self):
+        manifest = json.loads(PREREGISTRATION.read_text())
+        self.assertEqual(
+            manifest["freeze_manifest"]["sha256"],
+            "0eaca24be6d00f5ab369f1fb6769131bfeed336107128e76b26ccb6c4ff63908",
+        )
+        self.assertEqual(
+            manifest["final_run_manifest"]["sha256"],
+            "770ae8f2769f112cd308249ea94882dee2b8c6e7a7e383550d790c229c2a75bf",
+        )
+        self.assertEqual(manifest["freeze_manifest"]["commit"], "dd5dcd44ee91a2c93bfd24c29f189d8de32e87d5")
+        self.assertEqual(
+            manifest["final_run_manifest"]["commit"],
+            "56b109c17b95e4c610a874aaf63fc0ae583a57a6",
+        )
+        self.assertIn("post_run_hardening", manifest)
+
+
+class CommittedEvidenceTest(unittest.TestCase):
+    """Regression tests over the committed campaign evidence + manifest."""
+
+    def run_cli(self, manifest, arm_a, arm_b, out):
+        cmd = [
+            sys.executable,
+            "-I",
+            str(ANALYZE_PATH),
+            "--corpus",
+            str(CORPUS_PATH),
+            "--preregistration",
+            str(manifest),
+            "--repo-root",
+            str(REPO),
+            "--arm-a",
+            str(arm_a),
+            "--arm-b",
+            str(arm_b),
+            "--expected-commit",
+            EXPECTED_COMMIT,
+            "--out",
+            str(out),
+        ]
+        proc = subprocess.run(cmd, cwd=str(REPO), capture_output=True, text=True)
+        if proc.returncode != 0:
+            self.fail("analysis failed: %s%s" % (proc.stdout, proc.stderr))
+        return json.loads(Path(out).read_text())
+
+    def test_committed_evidence_with_manifest_is_positive(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = self.run_cli(
+                PREREGISTRATION,
+                EVIDENCE / "arm-local-arm64",
+                EVIDENCE / "arm-remote-amd64",
+                Path(tmp) / "results.json",
+            )
+        self.assertEqual(result["decision"]["category"], "POSITIVE")
+        self.assertTrue(result["manifest_checked"])
+        self.assertTrue(result["validity"]["valid"], result["validity"]["reasons"])
+        self.assertEqual(result["primary_endpoint"]["total"], 24)
+        self.assertEqual(result["primary_endpoint"]["identical"], 24)
+        self.assertEqual(result["interval"]["lower"], analyze.clopper_pearson(24, 24)[0])
+        self.assertEqual(result["arms"]["arm_a"]["host_arch"], "aarch64")
+        self.assertEqual(result["arms"]["arm_b"]["host_arch"], "x86_64")
+        for arm in ("arm_a", "arm_b"):
+            self.assertEqual(
+                result["arms"][arm]["tools"]["wc"]["value"],
+                "wc (GNU coreutils) 9.7",
+            )
+            self.assertEqual(
+                result["arms"][arm]["tools"]["wc"]["source"],
+                "container-supplement.txt",
+            )
+        self.assertTrue(result["env_lock_identity"])
+        for row in result["env_lock_identity"]:
+            self.assertTrue(row["normalized_equal"], row)
+        self.assertNotEqual(
+            result["env_lock_identity"][0]["arm_a_raw"],
+            result["env_lock_identity"][0]["arm_b_raw"],
+        )
+
+    def test_tampered_sealed_hash_is_invalid(self):
+        manifest = json.loads(PREREGISTRATION.read_text())
+        manifest["files"]["scripts/cross-arch-provenance-governed-corpus.json"] = "0" * 64
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest_path = Path(tmp) / "preregistration.json"
+            manifest_path.write_text(json.dumps(manifest))
+            result = self.run_cli(
+                manifest_path,
+                EVIDENCE / "arm-local-arm64",
+                EVIDENCE / "arm-remote-amd64",
+                Path(tmp) / "results.json",
+            )
+        self.assertEqual(result["decision"]["category"], "INVALID")
+        codes = {reason["code"] for reason in result["validity"]["reasons"]}
+        self.assertIn("SEALED_HASH_MISMATCH", codes)
+
+    def test_forged_host_arch_is_invalid(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            arm = Path(tmp) / "arm-local"
+            shutil.copytree(EVIDENCE / "arm-local-arm64", arm)
+            lines = []
+            for line in (arm / "identity.txt").read_text().splitlines():
+                if line.startswith("host-arch:"):
+                    lines.append("host-arch:       x86_64")
+                else:
+                    lines.append(line)
+            (arm / "identity.txt").write_text("\n".join(lines) + "\n")
+            result = self.run_cli(
+                PREREGISTRATION,
+                arm,
+                EVIDENCE / "arm-remote-amd64",
+                Path(tmp) / "results.json",
+            )
+        self.assertEqual(result["decision"]["category"], "INVALID")
+        codes = {reason["code"] for reason in result["validity"]["reasons"]}
+        self.assertIn("HOST_ARCH_MISMATCH", codes)
+
+    def test_tampered_checkpoint_hash_is_invalid(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            arm = Path(tmp) / "arm-local"
+            shutil.copytree(EVIDENCE / "arm-local-arm64", arm)
+            checkpoint_path = arm / "crossarch-governed-a.checkpoint.json"
+            checkpoint = json.loads(checkpoint_path.read_text())
+            first = sorted(checkpoint["checksums"])[0]
+            checkpoint["checksums"][first] = "sha256:" + "0" * 64
+            checkpoint_path.write_text(json.dumps(checkpoint))
+            result = self.run_cli(
+                PREREGISTRATION,
+                arm,
+                EVIDENCE / "arm-remote-amd64",
+                Path(tmp) / "results.json",
+            )
+        self.assertEqual(result["decision"]["category"], "INVALID")
+        codes = {reason["code"] for reason in result["validity"]["reasons"]}
+        self.assertIn("CHECKPOINT_INDEPENDENT_HASH_MISMATCH", codes)
 
 
 if __name__ == "__main__":

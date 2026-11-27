@@ -1,0 +1,10 @@
+# Supplementary container tool identity for the #1397/#1166 governed campaign.
+# Captured 2026-11-27T17:25:45Z from the same pinned manifest-list digest.
+# The sealed run-time identity is container.txt; this file supplies the wc
+# version that container.txt omitted (PR-06's environment lock names wc and
+# workflow A's derive rule uses `wc -l`).
+image-src:            python@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b
+manifest-list-digest: sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b
+platform:             linux/amd64
+wc:                   wc (GNU coreutils) 9.7
+captured-utc:         2026-11-27T17:25:45Z

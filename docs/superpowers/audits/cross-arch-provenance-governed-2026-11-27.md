@@ -3,7 +3,9 @@
 > **Status: governed campaign executed under PR-06 §C4 (amendment 2).**
 > The pre-registration values were frozen and committed before the first run
 > (freeze commit `dd5dcd44ee91a2c93bfd24c29f189d8de32e87d5`, 2026-11-28
-> 00:52:56 +08:00 / 2026-11-27T16:52:56Z). The campaign measures **native
+> 00:52:56 +08:00 / 2026-11-27T16:52:56Z). Two harness revisions followed
+> before the final analyzable run; the manifest lineage and the
+> attempt-1/attempt-2 timeline are in §2.1. The campaign measures **native
 > x86_64** against **native aarch64** through one shared multi-arch
 > manifest-list digest, with an excluded negative control that must differ.
 > PR-05 C4 independent reviewer sign-off remains **PENDING**; per PR-05 this
@@ -29,18 +31,35 @@ environment is the same and only the CPU architecture differs.
 | Pre-registration section | PR-06 §C4 |
 | Version | PR-06 v1.0.2 (amendment 2) |
 | Freeze date | 2026-11-28 |
-| Freeze commit | `dd5dcd44ee91a2c93bfd24c29f189d8de32e87d5` |
-| Freeze commit timestamp | 2026-11-28T00:52:56+08:00 (`2026-11-27T16:52:56Z`) |
+| Parameter-freeze commit | `dd5dcd44ee91a2c93bfd24c29f189d8de32e87d5` |
+| Parameter-freeze timestamp | 2026-11-28T00:52:56+08:00 (`2026-11-27T16:52:56Z`) |
+| Freeze-time manifest SHA-256 | `0eaca24be6d00f5ab369f1fb6769131bfeed336107128e76b26ccb6c4ff63908` |
+| Final-run manifest SHA-256 | `770ae8f2769f112cd308249ea94882dee2b8c6e7a7e383550d790c229c2a75bf` (commit `56b109c17b95e4c610a874aaf63fc0ae583a57a6`, 2026-11-27T17:00:43Z) |
+| Post-run review-hardened manifest SHA-256 | `3082b22899537eef7a75585f61347b4d81cf57d727565ee35d5f0f062f1e550e` |
 | `MANIFEST.sha256` | `b07721b846cbd74808cae156cebdbb93f4e6c140cf289aad217ea6cc06e07609` |
-| Pre-run manifest | `docs/superpowers/audits/data/crossarch-1397/preregistration.json` |
-| Pre-run manifest SHA-256 | `770ae8f2769f112cd308249ea94882dee2b8c6e7a7e383550d790c229c2a75bf` |
+| Pre-run/final-run manifest | `docs/superpowers/audits/data/crossarch-1397/preregistration.json` |
 
 The amendment log entry 2 records the value changes and that **no confirmatory
-outcome was examined** before the amendment. The two earlier #1166
+outcome was examined** before the parameter freeze. The two earlier #1166
 observations (the OS-confounded 2026-11-19 field observation and the
 2026-11-20 native-amd64-versus-qemu-emulated-arm64 container observation) are
 report-local operational measurements; they are not this corpus and did not
 set any frozen value.
+
+**Timeline (all UTC, 2026-11-27).** `16:52:56` parameter freeze, commit
+`dd5dcd44`, freeze manifest `0eaca24b`; `16:56:36` attempt-1 starts and Docker
+Desktop crashes on `docker rmi` during staging (identity only, no workflow
+artifact); `16:59:01` staging-fix commit `834dc183`; `16:59:18` attempt-2
+complete two-arm run with an evidence-stem defect (checkpoints/outputs exist
+but were **not** analyzed as the campaign result; preserved under
+`attempt-2-stem-mismatch/`); `17:00:43` stem-fix commit `56b109c1`, final-run
+manifest `770ae8f2`; `17:01:00`–`17:01:19` final analyzable run. The
+freeze-time and final-run manifests carry the **same scientific hashes**
+(corpus, workflows, analysis script, PR-06, MANIFEST); only harness hashes and
+status text changed. The current file is the post-run review-hardened
+revision (amendment log entry 6), which adds sealed-hash/host-arch/tool/
+env-lock checks without changing the scientific values or the observed
+hashes.
 
 ### 2.2 Frozen values
 
@@ -56,7 +75,7 @@ set any frozen value.
 | Negative control | `crossarch-governed-a/control/os_arch.txt` (`uname -m`), excluded from the primary endpoint and every class statement; must differ |
 | Missingness limit | **0%** — any missing primary artifact makes the campaign INVALID |
 
-### 2.3 Pre-run manifest hashes
+### 2.3 Manifest hashes (executed/final-run and post-run hardened)
 
 The machine-readable pre-run manifest records the SHA-256 of every campaign
 file before the run. The sealed hashes are:
@@ -72,6 +91,22 @@ file before the run. The sealed hashes are:
 | `eval/scripts/test_crossarch_governed.py` | `7667609c436e2a349a5deed5b83637dd5e854400a7b060f3c16a3fc60a036df7` |
 | `docs/superpowers/preregistration/PR-06-publication-decision-rule.md` | `e3e098c53d791c9a3ad6de8fd21802965b9eb8ac0237b19c9fa59308233bef21` |
 
+The manifest's `files` map is the **executed/final-run seal** at commit
+`56b109c1`. The post-run hardened analysis/arm/orchestrator/test hashes are in
+`post_run_hardening`; every scientific corpus/workflow/PR-06/MANIFEST hash is
+unchanged from the freeze-time manifest.
+
+| Post-run hardened file | SHA-256 |
+| :--- | :--- |
+| `scripts/cross-arch-provenance-governed-analyze.py` | `e31bc0e0443ec4789381341833755b3aaaaefc8c60810bbe3ff8f3ea81785df8` |
+| `scripts/cross-arch-provenance-arm.sh` | `8647a0c303f1208c05a2985f9623a56ab8bb1086f3c4088dfcb2949faa298ce3` |
+| `scripts/cross-arch-provenance-governed.sh` | `634dd6a7722de1d72ce36e3eef42f5958b5f83b797891f2e1a6d03a3812a796d` |
+| `eval/scripts/test_crossarch_governed.py` | `6441be427ab612b9f18571a419f8669a00ff1e90a885e628da93e8b13f712137` |
+
+The hardened analysis re-derives the same **POSITIVE** result on the committed
+evidence; its output is the current `crossarch-results.json` (SHA-256
+`20ac4e720acc1cac521a25a16e2cd4047a64c16aa1cf058e8739dbcce4cdbc47`).
+
 ### 2.4 Pre-data harness revision
 
 The first staging attempt stopped before any workflow artifact existed:
@@ -85,18 +120,20 @@ denominator, environment identity, or negative-control value changed; the
 same manifest-list digest remains the lock. The amendment log records this as
 entry 3.
 
-### 2.5 Pre-data harness revision 2
+### 2.5 Pre-analysis / pre-final-run harness revision 2
 
-The first complete two-arm run produced intact checkpoints and outputs, but
-the harness named the per-workflow evidence files by the `.oxoflow` file
-basename (`cross-arch-provenance-governed-a`) instead of the frozen workflow
-name (`crossarch-governed-a`), so the analysis could not pair the arms. No
-cross-arm comparison was made. The evidence is preserved under
+The first complete two-arm run (attempt-2, 16:59:18Z) produced intact
+checkpoints and outputs, but the harness named the per-workflow evidence files
+by the `.oxoflow` file basename (`cross-arch-provenance-governed-a`) instead
+of the frozen workflow name (`crossarch-governed-a`), so the analysis could
+not pair the arms. No cross-arm comparison was made or used. The evidence is
+preserved under
 `docs/superpowers/audits/data/crossarch-1397/attempt-2-stem-mismatch/`. The
-arm script now derives the stem from the workflow's declared
-`[workflow] name`, matching the frozen corpus keys. No threshold, endpoint,
-corpus, class, denominator, environment identity, or analysis script changed.
-The amendment log records this as entry 4.
+stem-fix commit `56b109c1` (17:00:43Z) was committed after attempt-2 and
+before the final analyzable run; the arm script now derives the stem from the
+workflow's declared `[workflow] name`, matching the frozen corpus keys. No
+threshold, endpoint, corpus, class, denominator, environment identity, or
+analysis script changed. The amendment log records this as entry 4.
 
 ## 3. Corpus
 
@@ -153,20 +190,23 @@ bash scripts/cross-arch-provenance-governed.sh \
 | :--- | :--- | :--- |
 | host | `ShixiangWang-WorkSpacedeMacBook-Pro.local` | `VM-4-4-ubuntu` (tx-ubuntu) |
 | `uname` | Darwin 27.2.0, `root:xnu-13432.41.4~25/RELEASE_ARM64_T8142 arm64` | Linux 6.8.0-137-generic, `x86_64` |
-| CPU | Apple M5 | Intel Xeon Platinum 8255C (pre-run `lscpu`; the run's `identity.txt` `cpu-model` field is `unknown` because the awk probe printed nothing on Linux) |
+| CPU | Apple M5 (`host-supplement.txt`, captured post-run) | Intel Xeon Platinum 8255C (`host-supplement.txt`, captured post-run; the run's `identity.txt` `cpu-model` field is `unknown` because its Linux awk probe printed nothing) |
 | nproc | 10 | 4 |
-| execution | native aarch64 silicon; Docker Desktop 4.94.0 native `linux/arm64` VM; no qemu | native x86_64; Docker 29.7.2 |
+| execution | native aarch64 silicon; Docker Desktop 4.94.0 native `linux/arm64` VM; no qemu; Docker server 29.8.2 (`host-supplement.txt`) | native x86_64; Docker server 29.7.2 (`host-supplement.txt`) |
 | oxo-flow | 0.32.0 | 0.32.0 |
 | binary SHA-256 | `9ce0065a42e60afe17dcb3308a9e430813301ea8e01bbf2964a75d14719236d6` | `aef9eecc49a09d177bcdbe102f309f64891935f2f18858fd441193c009b0cefd` |
 | engine commit (`workflow_git_sha`) | `56b109c17b95e4c610a874aaf63fc0ae583a57a6` | `56b109c17b95e4c610a874aaf63fc0ae583a57a6` |
 | `workflow_git_dirty` | `false` | `false` |
 | run date (UTC) | `2026-11-27T17:01:06Z` | `2026-11-27T17:01:11Z` |
 
-The engine commit `56b109c17b95e4c610a874aaf63fc0ae583a57a6` is the harness-revision commit; the campaign parameters
-were frozen one commit earlier at `dd5dcd44ee91a2c93bfd24c29f189d8de32e87d5`.
-The Rust source is identical between the two commits (the later commit changed
-only the harness and pre-run manifest), and both arms built their CLI from the
-same tree.
+The engine commit `56b109c17b95e4c610a874aaf63fc0ae583a57a6` is the
+harness-revision commit; the campaign parameters were frozen two commits
+earlier at `dd5dcd44ee91a2c93bfd24c29f189d8de32e87d5`. The Rust source is
+identical between those commits (they changed only the harness and manifest
+text), and both arms built their CLI from the same tree. The run-time
+`identity.txt` did not capture `cpu-model` or the Docker version; the
+post-run `host-supplement.txt` files record them and are cited here as
+supplementary evidence, not as part of the sealed run-time identity.
 
 ## 6. Environment lock
 
@@ -179,15 +219,31 @@ same tree.
 | per-platform image id | `sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b` | `sha256:78976a69c067520ef8be34cde307ef9f6fea6dcefa50edb57039773d241ca0db` | expected to differ (one manifest list, per-platform layer sets); Docker Desktop containerd reports the digest as the image id |
 | python3 | `Python 3.12.16` | `Python 3.12.16` | equal |
 | sort | `sort (GNU coreutils) 9.7` | `sort (GNU coreutils) 9.7` | equal |
+| wc | `wc (GNU coreutils) 9.7` (from `container-supplement.txt`) | `wc (GNU coreutils) 9.7` (from `container-supplement.txt`) | equal; the sealed run-time `container.txt` omitted `wc` |
 | gzip | `gzip 1.13` | `gzip 1.13` | equal |
 | sha256sum | `sha256sum (GNU coreutils) 9.7` | `sha256sum (GNU coreutils) 9.7` | equal |
 | glibc | `ldd (Debian GLIBC 2.41-12+deb13u4) 2.41` | `ldd (Debian GLIBC 2.41-12+deb13u4) 2.41` | equal |
 | engine commit | `56b109c17b95e4c610a874aaf63fc0ae583a57a6` | `56b109c17b95e4c610a874aaf63fc0ae583a57a6` | **equal** |
 | workflow content hash A | `sha256:8daa37215b0a5871253094d23cbe32035d21737c9a5fa097f63bbd5587e12847` | `sha256:8daa37215b0a5871253094d23cbe32035d21737c9a5fa097f63bbd5587e12847` | **equal** |
 | workflow content hash B | `sha256:8e6d1cf56939df49e2e760cf68249a85e32e53569b3bc9dd50043dc0fcaa8048` | `sha256:8e6d1cf56939df49e2e760cf68249a85e32e53569b3bc9dd50043dc0fcaa8048` | **equal** |
+| host-arch → container-arch | `arm64` → `aarch64` | `x86_64` → `x86_64` | **native on each host** (no emulation) |
+| image-src | `python@sha256:5e2bdb1b…4fa5b` | `python@sha256:5e2bdb1b…4fa5b` | **equal** to the corpus image block |
+| staged-tag | `crossarch1397:pin` | `crossarch1397:pin` | **equal** to the corpus image block |
+| env-lock identity, workflow A `prepare` | `docker\|crossarch1397@sha256:5e2b…` | `docker\|python@sha256:5e2b…` | raw prefixes differ; **normalized `@sha256` digest equal** |
+| env-lock identity, workflow A `derive` | `docker\|crossarch1397@sha256:5e2b…` | `docker\|python@sha256:5e2b…` | raw prefixes differ; **normalized `@sha256` digest equal** |
+| env-lock identity, workflow B (4 rules) | `docker\|crossarch1397@sha256:5e2b…` | `docker\|python@sha256:5e2b…` | raw prefixes differ; **normalized `@sha256` digest equal** |
 | `workflow_git_dirty` | false | false | **clean** |
 
-The validity check reports **no environment-lock mismatch**. Each arm's
+The validity check reports **no environment-lock mismatch**. The local engine
+resolved the staged tag to repository prefix `crossarch1397`; the remote engine
+resolved the pulled digest ref to `python`. Both carry the same trailing
+`@sha256:5e2bdb1b…4fa5b` digest, and the hardened analysis compares the parsed
+digest per rule (6/6 rules equal) rather than the raw prefix. The `wc` row is
+supplied by the post-run `container-supplement.txt` because the sealed
+run-time `container.txt` omitted it; the supplement was captured from the same
+pinned digest and is labeled post-run. The analysis also asserts the sealed
+corpus/workflow/PR-06/MANIFEST hashes and the host-arch↔container-arch match
+(`manifest_checked: true` in `crossarch-results.json`). Each arm's
 `provenance verify --json` re-verified its own checkpoint:
 workflow A matched 13/13 declared outputs, workflow B matched 12/12, with
 0 mismatched and 0 missing on both arms. The independent artifact hashes
@@ -297,6 +353,12 @@ are architecture-stable. No class-level NEGATIVE precedence applies.
 | workflows completed | 4 / 4 (2 per arm) |
 | rules completed | 12 / 12 (workflow A: 2 per arm; workflow B: 4 per arm; 6 per arm) |
 
+The `unexpected/undeclared artifacts` row is scoped to **checkpoint-declared
+outputs**. Workflow B intentionally writes `scratch_a.bin`, `scratch_b.bin`,
+and `scratch_c.txt` as internal inputs for its checksum manifests; they are
+not declared outputs, PR-02 §C4 defines non-declared files as non-artifacts,
+and they are excluded from the provenance denominator.
+
 ## 12. Limitations
 
 - **Bounded corpus.** Two workflows, 24 declared artifacts, eight classes.
@@ -324,9 +386,24 @@ are architecture-stable. No class-level NEGATIVE precedence applies.
   analyzed as the campaign result. Both are preserved under `attempt-1-*`
   and `attempt-2-*`. The final run used the corrected harness and is the
   result reported here.
-- **Host identity field.** The remote `identity.txt` `cpu-model` field is
-  `unknown` because the awk probe printed nothing on Linux; the host is
-  identified by hostname, `uname`, kernel, and the pre-run `lscpu` record.
+- **Host identity fields.** The run-time `identity.txt` did not capture
+  `cpu-model` (the Linux awk probe printed nothing) or the Docker version.
+  The post-run `host-supplement.txt` files record Apple M5 / Docker 29.8.2 and
+  Intel Xeon 8255C / Docker 29.7.2; they are supplementary evidence, not part
+  of the sealed run-time identity.
+- **Supplementary `wc`.** The sealed `container.txt` omitted `wc`; the
+  post-run `container-supplement.txt` records `wc (GNU coreutils) 9.7` on both
+  arms from the same digest. The hardened analysis compares it and labels the
+  source.
+- **Manifest lineage.** The parameter-freeze manifest (`0eaca24b`, commit
+  `dd5dcd44`) and the final-run manifest (`770ae8f2`, commit `56b109c1`) carry
+  the same scientific hashes. Attempt-2 produced checkpoint/output evidence
+  but was not analyzed as the campaign result; both the interrupted staging
+  attempt and attempt-2 are preserved and disclosed. The current file is the
+  post-run review-hardened revision (`3082b228`).
+- **Native-execution assertion.** The hardened analysis requires each arm's
+  normalized host architecture to equal its container architecture; an
+  emulated arm on an x86 host would now be INVALID, not silently accepted.
 - **Per-platform image ids differ** because one manifest list resolves to
   per-platform layer sets. Identity is the shared manifest-list digest; the
   per-platform ids are recorded, not treated as a lock.
@@ -337,12 +414,14 @@ all bioinformatics tools or hardware.
 
 ## 13. Raw-data lineage
 
-- Pre-run manifest: `docs/superpowers/audits/data/crossarch-1397/preregistration.json`.
+- Final-run / review-hardened manifest: `docs/superpowers/audits/data/crossarch-1397/preregistration.json`
+  (freeze-time `0eaca24b…`, final-run `770ae8f2…`, post-run hardened `3082b228…`).
 - Frozen corpus: `scripts/cross-arch-provenance-governed-corpus.json`,
   `scripts/cross-arch-provenance-governed-a.oxoflow`,
   `scripts/cross-arch-provenance-governed-b.oxoflow`.
 - arm A (native aarch64): `docs/superpowers/audits/data/crossarch-1397/arm-local-arm64/`
-  (`identity.txt`, `container.txt`, and per-workflow
+  (`identity.txt`, `container.txt`, `host-supplement.txt`,
+  `container-supplement.txt`, and per-workflow
   `{checkpoint.json,verify.json,artifacts.sha256,rows.tsv}`).
 - arm B (native x86_64): `docs/superpowers/audits/data/crossarch-1397/arm-remote-amd64/`
   (same file set).
@@ -351,15 +430,23 @@ all bioinformatics tools or hardware.
 - Interrupted staging attempt (identity only): `docs/superpowers/audits/data/crossarch-1397/attempt-1-docker-stopped/`.
 - First complete run with the stem-naming defect (not analyzed as the
   campaign result): `docs/superpowers/audits/data/crossarch-1397/attempt-2-stem-mismatch/`.
-- Governance: `docs/superpowers/preregistration/AMENDMENTS.md` entries 2–5;
+- Governance: `docs/superpowers/preregistration/AMENDMENTS.md` entries 2–6;
   `docs/superpowers/preregistration/MANIFEST.sha256`.
 
 The raw per-artifact digests are the `artifacts.sha256` files in each arm
 directory; the checkpoints retain the engine-recorded values; the analysis
 script cross-checks the two before deciding. The governed results JSON has
-SHA-256 `9e0635d809a3ae6f9b2ffb9bba0bd9eda02c3f84b05cfafac1ff971196861ab4`;
+SHA-256 `20ac4e720acc1cac521a25a16e2cd4047a64c16aa1cf058e8739dbcce4cdbc47`;
 the orchestrator log has SHA-256
 `79f9e26befa195acf75b6c2f639d93cf7f608d7497c05f8d0a47725a4ed47849`.
+
+**Retention / cleanup.** The hardened orchestrator removes the remote raw
+evidence directory and the local/remote `work/` artifact dirs after copying
+and analyzing the sealed evidence; `--keep-remote` and `--keep-work` retain
+them. The remote SSH checkout (`<remote-repo>`) is retained for reproduction.
+The committed evidence files (checkpoints, verify JSON, independent hashes,
+identity/container records, supplements, analysis JSON, log) are the retained
+raw record.
 
 ## 14. Reproduction
 
@@ -389,6 +476,8 @@ bash scripts/cross-arch-provenance-governed.sh \
 # 5. Re-run only the analysis on the committed evidence:
 python3 -I scripts/cross-arch-provenance-governed-analyze.py \
   --corpus scripts/cross-arch-provenance-governed-corpus.json \
+  --preregistration docs/superpowers/audits/data/crossarch-1397/preregistration.json \
+  --repo-root "$PWD" \
   --arm-a docs/superpowers/audits/data/crossarch-1397/arm-local-arm64 \
   --arm-b docs/superpowers/audits/data/crossarch-1397/arm-remote-amd64 \
   --expected-commit 56b109c17b95e4c610a874aaf63fc0ae583a57a6 \
@@ -397,4 +486,7 @@ python3 -I scripts/cross-arch-provenance-governed-analyze.py \
 
 The orchestrator records its exact commands and timestamps in
 `campaign.log`; the arm harness and analysis are stdlib/POSIX shell and
-do not require cloud or paid services.
+do not require cloud or paid services. By default the orchestrator removes
+the remote raw directory and the local/remote `work/` artifact dirs after the
+sealed evidence is copied and analyzed; `--keep-remote` and `--keep-work`
+retain them, and the remote SSH checkout is retained for reproduction.

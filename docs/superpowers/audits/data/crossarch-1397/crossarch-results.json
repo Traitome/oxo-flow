@@ -16,7 +16,25 @@
         "staged-tag": "crossarch1397:pin",
         "staging": "pre-staged"
       },
+      "container_supplement": {
+        "captured-utc": "2026-11-27T17:25:45Z",
+        "image-src": "python@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+        "manifest-list-digest": "sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+        "platform": "linux/arm64",
+        "wc": "wc (GNU coreutils) 9.7"
+      },
       "dir": "/Users/wsx/Documents/GitHub/oxo-flow/.claude/worktrees/agent-a4811d73744c25b76/docs/superpowers/audits/data/crossarch-1397/arm-local-arm64",
+      "host_arch": "aarch64",
+      "host_supplement": {
+        "captured-utc": "2026-11-27T17:25:45Z",
+        "cpu-model": "Apple M5",
+        "docker-server": "29.8.2 aarch64 Docker Desktop",
+        "docker-version": "Docker version 29.8.2, build 7fc2dff",
+        "host-arch": "arm64",
+        "host-uname": "Darwin ShixiangWang-WorkSpacedeMacBook-Pro.local 27.2.0 Darwin Kernel Version 27.2.0: Wed Oct 14 23:48:06 PDT 2026; root:xnu-13432.41.4~25/RELEASE_ARM64_T8142 arm64",
+        "hostname": "ShixiangWang-WorkSpacedeMacBook-Pro.local",
+        "nproc": "10"
+      },
       "identity": {
         "binary-sha256": "9ce0065a42e60afe17dcb3308a9e430813301ea8e01bbf2964a75d14719236d6",
         "cpu-model": "Apple M5",
@@ -34,6 +52,32 @@
         "platform": "linux/arm64"
       },
       "label": "local",
+      "tools": {
+        "gzip": {
+          "source": "container.txt",
+          "value": "gzip 1.13"
+        },
+        "libc": {
+          "source": "container.txt",
+          "value": "ldd (Debian GLIBC 2.41-12+deb13u4) 2.41"
+        },
+        "python3": {
+          "source": "container.txt",
+          "value": "Python 3.12.16"
+        },
+        "sha256sum": {
+          "source": "container.txt",
+          "value": "sha256sum (GNU coreutils) 9.7"
+        },
+        "sort": {
+          "source": "container.txt",
+          "value": "sort (GNU coreutils) 9.7"
+        },
+        "wc": {
+          "source": "container-supplement.txt",
+          "value": "wc (GNU coreutils) 9.7"
+        }
+      },
       "workflows": {
         "crossarch-governed-a": {
           "completed_rules": [
@@ -85,7 +129,25 @@
         "staged-tag": "crossarch1397:pin",
         "staging": "pre-staged"
       },
+      "container_supplement": {
+        "captured-utc": "2026-11-27T17:25:45Z",
+        "image-src": "python@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+        "manifest-list-digest": "sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+        "platform": "linux/amd64",
+        "wc": "wc (GNU coreutils) 9.7"
+      },
       "dir": "/Users/wsx/Documents/GitHub/oxo-flow/.claude/worktrees/agent-a4811d73744c25b76/docs/superpowers/audits/data/crossarch-1397/arm-remote-amd64",
+      "host_arch": "x86_64",
+      "host_supplement": {
+        "captured-utc": "2026-11-27T17:25:45Z",
+        "cpu-model": "Intel(R) Xeon(R) Platinum 8255C CPU @ 2.50GHz",
+        "docker-server": "29.7.2 x86_64 Ubuntu 24.04.4 LTS",
+        "docker-version": "Docker version 29.7.2, build a7dcaa6",
+        "host-arch": "x86_64",
+        "host-uname": "Linux VM-4-4-ubuntu 6.8.0-137-generic #137-Ubuntu SMP PREEMPT_DYNAMIC Fri Jul 17 20:28:23 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux",
+        "hostname": "VM-4-4-ubuntu",
+        "nproc": "4"
+      },
       "identity": {
         "binary-sha256": "aef9eecc49a09d177bcdbe102f309f64891935f2f18858fd441193c009b0cefd",
         "cpu-model": "unknown",
@@ -103,6 +165,32 @@
         "platform": "linux/amd64"
       },
       "label": "remote",
+      "tools": {
+        "gzip": {
+          "source": "container.txt",
+          "value": "gzip 1.13"
+        },
+        "libc": {
+          "source": "container.txt",
+          "value": "ldd (Debian GLIBC 2.41-12+deb13u4) 2.41"
+        },
+        "python3": {
+          "source": "container.txt",
+          "value": "Python 3.12.16"
+        },
+        "sha256sum": {
+          "source": "container.txt",
+          "value": "sha256sum (GNU coreutils) 9.7"
+        },
+        "sort": {
+          "source": "container.txt",
+          "value": "sort (GNU coreutils) 9.7"
+        },
+        "wc": {
+          "source": "container-supplement.txt",
+          "value": "wc (GNU coreutils) 9.7"
+        }
+      },
       "workflows": {
         "crossarch-governed-a": {
           "completed_rules": [
@@ -553,8 +641,65 @@
     "rule_step": "step 3: interval partition",
     "unstable_classes": []
   },
+  "env_lock_identity": [
+    {
+      "arm_a_digest": "5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+      "arm_a_raw": "docker|crossarch1397@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+      "arm_b_digest": "5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+      "arm_b_raw": "docker|python@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+      "normalized_equal": true,
+      "rule": "derive",
+      "workflow": "crossarch-governed-a"
+    },
+    {
+      "arm_a_digest": "5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+      "arm_a_raw": "docker|crossarch1397@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+      "arm_b_digest": "5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+      "arm_b_raw": "docker|python@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+      "normalized_equal": true,
+      "rule": "prepare",
+      "workflow": "crossarch-governed-a"
+    },
+    {
+      "arm_a_digest": "5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+      "arm_a_raw": "docker|crossarch1397@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+      "arm_b_digest": "5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+      "arm_b_raw": "docker|python@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+      "normalized_equal": true,
+      "rule": "checksums",
+      "workflow": "crossarch-governed-b"
+    },
+    {
+      "arm_a_digest": "5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+      "arm_a_raw": "docker|crossarch1397@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+      "arm_b_digest": "5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+      "arm_b_raw": "docker|python@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+      "normalized_equal": true,
+      "rule": "floats",
+      "workflow": "crossarch-governed-b"
+    },
+    {
+      "arm_a_digest": "5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+      "arm_a_raw": "docker|crossarch1397@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+      "arm_b_digest": "5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+      "arm_b_raw": "docker|python@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+      "normalized_equal": true,
+      "rule": "integers",
+      "workflow": "crossarch-governed-b"
+    },
+    {
+      "arm_a_digest": "5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+      "arm_a_raw": "docker|crossarch1397@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+      "arm_b_digest": "5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+      "arm_b_raw": "docker|python@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+      "normalized_equal": true,
+      "rule": "structured",
+      "workflow": "crossarch-governed-b"
+    }
+  ],
   "expected_engine_commit": "56b109c17b95e4c610a874aaf63fc0ae583a57a6",
   "flow_table": {
+    "artifact_scope": "checkpoint-declared outputs only; workflow B's scratch_*.bin/txt are intentionally undeclared internals and are not artifacts (PR-02 \u00a7C4)",
     "excluded_negative_controls": 1,
     "included_primary_artifacts": 24,
     "missing_primary_artifacts": []
@@ -569,6 +714,82 @@
     "upper": 1.0
   },
   "issue": "1397",
+  "manifest": {
+    "final_run_manifest": {
+      "commit": "56b109c17b95e4c610a874aaf63fc0ae583a57a6",
+      "commit_time_utc": "2026-11-27T17:00:43Z",
+      "note": "Final-run manifest: committed after attempt-2 and before the final analyzable run at 17:01:00Z. Same scientific hashes as the freeze manifest; only harness hashes and status text changed.",
+      "sha256": "770ae8f2769f112cd308249ea94882dee2b8c6e7a7e383550d790c229c2a75bf"
+    },
+    "freeze_manifest": {
+      "commit": "dd5dcd44ee91a2c93bfd24c29f189d8de32e87d5",
+      "commit_time_utc": "2026-11-27T16:52:56Z",
+      "note": "Parameter-freeze manifest: the #1166 thresholds/corpus were fixed and no campaign run existed. Its scientific hashes equal the final-run manifest.",
+      "sha256": "0eaca24be6d00f5ab369f1fb6769131bfeed336107128e76b26ccb6c4ff63908"
+    },
+    "governance": {
+      "amendment": "2 (2026-11-28)",
+      "amendment_log_entries": [
+        2,
+        3,
+        4,
+        5,
+        6
+      ],
+      "final_run_manifest_sha256": "770ae8f2769f112cd308249ea94882dee2b8c6e7a7e383550d790c229c2a75bf",
+      "freeze_manifest_sha256": "0eaca24be6d00f5ab369f1fb6769131bfeed336107128e76b26ccb6c4ff63908",
+      "manifest_file": "docs/superpowers/preregistration/MANIFEST.sha256",
+      "manifest_sha256": "b07721b846cbd74808cae156cebdbb93f4e6c140cf289aad217ea6cc06e07609",
+      "pr06_c4_section": "docs/superpowers/preregistration/PR-06-publication-decision-rule.md#c4--1166-cross-architecture-reproduction",
+      "pr06_version": "1.0.2",
+      "preregistration_readme": "docs/superpowers/preregistration/README.md",
+      "publication_gate": "PR-05 C4 independent reviewer sign-off is PENDING. Per PR-05, no result may be described as pre-registered or confirmatory until that row is completed. The governed category is computed under the frozen rule and reported with this limitation; it is not a publication-ready confirmatory result."
+    },
+    "post_run_hardening": {
+      "analysis_script_sha256": "e31bc0e0443ec4789381341833755b3aaaaefc8c60810bbe3ff8f3ea81785df8",
+      "arm_script_sha256": "8647a0c303f1208c05a2985f9623a56ab8bb1086f3c4088dfcb2949faa298ce3",
+      "captured_utc": "2026-11-27T17:25:45Z",
+      "orchestrator_sha256": "634dd6a7722de1d72ce36e3eef42f5958b5f83b797891f2e1a6d03a3812a796d",
+      "reason": "Independent review of PR #1444 found unmechanized validity checks and record-integrity wording. Post-run hardening: the analysis now asserts the sealed corpus/workflow/PR-06/MANIFEST hashes, host-arch versus container-arch, the wc tool version, image identity, and normalized env-lock digests; the arm script reads the image block from the corpus and records wc/docker/CPU; the orchestrator documents remote/local cleanup. Scientific thresholds, corpus, and observed hashes are unchanged.",
+      "review": "https://github.com/Traitome/oxo-flow/pull/1444",
+      "test_sha256": "6441be427ab612b9f18571a419f8669a00ff1e90a885e628da93e8b13f712137"
+    },
+    "timeline": [
+      {
+        "event": "parameter freeze commit dd5dcd44; freeze manifest 0eaca24b",
+        "utc": "2026-11-27T16:52:56Z"
+      },
+      {
+        "event": "attempt-1 starts; Docker Desktop crashes on docker rmi during staging; no workflow artifact exists",
+        "utc": "2026-11-27T16:56:36Z"
+      },
+      {
+        "event": "pre-run staging harness commit 834dc183 (CROSSARCH_STAGE=0 pre-staged path)",
+        "utc": "2026-11-27T16:59:01Z"
+      },
+      {
+        "event": "attempt-2 complete two-arm run; evidence-stem defect; checkpoints/outputs exist but are NOT analyzed as the campaign result (preserved under attempt-2-stem-mismatch)",
+        "utc": "2026-11-27T16:59:18Z"
+      },
+      {
+        "event": "pre-analysis / pre-final-run stem-fix commit 56b109c1; final-run manifest 770ae8f2",
+        "utc": "2026-11-27T17:00:43Z"
+      },
+      {
+        "event": "final analyzable run starts",
+        "utc": "2026-11-27T17:01:00Z"
+      },
+      {
+        "event": "final run ends; 24/24 artifacts identical",
+        "utc": "2026-11-27T17:01:19Z"
+      },
+      {
+        "event": "post-run supplementary host/container inventory captured for independent-review remediation",
+        "utc": "2026-11-27T17:25:45Z"
+      }
+    ]
+  },
+  "manifest_checked": true,
   "negative_control": [
     {
       "arm_a_sha256": "5121ae59314a84da7b4d9587374398f1afa2000b243b3e54f491adefaac54f92",

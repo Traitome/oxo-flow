@@ -524,7 +524,13 @@ def _implementation_plan_entry() -> dict:
             "Pins the Round-2 seeded fault-injection row (7/10 proposals, 3/10 "
             "applied, 3/10 verified, 3/10 reruns). Attribution provenance only: "
             "the campaign numbers and their raw logs live in "
-            "eval/frontier/PILOT_FINDINGS.md and are not re-derived here."
+            "eval/frontier/PILOT_FINDINGS.md and are not re-derived here. The "
+            "plan also quotes the governed #1166 cross-architecture campaign "
+            "(24/24 declared artifacts SHA-256 identical; exact 95% CI "
+            "[85.75%, 100%]); its measured table of record is "
+            "docs/superpowers/audits/cross-arch-provenance-governed-2026-11-27.md "
+            "and its raw per-arm records are under "
+            "docs/superpowers/audits/data/crossarch-1397/."
         ),
     }
 

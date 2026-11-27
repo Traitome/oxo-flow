@@ -1,0 +1,14 @@
+# Supplementary host inventory for the #1397/#1166 governed campaign.
+# Captured 2026-11-27T17:25:45Z, after the campaign, for independent-review
+# remediation. This file is NOT part of the sealed run-time identity; the
+# sealed identity is identity.txt. It records the CPU and Docker version that
+# the run-time identity probe did not capture (the Linux awk probe printed
+# nothing, so identity.txt says cpu-model: unknown).
+hostname:      ShixiangWang-WorkSpacedeMacBook-Pro.local
+host-uname:    Darwin ShixiangWang-WorkSpacedeMacBook-Pro.local 27.2.0 Darwin Kernel Version 27.2.0: Wed Oct 14 23:48:06 PDT 2026; root:xnu-13432.41.4~25/RELEASE_ARM64_T8142 arm64
+host-arch:     arm64
+cpu-model:     Apple M5
+nproc:         10
+docker-version: Docker version 29.8.2, build 7fc2dff
+docker-server:  29.8.2 aarch64 Docker Desktop
+captured-utc:  2026-11-27T17:25:45Z

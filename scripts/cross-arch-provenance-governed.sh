@@ -18,10 +18,19 @@
 #   --remote-bin PATH     remote binary (default <remote-repo>/target/debug/oxo-flow)
 #   --remote-out DIR      remote raw-evidence dir (default /home/ubuntu/crossarch-1397-raw)
 #   --expected-commit SHA  frozen engine commit (default: local HEAD)
+#   --preregistration F   sealed manifest JSON (default <outroot>/preregistration.json)
 #   --skip-build          do not run cargo build on either host
+#   --keep-remote         retain the remote raw-evidence dir after copying
+#   --keep-work           retain the local/remote work/ artifact dirs
 #
 # Emits <outroot>/arm-local-<arch>/ and <outroot>/arm-remote-<arch>/ raw
 # evidence, plus <outroot>/crossarch-results.json and <outroot>/campaign.log.
+#
+# Retention: the remote SSH checkout (<remote-repo>) is retained for
+# reproduction. The remote raw dir and the local/remote work/ dirs are removed
+# after the evidence is copied and analyzed unless --keep-remote/--keep-work is
+# given; the sealed evidence files (checkpoints, verify JSON, hashes, identity)
+# are always retained.
 set -euo pipefail
 
 outroot="${1:?usage: $0 <outroot> [options]}"
@@ -34,7 +43,10 @@ remote_repo=""
 remote_bin=""
 remote_out="/home/ubuntu/crossarch-1397-raw"
 expected_commit=""
+preregistration=""
 skip_build=0
+keep_remote=0
+keep_work=0
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -45,7 +57,10 @@ while [ "$#" -gt 0 ]; do
     --remote-bin) remote_bin="$2"; shift 2 ;;
     --remote-out) remote_out="$2"; shift 2 ;;
     --expected-commit) expected_commit="$2"; shift 2 ;;
+    --preregistration) preregistration="$2"; shift 2 ;;
     --skip-build) skip_build=1; shift ;;
+    --keep-remote) keep_remote=1; shift ;;
+    --keep-work) keep_work=1; shift ;;
     -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
@@ -109,6 +124,7 @@ if [ -z "$remote_bin" ]; then remote_bin="$remote_repo/target/debug/oxo-flow"; f
 
 mkdir -p "$outroot"
 outroot="$(cd "$outroot" && pwd)"
+[ -n "$preregistration" ] || preregistration="$outroot/preregistration.json"
 log="$outroot/campaign.log"
 {
   echo "campaign: 1397"
@@ -165,10 +181,21 @@ echo "copied remote evidence to $remote_arm" | tee -a "$log"
 
 python3 -I "$repo/scripts/cross-arch-provenance-governed-analyze.py" \
   --corpus "$corpus" \
+  --preregistration "$preregistration" \
+  --repo-root "$repo" \
   --arm-a "$local_arm" \
   --arm-b "$remote_arm" \
   --expected-commit "$expected_commit" \
   --out "$outroot/crossarch-results.json" | tee -a "$log"
+
+if [ "$keep_work" = "0" ]; then
+  rm -rf "$local_arm/work" "$remote_arm/work"
+  echo "cleaned local/remote work/ artifact dirs (sealed evidence retained)" | tee -a "$log"
+fi
+if [ "$keep_remote" = "0" ]; then
+  ssh "$remote_host" "rm -rf $(printf %q "$remote_out")"
+  echo "cleaned remote raw dir $remote_out (local copy retained)" | tee -a "$log"
+fi
 
 echo "finished-utc: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$log"
 echo "wrote $outroot/crossarch-results.json"

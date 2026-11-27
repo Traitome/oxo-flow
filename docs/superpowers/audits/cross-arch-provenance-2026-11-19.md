@@ -150,8 +150,10 @@ architecture-stability claim is made.
 - It does **not** measure the container/`docker`/`singularity`/`conda`/`pixi`
   backends, nor any full environment-lock matrix.
 - It is **N=1 workflow, 4 artifacts** — far below any `n_min`; `τ_ARCH` and
-  `n_min` in PR-06 §C4 remain UNDECIDED, so no threshold-based statement is
-  possible.
+  `n_min` in PR-06 §C4 **were** UNDECIDED at the time of this observation, so
+  no threshold-based statement was possible for it. They are now frozen
+  (amendment 2) and the governed campaign is in
+  [`cross-arch-provenance-governed-2026-11-27.md`](cross-arch-provenance-governed-2026-11-27.md).
 - It does **not** cover the scheduler/cluster path (the cluster arm of #1166 is
   deferred and blocked on cloud credentials; issue #1158).
 - The observed `summary.txt` divergence is a host-**tool** divergence deliberately

@@ -6,7 +6,9 @@
 > is still **not** the preregistered primary result as a governed
 > POSITIVE/NEGATIVE: the governed thresholds `τ_ARCH` and `n_min`
 > (`docs/superpowers/preregistration/PR-06-publication-decision-rule.md` §C4)
-> remain UNDECIDED, and one arm runs under **CPU emulation** (stated below).
+> **were** UNDECIDED at the time of this observation, and one arm ran under
+> **CPU emulation** (stated below); the later governed campaign is in
+> [`cross-arch-provenance-governed-2026-11-27.md`](cross-arch-provenance-governed-2026-11-27.md).
 > The per-artifact and per-class verdicts are reported as an operational
 > measurement, with every caveat the brief requires.
 >
@@ -162,8 +164,11 @@ measurement is not invalid as a contrast (one OS, one shared container digest,
 two architectures) **but** it carries a stated emulation caveat and `N=1`
 fixture; step 2 (NEGATIVE) — would require an eligible class (≥ `n_min`) with
 ≥1 differing artifact; **no class differs**, so no NEGATIVE; step 3 (interval
-partition on `τ_ARCH`) — `τ_ARCH` is **UNDECIDED**, so **no governed POSITIVE
-is claimed**. The honest, report-local statement is: *every declared artifact
+partition on `τ_ARCH`) — `τ_ARCH` was **UNDECIDED** at the time of this
+observation, so **no governed POSITIVE is claimed for it**; the later
+governed campaign is in
+[`cross-arch-provenance-governed-2026-11-27.md`](cross-arch-provenance-governed-2026-11-27.md).
+The honest, report-local statement for this observation is: *every declared artifact
 class was architecture-stable in this one container-digest, one-OS,
 native-vs-emulated measurement.*
 
@@ -174,7 +179,9 @@ native-vs-emulated measurement.*
   emulator could in principle mask or introduce an architecture-specific
   effect. Native-vs-native cross-architecture is not measured here.
 - **`N=1` fixture, 8 artifacts.** Far below any `n_min`; `τ_ARCH` and `n_min`
-  remain UNDECIDED — no threshold-based statement is possible.
+  **were** UNDECIDED at the time of this observation — no threshold-based
+  statement was possible for it; the later governed campaign is in
+  [`cross-arch-provenance-governed-2026-11-27.md`](cross-arch-provenance-governed-2026-11-27.md).
 - **Toolchain is deliberately held constant** (same image digest ⇒ same
   coreutils/Python/gzip). This isolates the architecture axis but means the
   measurement says nothing about how *differing* tool versions behave across
