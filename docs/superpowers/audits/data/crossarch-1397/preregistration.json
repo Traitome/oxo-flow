@@ -25,7 +25,7 @@
     "docs/superpowers/preregistration/MANIFEST.sha256": "b07721b846cbd74808cae156cebdbb93f4e6c140cf289aad217ea6cc06e07609",
     "docs/superpowers/preregistration/PR-06-publication-decision-rule.md": "e3e098c53d791c9a3ad6de8fd21802965b9eb8ac0237b19c9fa59308233bef21",
     "eval/scripts/test_crossarch_governed.py": "7667609c436e2a349a5deed5b83637dd5e854400a7b060f3c16a3fc60a036df7",
-    "scripts/cross-arch-provenance-arm.sh": "85aefedbbaaa1180709e687b442205274550e51d4596585a4782eba03f532810",
+    "scripts/cross-arch-provenance-arm.sh": "ceee31e545c02a1f44b47ebe0957154641609bd28a78bc646236d480905b955a",
     "scripts/cross-arch-provenance-governed-a.oxoflow": "8daa37215b0a5871253094d23cbe32035d21737c9a5fa097f63bbd5587e12847",
     "scripts/cross-arch-provenance-governed-analyze.py": "fb7ee1f5af85dcefa721283dcbb3e2cfc67ae2b8212c0f4578fb7c30a1d989b8",
     "scripts/cross-arch-provenance-governed-b.oxoflow": "8e6d1cf56939df49e2e760cf68249a85e32e53569b3bc9dd50043dc0fcaa8048",
@@ -33,7 +33,7 @@
     "scripts/cross-arch-provenance-governed.sh": "fc5f29c80d9678cdac415c83be37e7cfdb5f3769a10ca836c6d62da1ecc3c35a"
   },
   "format": "oxo-flow.crossarch-preregistration/v1",
-  "freeze_statement": "This manifest is committed before the first run of the frozen corpus. No cross-arm outcome of this corpus was examined before this commit. The 2026-11-19 OS-confounded field observation and the 2026-11-20 native-amd64-vs-qemu-emulated-arm64 container observation are different, report-local operational measurements; they are not this corpus and did not set any value below. A pre-data harness revision (CROSSARCH_STAGE=0 pre-staged image path) was committed before any workflow artifact existed; see harness_revision.",
+  "freeze_statement": "This manifest is committed before the first run of the frozen corpus. No cross-arm outcome of this corpus was examined before this commit. The 2026-11-19 OS-confounded field observation and the 2026-11-20 native-amd64-vs-qemu-emulated-arm64 container observation are different, report-local operational measurements; they are not this corpus and did not set any value below. A pre-data harness revision (CROSSARCH_STAGE=0 pre-staged image path) was committed before any workflow artifact existed; see harness_revision. A second pre-data harness revision (workflow-stem mapping) was committed after the first complete two-arm run produced evidence that the analysis could not pair; no cross-arm comparison was made and the raw evidence is preserved under attempt-2-stem-mismatch/.",
   "governance": {
     "amendment": "2 (2026-11-28)",
     "manifest_file": "docs/superpowers/preregistration/MANIFEST.sha256",
@@ -57,6 +57,23 @@
       "native arm definition",
       "negative control",
       "missingness limit"
+    ]
+  },
+  "harness_revision_2": {
+    "commit": "the commit that introduces this revision (recorded in the campaign report and campaign.log)",
+    "outcome_exposure": "No cross-arm comparison was made. The first run raw evidence was preserved but not analyzed as the campaign result.",
+    "reason": "The first complete two-arm run named per-workflow evidence files by the .oxoflow file basename (cross-arch-provenance-governed-a) instead of the frozen workflow name (crossarch-governed-a), so the analysis could not pair the evidence. The outputs and checkpoints themselves were intact and were NOT compared; the run is preserved under docs/superpowers/audits/data/crossarch-1397/attempt-2-stem-mismatch/. The arm script now derives the stem from the workflow declared [workflow] name, matching the frozen corpus keys.",
+    "unchanged": [
+      "tau_ARCH",
+      "n_min",
+      "primary endpoint",
+      "corpus",
+      "classes",
+      "manifest-list digest",
+      "native arm definition",
+      "negative control",
+      "missingness limit",
+      "analysis script"
     ]
   },
   "negative_control": {

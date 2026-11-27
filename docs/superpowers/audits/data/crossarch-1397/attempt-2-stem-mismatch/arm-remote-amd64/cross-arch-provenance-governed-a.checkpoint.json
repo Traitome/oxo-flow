@@ -1,0 +1,200 @@
+{
+  "checkpoint_format_version": 1,
+  "completed_rules": [
+    "derive",
+    "prepare"
+  ],
+  "failed_rules": [],
+  "benchmarks": {
+    "derive": {
+      "rule": "derive",
+      "wall_time_secs": 0.384,
+      "max_memory_mb": 267,
+      "cpu_seconds": 0.00606,
+      "retries": 0
+    },
+    "prepare": {
+      "rule": "prepare",
+      "wall_time_secs": 0.536,
+      "max_memory_mb": 233,
+      "cpu_seconds": 0.0,
+      "retries": 0
+    }
+  },
+  "workflow_path": "/home/ubuntu/crossarch-1397-src/scripts/cross-arch-provenance-governed-a.oxoflow",
+  "workflow_git_sha": "834dc183ddab1e1a9562bf65aa4da1d09f1e32ec",
+  "workflow_content_hash": "sha256:8daa37215b0a5871253094d23cbe32035d21737c9a5fa097f63bbd5587e12847",
+  "workflow_resolved_hash": "sha256:c765a0d183a297db30ffb995e2089e17a748df67e0a312197d4847c6d92d0717",
+  "workflow_git_dirty": false,
+  "workdir": "/home/ubuntu/crossarch-1397-raw/work/cross-arch-provenance-governed-a",
+  "checksums": {
+    "control/os_arch.txt": "sha256:aaf631698ae5160ceb04a97681a14887fdcab47cd6e0f163c87485b3b1340b62",
+    "data/alphabet.txt": "sha256:9e593b90f6fd0ef5636102094a488600be03a4913ea6e08836a5c924401b66c7",
+    "data/bytes.bin": "sha256:103066039ffcce85ebb793b744cae7e0017cd660c2bb6dff327ecbfe55212f75",
+    "data/bytes.bin.gz": "sha256:62de65398cfb8c3a523eeb8707ae1b65c5318003328d08d408db5f996ab1b536",
+    "data/mask.bin": "sha256:9c478d59f2a43f86656e4a15b12fbfa14d0f9026bfba48f92e0b5a9e620d1a15",
+    "data/notes.txt": "sha256:64c9a93dcb7c3a6da918cbf728e3a2ae6745760625e132b99eea6047cb0e5800",
+    "data/pattern.bin": "sha256:0dd21bd42470a439e676fa1e6e4706bb7909712910d854e229671a51a26a3941",
+    "data/pattern.bin.gz": "sha256:ff3c7d2f916148f28ec0bef862c8969f777b749b3c99a3083f11de4a4b20a397",
+    "data/payload.txt": "sha256:c3d522d442fe9b8e08ea1cc225886a96b7c6f2520e3ed49ce616912e8de61440",
+    "data/payload.txt.gz": "sha256:4f8c577971a39ab66656127c2e228a35afad3cf185facfba1cf669f9d96e68ff",
+    "dedup.txt": "sha256:9932a2cc85d679f070afd979ccd9640daf4c46c9bd99e579d9a0e012b7e40f94",
+    "sorted.txt": "sha256:aa7d83943d7ebf9dfb0f0d0e0ad57a231efadf5fcf481935cb85eec3b9fbe80c",
+    "summary.txt": "sha256:83d625670eed3424f9db4e517856744778dba9c5d40155cb84152fcd4d4d398a"
+  },
+  "output_manifests": {
+    "derive": [
+      {
+        "path": "summary.txt",
+        "size": 69,
+        "sha256": "sha256:83d625670eed3424f9db4e517856744778dba9c5d40155cb84152fcd4d4d398a"
+      },
+      {
+        "path": "sorted.txt",
+        "size": 1073,
+        "sha256": "sha256:aa7d83943d7ebf9dfb0f0d0e0ad57a231efadf5fcf481935cb85eec3b9fbe80c"
+      },
+      {
+        "path": "dedup.txt",
+        "size": 169,
+        "sha256": "sha256:9932a2cc85d679f070afd979ccd9640daf4c46c9bd99e579d9a0e012b7e40f94"
+      },
+      {
+        "path": "data/payload.txt.gz",
+        "size": 285,
+        "sha256": "sha256:4f8c577971a39ab66656127c2e228a35afad3cf185facfba1cf669f9d96e68ff"
+      },
+      {
+        "path": "data/bytes.bin.gz",
+        "size": 327,
+        "sha256": "sha256:62de65398cfb8c3a523eeb8707ae1b65c5318003328d08d408db5f996ab1b536"
+      },
+      {
+        "path": "data/pattern.bin.gz",
+        "size": 365,
+        "sha256": "sha256:ff3c7d2f916148f28ec0bef862c8969f777b749b3c99a3083f11de4a4b20a397"
+      }
+    ],
+    "prepare": [
+      {
+        "path": "data/payload.txt",
+        "size": 1073,
+        "sha256": "sha256:c3d522d442fe9b8e08ea1cc225886a96b7c6f2520e3ed49ce616912e8de61440"
+      },
+      {
+        "path": "data/alphabet.txt",
+        "size": 312,
+        "sha256": "sha256:9e593b90f6fd0ef5636102094a488600be03a4913ea6e08836a5c924401b66c7"
+      },
+      {
+        "path": "data/notes.txt",
+        "size": 128,
+        "sha256": "sha256:64c9a93dcb7c3a6da918cbf728e3a2ae6745760625e132b99eea6047cb0e5800"
+      },
+      {
+        "path": "data/bytes.bin",
+        "size": 4096,
+        "sha256": "sha256:103066039ffcce85ebb793b744cae7e0017cd660c2bb6dff327ecbfe55212f75"
+      },
+      {
+        "path": "data/pattern.bin",
+        "size": 8192,
+        "sha256": "sha256:0dd21bd42470a439e676fa1e6e4706bb7909712910d854e229671a51a26a3941"
+      },
+      {
+        "path": "data/mask.bin",
+        "size": 2048,
+        "sha256": "sha256:9c478d59f2a43f86656e4a15b12fbfa14d0f9026bfba48f92e0b5a9e620d1a15"
+      },
+      {
+        "path": "control/os_arch.txt",
+        "size": 7,
+        "sha256": "sha256:aaf631698ae5160ceb04a97681a14887fdcab47cd6e0f163c87485b3b1340b62"
+      }
+    ]
+  },
+  "rule_fingerprints": {
+    "derive": "sha256:b69416978ce7e2f7e7ad0939d7b7956c3153bb1f96e7dbe6de54cfbe01c9e16c",
+    "prepare": "sha256:539236f5d32f13ae66b117b52dcbceae36c593e8c1e5dc5bdcd311a07d08fc54"
+  },
+  "rule_fingerprints_no_input": {
+    "derive": "sha256:daf5915cb3a902730322f59ce9c6f9b6873ac73ba2d28ba059e6287e6e1ee12c",
+    "prepare": "sha256:e6b4966ff7c14f560119be98745d2bf9c40525935684d5508b4164d68b992019"
+  },
+  "input_manifests": {
+    "derive": [
+      {
+        "path": "data/bytes.bin",
+        "size": 4096,
+        "mtime_nanos": 1795798773956382577,
+        "hash": "sha256:103066039ffcce85ebb793b744cae7e0017cd660c2bb6dff327ecbfe55212f75"
+      },
+      {
+        "path": "data/pattern.bin",
+        "size": 8192,
+        "mtime_nanos": 1795798773976382711,
+        "hash": "sha256:0dd21bd42470a439e676fa1e6e4706bb7909712910d854e229671a51a26a3941"
+      },
+      {
+        "path": "data/payload.txt",
+        "size": 1073,
+        "mtime_nanos": 1795798773873382022,
+        "hash": "sha256:c3d522d442fe9b8e08ea1cc225886a96b7c6f2520e3ed49ce616912e8de61440"
+      }
+    ]
+  },
+  "rule_runs": {
+    "derive": {
+      "exit_code": 0,
+      "started_at": "2026-11-27T16:59:34.165893069Z",
+      "finished_at": "2026-11-27T16:59:34.550056270Z",
+      "command": "docker run --rm --user $(id -u):$(id -g) -v '/home/ubuntu/crossarch-1397-raw/work/cross-arch-provenance-governed-a':'/home/ubuntu/crossarch-1397-raw/work/cross-arch-provenance-governed-a' -w '/home/ubuntu/crossarch-1397-raw/work/cross-arch-provenance-governed-a' 'crossarch1397:pin' sh -c 'if command -v bash >/dev/null 2>&1; then exec bash -c \"$1\"; else exec sh -c \"$1\"; fi' sh 'mkdir -p '\\''data'\\''\nset -eu\nexport LC_ALL=C\n{\n  echo \"lines $(sort data/payload.txt | wc -l)\"\n  echo \"unique $(sort -u data/payload.txt | wc -l)\"\n  sort data/payload.txt | head -n 3\n} > summary.txt\nsort data/payload.txt > sorted.txt\nsort -u data/payload.txt | sed -n '\\''1,10p'\\'' > dedup.txt\ngzip -n -c data/payload.txt > data/payload.txt.gz\ngzip -n -c data/bytes.bin > data/bytes.bin.gz\ngzip -n -c data/pattern.bin > data/pattern.bin.gz\n'",
+      "stderr_tail": "",
+      "stdout_tail": "",
+      "status": "success"
+    },
+    "prepare": {
+      "exit_code": 0,
+      "started_at": "2026-11-27T16:59:33.601550575Z",
+      "finished_at": "2026-11-27T16:59:34.137802660Z",
+      "command": "docker run --rm --user $(id -u):$(id -g) -v '/home/ubuntu/crossarch-1397-raw/work/cross-arch-provenance-governed-a':'/home/ubuntu/crossarch-1397-raw/work/cross-arch-provenance-governed-a' -w '/home/ubuntu/crossarch-1397-raw/work/cross-arch-provenance-governed-a' 'crossarch1397:pin' sh -c 'if command -v bash >/dev/null 2>&1; then exec bash -c \"$1\"; else exec sh -c \"$1\"; fi' sh 'mkdir -p '\\''data'\\'' '\\''control'\\''\nset -eu\nexport LC_ALL=C\nmkdir -p data control\n: > data/payload.txt\ni=1\nwhile [ \"$i\" -le 64 ]; do\n  echo \"line $i value $((i * 37 % 97))\" >> data/payload.txt\n  i=$((i + 1))\ndone\npython3 -c \"\nimport sys\nfor i in range(1, 27):\n    sys.stdout.write('\\''letter %02d %s'\\'' % (i, chr(96 + i)) + chr(10))\n\" > data/alphabet.txt\npython3 -c \"\nimport sys\nlines = [\n    '\\''frozen governed cross-architecture corpus'\\'',\n    '\\''deterministic bytes only'\\'',\n    '\\''no timestamps'\\'',\n    '\\''no urandom'\\'',\n    '\\''native x86_64 versus native aarch64'\\'',\n]\nsys.stdout.write(chr(10).join(lines) + chr(10))\n\" > data/notes.txt\npython3 -c \"\nimport sys\nsys.stdout.buffer.write(bytes((i * 53 + 7) % 256 for i in range(4096)))\n\" > data/bytes.bin\npython3 -c \"\nimport sys\nsys.stdout.buffer.write(bytes((i * 131 + 17) % 256 for i in range(8192)))\n\" > data/pattern.bin\npython3 -c \"\nimport sys\nx = 0x12345678\nout = bytearray()\nfor i in range(2048):\n    x = (1103515245 * x + 12345) & 0x7fffffff\n    out.append((x >> 16) & 0xff)\nsys.stdout.buffer.write(bytes(out))\n\" > data/mask.bin\nuname -m > control/os_arch.txt\n'",
+      "stderr_tail": "",
+      "stdout_tail": "",
+      "status": "success"
+    }
+  },
+  "env_lock_identity": {
+    "derive": "docker|python@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+    "prepare": "docker|python@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b"
+  },
+  "resource_usage": {
+    "derive": {
+      "max_rss_bytes": 279355392,
+      "cpu_seconds": 0.00606,
+      "io_read_bytes": 0,
+      "io_write_bytes": 0,
+      "source": {
+        "backend": "local",
+        "tool": "sysinfo",
+        "raw_fields": {
+          "io_source": "proc",
+          "sample_interval_ms": "200"
+        }
+      }
+    },
+    "prepare": {
+      "max_rss_bytes": 244154368,
+      "cpu_seconds": 0.0,
+      "io_read_bytes": 0,
+      "io_write_bytes": 0,
+      "source": {
+        "backend": "local",
+        "tool": "sysinfo",
+        "raw_fields": {
+          "io_source": "proc",
+          "sample_interval_ms": "200"
+        }
+      }
+    }
+  }
+}

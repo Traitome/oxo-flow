@@ -129,7 +129,10 @@ actual_image_arch="$(docker image inspect "$tag" --format '{{.Architecture}}')"
 } > "$outdir/container.txt"
 
 for wf in "$@"; do
-  stem="$(basename "$wf" .oxoflow)"
+  # The frozen corpus keys artifacts by the workflow's declared name, not by
+  # the file basename (the file names carry a `cross-arch-provenance-` prefix).
+  stem="$(awk -F'"' '/^name = "/ {print $2; exit}' "$wf")"
+  [ -n "$stem" ] || stem="$(basename "$wf" .oxoflow)"
   work="$outdir/work/$stem"
   rm -rf "$work"
   "$bin" run "$wf" -d "$work" --provenance --quiet
