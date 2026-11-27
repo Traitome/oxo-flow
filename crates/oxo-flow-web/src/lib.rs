@@ -27,6 +27,7 @@ pub mod sandbox;
 pub mod server;
 pub mod sse;
 pub mod sys;
+pub mod userns;
 pub mod workspace;
 
 use serde::{Deserialize, Serialize};

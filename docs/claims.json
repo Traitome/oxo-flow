@@ -389,6 +389,22 @@
           "contains": ["claims-check", "docs/claims.json"]
         }
       ]
+    },
+    {
+      "id": "web.userns_isolation",
+      "description": "The opt-in per-run user + PID namespace knob must stay documented in the overview docs (drift guard for issue #1401).",
+      "source": {
+        "kind": "rust_const_strings",
+        "path": "crates/oxo-flow-web/src/userns.rs",
+        "regex": "pub const ISOLATION_MODE_ENV: &str = \"(OXO_FLOW_WEB_ISOLATION)\";"
+      },
+      "checks": [
+        { "path": "README.md", "contains": "{first}" },
+        { "path": "ROADMAP.md", "contains": "{first}" },
+        { "path": "docs/guide/src/vision.md", "contains": "{first}" },
+        { "path": "docs/guide/src/how-to/deploy-modes.md", "contains": "{first}" },
+        { "path": "AGENTS.md", "contains": "{first}" }
+      ]
     }
   ]
 }

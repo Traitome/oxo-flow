@@ -56,7 +56,7 @@ open http://localhost:8080
 |---------|-------|
 | Network | `127.0.0.1:8080` by default — pass `--host 0.0.0.0` to bind all interfaces |
 | Database | SQLite (default) or PostgreSQL — see [Database Selection](#database-selection-database_url) |
-| Run execution | Backend-routed code exists for SQLite and PostgreSQL; schema bootstrap + core CRUD are CI-smoke-verified on live PostgreSQL, and a 2026-11-26 campaign measured two instances (same host and separate network namespaces), partitions, connection exhaustion, clean/crash restarts, per-user quota, and owner-lease ghost-run reconciliation. Separate physical hosts, production scale, per-query network timeouts, and database media corruption remain unvalidated. Team mode has no OS-level tenant execution boundary, so expose it only to fully trusted workflow authors |
+| Run execution | Backend-routed code exists for SQLite and PostgreSQL; schema bootstrap + core CRUD are CI-smoke-verified on live PostgreSQL, and a 2026-11-26 campaign measured two instances (same host and separate network namespaces), partitions, connection exhaustion, clean/crash restarts, per-user quota, and owner-lease ghost-run reconciliation. Separate physical hosts, production scale, per-query network timeouts, and database media corruption remain unvalidated. Team mode's OS-level tenant boundary is opt-in and fail-closed when requested (`OXO_FLOW_WEB_SANDBOX=landlock` for filesystem/TCP, `OXO_FLOW_WEB_ISOLATION=userns` for a per-run user + PID namespace); with neither mode set, expose it only to fully trusted workflow authors |
 | Auth | Password env vars (`OXO_FLOW_ADMIN_PASSWORD` / `OXO_FLOW_USER_PASSWORD` / `OXO_FLOW_VIEWER_PASSWORD`) + optional ORCID/GitHub OAuth |
 | Workspace | `workspace/users/<username>/runs/<run_id>` |
 
@@ -333,6 +333,53 @@ Team/HPC modes scope every resource to the acting user:
   with the owner's exact permissions; stored hashed, instantly revocable.
 - **Shared infrastructure**: the server AI provider, webhook endpoint, and
   SSH cluster connections are admin-managed outside personal mode.
+
+### Execution boundary for local runs
+
+Directory scoping is not an OS boundary. The web spawn path always strips
+the server environment from the child (no `DATABASE_URL`, master key,
+provider/MCP credentials, or sign-in passwords), and two opt-in, fail-closed
+kernel modes add real isolation for locally executed runs:
+
+- `OXO_FLOW_WEB_SANDBOX=landlock` (Linux 5.13+) — a Landlock ruleset denies
+  `/proc`, `/sys`, `/etc`, the server `$HOME`, the workspace root, and other
+  tenants' workdirs; TCP is denied on kernel 6.7+. This is the mode to use
+  when tenant rules must not read host files.
+- `OXO_FLOW_WEB_ISOLATION=userns` — the CLI runs in a per-run user + PID
+  namespace (root inside, the server uid outside; a private `/proc`; the run
+  cannot signal or see host/sibling processes, while host-side signals still
+  reach it — that is how cancel works). It does **not** confine the
+  filesystem or network; run one mode at a time.
+
+`userns` needs unprivileged user namespaces on the host. Ubuntu 24.04
+blocks them by default. Grant the server binary the permission with an
+AppArmor profile rather than relaxing the host-wide sysctl:
+
+```text
+# /etc/apparmor.d/oxo-flow-userns
+abi <abi/4.0>,
+include <tunables/global>
+
+profile oxo-flow-userns /usr/local/bin/oxo-flow-web flags=(unconfined) {
+  userns,
+}
+```
+
+```bash
+sudo apparmor_parser -r /etc/apparmor.d/oxo-flow-userns
+```
+
+The server probes the exact `unshare --user --map-root-user --pid --fork
+--mount-proc --kill-child=SIGTERM -- true` invocation before the first run
+and caches a successful verdict; a failed probe is retried on the next
+spawn. If the mode cannot be installed, the spawn is refused
+with the remediation named — it never silently runs unisolated. Both modes
+apply to **local** runs only; cluster/remote runs execute on the remote
+host under that host's controls. See the
+[web API reference](../reference/web-api.md#per-run-user-pid-namespace-isolation)
+for the enforced-vs-residual matrix, including the honest residuals
+(single-uid mapping, `RLIMIT_NPROC` counted per real uid, UDP/ICMP,
+namespace-only mode not confining files).
 
 ## Server Data Layout (`OXO_FLOW_WORKSPACE`)
 

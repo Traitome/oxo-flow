@@ -677,12 +677,17 @@ weak `W/"7"` form, a multi-token list, or `*` — is rejected with
 > server secrets (`DATABASE_URL`, `OXO_FLOW_MASTER_KEY`, provider/MCP
 > credentials) never reach a tenant-authored rule shell; operator-wide
 > `RLIMIT_CPU`/`RLIMIT_NPROC` ceilings join the existing `RLIMIT_DATA` on
-> Linux; and the opt-in `OXO_FLOW_WEB_SANDBOX=landlock` mode installs a
+> Linux; the opt-in `OXO_FLOW_WEB_SANDBOX=landlock` mode installs a
 > kernel Landlock ruleset so the spawned tree can only reach the run's own
 > workdir and an explicit grant set (other tenants' workspaces, the server
 > database, the operator's `$HOME`, `/proc`, and `/etc` are denied by the
-> kernel; TCP bind/connect is denied on kernel 6.7+). The enforcement is
-> **opt-in and Linux-only** — with the sandbox off, a workflow that guesses
+> kernel; TCP bind/connect is denied on kernel 6.7+); and the opt-in
+> `OXO_FLOW_WEB_ISOLATION=userns` mode (issue #1401) runs the CLI in a
+> per-run user + PID namespace (root inside, the server uid outside; a
+> private `/proc`; the run cannot see or signal host or sibling-tenant
+> processes — host-side signals still reach it, which is exactly how cancel
+> works). The enforcement
+> is **opt-in and Linux-only** — with both modes off, a workflow that guesses
 > another tenant's absolute path can still read (and write) it, and the
 > residual matrix in [Tenant isolation and the run
 > sandbox](#tenant-isolation-and-the-run-sandbox) says exactly what remains
@@ -2240,22 +2245,109 @@ every probe would catch a regression):
 | Process count | `RLIMIT_NPROC` (`OXO_FLOW_WEB_RLIMIT_NPROC`) | Linux, knob set |
 | Filesystem reachability | Landlock ruleset (`OXO_FLOW_WEB_SANDBOX=landlock`) | Linux 5.13+, sandbox enabled |
 | TCP network | Landlock handled-net, all TCP denied | kernel 6.7+, sandbox enabled |
-| Signals to outside processes / abstract UNIX sockets | Landlock scoped | kernel 6.10+/6.12+ |
+| Signals to outside processes / abstract UNIX sockets | Landlock scoped | kernel 6.10+/6.12+, sandbox enabled |
+| uid inside the run | user namespace (`OXO_FLOW_WEB_ISOLATION=userns`) | Linux, host allows unprivileged userns, mode enabled |
+| Host process visibility (`/proc`) | PID namespace + private `/proc` | same |
+| Run → host / cross-tenant signals | PID namespace boundary | same |
+| Cancel/SIGTERM teardown of the whole tree | process-group kill + `unshare --kill-child=SIGTERM` | same |
 
 Not enforced (residual, honest list): with the sandbox **off** (default),
 none of the filesystem/network rows apply — today's behavior is unchanged;
 on non-Linux platforms the sandbox is unavailable (a requested mode fails
-closed); UDP and ICMP are outside the Landlock ABI on 6.x kernels; there is
-no PID namespace (the run shares the kernel process table — mitigated,
-not eliminated, by the `/proc` denial); already-open inherited file
-descriptors (the execution-log handle) stay writable; a granted
+closed); UDP and ICMP are outside the Landlock ABI on 6.x kernels; without
+`OXO_FLOW_WEB_ISOLATION=userns` there is no PID namespace (the run shares
+the kernel process table — mitigated, not eliminated, by the `/proc`
+denial); already-open inherited file descriptors (the execution-log handle)
+stay writable; a granted
 `OXO_FLOW_MODULE_CACHE`/`OXO_FLOW_ENV_STORE`/write path is a shared
 same-uid channel across all runs; git-based remote `[[include]]` needs
 `OXO_FLOW_MODULE_CACHE` set and may still fail reading the operator's
 `~/.gitconfig` (vendored includes are the sandboxed pattern); per-run uid
-isolation (`sudo`-prefixed spawns) and per-tenant containers remain
-deployment modes, not enforced features. Remote (cluster) runs execute on
-the cluster host under the cluster's own controls, outside this boundary.
+isolation via dedicated accounts (`sudo`-prefixed spawns) and per-tenant
+containers remain deployment modes, not enforced features. Remote (cluster)
+runs execute on the cluster host under the cluster's own controls, outside
+this boundary.
+
+### Per-run user + PID namespace isolation
+
+`OXO_FLOW_WEB_ISOLATION` (issue #1401, the RB-01 residual) adds an
+independent, opt-in boundary for **local** web-spawned runs:
+
+- unset, empty, or `off` — disabled (the default; behavior is unchanged);
+- `userns` — the CLI is spawned through
+  `unshare --user --map-root-user --pid --fork --mount-proc --kill-child=SIGTERM -- …`.
+  The server uid maps to uid 0 inside the namespace, so files created on the
+  run workdir (checkpoint, logs, outputs) keep the server uid outside and
+  ownership is unchanged. The CLI becomes PID 1 of a fresh PID namespace,
+  reaps its rule shells, and sees a private `/proc`; host processes and
+  other tenants' runs are invisible, and the run cannot signal them or any
+  host process. The boundary is **one-directional**: host-side signals keep
+  working — an ancestor PID namespace can signal every descendant, which is
+  exactly how cancel reaches the namespace. The `.exit-code` wrapper is
+  preserved:
+  `unshare` exits with the CLI's status, so run outcomes are recorded
+  exactly as before;
+- any other value — a configuration error that **fails the spawn** (a typo
+  never silently disables the requested isolation).
+
+**Fail-closed availability.** The mode is probed before use with the exact
+wrapper argv (`… --kill-child=SIGTERM -- true`, the same shape a run uses)
+as the server uid; a successful probe is cached for the server process
+lifetime, while a failed probe is retried on the next spawn (a transient
+failure must not disable the mode until restart). A requested-but-unavailable
+mode refuses the spawn
+and marks the run failed with a structured reason naming the host
+prerequisite — it never degrades to an unisolated run. The host
+requirements are:
+
+- unprivileged user namespaces enabled (`kernel.unprivileged_userns_clone=1`);
+- on Ubuntu 24.04, an AppArmor profile granting `userns,` to the server
+  binary (or `kernel.apparmor_restrict_unprivileged_userns=0`; relaxing the
+  sysctl is a host-wide decision and is not done by the server);
+- util-linux `unshare` installed.
+
+**Composition.** `RLIMIT_DATA`/`RLIMIT_CPU`/`RLIMIT_NPROC` are installed on
+the wrapper and inherited by `unshare`, the CLI, and every rule shell.
+`userns` and `OXO_FLOW_WEB_SANDBOX=landlock` are **mutually exclusive**
+(fail-closed). This was measured on tx-ubuntu (Landlock ABI 4, util-linux
+2.39.3): granting `/proc/self/{uid_map,gid_map,setgroups}` — as file rules
+or as a rule on `/proc/self` — does not let `unshare` initialize; the map
+open returns `EACCES`. With `--fork` util-linux clones and the child writes
+its own dynamic `/proc/<pid>/uid_map`, an inode no pre-exec static ruleset
+can name, and the no-fork self-mapping shape is denied after exec too. Only
+a host-`/proc` grant would cover it, which would re-expose every process —
+the disclosure both modes exist to prevent. Run one mode at a time.
+
+**Cancellation.** The supervisor's process-group SIGTERM reaches `sh`,
+`unshare`, and the namespace init DIRECTLY — that direct signal is what
+gives a CLI that traps SIGTERM a graceful shutdown window (util-linux
+`unshare` ignores SIGINT/SIGTERM while it waits for its child and does not
+forward them). `--kill-child=SIGTERM` is a **backstop**: it fires only when
+the `unshare` parent itself terminates (SIGKILL, crash), at which point it
+signals the init. An init that ignores SIGTERM (PID 1 ignores catchable
+signals without a handler) is covered by the existing 5 s SIGKILL
+escalation, after which the kernel tears down the namespace. SIGKILL and
+SIGSTOP — the final kill and pause/resume — are kernel-only signals and are
+delivered to init directly. The adversarial suite
+`crates/oxo-flow-web/tests/rb01_userns_adversarial.rs` asserts both the
+graceful SIGTERM-only teardown (no SIGKILL sent, completed inside the
+escalation window) and that the cancelled real run leaves no process in the
+namespace.
+
+**Residuals (not claimed as covered):**
+
+- the mapping is single-uid: root inside, the server uid outside. Per-run
+  dedicated uids need subordinate ID ranges and are out of scope;
+- `RLIMIT_NPROC` is accounted per real uid and is not partitioned by
+  namespaces — a namespace does not give each tenant its own process budget
+  (PID exhaustion by a same-uid tenant remains a shared resource);
+- UDP/ICMP and the network in general are unrestricted by namespaces;
+- filesystem reachability is **not** restricted by namespaces — use the
+  Landlock mode (one mode at a time) if the run must not read host paths;
+- hosts may disable unprivileged user namespaces; the mode then fails
+  closed with the remediation named;
+- **local-only**: cluster/remote runs execute on another host and are not
+  covered (the remote host's own controls apply).
 
 ## Cluster Connections & Remote Execution
 

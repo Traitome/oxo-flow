@@ -821,7 +821,10 @@ pub fn spawn_background_run_with_args(
         cmd.arg("-c").arg(EXIT_CODE_WRAPPER_SCRIPT);
         cmd.arg("sh");
         cmd.arg(&exit_file);
-        cmd.args(payload);
+        // The payload is appended after the isolation decision below: with
+        // OXO_FLOW_WEB_ISOLATION=userns it is wrapped in `unshare … --`, so
+        // the CLI runs inside the namespace while the `.exit-code` wrapper
+        // still records the CLI's status (unshare propagates it).
 
         // Capture output to files in the run directory
         let log_file_path = run_dir.join("execution.log");
@@ -908,6 +911,33 @@ pub fn spawn_background_run_with_args(
             }
         };
         oxo_flow_core::executor::apply_rule_env_allowlist(&mut cmd, &spawn_envs, false);
+
+        // RB-01 residual (#1401): the opt-in per-run user + PID namespace,
+        // local-only. Fail-closed: a requested-but-unavailable mode (or an
+        // invalid knob value, or a mode combination that cannot compose)
+        // refuses the spawn instead of silently degrading to an unisolated
+        // run. The probe runs as the server uid with the exact wrapper argv.
+        let userns_plan =
+            match crate::userns::configure_env(auth_type == "sudo", sandbox_plan.is_some()) {
+                Ok(plan) => plan,
+                Err(e) => {
+                    error!(
+                        "Namespace isolation configuration failed for run {run_id} — refusing \
+                     to spawn (fail-closed): {e}"
+                    );
+                    let _ = std::fs::write(
+                        run_dir.join("execution.log"),
+                        format!("run failed before spawn: namespace isolation unavailable: {e}\n"),
+                    );
+                    mark_run_failed(&run_id).await;
+                    return;
+                }
+            };
+        let payload = match userns_plan {
+            Some(plan) => plan.wrap_payload(payload),
+            None => payload,
+        };
+        cmd.args(payload);
 
         // RB-09 (#1133) + RB-01a (#1129): enforce the run's declared memory
         // as an OS ceiling on the CLI and every rule subprocess it spawns,
