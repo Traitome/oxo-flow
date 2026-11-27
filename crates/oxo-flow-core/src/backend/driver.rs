@@ -1575,6 +1575,20 @@ impl BackendDriver {
                 .iter()
                 .all(|n| !to_run_set.contains(n) || done.contains_key(n));
             if all_done && inflight.is_empty() {
+                // #1400 (review F2/F3): consult the cost gate once more —
+                // the settle that pushed the accrual over the cap may have
+                // landed in THIS round's Step 3, after the round's gate
+                // consult at the top, so without this the run would break
+                // `Ok` with the slot empty and the terminal breach would be
+                // invisible. The closure latches the caller's slot; the run
+                // still ends by its own records (a terminal breach is not a
+                // halt — nothing was stranded).
+                if cost_stop.is_none()
+                    && let Some(gate) = opts.cost_gate.as_mut()
+                    && gate().await.is_some()
+                {
+                    // Latched: the slot carries the breach for the caller.
+                }
                 break;
             }
             // Cost-budget stop (issue #1400): the gate fired, every job it

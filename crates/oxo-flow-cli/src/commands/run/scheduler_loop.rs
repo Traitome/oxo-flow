@@ -487,6 +487,12 @@ pub(crate) async fn run_scheduler_loop(ctx: SchedulerLoopContext<'_>) -> anyhow:
         .resource_budget
         .as_ref()
         .and_then(|b| b.max_cost.clone());
+    // The most recent latched stop (review F3): the gate recomputes the
+    // accrual every round from the checkpoint, so when the run ends with
+    // every rule terminal and this holds, the run completed (or failed by
+    // its own counts) WHILE over the declared cap — `handle_run_completion`
+    // attaches the detail so a terminal breach is never silent.
+    let mut cost_breach: Option<oxo_flow_core::cost_budget::CostAccrual> = None;
 
     // ---- main event loop -------------------------------------------------
 
@@ -602,11 +608,6 @@ pub(crate) async fn run_scheduler_loop(ctx: SchedulerLoopContext<'_>) -> anyhow:
             disk_hold_rounds = 0;
         }
 
-        // Check deadlock before each scheduling round.
-        if !sched.is_complete() && sched.running_count() == 0 && join_set.is_empty() {
-            sched.check_deadlock(dag)?;
-        }
-
         // #1400 enforced cost budget: accrue the declared rate table over the
         // rules that ALREADY executed (read straight from the checkpoint's
         // resource_usage via the canonical `resource_ledger` builder — reused,
@@ -615,6 +616,14 @@ pub(crate) async fn run_scheduler_loop(ctx: SchedulerLoopContext<'_>) -> anyhow:
         // reported — withhold every NEW dispatch this round. In-flight rules
         // are left alone (nothing is ever killed). Skipped entirely when
         // `[resource_budget] max_cost` is not declared.
+        //
+        // The accrual runs BEFORE the deadlock check below: a latched budget
+        // stop outranks the deadlock diagnosis exactly as the disk park above
+        // outranks it. Review F1: with the gate latched, a rule blocked on a
+        // failed upstream stays Pending and never becomes `ready`, so the bare
+        // deadlock check would mis-report a budget-stopped run as a malformed
+        // DAG — the stranded-work abort (and the terminal-breach completion)
+        // below is the correct ending for a capped run.
         let mut cost_gate_fired = false;
         let mut cost_accrual: Option<oxo_flow_core::cost_budget::CostAccrual> = None;
         if let Some(budget) = &cost_budget {
@@ -625,8 +634,30 @@ pub(crate) async fn run_scheduler_loop(ctx: SchedulerLoopContext<'_>) -> anyhow:
             let accrual = oxo_flow_core::cost_budget::accrue_cost(&rules, budget);
             if accrual.must_stop() {
                 cost_gate_fired = true;
+                cost_breach = Some(accrual.clone());
                 cost_accrual = Some(accrual);
+            } else {
+                // The local gate recomputes per round (unlike the cluster
+                // driver's sticky latch): a later round that no longer
+                // must-stop — a retry replaced a failed rule's recorded
+                // metrics, or an unknown metric resolved — must clear an
+                // earlier round's marker, or a run that completed under cap
+                // would report a stale breach (review finding 1).
+                cost_breach = None;
             }
+        }
+
+        // Check deadlock before each scheduling round — deferred whenever a
+        // cost stop is latched (the gate above; the disk park above the gate
+        // makes the same precedence trade, bounded the same way: a latched
+        // run always terminates at the stranded-work abort or the loop
+        // break, never here).
+        if !cost_gate_fired
+            && !sched.is_complete()
+            && sched.running_count() == 0
+            && join_set.is_empty()
+        {
+            sched.check_deadlock(dag)?;
         }
 
         // Submit every rule whose dependencies are now satisfied — capped to
@@ -661,34 +692,44 @@ pub(crate) async fn run_scheduler_loop(ctx: SchedulerLoopContext<'_>) -> anyhow:
         }
 
         // #1400 cost-budget abort: the gate fired, nothing is in flight, and
-        // ready work remains that may never be dispatched — no progress is
+        // rules remain Pending that may never be dispatched — no progress is
         // possible. Take the same abort path as the #843 disk-pressure ladder:
         // persist the checkpoint, then fail the run with a structured status.
+        //
+        // Review F1: "Pending" is broader than `ready` — a rule blocked on a
+        // failed upstream never appears in `ready_rules` (a failed dependency
+        // satisfies nothing), yet under a latched stop it is stranded exactly
+        // the same. Review F3: when NO rule is Pending (the last settle pushed
+        // the accrual over the cap) there is nothing left to protect — the run
+        // falls through to normal completion and `handle_run_completion`
+        // attaches the breach detail from `cost_breach` instead of aborting.
         if let Some(accrual) = &cost_accrual
             && sched.running_count() == 0
             && join_set.is_empty()
-            && !ready.is_empty()
         {
-            {
-                let ck = checkpoint.lock().await;
-                if let Err(save_err) = ck.save_to_file_async(checkpoint_path).await {
-                    tracing::warn!(
-                        "Failed to save checkpoint before cost-budget abort: {save_err}"
-                    );
+            let stranded = sched.pending_rules();
+            if !stranded.is_empty() {
+                {
+                    let ck = checkpoint.lock().await;
+                    if let Err(save_err) = ck.save_to_file_async(checkpoint_path).await {
+                        tracing::warn!(
+                            "Failed to save checkpoint before cost-budget abort: {save_err}"
+                        );
+                    }
                 }
+                progress.finish_and_clear();
+                let counts = RunCounts {
+                    succeeded: success_count.load(std::sync::atomic::Ordering::Relaxed),
+                    skipped: skipped_count.load(std::sync::atomic::Ordering::Relaxed),
+                    failed: fail_count.load(std::sync::atomic::Ordering::Relaxed),
+                    non_required_failed: non_required_fail_count
+                        .load(std::sync::atomic::Ordering::Relaxed),
+                    blocked: blocked.lock().await.len(),
+                };
+                json_summary.set_cost_budget(cost_budget_detail(accrual, &stranded));
+                json_summary.emit("cost_budget_exceeded", &counts, vec![]);
+                anyhow::bail!("{}", cost_budget_abort_message(accrual, stranded.len()));
             }
-            progress.finish_and_clear();
-            let counts = RunCounts {
-                succeeded: success_count.load(std::sync::atomic::Ordering::Relaxed),
-                skipped: skipped_count.load(std::sync::atomic::Ordering::Relaxed),
-                failed: fail_count.load(std::sync::atomic::Ordering::Relaxed),
-                non_required_failed: non_required_fail_count
-                    .load(std::sync::atomic::Ordering::Relaxed),
-                blocked: blocked.lock().await.len(),
-            };
-            json_summary.set_cost_budget(cost_budget_detail(accrual, &ready));
-            json_summary.emit("cost_budget_exceeded", &counts, vec![]);
-            anyhow::bail!("{}", cost_budget_abort_message(accrual, ready.len()));
         }
 
         for rule_name in &to_submit {
@@ -1467,6 +1508,7 @@ pub(crate) async fn run_scheduler_loop(ctx: SchedulerLoopContext<'_>) -> anyhow:
         disk_thresholds,
         dag,
         samples_filter,
+        cost_breach,
         json_summary,
     })
     .await
@@ -1474,7 +1516,9 @@ pub(crate) async fn run_scheduler_loop(ctx: SchedulerLoopContext<'_>) -> anyhow:
 
 /// The `cost_budget` detail object embedded in the `--json` run summary when
 /// the #1400 gate fires. Mirrors [`oxo_flow_core::cost_budget::CostAccrual`]
-/// and adds the rules still ready but never dispatched.
+/// and adds the rules still undispatched when the run stopped (the historical
+/// `pending_ready` name is kept for JSON compatibility; the list is every
+/// stranded rule, ready or blocked-on-failure alike).
 pub(crate) fn cost_budget_detail(
     accrual: &oxo_flow_core::cost_budget::CostAccrual,
     pending_ready: &[String],
@@ -1507,7 +1551,7 @@ pub(crate) fn cost_budget_abort_message(
     };
     let mut message = format!(
         "cost budget exceeded: accrued {accrued} (method: {}) against the \
-         [resource_budget] max_cost cap of {} {}, with {pending_ready} rule(s) ready but \
+         [resource_budget] max_cost cap of {} {}, with {pending_ready} rule(s) remaining \
          undispatched and nothing in flight — the run cannot make progress. Raise the cap, \
          lower the rates, or resume from the checkpoint after freeing budget.",
         accrual.method, accrual.limit, accrual.currency
