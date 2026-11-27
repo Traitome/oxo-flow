@@ -38,11 +38,27 @@
 //!
 //! RLIMITs are installed in `pre_exec` on the wrapper and inherited by
 //! `unshare`, the CLI, and every rule shell — unchanged. `OXO_FLOW_WEB_SANDBOX
-//! =landlock` is refused together with `userns` (fail-closed): the Landlock
-//! ruleset installed before exec denies `/proc`, which is exactly where
-//! `unshare` must write `uid_map`/`gid_map` to create the user namespace, and
-//! granting host `/proc` back would re-expose every process on the host.
-//! Operators run one enforcement mode at a time.
+//! =landlock` is refused together with `userns` (fail-closed). This was
+//! measured, not assumed (tx-ubuntu, kernel with Landlock ABI 4,
+//! util-linux 2.39.3): granting read+write on `/proc/self/uid_map`,
+//! `/proc/self/gid_map`, and `/proc/self/setgroups` — as individual file
+//! rules or as a rule on the whole `/proc/self` directory — does NOT let
+//! `unshare` initialize. The open still returns `EACCES`:
+//!
+//! - with `--fork` (required for the PID namespace) util-linux clones first
+//!   and the CHILD opens its own `/proc/self/uid_map`; the child's host pid
+//!   is assigned at runtime, so no ruleset built before exec can name that
+//!   inode (strace: `clone(...) = <pid>` then that pid's
+//!   `openat("/proc/self/uid_map", O_WRONLY) = -1 EACCES`);
+//! - even the no-fork self-mapping shape is denied after exec: a Landlock
+//!   path rule resolved on the pre-exec process's proc entry does not cover
+//!   the post-exec open of the dynamic pid entry.
+//!
+//! Only a grant on host `/proc` (or a dynamically learned per-pid path,
+//! which Landlock cannot express) would cover the write, and that would
+//! re-expose every process on the host — the exact disclosure the
+//! environment allowlist and `/proc` denial exist to prevent. Composition is
+//! therefore refused; operators run one enforcement mode at a time.
 //!
 //! ## Residuals (documented, not claimed as covered)
 //!
@@ -184,14 +200,18 @@ fn configure_with(
         ));
     }
     if landlock_enabled {
-        // See the module docs: a Landlock ruleset denies /proc, where
-        // unshare must write uid_map/gid_map; granting host /proc back would
-        // re-expose every process on the host. Refuse rather than weakening
-        // either mode.
+        // Measured on tx-ubuntu (Landlock ABI 4, util-linux 2.39.3): even
+        // granting /proc/self/{uid_map,gid_map,setgroups}, the unshare map
+        // write returns EACCES — with --fork the write happens in a child
+        // whose host pid is assigned at runtime, so no pre-exec static rule
+        // can name it; a host-/proc grant would re-expose every process.
+        // Refuse rather than weakening either mode.
         return Err(format!(
             "{ISOLATION_MODE_ENV}=userns cannot be combined with \
-             OXO_FLOW_WEB_SANDBOX=landlock: the Landlock ruleset would deny the \
-             /proc uid_map/gid_map writes the user namespace needs. Run one mode at a time."
+             OXO_FLOW_WEB_SANDBOX=landlock: unshare writes uid_map/gid_map/setgroups \
+             through the dynamic /proc/<pid> of a forked child, which a pre-exec \
+             Landlock ruleset cannot grant, and granting host /proc would re-expose \
+             every process. Run one mode at a time."
         ));
     }
     let program = PathBuf::from(UNSHARE_PROGRAM);

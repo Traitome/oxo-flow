@@ -379,14 +379,16 @@ verifier.
 ### Tenant execution boundary (RB-01)
 
 Every locally executed run spawns through one choke point
-(`spawn_background_run_with_args`), which layers four independent OS-level
+(`spawn_background_run_with_args`), which layers five independent OS-level
 controls on the CLI process tree (and therefore every rule shell it forks):
 
 1. **Environment allowlist (always on, all platforms, RB-01a)** — the child
    is rebuilt from the engine's rule-shell policy; server secrets never
    ride along.
 2. **Resource ceilings (Linux, opt-in)** — `RLIMIT_DATA` from the declared
-   memory, plus operator-wide `RLIMIT_CPU`/`RLIMIT_NPROC` knobs.
+   memory, plus operator-wide `RLIMIT_CPU`/`RLIMIT_NPROC` knobs. The
+   ceilings are installed on the wrapper and inherited through every
+   isolation layer below.
 3. **Kernel filesystem/network sandbox (Linux 5.13+, opt-in)** —
    `OXO_FLOW_WEB_SANDBOX=landlock` installs a Landlock ruleset in a
    `pre_exec` hook: the spawned tree can read+execute system dirs and the
@@ -396,16 +398,33 @@ controls on the CLI process tree (and therefore every rule shell it forks):
    the kernel level; TCP bind/connect is denied on kernel 6.7+ (ABI v4),
    abstract-UNIX-socket and signal scoping on 6.10+/6.12+ (ABI v5/v6).
    Fail-closed: an unhonorable sandbox request refuses the spawn.
-4. **Process-group bookkeeping (always on)** — the run owns a process
-   group, so cancel/pause/resume signal the whole tree.
+4. **User + PID namespace (Linux, opt-in, local runs, issue #1401)** —
+   `OXO_FLOW_WEB_ISOLATION=userns` spawns the CLI through
+   `unshare --user --map-root-user --pid --fork --mount-proc --kill-child`:
+   the run is root inside its own user namespace (the server uid outside, so
+   workdir ownership is unchanged), is PID 1 of a private PID namespace with
+   a private `/proc`, and can neither see nor signal host or sibling-tenant
+   processes. Availability is probed before use (AppArmor/sysctl host
+   prerequisites) and a requested-but-unavailable mode fails the spawn —
+   never a silent downgrade. Mutually exclusive with the Landlock mode:
+   measured on a Landlock ABI 4 host, the `unshare` map write targets the
+   dynamic `/proc/<pid>` of a forked child, which a pre-exec static ruleset
+   cannot grant without re-exposing host `/proc`.
+5. **Process-group bookkeeping (always on)** — the run owns a process
+   group, so cancel/pause/resume signal the whole tree; with a namespace,
+   `--kill-child` extends the group kill to the namespace init, so cancel
+   tears down every process in the namespace.
 
-The implementation lives in `crates/oxo-flow-web/src/sandbox.rs`; the
+The implementation lives in `crates/oxo-flow-web/src/sandbox.rs` (Landlock,
+rlimits) and `crates/oxo-flow-web/src/userns.rs` (namespaces); the
 enforced-vs-residual matrix, the knob reference, and the two-tenant
-adversarial evidence are in
+adversarial evidence (`rb01_sandbox_adversarial.rs`,
+`rb01_userns_adversarial.rs`) are in
 [Create Run → Tenant isolation](web-api.md#tenant-isolation-and-the-run-sandbox).
-Per-run OS identities and per-tenant containers remain deployment modes,
-not enforced features — remote (cluster) runs execute on the cluster host
-under the cluster's own controls.
+Per-run OS identities via dedicated accounts and per-tenant containers
+remain deployment modes, not enforced features — remote (cluster) runs
+execute on the cluster host under the cluster's own controls, and the
+namespace mode does not apply to them.
 
 ---
 

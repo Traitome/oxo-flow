@@ -1,6 +1,6 @@
 # Security Model
 
-oxo-flow implements defense-in-depth security across five layers: command execution, file system access, credential protection, web API rate limiting, and HTTP security headers.
+oxo-flow implements defense-in-depth security across seven layers: command execution, file system access, credential protection, web API rate limiting, HTTP security headers, audit trail integrity, and tenant execution isolation.
 
 ---
 
@@ -266,6 +266,45 @@ with `AUDIT_EXPORT_INVALID`). See the
 
 Backup/restore guidance for the chain is in
 [Deployment Modes](../how-to/deploy-modes.md#mode-2-team).
+
+---
+
+## Layer 7 — Tenant Execution Isolation
+
+Workflow rule shells are authored by tenants and run with the server
+account's privileges unless an OS-level boundary is installed. The web
+spawn path therefore layers opt-in, fail-closed controls on the local
+`oxo-flow` CLI and every rule shell it forks (issue #1129 and the #1401
+residual):
+
+- **Environment allowlist (always on)** — the child environment is rebuilt
+  from the engine's rule-shell policy; `DATABASE_URL`,
+  `OXO_FLOW_MASTER_KEY`, AI provider keys, MCP tokens, and sign-in
+  passwords never reach a tenant-authored command.
+- **Resource ceilings (Linux, opt-in)** — `RLIMIT_DATA` from the workflow's
+  declared memory, `RLIMIT_CPU` / `RLIMIT_NPROC` from operator knobs.
+- **Landlock sandbox (Linux 5.13+, opt-in)** —
+  `OXO_FLOW_WEB_SANDBOX=landlock` denies `/proc`, `/sys`, `/etc`, the
+  server `$HOME`, the workspace root, and other tenants' workdirs at the
+  kernel level, and denies TCP on kernel 6.7+.
+- **User + PID namespace (Linux, opt-in, local runs)** —
+  `OXO_FLOW_WEB_ISOLATION=userns` runs the CLI as root inside a private
+  user namespace (the server uid outside) and as PID 1 of a private PID
+  namespace with a private `/proc`, so a run cannot see or signal host or
+  sibling-tenant processes; cancel tears the whole namespace down
+  (`--kill-child`).
+
+Both modes are **fail-closed**: a requested mode that cannot be installed
+(wrong kernel, LSM denial, bad knob value, unsupported combination) refuses
+the spawn instead of running unisolated. They are mutually exclusive: the
+Landlock ruleset cannot grant `unshare`'s dynamic `/proc/<pid>` map writes
+without re-exposing host `/proc` (measured; see the web API reference).
+Residuals are listed there too: single-uid mapping, per-real-uid
+`RLIMIT_NPROC`, UDP/ICMP, no filesystem confinement under namespaces alone,
+host prerequisites (unprivileged userns; Ubuntu 24.04 needs an AppArmor
+`userns,` profile), and remote/cluster runs are outside the boundary.
+See [Create Run → Tenant isolation](web-api.md#tenant-isolation-and-the-run-sandbox)
+for the enforced-vs-residual matrix and the adversarial test evidence.
 
 ---
 
