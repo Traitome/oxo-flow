@@ -24,9 +24,13 @@ container image**:
 - **IMPORTED** — `oxo-flow import <source> -o W.oxoflow` followed by
   `oxo-flow run W.oxoflow -d <staged dir>`, running the importer's output.
 
-The comparison endpoint is the **SHA-256 of the file content** of every
-declared output path after each arm runs, compared as a path→hash map. The
-harness enumerates supported fixtures from
+The comparison endpoint is the **complete produced-artifact path→SHA-256
+map** after each arm runs (planted inputs, the seeded workflow files, and
+engine metadata are excluded). When the imported workflow declares literal
+outputs (no wildcard syntax), each is additionally required to be present in
+both arms; a fixture whose `execution` block pins a container must import to
+that same container (the `docker://` prefix is normalized), else it is
+SKIPPED. The harness enumerates supported fixtures from
 `scripts/import_equivalence_expectations.py` (`status == "supported"`), so the
 execution corpus cannot drift from the declared-artifact truth table. A
 fixture is **MATCHED** only when BOTH arms genuinely executed (exit 0) and
@@ -34,7 +38,13 @@ each produced at least one artifact; a non-running arm, missing tool, missing
 backend, or non-zero exit is **SKIPPED** with the reason; two executed arms
 with empty artifact sets are **NO_ARTIFACTS**, never MATCHED (the #1349 rule).
 These rules pre-date this campaign (the harness was authored for #1300); this
-campaign did not relax them.
+campaign did not relax them. The container and literal-declared-output
+validations were added by the #1398 review and are covered by the hermetic
+harness tests. The campaign evidence below was produced by the same runner
+logic without those two assertions; re-checking the two real fixtures against
+the review harness confirms both satisfy them: their imported environment
+matches the pinned container after `docker://` normalization, and every
+literal declared output is present in both recorded arm artifact maps.
 
 The two new real-world fixtures:
 
@@ -52,13 +62,13 @@ listed in the fixture header and in §6.
 | Field | Value |
 | :--- | :--- |
 | `campaign` | #1398 real-world import execution-equivalence |
-| `engine_commit` | host checkout at campaign time `94f3c8ec2b4ae05564a102c83caa95255396f8a9` (recorded in `data/import-execution-realworld-2026-11-27-identity.txt`). The binary was built from `8be843433dfeab31312e22969d1c98adee822649`; commits between are fixtures/scripts/docs only, and the only later `nextflow.rs` change is a comment/attribute move (no codegen change) |
+| `engine_commit` | host checkout at campaign time `94f3c8ec2b4ae05564a102c83caa95255396f8a9` (recorded in `data/import-execution-realworld-2026-11-27-identity.txt`). The binary was built from `8be843433dfeab31312e22969d1c98adee822649`; commits between are fixtures/scripts/docs only. The review head later changed `nextflow.rs` by a comment/attribute move and `nextflow_export.rs` by the export-escaping fix — neither is on the measured import/run path |
 | `engine_version` | `oxo-flow 0.32.0` (`target/debug/oxo-flow`) |
 | `binary_sha256` | `2a9e7e89a49a04b0c882bb88e533c979380519c5e6d51bc46207ca35339b19c7` |
 | `schema_sha256` | `7f68d09a481f28a1568fb9a37eb14a75bc6ef57d2d504891ef8ce5aeebca47e0` (`docs/schema/oxoflow-v1.schema.json`) |
-| `analysis_script_sha256` | runner `3c6f18ea098787973dab8624540f65ac8e539bab473bb4c606159e01bca27e06`; wrapper `4bf51520e78340c51207d3f8fab54be0af995cb79ce65eb1e06dd03f5f36ceaa`; truth table `e0133af31aaf93db9d4d98a53bde66022dfcdfcc370cc271abf4a77955ebe7ba` |
-| `fixture_sha256` | `nextflow/nfcore_faidx.ok.nf` `4357594f3a36d9280ce9ad40cd932e91f75cdc0dabdb92b57b1d315132299afc`; `snakemake/training_faidx.ok.smk` `217d1261c2a767e8ad21aaf90c64d2fe9cb7517f439894e8b1455befba85265a` |
-| `importer_source_sha256` | `nextflow.rs` `0be1fd8b865f6cc194be2200ed1aaabcb6cbca1c014c00e9f541e12bb2aff1f6`; `snakemake.rs` `6d094b57253009b7c172b12154bd9ede5bc8842003e3c835028e80b06a27e48c` |
+| `analysis_script_sha256` | campaign-time runner `3c6f18ea098787973dab8624540f65ac8e539bab473bb4c606159e01bca27e06`; wrapper `4bf51520e78340c51207d3f8fab54be0af995cb79ce65eb1e06dd03f5f36ceaa`; truth table `e0133af31aaf93db9d4d98a53bde66022dfcdfcc370cc271abf4a77955ebe7ba`. Review-head runner (container/declared-output validation added, hermetic tests) `5df2afd33cde81522cacb40ebc6418cc7b5369753e7df3a5d54d4c5f30660fc2`; no verdict change for these fixtures (re-checked against their imported documents and the recorded arm artifact maps) |
+| `fixture_sha256` | campaign-time `nextflow/nfcore_faidx.ok.nf` `4357594f3a36d9280ce9ad40cd932e91f75cdc0dabdb92b57b1d315132299afc`; `snakemake/training_faidx.ok.smk` `217d1261c2a767e8ad21aaf90c64d2fe9cb7517f439894e8b1455befba85265a`. Review-head nf-core fixture `6ae0a2a4c8b92218fe0507f75e6b385a5d424a1132c3b4168487a210e8bc0d5f` differs by header comments only (execution-inert) |
+| `importer_source_sha256` | measured code (checkout `94f3c8ec`): `nextflow.rs` `0c6d74882cebca70eb6d83a3c6454fb556d8762578848c14f4a67df77ba1ee80`, `snakemake.rs` `6d094b57253009b7c172b12154bd9ede5bc8842003e3c835028e80b06a27e48c`. Review head: `nextflow.rs` `0be1fd8b…` (comment/attribute move only), `snakemake.rs` `d93465aec0ba2773fe6b6c551df3fc521d660a837713cdbbc83215c79d15664b` (test comment only), and `nextflow_export.rs` `0a0a8df3c2c2d8fd710da5e4e1622344220060d6afc31d0459a3744749830785` (the export-escaping fix; the exporter is not on the measured import/run path) |
 | `model` | None — execution is deterministic, no provider call |
 | `prompt_sha256` | None — no prompt |
 | `toolchain` | Nextflow **26.10.6 build 15032**; Snakemake **9.27.2**; OpenJDK 21.0.11; Python 3.12.3; Docker 29.7.2; Apptainer 1.3.6 |
@@ -131,7 +141,7 @@ fixtures reached execution):
 **executed 2 / matched 2 / drifted 0 / skipped 6 / no_artifacts 0**, in both
 the report-only and the `--strict` invocation.
 
-| fixture | arm | exit | declared outputs | SHA-256 | verdict |
+| fixture | arm | exit | produced artifacts | SHA-256 | verdict |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | `nextflow/nfcore_faidx.ok.nf` | Nextflow (`-with-docker`) | 0 | 1/1 | `696683592f087bb9aa2bf8cb2b9bd85df1b482c809c3770d86c9450d629d6cfe` | MATCHED |
 | `nextflow/nfcore_faidx.ok.nf` | imported (oxo-flow) | 0 | 1/1 | `696683592f087bb9aa2bf8cb2b9bd85df1b482c809c3770d86c9450d629d6cfe` | MATCHED |
@@ -184,8 +194,12 @@ as run when it had exited non-zero.
 1. `rule all` added as the concrete target (the upstream file's default target
    downloads data over the network); only the index rule is extracted.
 2. The container value is written on its own line (valid Snakemake; the
-   multi-line directive shape real workflows use) — this exercised the
-   multi-line parser fix in §8.
+   multi-line directive shape real workflows use, e.g. the NBIS
+   workshop-reproducible-research final workflow). This layout does **not**
+   by itself exercise the trailing-comma parser defect fixed in §8: this
+   fixture has no trailing comma, and it imported on pre-fix main. It only
+   places the value in the multi-line continuation form that the parser must
+   handle.
 3. The upstream `biocontainers/samtools:v1.3_cv3` image (1.26 GB) is replaced
    with the pinned `htslib_samtools:1.25` image (202 MB) for the ~15 GB-free
    qualification host. Both arms use this same image, so the comparison stays
@@ -205,24 +219,41 @@ as run when it had exited non-zero.
 | O8 | The Apptainer default cache (`~/.apptainer/cache`) fails on this host with an input/output error; the campaign sets `APPTAINER_CACHEDIR=/tmp/apptainer-cache`. This is a host workaround, not a product change. | host environment | §3 |
 | O9 | A source comment containing the words `process <word>` is scanned as a phantom process by the Nextflow importer (observed while authoring the fixture; the fixture header was worded to avoid it). Not fixed in this campaign. | residual importer robustness gap | §8 |
 
-## 8. Importer defects proven by this campaign (fixed, with regression tests)
+## 8. Importer defects found while making real workflows work (fixed, with regression tests)
 
-Making the real-world fixtures importable exposed two real defects; both are
-fixed in this PR and covered by unit tests (the transpile suite: 62 passed):
+Two importer defects were found in this work and fixed in this PR. Their
+provenance differs, and the report states it exactly:
 
 - **Snakemake multi-line directive values kept the trailing list separator.**
-  A real-world shape (`container:` on its own line, followed by `"docker://...",`)
-  produced `biocontainers/samtools:v1.3_cv3",` and the importer refused the
-  workflow with E016 (shell-unsafe `"`). `unquote` now strips a trailing comma
-  before the quotes. Regression:
-  `multiline_directive_values_drop_the_list_separator`.
-- **Nextflow script strings were copied verbatim.** nf-core modules write
-  `samtools \\` line continuations; Nextflow decodes `\\` to `\` before the
-  shell runs, but the importer emitted `\\`, which bash treats as a literal
-  backslash argument — the imported rule could not run. Added Groovy escape
-  decoding for script bodies (`\\`, `\$`, `\n`, `\t`, `\r`, quotes).
-  Regressions: `nextflow_string_escapes_decode_to_the_runtime_shell_text`,
+  Found while generalizing multi-line directive parsing for the real-world
+  fixture: a value on the line after the directive and ending with a list
+  comma (`container:` / `"docker://…",`) kept the comma and closing quote
+  inside the spec, and the importer refused the workflow with E016
+  (shell-unsafe `"`). `unquote` now strips a trailing comma before the
+  quotes. **The committed `training_faidx.ok.smk` fixture does not contain a
+  trailing comma and imported on pre-fix main**, so the fixture is not the
+  proof; the defect is pinned by the synthetic regression
+  `multiline_directive_values_drop_the_list_separator`. The same multi-line
+  list shape (with its trailing separator) appears in real Snakefiles — the
+  pre-existing `rseqc_stat.ok.smk` corpus entry documents the analogous
+  multi-line `log:` artifact as O13 in the 2026-11-19 audit.
+- **Nextflow script strings were copied verbatim.** The committed
+  `nfcore_faidx.ok.nf` carries nf-core's `samtools \\` line continuations;
+  before the fix the importer emitted `\\` into the shell (observed in the
+  imported workflow while authoring the fixture), where bash treats it as a
+  literal backslash argument instead of a continuation — the imported rule
+  could not run. Added Groovy escape decoding for script bodies (`\\`,
+  `\$`, `\n`, `\t`, `\r`, quotes). Regressions:
+  `nextflow_string_escapes_decode_to_the_runtime_shell_text`,
   `line_continuations_are_decoded_in_the_emitted_shell`.
+- **Exporter escaping (found by the #1398 review, fixed here).** The new
+  decoder made the existing exporter lossy: it wrote the shell raw into a
+  Groovy `"""` string, so a literal `\t` or `$HOME` in an `.oxoflow` shell
+  would change on export→import (a real tab, or a Nextflow interpolation).
+  The exporter now emits the inverse escapes for literal segments while
+  leaving its own `${meta.id}`/`$task.*`/`$inN` interpolations raw.
+  Regression: `shell_escapes_round_trip_through_the_exported_groovy_string`
+  (proved failing before the fix).
 
 Harness findings fixed in the same PR (not importer defects): a relative
 `--bin` was resolved against each arm's staged cwd and failed ENOENT; the
@@ -235,14 +266,17 @@ wrapper now anchors it. Fixture-only corrections: the 6 GB task requirement
 for the importer: two published-source workflows (one nf-core module, one
 community Snakemake tutorial rule), each executed natively and as an imported
 `.oxoflow` workflow on one host, over identical inputs and one pinned image
-digest, with declared-output content compared by SHA-256. Both matched; none
-drifted; six other supported fixtures were honestly SKIPPED with reasons.
+digest, with the produced artifact sets (including the declared outputs)
+compared by SHA-256. Both matched; none drifted; six other supported fixtures
+were honestly SKIPPED with reasons.
 
 **What this is NOT, stated loudly.**
 
 - **Not Gate 3 / not corpus-wide.** N=2 real workflows; 6 of the 8 supported
-  fixtures did not execute on this host (conda/modules absent, two sources not
-  runnable as written). This is a floor, not coverage.
+  fixtures did not execute on this host: four for a missing conda/modules
+  backend, one because the installed Nextflow does not compile that source
+  fixture, and one because the imported arm's wildcard expansion found no
+  planted BAM. This is a floor, not coverage.
 - **Not a multi-tool or multi-host result.** One tool (`samtools faidx`), one
   host, one image. No aligner, variant caller, or reference genome.
 - **Not a cross-version claim.** Both arms run the same samtools image; the
@@ -250,8 +284,8 @@ drifted; six other supported fixtures were honestly SKIPPED with reasons.
   with the fixture's declared environment, not that tool versions agree.
 - **Not a wall-time/RSS/IO measurement.** See O6.
 - **"MATCHED" is not "equivalent in general".** It means these two workflows'
-  declared outputs were byte-identical on this host with this image under the
-  documented wrappers.
+  produced artifact sets (which include the declared outputs) were
+  byte-identical on this host with this image under the documented wrappers.
 - **Single host, single author.** `tx-ubuntu` (x86_64 Linux); sources and truth
   were authored as part of this PR.
 
@@ -268,7 +302,7 @@ installed Nextflow compiles unmodified.
 | Execution runner (python) | `scripts/import_execution_equivalence_run.py` |
 | Truth table | `scripts/import_equivalence_expectations.py` (`status == "supported"`, `execution` blocks) |
 | Fixtures | `tests/fixtures/import/nextflow/nfcore_faidx.ok.nf`, `tests/fixtures/import/snakemake/training_faidx.ok.smk` |
-| Hermetic tests | `eval/scripts/test_import_execution_equivalence.py` (28 passed) |
+| Hermetic tests | `eval/scripts/test_import_execution_equivalence.py` (38 passed) |
 | Baseline log (0 executed / 8 skipped) | `docs/superpowers/audits/data/import-execution-realworld-2026-11-27-baseline.log` |
 | Campaign log | `docs/superpowers/audits/data/import-execution-realworld-2026-11-27-campaign.log` |
 | Campaign raw records (per-arm command, exit, artifact SHA-256) | `docs/superpowers/audits/data/import-execution-realworld-2026-11-27-records.json` |

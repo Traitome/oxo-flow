@@ -15,6 +15,17 @@ artifacts, the verdict is NO_ARTIFACTS, never MATCHED: a runtime that exits 0
 while writing nothing is not evidence of equivalence (issue #1349). A green
 tally must mean runs happened.
 
+The comparison endpoint is the COMPLETE produced-artifact path->SHA-256 map
+(planted inputs, the seeded workflow files, and engine metadata excluded), so
+an incidental file can never be the only agreement. When the imported
+workflow declares literal outputs (no wildcard syntax), each must also be
+present in both arms or the fixture is SKIPPED as "declared output missing".
+A fixture whose `execution` block pins a container must import to that same
+container (the `docker://` scheme prefix is normalized before comparison),
+else it is SKIPPED as a container mismatch. Wildcard declared outputs are not
+expanded for the membership check; the artifact-set comparison still covers
+whatever the arms produced.
+
 Requires Python >= 3.11 (tomllib). On an older interpreter the harness exits 2
 with an explicit message instead of a silent-green empty result.
 
@@ -36,6 +47,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -138,6 +150,66 @@ def required_backends(imported_doc):
             elif key in ("modules", "module"):
                 need.add("modules")
     return need
+
+
+def normalize_container(spec):
+    """Compare container specs independent of the transfer scheme prefix.
+
+    A fixture declares e.g. `docker://registry/img:tag` while the importer
+    emits `registry/img:tag` under `environment.docker`; the same image must
+    compare equal or a future fixture could run a different container than the
+    one its `execution` block pins.
+    """
+    spec = (spec or "").strip()
+    for prefix in ("docker://", "shub://"):
+        if spec.startswith(prefix):
+            return spec[len(prefix):]
+    return spec
+
+
+def imported_containers(imported_doc):
+    """Normalized container specs the imported workflow declares, in order."""
+    out = []
+    for rule in imported_doc.get("rules", []):
+        environment = rule.get("environment") or {}
+        for key in ("docker", "singularity"):
+            spec = environment.get(key)
+            if spec:
+                out.append(normalize_container(spec))
+    return out
+
+
+def container_mismatch(imported_doc, execution):
+    """Reason when `execution.container` is not what the imported workflow runs."""
+    declared = execution.get("container")
+    if not declared:
+        return None
+    want = normalize_container(declared)
+    have = imported_containers(imported_doc)
+    if want in have:
+        return None
+    return ("container mismatch: execution declares %s; imported environment has %s"
+            % (declared, ", ".join(have) if have else "no container"))
+
+
+# A path with any of these characters is not a single literal artifact and
+# cannot be membership-checked without expanding the wildcard domain.
+WILDCARD_CHARS = set("{}*[]?")
+
+
+def declared_literal_outputs(imported_doc):
+    """Declared output paths that carry no wildcard/glob syntax."""
+    out = []
+    for rule in imported_doc.get("rules", []):
+        for path in rule.get("output") or []:
+            if not any(ch in WILDCARD_CHARS for ch in path):
+                out.append(path)
+    return out
+
+
+def missing_declared_outputs(artifacts, declared):
+    """Declared literal outputs absent from a produced artifact map."""
+    return [path for path in declared if path not in artifacts]
 
 
 def missing_reason(runtime_bin, backends, have):
@@ -272,6 +344,9 @@ def measure(rel, expect, bin_, tmp, have, timeout, record_sink=None):
         return "SKIPPED", "import failed: %s" % error_line(p.stderr)
     with open(imported_wf, "rb") as fh:
         imported_doc = tomllib.load(fh)
+    mismatch = container_mismatch(imported_doc, execution)
+    if mismatch:
+        return "SKIPPED", mismatch
     backends = required_backends(imported_doc)
     source_backend = execution.get("source_backend")
     if source_backend:
@@ -300,6 +375,23 @@ def measure(rel, expect, bin_, tmp, have, timeout, record_sink=None):
     i_ran, i_reason, i_art = run_arm(imported_argv, run_dir, arm_timeout)
     for art, seed in ((s_art, src_seed), (i_art, IMPORTED_SEED)):
         art.pop(seed, None)
+    # The comparison endpoint is the complete produced-artifact set, so an
+    # incidental file can never be the only agreement. When the imported
+    # workflow declares literal outputs, each must also be present in BOTH
+    # arms; wildcard outputs are not expanded here and are skipped from this
+    # membership check (the artifact-set comparison still covers whatever the
+    # arms produced).
+    declared = declared_literal_outputs(imported_doc)
+    if s_ran and declared:
+        missing = missing_declared_outputs(s_art, declared)
+        if missing:
+            return "SKIPPED", ("source arm: declared output(s) missing: "
+                               + ", ".join(missing[:4]))
+    if i_ran and declared:
+        missing = missing_declared_outputs(i_art, declared)
+        if missing:
+            return "SKIPPED", ("imported arm: declared output(s) missing: "
+                               + ", ".join(missing[:4]))
     verdict, detail = classify({
         "source": {"ran": s_ran, "reason": "source arm: " + s_reason, "artifacts": s_art},
         "imported": {"ran": i_ran, "reason": "imported arm: " + i_reason, "artifacts": i_art},
@@ -314,6 +406,7 @@ def measure(rel, expect, bin_, tmp, have, timeout, record_sink=None):
             "imported": {"command": imported_argv, "ran": i_ran,
                          "reason": i_reason, "artifacts": i_art},
             "execution": execution,
+            "declared_literal_outputs": declared,
         })
     return verdict, detail
 

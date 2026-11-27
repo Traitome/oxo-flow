@@ -112,11 +112,14 @@ declaration order:
 
 Two exports of the same workflow are byte-identical (pinned by tests). The
 fixture-corpus round trip is measured in `tests/transpile_roundtrip.rs`: of
-the 25 `tests/fixtures/import/**` fixtures, 19 are rejected by the importer
-(no parsed model to export), the 3 accepted Nextflow fixtures export and
-re-import **byte-identically**, and the 3 accepted Snakemake fixtures are
-refused naming the constructs Snakemake import emits that Nextflow cannot
-carry back (`[wildcard_constraints]`, rule `benchmark`, rule `log`).
+the 27 `tests/fixtures/import/**` fixtures, 19 are rejected by the importer
+(no parsed model to export), **5** accepted fixtures export and re-import
+**byte-identically** (the 4 accepted Nextflow fixtures plus the Snakemake
+fixture `training_faidx.ok.smk`, whose imported model carries none of the
+unexportable fields), and the 3 accepted Snakemake fixtures that declare
+`[wildcard_constraints]`, rule `benchmark`, or rule `log` are refused naming
+those constructs (Nextflow has no equivalent for what Snakemake import emits
+there).
 
 `[types.*]` contracts and per-rule `types` are not emitted (Nextflow has no
 equivalent); the importer re-derives them from tool-name/IO inference on

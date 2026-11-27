@@ -50,11 +50,12 @@ WDL, and no importers for those formats are currently available.
   and a community Snakemake tutorial rule, each run in its native engine and
   as an imported workflow over identical inputs and one pinned image, both
   with byte-identical declared outputs (2 matched / 0 drifted; six other
-  supported fixtures skipped for missing conda/modules or sources that do not
-  run as written). Corpus-wide, multi-tool, multi-host execution equivalence
-  is still open work (see ROADMAP.md Phase 12.3 and
-  `docs/superpowers/audits/import-execution-realworld-2026-11-27.md`), and
-  `nextflow.config` profiles/labels/`publishDir` behavior is not imported.
+  supported fixtures skipped: four for a missing conda/modules backend, one
+  source fixture the installed Nextflow does not compile, and one imported
+  arm whose wildcard expansion finds no planted BAM). Corpus-wide, multi-tool,
+  multi-host execution equivalence is still open work (see ROADMAP.md Phase
+  12.3 and `docs/superpowers/audits/import-execution-realworld-2026-11-27.md`),
+  and `nextflow.config` profiles/labels/`publishDir` behavior is not imported.
 - **Nextflow DSL2 export covers the round-trip subset only, one direction** —
   `oxo-flow export-dsl` emits a parsed `.oxoflow` workflow back to Nextflow
   DSL2 over the same documented subset the importer accepts

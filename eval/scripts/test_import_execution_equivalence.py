@@ -124,6 +124,54 @@ class MissingReasonTests(unittest.TestCase):
                                   lambda n: n in ("snakemake", "docker")))
 
 
+class ContainerValidationTests(unittest.TestCase):
+    def test_docker_scheme_prefix_is_normalized(self):
+        doc = {"rules": [{"environment": {"docker": "img:1"}}]}
+        self.assertIsNone(
+            runner.container_mismatch(doc, {"container": "docker://img:1"}))
+
+    def test_singularity_environment_also_counts(self):
+        doc = {"rules": [{"environment": {"singularity": "sif:1"}}]}
+        self.assertIsNone(
+            runner.container_mismatch(doc, {"container": "docker://sif:1"}))
+
+    def test_mismatch_names_both_specs(self):
+        doc = {"rules": [{"environment": {"docker": "img:2"}}]}
+        reason = runner.container_mismatch(doc, {"container": "docker://img:1"})
+        self.assertIn("container mismatch", reason)
+        self.assertIn("img:1", reason)
+        self.assertIn("img:2", reason)
+
+    def test_missing_imported_container_is_a_mismatch(self):
+        doc = {"rules": [{"name": "system-only"}]}
+        reason = runner.container_mismatch(doc, {"container": "docker://img:1"})
+        self.assertIn("no container", reason)
+
+    def test_no_declared_container_is_not_checked(self):
+        doc = {"rules": [{"environment": {"docker": "img:2"}}]}
+        self.assertIsNone(runner.container_mismatch(doc, {}))
+
+
+class DeclaredOutputTests(unittest.TestCase):
+    def test_only_literal_paths_are_collected(self):
+        doc = {"rules": [
+            {"output": ["results/a.txt", "results/{sample}.bam"]},
+            {"output": ["glob/*.txt"]},
+            {"output": ["questions?.txt"]},
+        ]}
+        self.assertEqual(
+            runner.declared_literal_outputs(doc), ["results/a.txt"])
+
+    def test_missing_declared_output_is_reported(self):
+        self.assertEqual(
+            runner.missing_declared_outputs({"other.txt": "x"},
+                                            ["declared.txt"]),
+            ["declared.txt"])
+        self.assertEqual(
+            runner.missing_declared_outputs({"declared.txt": "x"},
+                                            ["declared.txt"]), [])
+
+
 class ClassifyVerdictTests(unittest.TestCase):
     def _arm(self, ran, artifacts=None, reason=""):
         return {"ran": ran, "artifacts": artifacts or {}, "reason": reason}
@@ -199,8 +247,8 @@ class MeasureEndToEndStubTests(unittest.TestCase):
     arms must be comparable, so two genuinely-running arms that emit an
     identical output set report MATCHED -- not DRIFTED from a one-sided seed."""
 
-    def _write_stub(self, path, out_content):
-        # argv[1] == 'import' -> write a minimal (rule-less) TOML document;
+    def _write_stub(self, path, out_content, import_body="# imported\n"):
+        # argv[1] == 'import' -> write the supplied TOML document;
         # otherwise (a 'run' invocation) -> write out.txt with out_content.
         # out_content=None writes nothing on run: a runtime that exits 0
         # while producing zero artifacts (#1349).
@@ -209,14 +257,15 @@ class MeasureEndToEndStubTests(unittest.TestCase):
             "import sys\n"
             "a = sys.argv[1:]\n"
             "if a and a[0] == 'import':\n"
-            "    open(a[a.index('-o') + 1], 'w').write('# imported\\n')\n"
+            "    open(a[a.index('-o') + 1], 'w').write(%r)\n" % import_body
         )
         if out_content is not None:
             body += "else:\n    open('out.txt', 'w').write(%r)\n" % out_content
         path.write_text(body)
         path.chmod(0o755)
 
-    def _measure(self, src_content, imp_content, record_sink=None):
+    def _measure(self, src_content, imp_content, record_sink=None,
+                 import_body=None, expected=None):
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d)
             fx = tmp / "ROOT" / "tests" / "fixtures" / "import" / "nextflow"
@@ -227,9 +276,12 @@ class MeasureEndToEndStubTests(unittest.TestCase):
             src_stub = bindir / "nextflow"
             self._write_stub(src_stub, src_content)
             oxo_stub = bindir / "oxo-flow"
-            self._write_stub(oxo_stub, imp_content)
+            self._write_stub(
+                oxo_stub, imp_content,
+                "# imported\n" if import_body is None else import_body)
             expect = mock.Mock()
             expect.ROOT = str(tmp / "ROOT")
+            expect.EXPECTED = expected or {}
             with mock.patch.dict(
                 runner.SOURCE_RUNNERS,
                 {".nf": ("nextflow", [str(src_stub), "run", "{src}"])},
@@ -281,6 +333,38 @@ class MeasureEndToEndStubTests(unittest.TestCase):
         self.assertIn("out.txt", rec["imported"]["artifacts"])
         self.assertEqual(rec["source"]["artifacts"]["out.txt"],
                          rec["imported"]["artifacts"]["out.txt"])
+
+    def test_incidental_file_agreement_without_declared_output_is_skipped(self):
+        # #1398 review: an incidental file that both arms happen to write must
+        # not be able to carry a MATCHED when the imported workflow declares a
+        # different output. Both stub arms write out.txt; declared.txt is
+        # missing from both -> SKIPPED, never MATCHED.
+        import_body = ('[[rules]]\nname = "r"\n'
+                       'output = ["declared.txt"]\nshell = "true"\n')
+        verdict, reason = self._measure(
+            "incidental\n", "incidental\n", import_body=import_body)
+        self.assertEqual(verdict, "SKIPPED")
+        self.assertIn("declared output", reason)
+
+    def test_declared_output_present_keeps_match(self):
+        import_body = ('[[rules]]\nname = "r"\n'
+                       'output = ["out.txt"]\nshell = "true"\n')
+        verdict, _ = self._measure(
+            "same\n", "same\n", import_body=import_body)
+        self.assertEqual(verdict, "MATCHED")
+
+    def test_pinned_container_mismatch_is_skipped_before_running(self):
+        # #1398 review: the fixture's declared container must be what the
+        # imported workflow actually runs (scheme-insensitive).
+        expected = {"nextflow/x.nf": {
+            "execution": {"container": "docker://wanted:1"}}}
+        import_body = ('[[rules]]\nname = "r"\n'
+                       'environment = { docker = "other:2" }\n'
+                       'shell = "true"\n')
+        verdict, reason = self._measure(
+            "same\n", "same\n", import_body=import_body, expected=expected)
+        self.assertEqual(verdict, "SKIPPED")
+        self.assertIn("container mismatch", reason)
 
 
 class StrictExitCodeTests(unittest.TestCase):

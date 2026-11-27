@@ -11,9 +11,11 @@
 //      fa/sizes/gzi outputs are not produced without extra args, and the
 //      `versions` topic is not a file artifact.
 //   3. The dynamic container ternary is materialized to its docker branch (a
-//      static fixture cannot evaluate `workflow.containerEngine`), and the
-//      module-local conda `environment.yml` reference is materialized to the
-//      literal spec it contains.
+//      static fixture cannot evaluate `workflow.containerEngine`). The
+//      module-local conda `environment.yml` pins `htslib=1.25` and
+//      `samtools=1.25`; the fixture materializes only
+//      `bioconda::samtools=1.25` because htslib is samtools' own library
+//      dependency and `samtools` is the invoked binary (no behavior change).
 //   4. Resources are materialized from the nf-core `process_single` label
 //      default (base.config: cpus 1, memory 6.GB, time 4h), with cpus 2 and
 //      memory lowered to 2 GB so the task fits the 3 GiB qualification host
@@ -29,6 +31,9 @@
 //      Nextflow leaves the declared output inside `work/`, so a standalone run
 //      produces no artifact in the launch directory (observed in the first
 //      campaign attempt: exit 0, no file).
+//   8. The upstream `stub:` block is dropped: it is the test-only body the
+//      importer ignores (it never runs in a real execution), and keeping it
+//      would add directives the static fixture does not need.
 // The `samtools faidx` command, the container image and the module identifier
 // are upstream. The fixture's declared output is one text index, so the
 // execution-equivalence harness compares deterministic bytes.

@@ -1963,9 +1963,13 @@ rule quantify:
 
     #[test]
     fn multiline_directive_values_drop_the_list_separator() {
-        // Real-world shape (troycomi/snakemake-training 2_containers/
-        // Snakefile): the quoted value is on the line after the directive and
-        // ends with a list comma. Before the fix the quote survived inside the
+        // Regression for the multi-line directive shape: the quoted value sits
+        // on the line after the directive and ends with a list comma. This was
+        // found while generalizing multi-line directive parsing for the
+        // real-world execution fixture (#1398), and real Snakefiles write
+        // multi-line lists this way; the committed `training_faidx.ok.smk`
+        // fixture itself has no trailing comma, so this test -- not the fixture
+        // -- pins the defect. Before the fix the quote survived inside the
         // value and the emitted workflow failed validation with E016.
         let source = r#"
 rule index_reference:
