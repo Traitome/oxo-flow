@@ -1,0 +1,167 @@
+{
+  "fixtures": [
+    {
+      "execution": {
+        "container": "community.wave.seqera.io/library/htslib_samtools:1.25--704fb80d75745bd4",
+        "source": [
+          "nextflow",
+          "run",
+          "{src}",
+          "-with-docker",
+          "-ansi-log",
+          "false",
+          "-work-dir",
+          "work"
+        ],
+        "source_backend": "docker",
+        "timeout": 1200
+      },
+      "fixture": "nextflow/nfcore_faidx.ok.nf",
+      "imported": {
+        "artifacts": {
+          "GENOME_PATH/genome.fna.fai": "696683592f087bb9aa2bf8cb2b9bd85df1b482c809c3770d86c9450d629d6cfe"
+        },
+        "command": [
+          "/home/ubuntu/oxo-1398/target/debug/oxo-flow",
+          "run",
+          "W.oxoflow",
+          "-d",
+          "/tmp/tmp.vG6HVVHFzI/nextflow_nfcore_faidx.ok.nf_run"
+        ],
+        "ran": true,
+        "reason": ""
+      },
+      "reason": "artifact sets agree",
+      "source": {
+        "artifacts": {
+          "GENOME_PATH/genome.fna.fai": "696683592f087bb9aa2bf8cb2b9bd85df1b482c809c3770d86c9450d629d6cfe"
+        },
+        "command": [
+          "nextflow",
+          "run",
+          "nfcore_faidx.ok.nf",
+          "-with-docker",
+          "-ansi-log",
+          "false",
+          "-work-dir",
+          "work"
+        ],
+        "ran": true,
+        "reason": ""
+      },
+      "verdict": "MATCHED"
+    },
+    {
+      "execution": {},
+      "fixture": "nextflow/nfcore_module.ok.nf",
+      "imported": {
+        "artifacts": {},
+        "command": [
+          "/home/ubuntu/oxo-1398/target/debug/oxo-flow",
+          "run",
+          "W.oxoflow",
+          "-d",
+          "/tmp/tmp.vG6HVVHFzI/nextflow_nfcore_module.ok.nf_run"
+        ],
+        "ran": false,
+        "reason": "exit 1: Error: workflow execution failed"
+      },
+      "reason": "source arm: exit 1: ERROR ~ Script compilation failed",
+      "source": {
+        "artifacts": {},
+        "command": [
+          "nextflow",
+          "run",
+          "nfcore_module.ok.nf",
+          "-with-docker"
+        ],
+        "ran": false,
+        "reason": "exit 1: ERROR ~ Script compilation failed"
+      },
+      "verdict": "SKIPPED"
+    },
+    {
+      "execution": {},
+      "fixture": "nextflow/samtools_sort.ok.nf",
+      "imported": {
+        "artifacts": {},
+        "command": [
+          "/home/ubuntu/oxo-1398/target/debug/oxo-flow",
+          "run",
+          "W.oxoflow",
+          "-d",
+          "/tmp/tmp.vG6HVVHFzI/nextflow_samtools_sort.ok.nf_run"
+        ],
+        "ran": false,
+        "reason": "exit 1: Error: failed to expand wildcard rules"
+      },
+      "reason": "imported arm: exit 1: Error: failed to expand wildcard rules",
+      "source": {
+        "artifacts": {},
+        "command": [
+          "nextflow",
+          "run",
+          "samtools_sort.ok.nf",
+          "-with-docker"
+        ],
+        "ran": true,
+        "reason": ""
+      },
+      "verdict": "SKIPPED"
+    },
+    {
+      "execution": {
+        "container": "docker://community.wave.seqera.io/library/htslib_samtools:1.25--704fb80d75745bd4",
+        "source": [
+          "snakemake",
+          "-s",
+          "{src}",
+          "--cores",
+          "2",
+          "--use-singularity"
+        ],
+        "source_backend": "singularity",
+        "timeout": 1200
+      },
+      "fixture": "snakemake/training_faidx.ok.smk",
+      "imported": {
+        "artifacts": {
+          "GENOME_PATH/GCF_000001215.4_Release_6_plus_ISO1_MT_genomic.fna.fai": "696683592f087bb9aa2bf8cb2b9bd85df1b482c809c3770d86c9450d629d6cfe"
+        },
+        "command": [
+          "/home/ubuntu/oxo-1398/target/debug/oxo-flow",
+          "run",
+          "W.oxoflow",
+          "-d",
+          "/tmp/tmp.vG6HVVHFzI/snakemake_training_faidx.ok.smk_run"
+        ],
+        "ran": true,
+        "reason": ""
+      },
+      "reason": "artifact sets agree",
+      "source": {
+        "artifacts": {
+          "GENOME_PATH/GCF_000001215.4_Release_6_plus_ISO1_MT_genomic.fna.fai": "696683592f087bb9aa2bf8cb2b9bd85df1b482c809c3770d86c9450d629d6cfe"
+        },
+        "command": [
+          "snakemake",
+          "-s",
+          "training_faidx.ok.smk",
+          "--cores",
+          "2",
+          "--use-singularity"
+        ],
+        "ran": true,
+        "reason": ""
+      },
+      "verdict": "MATCHED"
+    }
+  ],
+  "tally": {
+    "DRIFTED": 0,
+    "EXECUTED": 2,
+    "MATCHED": 2,
+    "NO_ARTIFACTS": 0,
+    "SKIPPED": 6
+  }
+}
