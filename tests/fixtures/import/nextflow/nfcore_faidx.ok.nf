@@ -22,6 +22,11 @@
 //      the wrapper.
 //   6. A `workflow { }` call is added because the upstream file is a module
 //      only (it carries no workflow block).
+//   7. `publishDir "GENOME_PATH", mode: 'copy'` is added because nf-core
+//      modules publish at the pipeline level, not in the module; without it
+//      Nextflow leaves the declared output inside `work/`, so a standalone run
+//      produces no artifact in the launch directory (observed in the first
+//      campaign attempt: exit 0, no file).
 // The `samtools faidx` command, the container image and the module identifier
 // are upstream. The fixture's declared output is one text index, so the
 // execution-equivalence harness compares deterministic bytes.
@@ -35,6 +40,8 @@ process SAMTOOLS_FAIDX {
     cpus 1
     memory '2 GB'
     time '4h'
+
+    publishDir "GENOME_PATH", mode: 'copy'
 
     input:
     path fasta
