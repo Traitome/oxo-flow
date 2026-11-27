@@ -1,0 +1,27 @@
+# G063 — GRCm38 VCF fed to a dm6 consumer
+# The producer declares reference_build=GRCm38; the consumer requires
+# reference_build=dm6. The published reference-build field is checked
+# when both sides name a build and aliases do not make these equal, so
+# the edge violates TYPE-004. This build pair was not asserted by any
+# pilot case (the pilot used the human GRCh37/GRCh38 family).
+#
+# EXPECTED (authored 2026-11-27 from the published contract, before running):
+#   reject — TYPE-004.
+
+[workflow]
+name = "g063"
+
+[[rules]]
+name = "produce"
+output = ["calls.vcf"]
+shell = "bcftools call -Ov -o calls.vcf"
+[rules.types]
+outputs = { default = "VCF[reference_build=GRCm38]" }
+
+[[rules]]
+name = "consume"
+input = ["calls.vcf"]
+output = ["result.txt"]
+shell = "bcftools norm -f dm6.fa calls.vcf > norm.vcf"
+[rules.types]
+inputs = { default = "VCF[reference_build=dm6]" }

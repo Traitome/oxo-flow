@@ -1,0 +1,26 @@
+# G019 — TSV table fed to a PARQUET consumer
+# A TSV producer feeds a consumer whose declared contract is PARQUET.
+# The published format enum makes them distinct formats; no coercion
+# arm applies, so the edge violates TYPE-001 (format incompatibility).
+# Distinct format pair not asserted by any pilot case.
+#
+# EXPECTED (authored 2026-11-27 from the published contract, before running):
+#   reject — TYPE-001.
+
+[workflow]
+name = "g019"
+
+[[rules]]
+name = "produce"
+output = ["features.tsv"]
+shell = "cut -f1,2 counts.tsv > features.tsv"
+[rules.types]
+outputs = { default = "TSV" }
+
+[[rules]]
+name = "consume"
+input = ["features.tsv"]
+output = ["result.dat"]
+shell = "Rscript -e 'arrow::write_parquet(read.delim(\"features.tsv\"), \"features.parquet\")'"
+[rules.types]
+inputs = { default = "PARQUET" }

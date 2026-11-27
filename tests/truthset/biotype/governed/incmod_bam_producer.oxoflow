@@ -1,0 +1,13 @@
+# incmod_bam_producer.oxoflow — include-module fixture for g082.
+# Produces a plain BAM consumed across the [[include]] boundary. This
+# fixture has no EXPECT row of its own.
+
+[workflow]
+name = "incmod_bam_producer"
+
+[[rules]]
+name = "produce_alignment"
+output = ["reads.bam"]
+shell = "bwa mem ref.fa r1.fq r2.fq | samtools sort -o reads.bam"
+[rules.types]
+outputs = { default = "BAM" }

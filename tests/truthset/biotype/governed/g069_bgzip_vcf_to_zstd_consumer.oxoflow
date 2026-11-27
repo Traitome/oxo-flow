@@ -1,0 +1,27 @@
+# G069 — bgzip VCF fed to a zstd consumer
+# The producer declares VCF[compression=bgzip]; the consumer requires VCF[compression=zstd].
+# The published compression field names block/stream encodings; only
+# BAM implies BGZF, and a different declared encoding does not satisfy
+# the requirement, so the edge violates TYPE-006. This compression
+# pair was not asserted by the pilot.
+#
+# EXPECTED (authored 2026-11-27 from the published contract, before running):
+#   reject — TYPE-006.
+
+[workflow]
+name = "g069"
+
+[[rules]]
+name = "produce"
+output = ["calls.vcf.gz"]
+shell = "bcftools call -Oz -o calls.vcf.gz"
+[rules.types]
+outputs = { default = "VCF[compression=bgzip]" }
+
+[[rules]]
+name = "consume"
+input = ["calls.vcf.gz"]
+output = ["result.dat"]
+shell = "zstd -d calls.vcf.gz -o calls.vcf.zst"
+[rules.types]
+inputs = { default = "VCF[compression=zstd]" }

@@ -1,0 +1,26 @@
+# G095 — CRAM with explicit compression=none on both sides
+# Both sides declare CRAM[sort_order=coordinate,index=crai,compression=none];
+# CRAM does not imply BGZF, so naming the same explicit encoding on both
+# sides satisfies the compression field, and the sort/index fields agree.
+# No TYPE diagnostic.
+#
+# EXPECTED (authored 2026-11-27 from the published contract, before running):
+#   accept — no TYPE diagnostic.
+
+[workflow]
+name = "g095"
+
+[[rules]]
+name = "produce"
+output = ["aln.cram"]
+shell = "samtools view -C -o aln.cram aln.bam && samtools index aln.cram"
+[rules.types]
+outputs = { default = "CRAM[sort_order=coordinate,index=crai,compression=none]" }
+
+[[rules]]
+name = "consume"
+input = ["aln.cram"]
+output = ["depth.txt"]
+shell = "samtools depth -a aln.cram > depth.txt"
+[rules.types]
+inputs = { default = "CRAM[sort_order=coordinate,index=crai,compression=none]" }

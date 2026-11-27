@@ -1,0 +1,27 @@
+# G044 — unsorted SAM fed to a queryname consumer
+# The producer declares SAM[sort_order=unsorted]; the consumer
+# requires SAM[sort_order=queryname]. The published sort-order field
+# is a consumer requirement, and a different recorded order does not
+# satisfy it, so the edge violates TYPE-002. The pilot asserted only
+# BAM queryname<->coordinate, so this format/order pair is new.
+#
+# EXPECTED (authored 2026-11-27 from the published contract, before running):
+#   reject — TYPE-002.
+
+[workflow]
+name = "g044"
+
+[[rules]]
+name = "produce"
+output = ["aln.sam"]
+shell = "bwa mem ref.fa reads.fq > aln.sam"
+[rules.types]
+outputs = { default = "SAM[sort_order=unsorted]" }
+
+[[rules]]
+name = "consume"
+input = ["aln.sam"]
+output = ["result.txt"]
+shell = "samtools fixmate -m aln.sam fixed.sam"
+[rules.types]
+inputs = { default = "SAM[sort_order=queryname]" }

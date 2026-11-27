@@ -1,0 +1,33 @@
+# G065 — BAM without @RG fed to a four-field named consumer
+# The consumer's named type requires @RG fields ID, SM, PL and LB. The
+# producer declares plain BAM and therefore no read-group contract. The
+# missing metadata violates TYPE-005; the four-field requirement is a
+# distinct assertion from the pilot's three-field case.
+#
+# EXPECTED (authored 2026-11-27 from the published contract, before running):
+#   reject — TYPE-005.
+
+[workflow]
+name = "g065"
+
+[types.rg_strict]
+format = "bam"
+
+[types.rg_strict.read_groups]
+required = true
+fields = ["ID", "SM", "PL", "LB"]
+
+[[rules]]
+name = "produce"
+output = ["aln.bam"]
+shell = "bwa mem ref.fa r1.fq r2.fq | samtools sort -o aln.bam"
+[rules.types]
+outputs = { default = "BAM" }
+
+[[rules]]
+name = "bqsr"
+input = ["aln.bam"]
+output = ["recal.table"]
+shell = "gatk BaseRecalibrator -I aln.bam -R ref.fa -O recal.table"
+[rules.types]
+inputs = { default = "rg_strict" }

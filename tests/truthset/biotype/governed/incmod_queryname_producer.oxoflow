@@ -1,0 +1,13 @@
+# incmod_queryname_producer.oxoflow — include-module fixture for g083.
+# Produces a queryname-sorted BAM consumed across the [[include]]
+# boundary. This fixture has no EXPECT row of its own.
+
+[workflow]
+name = "incmod_queryname_producer"
+
+[[rules]]
+name = "produce_name_sorted"
+output = ["reads.bam"]
+shell = "samtools sort -n -o reads.bam in.bam"
+[rules.types]
+outputs = { default = "BAM[sort_order=queryname]" }

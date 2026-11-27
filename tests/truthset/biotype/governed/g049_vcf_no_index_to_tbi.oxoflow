@@ -1,0 +1,26 @@
+# G049 — unindexed VCF fed to an index=tbi consumer
+# The producer declares VCF; the consumer requires VCF[index=tbi].
+# The index field is a companion-artifact requirement; an absent index
+# or a different index kind cannot satisfy it, so the edge violates
+# TYPE-003. Distinct index/format pair from the pilot's cases.
+#
+# EXPECTED (authored 2026-11-27 from the published contract, before running):
+#   reject — TYPE-003.
+
+[workflow]
+name = "g049"
+
+[[rules]]
+name = "produce"
+output = ["calls.vcf.gz"]
+shell = "bcftools call -Oz -o calls.vcf.gz"
+[rules.types]
+outputs = { default = "VCF" }
+
+[[rules]]
+name = "consume"
+input = ["calls.vcf.gz"]
+output = ["result.txt"]
+shell = "tabix calls.vcf.gz"
+[rules.types]
+inputs = { default = "VCF[index=tbi]" }

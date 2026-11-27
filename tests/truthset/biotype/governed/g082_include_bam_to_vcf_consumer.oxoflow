@@ -1,0 +1,22 @@
+# G082 — include-contributed BAM fed to a VCF consumer
+# The producing rule lives in an included module and declares BAM; the main
+# workflow's consumer requires VCF. The type propagates across the
+# [[include]] boundary and the format mismatch violates TYPE-001. The
+# pilot's include case asserted a build mismatch, not a format mismatch.
+#
+# EXPECTED (authored 2026-11-27 from the published contract, before running):
+#   reject — TYPE-001.
+
+[workflow]
+name = "g082"
+
+[[include]]
+path = "incmod_bam_producer.oxoflow"
+
+[[rules]]
+name = "consume"
+input = ["reads.bam"]
+output = ["calls.vcf"]
+shell = "call {input} > {output}"
+[rules.types]
+inputs = { default = "VCF" }

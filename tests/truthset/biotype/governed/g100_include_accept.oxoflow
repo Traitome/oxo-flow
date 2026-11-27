@@ -1,0 +1,23 @@
+# G100 — include-contributed GTF type with a matching consumer
+# The producing rule lives in an included module and declares
+# GTF[reference_build=GRCh38]; the main workflow's consumer requires the
+# same GTF contract. The type propagates across the [[include]] boundary
+# and is satisfied, so no TYPE diagnostic. This is the accept-side
+# contrast to the pilot's include build-mismatch reject.
+#
+# EXPECTED (authored 2026-11-27 from the published contract, before running):
+#   accept — no TYPE diagnostic.
+
+[workflow]
+name = "g100"
+
+[[include]]
+path = "incmod_gtf_grch38.oxoflow"
+
+[[rules]]
+name = "count"
+input = ["genes.gtf"]
+output = ["counts.txt"]
+shell = "featureCounts -a {input} -o {output} aln.bam"
+[rules.types]
+inputs = { default = "GTF[reference_build=GRCh38]" }

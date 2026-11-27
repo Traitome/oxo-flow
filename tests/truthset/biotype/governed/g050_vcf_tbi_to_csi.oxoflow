@@ -1,0 +1,26 @@
+# G050 — TBI-indexed VCF fed to an index=csi consumer
+# The producer declares VCF[index=tbi]; the consumer requires VCF[index=csi].
+# The index field is a companion-artifact requirement; an absent index
+# or a different index kind cannot satisfy it, so the edge violates
+# TYPE-003. Distinct index/format pair from the pilot's cases.
+#
+# EXPECTED (authored 2026-11-27 from the published contract, before running):
+#   reject — TYPE-003.
+
+[workflow]
+name = "g050"
+
+[[rules]]
+name = "produce"
+output = ["calls.vcf.gz"]
+shell = "bcftools call -Oz -o calls.vcf.gz && tabix -p vcf calls.vcf.gz"
+[rules.types]
+outputs = { default = "VCF[index=tbi]" }
+
+[[rules]]
+name = "consume"
+input = ["calls.vcf.gz"]
+output = ["result.txt"]
+shell = "bcftools view calls.vcf.gz > calls.vcf"
+[rules.types]
+inputs = { default = "VCF[index=csi]" }

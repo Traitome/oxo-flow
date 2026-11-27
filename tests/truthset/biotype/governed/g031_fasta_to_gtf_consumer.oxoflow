@@ -1,0 +1,26 @@
+# G031 — reference FASTA fed to a GTF consumer
+# A FASTA producer feeds a consumer whose declared contract is GTF.
+# The published format enum makes them distinct formats; no coercion
+# arm applies, so the edge violates TYPE-001 (format incompatibility).
+# Distinct format pair not asserted by any pilot case.
+#
+# EXPECTED (authored 2026-11-27 from the published contract, before running):
+#   reject — TYPE-001.
+
+[workflow]
+name = "g031"
+
+[[rules]]
+name = "produce"
+output = ["genome.fa"]
+shell = "samtools faidx genome.fa"
+[rules.types]
+outputs = { default = "FASTA" }
+
+[[rules]]
+name = "consume"
+input = ["genome.fa"]
+output = ["result.dat"]
+shell = "braker.pl --genome=genome.fa --gtf=genes.gtf"
+[rules.types]
+inputs = { default = "GTF" }

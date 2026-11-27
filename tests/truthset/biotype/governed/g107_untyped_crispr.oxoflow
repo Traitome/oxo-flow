@@ -1,0 +1,28 @@
+# G107 — untyped CRISPR screen pipeline
+# The workflow declares no [types.*] tables and no [rules.types]
+# annotations. The published type system is opt-in: with no contracts
+# there is nothing to violate, so `validate` must accept it. This is a
+# distinct real assay pipeline, not a pilot case.
+#
+# EXPECTED (authored 2026-11-27 from the published contract, before running):
+#   accept — no TYPE diagnostic.
+
+[workflow]
+name = "g107"
+
+[[rules]]
+name = "prepare"
+output = ["r1.fq"]
+shell = "tool0  > r1.fq"
+
+[[rules]]
+name = "process"
+input = ["r1.fq"]
+output = ["aln.bam"]
+shell = "tool1 r1.fq > aln.bam"
+
+[[rules]]
+name = "summarize"
+input = ["aln.bam"]
+output = ["counts.tsv"]
+shell = "tool2 aln.bam > counts.tsv"

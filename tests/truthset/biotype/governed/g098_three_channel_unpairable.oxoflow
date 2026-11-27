@@ -1,0 +1,26 @@
+# G098 — three-channel producer with no matching consumer channels
+# The producer keys three output channels (bam, bai, stats); the consumer
+# keys its two inputs differently (aligned, index) and none of the names
+# match. Both sides are typed but zero channels pair, which is the
+# documented advisory TYPE-010 (never fatal).
+#
+# EXPECTED (authored 2026-11-27 from the published contract, before running):
+#   accept — TYPE-010 (advisory, never fatal).
+
+[workflow]
+name = "g098"
+
+[[rules]]
+name = "produce"
+output = ["out.bam", "out.bam.bai", "stats.txt"]
+shell = "samtools sort -o out.bam in.bam && samtools index out.bam && samtools idxstats out.bam > stats.txt"
+[rules.types]
+outputs = { "bam" = "BAM[sort_order=coordinate]", "bai" = "BAM[sort_order=coordinate,index=bai]", "stats" = "TSV" }
+
+[[rules]]
+name = "consume"
+input = ["out.bam", "out.bam.bai"]
+output = ["report.txt"]
+shell = "multiqc {input} -o . && cp multiqc_report.html report.txt"
+[rules.types]
+inputs = { "aligned" = "BAM[sort_order=coordinate]", "index" = "BAM[index=bai]" }

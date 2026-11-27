@@ -1,0 +1,27 @@
+# G038 — queryname-sorted SAM fed to a coordinate consumer
+# The producer declares SAM[sort_order=queryname]; the consumer
+# requires SAM[sort_order=coordinate]. The published sort-order field
+# is a consumer requirement, and a different recorded order does not
+# satisfy it, so the edge violates TYPE-002. The pilot asserted only
+# BAM queryname<->coordinate, so this format/order pair is new.
+#
+# EXPECTED (authored 2026-11-27 from the published contract, before running):
+#   reject — TYPE-002.
+
+[workflow]
+name = "g038"
+
+[[rules]]
+name = "produce"
+output = ["aln.sam"]
+shell = "bwa mem ref.fa reads.fq | samtools sort -n -o aln.sam"
+[rules.types]
+outputs = { default = "SAM[sort_order=queryname]" }
+
+[[rules]]
+name = "consume"
+input = ["aln.sam"]
+output = ["result.txt"]
+shell = "samtools mpileup -f ref.fa aln.sam > pileup.txt"
+[rules.types]
+inputs = { default = "SAM[sort_order=coordinate]" }

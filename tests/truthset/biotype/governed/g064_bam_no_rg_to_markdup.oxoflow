@@ -1,0 +1,33 @@
+# G064 — BAM without @RG fed to a MarkDuplicates-style consumer
+# The producer declares plain BAM with no read-group contract; the consumer
+# requires @RG fields ID and SM (the documented metadata requirement).
+# The missing read-group metadata violates TYPE-005. The field set differs
+# from the pilot's ID/SM/PL case.
+#
+# EXPECTED (authored 2026-11-27 from the published contract, before running):
+#   reject — TYPE-005.
+
+[workflow]
+name = "g064"
+
+[types.rg_id_sm]
+format = "bam"
+
+[types.rg_id_sm.read_groups]
+required = true
+fields = ["ID", "SM"]
+
+[[rules]]
+name = "produce"
+output = ["aln.bam"]
+shell = "bwa mem ref.fa r1.fq r2.fq | samtools sort -o aln.bam"
+[rules.types]
+outputs = { default = "BAM" }
+
+[[rules]]
+name = "markdup"
+input = ["aln.bam"]
+output = ["dedup.bam"]
+shell = "picard MarkDuplicates -I aln.bam -O dedup.bam"
+[rules.types]
+inputs = { default = "rg_id_sm" }

@@ -1,0 +1,26 @@
+# G024 — GTF annotation fed to a PARQUET consumer
+# A GTF producer feeds a consumer whose declared contract is PARQUET.
+# The published format enum makes them distinct formats; no coercion
+# arm applies, so the edge violates TYPE-001 (format incompatibility).
+# Distinct format pair not asserted by any pilot case.
+#
+# EXPECTED (authored 2026-11-27 from the published contract, before running):
+#   reject — TYPE-001.
+
+[workflow]
+name = "g024"
+
+[[rules]]
+name = "produce"
+output = ["genes.gtf"]
+shell = "stringtie -o genes.gtf aln.bam"
+[rules.types]
+outputs = { default = "GTF" }
+
+[[rules]]
+name = "consume"
+input = ["genes.gtf"]
+output = ["result.dat"]
+shell = "Rscript -e 'arrow::write_parquet(read.gtf(\"genes.gtf\"), \"genes.parquet\")'"
+[rules.types]
+inputs = { default = "PARQUET" }

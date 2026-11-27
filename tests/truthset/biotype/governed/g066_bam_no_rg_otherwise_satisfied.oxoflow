@@ -1,0 +1,35 @@
+# G066 — indexed GRCh38 BAM without @RG fed to a read-group consumer
+# The producer satisfies sort order and index (coordinate, bai) and names
+# the consumer's build, but declares no read-group contract; the consumer
+# requires @RG. The edge's ONLY unmet requirement is the read group, so
+# the single violation is TYPE-005.
+#
+# EXPECTED (authored 2026-11-27 from the published contract, before running):
+#   reject — TYPE-005.
+
+[workflow]
+name = "g066"
+
+[types.rg_build]
+format = "bam"
+sort_order = "coordinate"
+reference_build = "GRCh38"
+
+[types.rg_build.read_groups]
+required = true
+fields = ["ID", "SM", "PL"]
+
+[[rules]]
+name = "produce"
+output = ["aln.bam"]
+shell = "bwa mem grch38.fa r1.fq r2.fq | samtools sort -o aln.bam && samtools index aln.bam"
+[rules.types]
+outputs = { default = "BAM[sort_order=coordinate,index=bai,reference_build=GRCh38]" }
+
+[[rules]]
+name = "bqsr"
+input = ["aln.bam"]
+output = ["recal.table"]
+shell = "gatk BaseRecalibrator -I aln.bam -R grch38.fa -O recal.table"
+[rules.types]
+inputs = { default = "rg_build" }

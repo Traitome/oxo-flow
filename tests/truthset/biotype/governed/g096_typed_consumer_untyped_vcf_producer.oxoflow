@@ -1,0 +1,23 @@
+# G096 — typed VCF consumer fed by an untyped producer
+# The producer declares no [rules.types] at all; the consumer declares a
+# VCF[index=tbi] contract. The edge cannot be checked, which is exactly
+# the documented advisory TYPE-008 (unverifiable edge), never fatal.
+#
+# EXPECTED (authored 2026-11-27 from the published contract, before running):
+#   accept — TYPE-008 (advisory, never fatal).
+
+[workflow]
+name = "g096"
+
+[[rules]]
+name = "produce"
+output = ["calls.vcf.gz"]
+shell = "bcftools call -Oz -o calls.vcf.gz"
+
+[[rules]]
+name = "consume"
+input = ["calls.vcf.gz"]
+output = ["stats.txt"]
+shell = "bcftools stats {input} > {output}"
+[rules.types]
+inputs = { default = "VCF[index=tbi]" }

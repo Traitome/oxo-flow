@@ -1,0 +1,27 @@
+# G071 — uncompressed-flagged CRAM fed to a zstd consumer
+# The producer declares CRAM; the consumer requires CRAM[compression=zstd].
+# The published compression field names block/stream encodings; only
+# BAM implies BGZF, and a different declared encoding does not satisfy
+# the requirement, so the edge violates TYPE-006. This compression
+# pair was not asserted by the pilot.
+#
+# EXPECTED (authored 2026-11-27 from the published contract, before running):
+#   reject — TYPE-006.
+
+[workflow]
+name = "g071"
+
+[[rules]]
+name = "produce"
+output = ["aln.cram"]
+shell = "samtools view -C -o aln.cram aln.bam"
+[rules.types]
+outputs = { default = "CRAM" }
+
+[[rules]]
+name = "consume"
+input = ["aln.cram"]
+output = ["result.dat"]
+shell = "zstd -c aln.cram > aln.cram.zst"
+[rules.types]
+inputs = { default = "CRAM[compression=zstd]" }

@@ -1,0 +1,25 @@
+# G087 — FASTA producer and consumer with matching index and build
+# Both sides declare FASTA[index=fai,reference_build=GRCh38]; the consumer's
+# companion-index and build requirements are satisfied, so no TYPE
+# diagnostic. FASTA is not covered as a same-format accept by the pilot.
+#
+# EXPECTED (authored 2026-11-27 from the published contract, before running):
+#   accept — no TYPE diagnostic.
+
+[workflow]
+name = "g087"
+
+[[rules]]
+name = "produce"
+output = ["genome.fa"]
+shell = "samtools faidx genome.fa"
+[rules.types]
+outputs = { default = "FASTA[index=fai,reference_build=GRCh38]" }
+
+[[rules]]
+name = "consume"
+input = ["genome.fa"]
+output = ["genome.mmi"]
+shell = "minimap2 -d genome.mmi genome.fa"
+[rules.types]
+inputs = { default = "FASTA[index=fai,reference_build=GRCh38]" }

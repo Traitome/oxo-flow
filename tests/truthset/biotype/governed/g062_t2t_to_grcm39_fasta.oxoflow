@@ -1,0 +1,27 @@
+# G062 — T2T-CHM13 FASTA fed to a GRCm39 consumer
+# The producer declares reference_build=T2T-CHM13; the consumer requires
+# reference_build=GRCm39. The published reference-build field is checked
+# when both sides name a build and aliases do not make these equal, so
+# the edge violates TYPE-004. This build pair was not asserted by any
+# pilot case (the pilot used the human GRCh37/GRCh38 family).
+#
+# EXPECTED (authored 2026-11-27 from the published contract, before running):
+#   reject — TYPE-004.
+
+[workflow]
+name = "g062"
+
+[[rules]]
+name = "produce"
+output = ["genome.fa"]
+shell = "samtools faidx t2t.fa"
+[rules.types]
+outputs = { default = "FASTA[reference_build=T2T-CHM13]" }
+
+[[rules]]
+name = "consume"
+input = ["genome.fa"]
+output = ["result.txt"]
+shell = "minimap2 -d grcm39.mmi genome.fa"
+[rules.types]
+inputs = { default = "FASTA[reference_build=GRCm39]" }

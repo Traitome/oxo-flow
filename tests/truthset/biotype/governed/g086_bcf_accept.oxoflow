@@ -1,0 +1,25 @@
+# G086 — BCF producer and consumer with matching format
+# Both sides declare the same BCF format and no other requirement, so the
+# edge is compatible and no TYPE diagnostic fires. BCF is not covered as a
+# same-format accept by the pilot.
+#
+# EXPECTED (authored 2026-11-27 from the published contract, before running):
+#   accept — no TYPE diagnostic.
+
+[workflow]
+name = "g086"
+
+[[rules]]
+name = "produce"
+output = ["calls.bcf"]
+shell = "bcftools call -Ob -o calls.bcf"
+[rules.types]
+outputs = { default = "BCF" }
+
+[[rules]]
+name = "consume"
+input = ["calls.bcf"]
+output = ["stats.txt"]
+shell = "bcftools stats calls.bcf > stats.txt"
+[rules.types]
+inputs = { default = "BCF" }

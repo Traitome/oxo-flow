@@ -1,0 +1,26 @@
+# G035 — CRAM alignment fed to a SAM consumer
+# A CRAM producer feeds a consumer whose declared contract is SAM.
+# The published format enum makes them distinct formats; no coercion
+# arm applies, so the edge violates TYPE-001 (format incompatibility).
+# Distinct format pair not asserted by any pilot case.
+#
+# EXPECTED (authored 2026-11-27 from the published contract, before running):
+#   reject — TYPE-001.
+
+[workflow]
+name = "g035"
+
+[[rules]]
+name = "produce"
+output = ["aln.cram"]
+shell = "samtools view -C -o aln.cram aln.bam"
+[rules.types]
+outputs = { default = "CRAM" }
+
+[[rules]]
+name = "consume"
+input = ["aln.cram"]
+output = ["result.dat"]
+shell = "samtools view -h aln.cram > aln.sam"
+[rules.types]
+inputs = { default = "SAM" }
