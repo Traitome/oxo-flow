@@ -347,7 +347,10 @@ Any other gating shape still reports the warning.
 **Solution**: Pending rules are stuck because none can become ready — typically an
 upstream rule failed and its dependents stay pending forever (resource waits
 cannot deadlock: over-capacity requests are clamped, and explicit budget
-violations fail fast before any rule runs). Check:
+violations fail fast before any rule runs). One exception: a run whose
+`[resource_budget] max_cost` stop has latched never reaches this diagnosis —
+a latched budget stop outranks it and the run ends as `cost_budget_exceeded`
+instead. Check:
 
 1. `oxo-flow status` for failed upstream rules (the stuck rules' dependencies)
 2. Dependency declarations (`depends_on`) that may never be satisfiable

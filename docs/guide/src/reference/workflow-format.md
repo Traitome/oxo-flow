@@ -1286,10 +1286,22 @@ disk-pressure guard withholds new work:
   observably with the structured run status `cost_budget_exceeded` — the
   same shape as the disk-pressure Hold abort: the checkpoint is saved, a
   message names the method, the accrued amount (or "unknown"), the cap, and
-  any unknown residual, then the run exits non-zero.
+  any unknown residual, then the run exits non-zero. A latched budget stop
+  takes precedence over the DAG deadlock diagnosis (exactly as the
+  disk-pressure Hold park does): a capped run whose remaining rules are
+  blocked on a failed upstream ends as the budget outcome, never as a
+  "Deadlock detected" mis-report.
+- A cap breach on the run's LAST settle leaves nothing stranded: the run
+  then ends by its own counts (`completed` or `failed`), but the `--json`
+  summary carries the `cost_budget` detail (final accrual against the cap)
+  and the console says so loudly — a terminal breach is never invisible,
+  locally or on the cluster path.
 - A workflow with no `max_cost` behaves byte-identically to before.
 - The cluster path (`run --profile`) enforces the same accrual and stops new
-  submissions at the cap.
+  submissions at the cap. Its cost stop is identified by the driver's own
+  error carrying the gate's message — a deadline or stall failure that
+  follows a latched cap keeps its real identity and is never re-labelled as
+  a budget stop.
 
 See [Resource budgets](../how-to/resource-tuning.md#resource-budgets) for
 the operational walk-through and

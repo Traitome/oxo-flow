@@ -153,16 +153,24 @@ pub(crate) struct ClusterRunSummary {
     /// successful run, even when every interrupted rule was
     /// `required = false`.
     pub interrupt_exit_code: Option<i32>,
-    /// #1400 structured cost-budget detail, present only when the cluster
-    /// cost gate fired (the driver stops NEW dispatch, in-flight jobs settle
-    /// honestly, and the run ends `cost_budget_exceeded`). `None` for every
-    /// ordinary run so the JSON summary stays byte-identical to before.
+    /// #1400 structured cost-budget detail, present whenever the cluster
+    /// cost gate fired (the driver stops NEW dispatch; in-flight jobs settle
+    /// honestly). `None` for every ordinary run so the JSON summary stays
+    /// byte-identical to before.
     pub cost_budget: Option<serde_json::Value>,
+    /// Review F2 (#1400): `true` only when the DRIVER ended the run on the
+    /// latched cost stop (its `Config` error carrying the gate's message) —
+    /// the "halted with work stranded" outcome that reports
+    /// `cost_budget_exceeded`. A run whose every record reached a terminal
+    /// state while the cap was breached keeps `false`: it ends by its own
+    /// counts (`completed`/`failed`) with `cost_budget` attached for
+    /// visibility, mirroring the local completion path.
+    pub cost_halt: bool,
 }
 
 impl ClusterRunSummary {
     pub fn is_success(&self) -> bool {
-        self.failed == 0 && self.interrupt_exit_code.is_none() && self.cost_budget.is_none()
+        self.failed == 0 && self.interrupt_exit_code.is_none() && !self.cost_halt
     }
 }
 
@@ -1003,6 +1011,7 @@ pub(crate) async fn run_on_cluster(
         skipped: 0,
         interrupt_exit_code: None,
         cost_budget: None,
+        cost_halt: false,
     };
 
     if to_run.is_empty() {
@@ -1274,9 +1283,13 @@ pub(crate) async fn run_on_cluster(
     // local scheduler uses (`resource_ledger` + `cost_budget`) over the shared
     // checkpoint — never a hand copy. `Some(message)` withholds every NEW
     // dispatch; in-flight jobs settle honestly (they are never killed). The
-    // structured detail is stashed so the terminal contract can still report
-    // `cost_budget_exceeded` after the driver's error is caught below.
-    let cost_slot: std::sync::Arc<std::sync::Mutex<Option<serde_json::Value>>> =
+    // gate's message AND structured detail are stashed so the terminal
+    // contract can classify the driver's own cost-stop error (it returns the
+    // message verbatim) and still report the breach after the run ends.
+    // Review F4: classification is by the latched MESSAGE matched against the
+    // driver's error, never by slot presence alone — a deadline or stall
+    // error that happens to follow a latched cap keeps its real identity.
+    let cost_slot: std::sync::Arc<std::sync::Mutex<Option<(String, serde_json::Value)>>> =
         std::sync::Arc::new(std::sync::Mutex::new(None));
     let cost_gate: Option<oxo_flow_core::backend::driver::CostGateHook<'_>> = args
         .config
@@ -1286,7 +1299,10 @@ pub(crate) async fn run_on_cluster(
         .map(|budget| {
             let gate_ck = args.checkpoint.clone();
             let slot = cost_slot.clone();
-            let names: Vec<String> = to_run.iter().cloned().collect();
+            // Sorted: `pending_ready` rides the persisted summary, so it
+            // must not depend on HashSet iteration order (review finding 4).
+            let mut names: Vec<String> = to_run.iter().cloned().collect();
+            names.sort();
             Box::new(move || {
                 let ck = gate_ck.clone();
                 let slot = slot.clone();
@@ -1316,15 +1332,25 @@ pub(crate) async fn run_on_cluster(
                         &accrual,
                         pending_names.len(),
                     );
-                    *slot.lock().unwrap() = Some(crate::commands::run::cost_budget_detail(
-                        &accrual,
-                        &pending_names,
+                    *slot.lock().unwrap() = Some((
+                        message.clone(),
+                        crate::commands::run::cost_budget_detail(&accrual, &pending_names),
                     ));
                     Some(message)
                 })
                     as std::pin::Pin<Box<dyn std::future::Future<Output = Option<String>> + Send>>
             }) as oxo_flow_core::backend::driver::CostGateHook<'_>
         });
+    // Terminal-breach reporting (review F2/F3): the Ok path needs the SAME
+    // canonical budget + checkpoint the gate used, so a run that ends with
+    // every record terminal while the cap was latched can attach the final
+    // accrual (recomputed — the latch-time detail predates the last settles).
+    let post_cost_ck = args.checkpoint.clone();
+    let post_cost_budget = args
+        .config
+        .resource_budget
+        .as_ref()
+        .and_then(|b| b.max_cost.clone());
     let run_result = driver
         .run(
             &mut plan,
@@ -1372,16 +1398,84 @@ pub(crate) async fn run_on_cluster(
             // the terminal contract through `summary.cost_budget` instead of
             // swallowing it into a bare error (the caller maps it to the
             // observable `cost_budget_exceeded` outcome).
-            let cost_detail = cost_slot.lock().unwrap().take();
-            if let Some(detail) = cost_detail {
+            //
+            // Review F4: classification matches the DRIVER'S OWN cost-stop
+            // error (it returns the gate's message verbatim) against the
+            // latched slot — never slot presence alone, so a deadline
+            // ("poll timeout exceeded") or stall error that follows a
+            // latched cap keeps its real identity.
+            let stop = cost_slot.lock().unwrap().take();
+            let cost_stopped = matches!(
+                &e,
+                oxo_flow_core::error::OxoFlowError::Config { message }
+                    if stop.as_ref().is_some_and(|(m, _)| m == message)
+            );
+            if cost_stopped {
+                let (_, detail) = stop.expect("matched the latched cost slot");
                 eprintln!("{} {}", "Cost budget:".red().bold(), e);
                 summary.cost_budget = Some(detail);
+                summary.cost_halt = true;
                 warn_if_nothing_recorded(&args).await;
                 return Ok(summary);
+            }
+            // A real failure after a latched cap: the failure keeps its
+            // identity (the summary is dropped on Err), but the breach is
+            // never silent — the latched detail names what was known when
+            // the cap tripped.
+            if let Some((_, detail)) = &stop {
+                eprintln!(
+                    "{} the cost budget had latched before this failure: {detail}",
+                    "Cost budget:".red().bold()
+                );
             }
             return Err(anyhow::anyhow!("cluster execution failed: {e}"));
         }
     };
+    // Review F2/F3 (#1400): the driver also breaks out with `Ok` when every
+    // record reached a terminal state while the cap was latched — in-flight
+    // settles pushed the accrual past it (terminal breach), or dep-blocked
+    // rules were skipped into `done` (F2's silent-drop case). The run is
+    // over, not halted: attach the FINAL accrual — recomputed from the
+    // settled checkpoint so late in-flight settles count — and let the
+    // records decide the status, exactly like the local completion path.
+    // An interrupted run (the Cancelled arm above) keeps its own truth: its
+    // jobs did NOT settle, so no "settled" breach line and no detail.
+    if summary.interrupt_exit_code.is_none() && cost_slot.lock().unwrap().take().is_some() {
+        let budget = post_cost_budget.expect("cost slot latched implies a declared max_cost");
+        // Sorted (review finding 4): `pending_ready` must not depend on
+        // HashSet iteration order — the persisted artifact is compared and
+        // audited.
+        let mut names: Vec<String> = to_run.iter().cloned().collect();
+        names.sort();
+        let (rules, pending_names) = {
+            let ck = post_cost_ck.lock().await;
+            let rules =
+                oxo_flow_core::resource_ledger::build_resource_ledger(&ck, None, None, None).rules;
+            let pending: Vec<String> = names
+                .iter()
+                .filter(|r| !ck.completed_rules.contains(*r) && !ck.failed_rules.contains(*r))
+                .cloned()
+                .collect();
+            (rules, pending)
+        };
+        let accrual = oxo_flow_core::cost_budget::accrue_cost(&rules, &budget);
+        eprintln!(
+            "{} the run ended with the declared [resource_budget] max_cost cap \
+             exceeded: accrued {} against the cap of {} {} — every dispatched \
+             job settled; the cost_budget detail rides the --json summary.",
+            "Cost budget:".red().bold(),
+            accrual
+                .accrued
+                .map(|v| format!("{v:.6} {}", accrual.currency))
+                .unwrap_or_else(|| "unknown".to_string()),
+            accrual.limit,
+            accrual.currency
+        );
+        summary.cost_budget = Some(crate::commands::run::cost_budget_detail(
+            &accrual,
+            &pending_names,
+        ));
+    }
 
     for record in &records {
         record_outcome(&args, record, &mut summary).await;

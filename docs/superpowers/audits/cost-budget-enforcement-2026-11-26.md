@@ -124,3 +124,61 @@ submission.
   `gb_second_rate`, so it does not exercise that residual.
 - Multi-instance / crash-recovery enforcement is out of scope here; this is a
   single-host SLURM submission.
+
+## Follow-up: terminal contract (review findings F1–F4, 2026-11-27)
+
+An independent re-review of the merged #1400 surfaced four edge defects and
+this follow-up fixes them; the same fr cluster re-verified the two terminal
+shapes with binary `bin/oxo-flow-1400fu` (musl static release via
+`cargo zigbuild`, `oxo-flow 0.32.0`, evidence root
+`.../oxo-flow-slurm-test/cb1400fu`).
+
+1. **F1 — a latched budget stop outranks the deadlock diagnosis.** The local
+   scheduler accrued cost BEFORE `check_deadlock` and defers the check while
+   the stop is latched (the disk-pressure Hold park makes the same
+   precedence trade); the abort fires on ANY rule still `Pending`
+   (`Scheduler::pending_rules`), not only `ready` ones — a rule blocked on a
+   failed upstream is never `ready`.
+2. **F2/F3 — terminal breach is visible on both paths.** When the cap is
+   breached by the run's LAST settle (nothing stranded), the run no longer
+   ends silently: locally `handle_run_completion` attaches the final accrual
+   to the `--json` summary with a loud console line; on the cluster path the
+   driver consults the cost gate once more at the `all_done` break (the
+   settle that breached may land after the round's gate consult), and the
+   caller attaches the recomputed final accrual. Status stays the run's own
+   verdict; `ClusterRunSummary.cost_halt` distinguishes the halted outcome.
+3. **F4 — cost stops are classified by the driver's own error.** The Err
+   path matches the gate's message against the driver's returned `Config`
+   error instead of slot presence, so a deadline/stall failure after a
+   latch keeps its identity.
+
+### Evidence `cb1400fu/run1` — halt parity (F2/F4 rework regression guard)
+
+The original three-chain treatment re-run on the fixed binary: exit 1,
+`run1/out.json` reports `"status": "cost_budget_exceeded"` with
+`pending_ready: ["step2", "step3"]` and the reworded message
+("2 rule(s) remaining undispatched"); `run1/cp.json/out` holds **only**
+`step1.txt` — identical behavioral contract to the original treatment,
+now through the F4 message-matched classification.
+
+### Evidence `cb1400fu/run2` — terminal breach (F2/F3 cluster Ok path)
+
+One rule (`solo`, `sleep 4`, GB-second rate 1.0, cap 1e-7): its settle is
+the breach and nothing is stranded. Exit **0**, `run2/out.json`:
+
+```json
+"status": "completed",
+"cost_budget": {
+  "accrued": 0.004194304, "cpu_seconds": 0.0,
+  "gb_cost": 0.004194304, "limit": 1e-7,
+  "method": "gb_second_rate * (max_rss_bytes/1e9 * wall_time_secs)",
+  "on_unknown": "refuse", "unknown_rules": [],
+  "pending_ready": [], "currency_mismatch": []
+}
+```
+
+`run2/cp.json/out` holds `solo.txt` (the rule really ran and settled).
+Before the driver's final-gate-consult fix, this shape ended `completed`
+with `cost_budget: null` — the exact invisible-breach gap F3 describes;
+the fix is what makes the detail appear. Local counterparts:
+`tests/cost_budget.rs` cases 9 (no-deadlock) and 10 (terminal breach).

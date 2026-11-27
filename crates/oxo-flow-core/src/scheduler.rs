@@ -375,6 +375,22 @@ impl SchedulerState {
         Ok(ready)
     }
 
+    /// Returns the rules still `Pending`, sorted — every rule that has not
+    /// reached a terminal state. Unlike [`Self::ready_rules`], this includes
+    /// rules whose dependencies already failed: under a latched cost-budget
+    /// stop (#1400) no further rule can ever dispatch, so *any* remaining
+    /// Pending rule is stranded, ready or not.
+    pub fn pending_rules(&self) -> Vec<String> {
+        let mut pending: Vec<String> = self
+            .statuses
+            .iter()
+            .filter(|(_, status)| **status == JobStatus::Pending)
+            .map(|(n, _)| n.clone())
+            .collect();
+        pending.sort();
+        pending
+    }
+
     /// Returns `true` if all rules have completed (success, failed, or skipped).
     pub fn is_complete(&self) -> bool {
         self.statuses.values().all(|s| {
@@ -1974,6 +1990,57 @@ mod tests {
 
         let ready = state.ready_rules(&dag).unwrap();
         assert_eq!(ready, vec!["a"]);
+    }
+
+    /// #1400 review F1: a rule whose upstream FAILED stays Pending but is
+    /// never `ready` — `pending_rules` must still report it, since under a
+    /// latched cost stop it is stranded exactly like a ready rule.
+    #[test]
+    fn pending_rules_includes_failed_dependency_blockees() {
+        let mut state = SchedulerState::new(&["a", "b"]);
+        state.mark_completed(JobRecord {
+            resources: None,
+            signal: None,
+            rule: "a".to_string(),
+            status: JobStatus::Failed,
+            enqueued_at: None,
+            started_at: None,
+            finished_at: None,
+            exit_code: Some(1),
+            stdout: None,
+            stderr: None,
+            command: None,
+            retries: 0,
+            skip_reason: None,
+            max_rss_mb: None,
+            cpu_seconds: None,
+            caption: None,
+        });
+        let dag = WorkflowDag::from_rules(&make_rules()).unwrap();
+        assert!(state.ready_rules(&dag).unwrap().is_empty());
+        assert_eq!(state.pending_rules(), vec!["b".to_string()]);
+        assert!(!state.is_complete());
+        // Terminal states leave nothing pending.
+        state.mark_completed(JobRecord {
+            resources: None,
+            signal: None,
+            rule: "b".to_string(),
+            status: JobStatus::Skipped,
+            enqueued_at: None,
+            started_at: None,
+            finished_at: None,
+            exit_code: None,
+            stdout: None,
+            stderr: None,
+            command: None,
+            retries: 0,
+            skip_reason: Some("blocked by failed upstream dependency".into()),
+            max_rss_mb: None,
+            cpu_seconds: None,
+            caption: None,
+        });
+        assert!(state.pending_rules().is_empty());
+        assert!(state.is_complete());
     }
 
     /// Two-sample diamond: `a → (b ∥ c) → d`, one instance per sample.

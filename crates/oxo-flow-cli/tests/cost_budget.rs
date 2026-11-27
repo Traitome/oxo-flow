@@ -366,3 +366,105 @@ fn plan_time_surfaces_have_no_budget_key_when_undeclared() {
         );
     }
 }
+
+// 9. Review F1 (#1400): a budget-stopped run whose remaining rule is blocked
+// on a FAILED upstream must end as the budget outcome — never as a DAG
+// "Deadlock detected" mis-report, and never silently without the cost detail.
+// The executed rule breaches the cap (its CPU metrics accrue), so the gate
+// latches while its dependent is still stranded.
+#[test]
+fn budget_stop_with_blocked_remaining_rule_is_not_a_deadlock() {
+    let dir = tempfile::tempdir().unwrap();
+    write(
+        dir.path(),
+        "wf.oxoflow",
+        r#"
+[workflow]
+name = "cost-budget-no-deadlock"
+version = "1.0"
+
+[resource_budget]
+max_cost = { amount = 0.0001, currency = "USD", cpu_second_rate = 0.001 }
+
+[[rules]]
+name = "boom"
+shell = "i=0; while [ $i -lt 600000 ]; do i=$((i+1)); done; echo boom > boom.txt; exit 1"
+
+[[rules]]
+name = "after"
+depends_on = ["boom"]
+shell = "echo after > after.txt"
+"#,
+    );
+    let (code, stdout, stderr) =
+        run_in(dir.path(), &["run", "wf.oxoflow", "--json", "--keep-going"]);
+    assert_ne!(
+        code, 0,
+        "a breached budget run must exit non-zero: {stderr}"
+    );
+    assert!(
+        !stderr.contains("Deadlock detected"),
+        "a budget stop must never be mis-reported as a DAG deadlock: {stderr}"
+    );
+    let doc = parse_json(&stdout);
+    assert!(
+        matches!(
+            doc["status"].as_str(),
+            Some("cost_budget_exceeded") | Some("failed")
+        ),
+        "the run ends by the budget or by its own failure, never a deadlock: {doc}"
+    );
+    let cb = doc
+        .get("cost_budget")
+        .unwrap_or_else(|| panic!("the latched cap breach must carry its detail: {doc}"));
+    assert_eq!(cb["currency"], "USD", "{doc}");
+    // The executed rule keeps its side effect; the blocked rule never ran.
+    assert!(dir.path().join("boom.txt").exists());
+    assert!(!dir.path().join("after.txt").exists());
+}
+
+// 10. Review F3 (#1400): when the LAST executed rule pushes the accrual over
+// the cap, nothing is stranded — the run completes by its own counts, but the
+// summary must carry the breach detail so a cap breach is never invisible
+// (previously it emitted a plain `completed` indistinguishable from a run
+// under budget).
+#[test]
+fn terminal_breach_completes_with_cost_budget_detail() {
+    let dir = tempfile::tempdir().unwrap();
+    write(
+        dir.path(),
+        "wf.oxoflow",
+        r#"
+[workflow]
+name = "cost-budget-terminal-breach"
+version = "1.0"
+
+[resource_budget]
+max_cost = { amount = 0.0001, currency = "USD", cpu_second_rate = 0.001 }
+
+[[rules]]
+name = "burn"
+shell = "i=0; while [ $i -lt 600000 ]; do i=$((i+1)); done; echo done > burn.txt"
+"#,
+    );
+    let (code, stdout, stderr) = run_in(dir.path(), &["run", "wf.oxoflow", "--json"]);
+    assert_eq!(
+        code, 0,
+        "nothing is stranded, so the run completes: {stderr}"
+    );
+    let doc = parse_json(&stdout);
+    assert_eq!(doc["status"], "completed", "{doc}");
+    let cb = doc
+        .get("cost_budget")
+        .and_then(Value::as_object)
+        .unwrap_or_else(|| panic!("a terminal cap breach must surface its detail: {doc}"));
+    assert_eq!(cb["currency"], "USD");
+    let accrued = cb["accrued"]
+        .as_f64()
+        .unwrap_or_else(|| panic!("terminal breach accrual is known here: {doc}"));
+    assert!(
+        accrued >= 0.0001,
+        "the breach detail must show the cap was reached: {doc}"
+    );
+    assert!(dir.path().join("burn.txt").exists());
+}

@@ -65,6 +65,13 @@ pub(crate) struct CompletionContext<'a> {
     pub disk_thresholds: Option<(u64, u64)>,
     pub dag: &'a WorkflowDag,
     pub samples_filter: &'a [String],
+    /// Review F3 (#1400): the latched cost-budget stop, when the run reached
+    /// normal completion while over the declared cap (the last settle pushed
+    /// the accrual past it, leaving nothing stranded). The abort path never
+    /// reaches completion; here the breach is attached to the summary — the
+    /// status stays `completed`/`failed` by the run's own counts, but the
+    /// `cost_budget` detail makes the cap breach impossible to miss.
+    pub cost_breach: Option<oxo_flow_core::cost_budget::CostAccrual>,
     pub json_summary: &'a mut RunJsonSummary,
 }
 
@@ -829,6 +836,33 @@ pub(crate) async fn handle_run_completion(ctx: CompletionContext<'_>) -> anyhow:
                 }
             }
         }
+    }
+
+    // Review F3 (#1400): the run ended over its declared cap with every rule
+    // terminal — nothing was stranded, so no abort fired. The breach must
+    // never be silent: attach the structured detail (final accrual, recomputed
+    // by the gate from the settled checkpoint) and say so loudly. The status
+    // and exit contract stay governed by the run's own counts, mirroring the
+    // cluster path's terminal-breach handling.
+    if let Some(accrual) = &ctx.cost_breach {
+        ctx.json_summary
+            .set_cost_budget(crate::commands::run::cost_budget_detail(accrual, &[]));
+        progress_narrate(
+            format_args!(
+                "\n{} the run finished while exceeding the declared [resource_budget] \
+                 max_cost cap: accrued {} against the cap of {} {} — every rule settled, \
+                 so nothing was killed, but the cap was breached (see the `cost_budget` \
+                 field of the --json summary).",
+                "Cost budget:".red().bold(),
+                accrual
+                    .accrued
+                    .map(|v| format!("{v:.6} {}", accrual.currency))
+                    .unwrap_or_else(|| "unknown".to_string()),
+                accrual.limit,
+                accrual.currency
+            ),
+            ctx.run_log,
+        );
     }
 
     // JSON output mode (issue #142 H6): the summary is emitted on EVERY

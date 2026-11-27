@@ -248,9 +248,18 @@ currency mismatch between the budget and a rule's own reported cost is
   killed or rolled back. Once nothing is in flight and no new work may
   dispatch, the run aborts observably with the structured run status
   `cost_budget_exceeded`, naming the method, the accrued amount (or
-  "unknown"), the cap, and any unknown residual, then exits non-zero.
+  "unknown"), the cap, and any unknown residual, then exits non-zero. The
+  latched stop outranks the DAG deadlock diagnosis (as the disk-pressure
+  Hold park does), so a capped run whose remaining rules are blocked on a
+  failed upstream is never mis-reported as "Deadlock detected". If the
+  breach lands on the run's last settle — nothing left undispatched — the
+  run ends by its own counts and the summary still carries the
+  `cost_budget` detail, so the breach is never invisible.
 - **Cluster** (`oxo-flow run --profile <name>`): the same accrual stops new
-  submissions at the cap.
+  submissions at the cap. The halt outcome is identified by the driver's
+  own cost-stop error; a deadline or stall failure that follows a latched
+  cap keeps its real identity, and a run that merely ends over its cap
+  reports its own verdict with the `cost_budget` detail attached.
 - A workflow with no `max_cost` behaves byte-identically to before.
 
 Because no run metrics exist before execution, plan-time cost is

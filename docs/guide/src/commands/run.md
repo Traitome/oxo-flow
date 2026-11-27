@@ -101,7 +101,10 @@ so `--json` consumers never get zero bytes. `status` is `"completed"` only
 when the run finished with zero required failures and was not interrupted;
 every other exit is `"failed"`. A run stopped by a `[resource_budget]
 max_cost` cap reports the structured status `cost_budget_exceeded` in this
-summary (see [Limit resource usage](#limit-resource-usage)).
+summary; a run whose last settle breaches the cap with nothing left
+undispatched keeps its own `completed`/`failed` status and instead carries
+the `cost_budget` detail object with the final accrual (see
+[Limit resource usage](#limit-resource-usage)).
 
 Human progress and result output on stderr is **not** suppressed — this flag
 appends the summary, it does not switch the run to machine-only mode.
@@ -430,9 +433,14 @@ max_cost = { amount = 10.0, currency = "USD", cpu_second_rate = 0.0001, gb_secon
 `amount` and `currency` are required; at least one of `cpu_second_rate` /
 `gb_second_rate` must be present. When accrued cost reaches `amount`, the run
 dispatches no new rules, lets in-flight rules settle honestly (they are not
-killed or rolled back), and — once nothing is in flight — aborts with the
-structured run status `cost_budget_exceeded`, naming the method, the accrued
-amount (or "unknown"), the cap, and any unknown residual. Because the ledger
+killed or rolled back), and — once nothing is in flight and rules remain
+pending — aborts with the structured run status `cost_budget_exceeded`,
+naming the method, the accrued amount (or "unknown"), the cap, and any
+unknown residual. A latched stop outranks the deadlock diagnosis (rules
+blocked on a failed upstream are budget-stranded, not a malformed DAG). If
+the breach lands on the run's last settle — nothing left undispatched — the
+run ends by its own counts and the summary carries the `cost_budget` detail
+instead of aborting. Because the ledger
 never reports a metric a rule did not produce, an accrual that depends on a
 missing metric is `null`, never `0`; the default `on_unknown = "refuse"` then
 fails closed, while `on_unknown = "report"` keeps running and reports the
@@ -2097,7 +2105,7 @@ and [`test`](test.md#exit-codes).
 - A timeout of `0` means no timeout
 - Resource constraints (`threads`, `memory`) in rules are checked against available resources before execution
 - **Pre-flight budget check:** When `--max-threads`/`--max-memory` is explicitly set — or the workflow declares `[resource_budget] max_threads`/`max_memory` (issue #1080) — the engine checks all rules *before* execution starts. Any rule whose requirements exceed the effective cap is reported immediately (fast-fail), preventing mid-pipeline failures. The workflow budget is a hard, versioned cap: it clamps a larger CLI request, a tighter CLI request still wins, and a silent CLI inherits it.
-- **Cost budget (`[resource_budget] max_cost`, issue #1400):** a workflow may declare a spend cap as `max_cost = { amount = 10.0, currency = "USD", cpu_second_rate = 0.0001 }`. Unlike the pre-flight caps above, this is a **run-time** gate: cost accrues from the resource ledger (issue #1371) as rules complete, and once accrued cost reaches `amount` — or accrual is unknown under the default `on_unknown = "refuse"` — the scheduler dispatches no new ready rules. In-flight rules settle honestly: they run to completion and are not killed or rolled back. When nothing remains in flight, the run aborts with the structured status `cost_budget_exceeded` (checkpoint saved, message naming the method, the accrued amount or "unknown", the cap, and any unknown residual, non-zero exit). Accrual depends on per-rule CPU-seconds and GB-seconds; a metric no rule reported makes the accrual `null`, never `0`. `on_unknown = "report"` keeps the run going and records the unbounded residual instead. A currency mismatch is always fail-closed. A workflow with no `max_cost` is unchanged. See [Resource budgets](../how-to/resource-tuning.md#resource-budgets).
+- **Cost budget (`[resource_budget] max_cost`, issue #1400):** a workflow may declare a spend cap as `max_cost = { amount = 10.0, currency = "USD", cpu_second_rate = 0.0001 }`. Unlike the pre-flight caps above, this is a **run-time** gate: cost accrues from the resource ledger (issue #1371) as rules complete, and once accrued cost reaches `amount` — or accrual is unknown under the default `on_unknown = "refuse"` — the scheduler dispatches no new ready rules. In-flight rules settle honestly: they run to completion and are not killed or rolled back. When nothing remains in flight and rules are still pending, the run aborts with the structured status `cost_budget_exceeded` (checkpoint saved, message naming the method, the accrued amount or "unknown", the cap, and any unknown residual, non-zero exit); a latched stop outranks the DAG deadlock diagnosis, so a capped run whose remaining rules are blocked on a failed upstream is never mis-reported as "Deadlock detected". If the breach lands on the run's last settle (nothing left undispatched), the run ends by its own counts and the summary still carries the `cost_budget` detail — the breach is visible on both the local and the cluster path, and the cluster path never re-labels a later deadline/stall failure as a budget stop. Accrual depends on per-rule CPU-seconds and GB-seconds; a metric no rule reported makes the accrual `null`, never `0`. `on_unknown = "report"` keeps the run going and records the unbounded residual instead. A currency mismatch is always fail-closed. A workflow with no `max_cost` is unchanged. See [Resource budgets](../how-to/resource-tuning.md#resource-budgets).
 - **Backend preflight:** before any rule executes, every unique environment spec of the pending rules is validated once — a missing backend (`conda`, `mamba`, `pixi`, `docker`, `singularity`, `modules`) aborts the run with one collapsed entry per root cause and "no rules were run" (see [Backend preflight](#backend-preflight-fail-fast-on-a-missing-environment-backend)).
 - **Auto-detected capacity is soft:** Rules whose declared requests exceed the machine's detected threads/memory are not rejected — the declared request is the tool's upper bound (often an upstream HPC label), not a scheduling requirement. The engine warns and clamps the pool reservation, so an over-capacity rule runs alone (serialized) instead of blocking the workflow.
 - **CPU-oversubscription warning:** the engine compares each scheduled parallel wave's worst-case demand (`min(-j, wave width) × heaviest rule threads`, both clamped to the effective pool ceiling) with the detected CPUs and warns at ≥ 80 % — the analogue of the memory clamp warning. The estimate covers only the rules the run will execute (`-t`/`--module` filtering included). A ceiling that leaves headroom silences it; a cap at or above the host still warns. See [CPU Oversubscription Warning](../how-to/resource-tuning.md#cpu-oversubscription-warning).

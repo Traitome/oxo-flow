@@ -854,8 +854,14 @@ A declared `[resource_budget] max_cost` table **is** enforced on the cluster
 path (issue #1400): it does not consume a `run` flag, so it is neither warned
 nor dropped. The same ledger-based accrual that stops local dispatch stops
 **new** cluster submissions once the accrued cost reaches the cap — jobs
-already submitted run to completion, and the run ends with the structured
-status `cost_budget_exceeded` (see [Resource Budgets](../how-to/resource-tuning.md#cost-budgets-max_cost)
+already submitted run to completion, and a run halted with work stranded
+ends with the structured status `cost_budget_exceeded` (the stop is
+identified by the driver's own cost-stop error, so a later deadline/stall
+failure is never re-labelled as a budget stop). A run whose last submitted
+jobs breach the cap with nothing left to submit keeps its own
+`completed`/`failed` verdict and carries the `cost_budget` detail in the
+`--json` summary (see
+[Resource Budgets](../how-to/resource-tuning.md#cost-budgets-max_cost)
 and [`report` → Cost accrual](../commands/report.md#cost-accrual)). The
 `max_threads`/`max_memory`/`max_jobs` caps keep their separate pre-submit
 check.
