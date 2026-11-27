@@ -118,10 +118,12 @@ pub fn looks_like_oxo_flow(pid: i32) -> bool {
 ///     path whose file name is `oxo-flow`, or the bare name from a PATH
 ///     lookup — the executor's payload);
 ///   - the executor's wrapper (see [`crate::executor`]): the line carries
-///     an exit-record path (file name `.exit-code`) followed within a few
-///     argv elements by the oxo-flow binary token — the exact composition
-///     of `spawn_background_run_with_args`, including the `sudo -n -u
-///     <user>` prefix in between.
+///     an exit-record path (file name `.exit-code`) followed by the exact
+///     payload composition — the oxo-flow binary token, optionally behind
+///     the `sudo -n -u <user>` prefix and/or the `unshare … --` namespace
+///     wrapper (issue #1401; `process_control` must recognize the same
+///     shapes the executor spawns, or crash recovery cannot attribute its
+///     own CLI).
 fn cmdline_is_oxo_flow(args: &str) -> bool {
     let tokens: Vec<&str> = args.split_whitespace().collect();
     if tokens.is_empty() {
@@ -134,14 +136,33 @@ fn cmdline_is_oxo_flow(args: &str) -> bool {
         if std::path::Path::new(token)
             .file_name()
             .is_some_and(|f| f == ".exit-code")
+            && payload_is_oxo_flow(&tokens[i + 1..])
         {
-            let lookahead = &tokens[i + 1..(i + 1 + 5).min(tokens.len())];
-            if lookahead.iter().any(|t| is_oxo_flow_token(t)) {
-                return true;
-            }
+            return true;
         }
     }
     false
+}
+
+/// Whether a token sequence is the executor's payload with the CLI at its
+/// head, skipping the optional wrappers the executor may prepend: the legacy
+/// `sudo -n -u <user>` prefix, then the `unshare <flags> --` namespace
+/// wrapper (issue #1401). Anything else at the head is not the payload.
+fn payload_is_oxo_flow(tokens: &[&str]) -> bool {
+    let mut rest = tokens;
+    if rest.first() == Some(&"sudo") {
+        // `sudo -n -u <user>` — exactly four tokens.
+        rest = rest.get(4..).unwrap_or_default();
+    }
+    if rest.first() == Some(&"unshare") {
+        // Skip the wrapper's options up to the `--` separator; the wrapped
+        // command is the token directly after it.
+        let Some(sep) = rest.iter().position(|t| *t == "--") else {
+            return false;
+        };
+        rest = rest.get(sep + 1..).unwrap_or_default();
+    }
+    rest.first().is_some_and(|t| is_oxo_flow_token(t))
 }
 
 fn is_oxo_flow_token(token: &str) -> bool {
@@ -314,6 +335,19 @@ mod tests {
         // …including the sudo prefix (`sudo -n -u <user>` between them).
         assert!(super::cmdline_is_oxo_flow(
             "sh -c f=\"$1\"; shift; \"$@\"; rc=$?; printf '%s' \"$rc\" > \"$f\"; exit \"$rc\" sh /tmp/run/.exit-code sudo -n -u bioinfo /usr/local/bin/oxo-flow run wf.oxoflow"
+        ));
+        // …and the userns wrapper (#1401): `unshare <flags> -- <binary>`.
+        assert!(super::cmdline_is_oxo_flow(
+            "sh -c f=\"$1\"; shift; \"$@\"; rc=$?; printf '%s' \"$rc\" > \"$f\"; exit \"$rc\" sh /tmp/run/.exit-code unshare --user --map-root-user --pid --fork --mount-proc --kill-child -- /usr/local/bin/oxo-flow run wf.oxoflow"
+        ));
+        // A userns wrapper WITHOUT the `--` separator is not the executor's
+        // spawn shape: the wrapped command is not identifiable.
+        assert!(!super::cmdline_is_oxo_flow(
+            "sh -c x sh /tmp/run/.exit-code unshare --user --pid /usr/local/bin/oxo-flow run wf"
+        ));
+        // A wrapper whose wrapped command is NOT the CLI must fail.
+        assert!(!super::cmdline_is_oxo_flow(
+            "sh -c x sh /tmp/run/.exit-code unshare --user --pid -- /bin/sleep 30"
         ));
     }
 
