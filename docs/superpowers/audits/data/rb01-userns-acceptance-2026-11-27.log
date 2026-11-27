@@ -1,21 +1,24 @@
-# Issue #1401 userns acceptance - key output (tx-ubuntu, 2026-11-27)
+# Issue #1401 userns acceptance - key output (tx-ubuntu, 2026-11-27/28)
 #
 # Host: Linux VM-4-4-ubuntu 6.8.0-137-generic x86_64, Intel Xeon 8255C,
-#       4 vCPU / 3.6 GiB RAM, unshare from util-linux 2.39.3
+#       4 vCPU / 3.6 GiB RAM, unshare from util-linux 2.39.3, Landlock ABI 4
 # Run identity verified: uid 1000; AppArmor profile "oxo-flow-userns (unconfined)"
 # Build: CARGO_BUILD_JOBS=1, isolated CARGO_TARGET_DIR,
 #        cargo test -p oxo-flow-web --test rb01_userns_adversarial --no-run --locked
-# Full run log (including the build) stayed on the host at
-#   /home/ubuntu/rb1401-host-run.log
+# The suite was re-run after the review fixes (SIGTERM cancel, exact probe
+# argv, success-only probe cache, fail-closed leg, ownership and SIGTERM-only
+# legs); this file carries the final run's output.
 #
 === build result ===
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 6m 21s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6m 19s
   Executable tests/rb01_userns_adversarial.rs (/home/ubuntu/oxo-build-target-1401/debug/deps/rb01_userns_adversarial-bbb0e71c35c9a0c7)
 
-=== test binary: /home/ubuntu/oxo-build-target-1401/debug/deps/rb01_userns_adversarial-bbb0e71c35c9a0c7 ===
-=== AppArmor profile inherited through sudo -u ubuntu? ===
+=== profile + uid check ===
+1000
+oxo-flow-userns (unconfined)
 unshare-control exit=0
-=== uid-1000 Landlock composition probe (evidence for the docs claim) ===
+
+=== uid-1000 Landlock composition probe ===
 probe variant=none abi=4
 variant=none exit=0
 probe variant=system-only abi=4
@@ -33,10 +36,11 @@ variant=proc-self-dir exit=1
 
 === adversarial suite (--nocapture --test-threads=1) ===
 running 1 test
-test userns_run_is_isolated_from_host_and_tenants ... RB01U CONTROL probe results:
+test userns_run_is_isolated_from_host_and_tenants ... RB01U fail-closed: run=85db1f02-088e-4876-b0f9-e62e024af50b status=failed log_names_reason=true no_cli_executed=true quota_active_runs=0
+RB01U CONTROL probe results:
 RB01U   nproc: 14566
 RB01U   proc-environ: LEAKED
-RB01U   proc-pid-count: 210
+RB01U   proc-pid-count: 215
 RB01U   proc-server-visible: VISIBLE
 RB01U   signal-server: SIGNALLED
 RB01U   signal-tenantb: SIGNALLED
@@ -54,12 +58,15 @@ RB01U   signal-victim: denied
 RB01U   uid: 0
 RB01U   workdir-write: pass
 RB01U exit-code run: status=failed (CLI exit 7 through unshare)
-RB01U cancel: run=8771e728-1be2-4e7b-9c52-808c921f7f58 status=cancelled tenant_b_host_pid=1649870 marker=rb01u-b-marker-1649855 namespace_has_no_survivor=true
+RB01U cancel: run=a2f3b13d-1fa8-4de8-8451-e7a818dcebc7 status=cancelled tenant_b_host_pid=1673564 marker=rb01u-b-marker-1673541 namespace_has_no_survivor=true
+RB01U sigterm-only teardown: elapsed=11.091675ms namespace_has_no_survivor=true
 ok
 
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.77s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.84s
 
 # The run was launched as uid 1000 (not root) so the user namespace is a real
 # unprivileged creation, and the AppArmor profile was verified independently
 # (`unshare -Ur true` exits 0; /proc/self/attr/current = "oxo-flow-userns
-# (unconfined)").
+# (unconfined)"). The namespace-created workdir file ownership assertion and
+# the fail-closed (failing `unshare` on PATH) leg are inside the same test and
+# are not separately echoed beyond the lines above.

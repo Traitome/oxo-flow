@@ -56,7 +56,7 @@ open http://localhost:8080
 |---------|-------|
 | Network | `127.0.0.1:8080` by default — pass `--host 0.0.0.0` to bind all interfaces |
 | Database | SQLite (default) or PostgreSQL — see [Database Selection](#database-selection-database_url) |
-| Run execution | Backend-routed code exists for SQLite and PostgreSQL; schema bootstrap + core CRUD are CI-smoke-verified on live PostgreSQL, and a 2026-11-26 campaign measured two instances (same host and separate network namespaces), partitions, connection exhaustion, clean/crash restarts, per-user quota, and owner-lease ghost-run reconciliation. Separate physical hosts, production scale, per-query network timeouts, and database media corruption remain unvalidated. Team mode has no OS-level tenant execution boundary, so expose it only to fully trusted workflow authors |
+| Run execution | Backend-routed code exists for SQLite and PostgreSQL; schema bootstrap + core CRUD are CI-smoke-verified on live PostgreSQL, and a 2026-11-26 campaign measured two instances (same host and separate network namespaces), partitions, connection exhaustion, clean/crash restarts, per-user quota, and owner-lease ghost-run reconciliation. Separate physical hosts, production scale, per-query network timeouts, and database media corruption remain unvalidated. Team mode's OS-level tenant boundary is opt-in and fail-closed when requested (`OXO_FLOW_WEB_SANDBOX=landlock` for filesystem/TCP, `OXO_FLOW_WEB_ISOLATION=userns` for a per-run user + PID namespace); with neither mode set, expose it only to fully trusted workflow authors |
 | Auth | Password env vars (`OXO_FLOW_ADMIN_PASSWORD` / `OXO_FLOW_USER_PASSWORD` / `OXO_FLOW_VIEWER_PASSWORD`) + optional ORCID/GitHub OAuth |
 | Workspace | `workspace/users/<username>/runs/<run_id>` |
 
@@ -346,8 +346,9 @@ kernel modes add real isolation for locally executed runs:
   tenants' workdirs; TCP is denied on kernel 6.7+. This is the mode to use
   when tenant rules must not read host files.
 - `OXO_FLOW_WEB_ISOLATION=userns` — the CLI runs in a per-run user + PID
-  namespace (root inside, the server uid outside; a private `/proc`; no
-  signals to or from host/sibling processes). It does **not** confine the
+  namespace (root inside, the server uid outside; a private `/proc`; the run
+  cannot signal or see host/sibling processes, while host-side signals still
+  reach it — that is how cancel works). It does **not** confine the
   filesystem or network; run one mode at a time.
 
 `userns` needs unprivileged user namespaces on the host. Ubuntu 24.04
@@ -369,8 +370,9 @@ sudo apparmor_parser -r /etc/apparmor.d/oxo-flow-userns
 ```
 
 The server probes the exact `unshare --user --map-root-user --pid --fork
---mount-proc --kill-child -- true` invocation before the first run and
-caches the verdict. If the mode cannot be installed, the spawn is refused
+--mount-proc --kill-child=SIGTERM -- true` invocation before the first run
+and caches a successful verdict; a failed probe is retried on the next
+spawn. If the mode cannot be installed, the spawn is refused
 with the remediation named — it never silently runs unisolated. Both modes
 apply to **local** runs only; cluster/remote runs execute on the remote
 host under that host's controls. See the

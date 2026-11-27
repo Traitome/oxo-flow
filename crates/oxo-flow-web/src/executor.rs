@@ -917,27 +917,22 @@ pub fn spawn_background_run_with_args(
         // invalid knob value, or a mode combination that cannot compose)
         // refuses the spawn instead of silently degrading to an unisolated
         // run. The probe runs as the server uid with the exact wrapper argv.
-        let userns_plan = match crate::userns::configure(
-            std::env::var(crate::userns::ISOLATION_MODE_ENV)
-                .ok()
-                .as_deref(),
-            auth_type == "sudo",
-            sandbox_plan.is_some(),
-        ) {
-            Ok(plan) => plan,
-            Err(e) => {
-                error!(
-                    "Namespace isolation configuration failed for run {run_id} — refusing \
+        let userns_plan =
+            match crate::userns::configure_env(auth_type == "sudo", sandbox_plan.is_some()) {
+                Ok(plan) => plan,
+                Err(e) => {
+                    error!(
+                        "Namespace isolation configuration failed for run {run_id} — refusing \
                      to spawn (fail-closed): {e}"
-                );
-                let _ = std::fs::write(
-                    run_dir.join("execution.log"),
-                    format!("run failed before spawn: namespace isolation unavailable: {e}\n"),
-                );
-                mark_run_failed(&run_id).await;
-                return;
-            }
-        };
+                    );
+                    let _ = std::fs::write(
+                        run_dir.join("execution.log"),
+                        format!("run failed before spawn: namespace isolation unavailable: {e}\n"),
+                    );
+                    mark_run_failed(&run_id).await;
+                    return;
+                }
+            };
         let payload = match userns_plan {
             Some(plan) => plan.wrap_payload(payload),
             None => payload,

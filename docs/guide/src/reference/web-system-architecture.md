@@ -400,11 +400,11 @@ controls on the CLI process tree (and therefore every rule shell it forks):
    Fail-closed: an unhonorable sandbox request refuses the spawn.
 4. **User + PID namespace (Linux, opt-in, local runs, issue #1401)** —
    `OXO_FLOW_WEB_ISOLATION=userns` spawns the CLI through
-   `unshare --user --map-root-user --pid --fork --mount-proc --kill-child`:
+   `unshare --user --map-root-user --pid --fork --mount-proc --kill-child=SIGTERM`:
    the run is root inside its own user namespace (the server uid outside, so
    workdir ownership is unchanged), is PID 1 of a private PID namespace with
    a private `/proc`, and can neither see nor signal host or sibling-tenant
-   processes. Availability is probed before use (AppArmor/sysctl host
+   processes (host-side signals still reach it — that is how cancel works). Availability is probed before use (AppArmor/sysctl host
    prerequisites) and a requested-but-unavailable mode fails the spawn —
    never a silent downgrade. Mutually exclusive with the Landlock mode:
    measured on a Landlock ABI 4 host, the `unshare` map write targets the
@@ -412,11 +412,14 @@ controls on the CLI process tree (and therefore every rule shell it forks):
    cannot grant without re-exposing host `/proc`.
 5. **Process-group bookkeeping (always on)** — the run owns a process
    group, so cancel/pause/resume signal the whole tree; with a namespace,
-   `--kill-child` extends the group kill to the namespace init, so cancel
-   tears down every process in the namespace.
+   `--kill-child=SIGTERM` forwards the supervisor's SIGTERM to the namespace
+   init (a CLI that traps it shuts down gracefully; an init that ignores it
+   is covered by the 5 s SIGKILL escalation), so cancel tears down every
+   process in the namespace.
 
-The implementation lives in `crates/oxo-flow-web/src/sandbox.rs` (Landlock,
-rlimits) and `crates/oxo-flow-web/src/userns.rs` (namespaces); the
+The implementation lives in `crates/oxo-flow-web/src/executor.rs` (the spawn
+choke point and the rlimit `pre_exec` hooks), `crates/oxo-flow-web/src/sandbox.rs`
+(Landlock), and `crates/oxo-flow-web/src/userns.rs` (namespaces); the
 enforced-vs-residual matrix, the knob reference, and the two-tenant
 adversarial evidence (`rb01_sandbox_adversarial.rs`,
 `rb01_userns_adversarial.rs`) are in

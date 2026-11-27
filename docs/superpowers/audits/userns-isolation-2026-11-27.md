@@ -23,14 +23,14 @@ The full run log (including the build) stayed on the campaign host.
 | util-linux | `unshare` 2.39.3 |
 | Landlock | ABI 4 (reported by the probe) |
 | Run identity | uid **1000** (`ubuntu`), AppArmor profile `oxo-flow-userns (unconfined)`, verified with `unshare -Ur true` (exit 0) and `/proc/self/attr/current` |
-| Build | source archive of `security/1401-userns-isolation`, `CARGO_BUILD_JOBS=1`, isolated `CARGO_TARGET_DIR`; `cargo test -p oxo-flow-web --test rb01_userns_adversarial --no-run --locked` (6m 21s) |
+| Build | source archive of `security/1401-userns-isolation`, `CARGO_BUILD_JOBS=1`, isolated `CARGO_TARGET_DIR`; `cargo test -p oxo-flow-web --test rb01_userns_adversarial --no-run --locked` (6m 19s) |
 | Suite | `crates/oxo-flow-web/tests/rb01_userns_adversarial.rs`, `--nocapture --test-threads=1` |
 
 ## Method
 
 - Every run is created through the production `POST /api/runs` path and the
   executor's spawn choke point: `sh -c <exit-code wrapper>` → optional
-  `unshare --user --map-root-user --pid --fork --mount-proc --kill-child --`
+  `unshare --user --map-root-user --pid --fork --mount-proc --kill-child=SIGTERM --`
   → the CLI payload. The payload is a probe stub; the spawn, environment,
   exit-record, and cancel machinery is the production code.
 - **Non-vacuity**: the same stub first runs with the mode OFF (control) and
@@ -39,6 +39,14 @@ The full run log (including the build) stayed on the campaign host.
 - **Cross-tenant signals** target a REAL second run of tenant B: a long
   `sleep` inside B's own namespace, located by a unique argv[0] marker, and
   later cancelled through `POST /api/runs/{id}/cancel`.
+- **Fail-closed leg**: the first run is submitted with a failing `unshare`
+  prepended to `PATH`; the executor must refuse to spawn (run failed, reason
+  logged, no CLI executed, quota reservation released). Because only a
+  SUCCESSFUL probe is cached, the later legs probe again and succeed.
+- **Graceful teardown leg**: a direct spawn with a namespace init that traps
+  SIGTERM, and a marker child that IGNORES SIGTERM (it can only die with the
+  namespace). SIGTERM alone — no SIGKILL — must remove it inside the 5 s
+  escalation window.
 - `RLIMIT_NPROC` composition is asserted by inheritance (the probe records
   `ulimit -u` inside the namespace), not by a fork-bomb: the host is shared.
 
@@ -52,17 +60,24 @@ The full run log (including the build) stayed on the campaign host.
 | `kill -0 <server pid>` | SIGNALLED | **denied** |
 | `kill -0 <host victim pid>` | SIGNALLED | **denied** |
 | `kill -0 <tenant B host pid>` | SIGNALLED | **denied** |
-| numeric entries in `/proc` | 210 (host) | **4** (private PID namespace) |
+| numeric entries in `/proc` | 215 (host) | **4** (private PID namespace) |
 | `ulimit -u` (operator `RLIMIT_NPROC=4096`) | 14566 (host limit) | **4096** (inherited through `unshare`) |
-| write the run's own workdir | pass | **pass** |
+| write the run's own workdir | pass | **pass** (file owned by uid 1000 on the host) |
 
 - **Exit-status propagation**: a run whose CLI exits 7 through `unshare` is
   recorded `failed` by the web executor — the `.exit-code` wrapper semantics
   are unchanged.
+- **Fail-closed refusal** (requested mode, unusable host): run `failed`, the
+  refusal reason persisted in `execution.log`, no CLI or wrapper executed,
+  and the quota reservation released (`active_runs=0`).
 - **Cancel**: tenant B's run reached `cancelled`; its namespaced process
-  (host pid 1649870) disappeared and no process carrying the marker survived
-  — group kill + `--kill-child` tear down the whole namespace.
-- The suite finished in 5.77 s with `1 passed; 0 failed`.
+  (host pid 1673564) disappeared and no process carrying the marker survived
+  — group kill + `--kill-child=SIGTERM`, with the 5 s SIGKILL escalation as
+  the guaranteed path for an init that does not trap SIGTERM.
+- **SIGTERM-only teardown**: with no SIGKILL sent at all, the namespace was
+  gone in **11.1 ms** (`namespace_has_no_survivor=true`) — the graceful
+  SIGTERM path has a real, measured window.
+- The suite finished in 5.84 s with `1 passed; 0 failed`.
 
 ## Landlock composition — re-measured as uid 1000
 
@@ -113,11 +128,32 @@ sudo aa-exec -p oxo-flow-userns -- sudo -u ubuntu env \
   <test-binary> --nocapture --test-threads=1
 ```
 
+### Landlock composition probe (reproducible)
+
+The four variants in the composition table are driven by
+[`data/rb01-userns-landlock-probe.py`](data/rb01-userns-landlock-probe.py),
+which installs the ruleset in-process and then execs `unshare` (the same
+process, preserving the pid). Copy it to the host and run each variant as
+uid 1000 under the profile:
+
+```bash
+for v in none system-only proc-grants proc-self-dir; do
+  sudo aa-exec -p oxo-flow-userns -- sudo -u ubuntu \
+    python3 -I /path/to/rb01-userns-landlock-probe.py "$v"
+  echo "variant=$v exit=$?"
+done
+```
+
+Expected on the measured host: `none` exits 0; the other three exit 1 with
+`unshare: cannot open /proc/self/uid_map: Permission denied` — the measured
+basis for the fail-closed mutual exclusion.
+
 ## Limits and residuals (not claimed)
 
-- One host, one measured run per leg (control, isolated, cancel), kernel
-  6.8.0-137, Landlock ABI 4, util-linux 2.39.3. Other kernels/LSM
-  configurations are covered only by the fail-closed probe.
+- One host, one measured run per leg (fail-closed, control, isolated,
+  exit-code, cancel, SIGTERM-only), kernel 6.8.0-137, Landlock ABI 4,
+  util-linux 2.39.3. Other kernels/LSM configurations are covered only by
+  the fail-closed probe.
 - The spawned payload is a probe stub; the production executor, wrapper,
   env allowlist, rlimits, and cancel path are exercised, but no real
   bioinformatics rule shell was run inside the namespace in this campaign.

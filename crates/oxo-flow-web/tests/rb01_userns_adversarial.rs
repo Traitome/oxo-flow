@@ -50,6 +50,8 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use oxo_flow_web::server;
 use serde_json::{Value, json};
+use std::os::unix::process::CommandExt;
+use std::process::Stdio;
 use std::time::{Duration, Instant};
 use tower::ServiceExt;
 
@@ -68,9 +70,10 @@ async fn userns_run_is_isolated_from_host_and_tenants() {
     run_userns_suite().await;
 }
 
-/// Probe the EXACT wrapper argv the executor uses (`--kill-child` included)
-/// with `true` as the payload. Any failure — missing binary, EPERM from the
-/// kernel/AppArmor, mount-proc failure — skips the suite with the reason.
+/// Probe the EXACT wrapper argv the executor uses (`--kill-child=SIGTERM`
+/// and the `--` separator included) with `true` as the payload. Any failure
+/// — missing binary, EPERM from the kernel/AppArmor, mount-proc failure —
+/// skips the suite with the reason.
 fn probe_userns() -> Result<(), String> {
     let out = std::process::Command::new("unshare")
         .args([
@@ -79,7 +82,7 @@ fn probe_userns() -> Result<(), String> {
             "--pid",
             "--fork",
             "--mount-proc",
-            "--kill-child",
+            "--kill-child=SIGTERM",
             "--",
             "true",
         ])
@@ -415,6 +418,82 @@ shell = "echo rb01u-probe"
     seed_identity(A_TOKEN, A_ID, A_USER, "user").await;
     seed_identity(B_TOKEN, B_ID, B_USER, "user").await;
 
+    // ── Fail-closed leg: a requested-but-unavailable host ─────────────────
+    // PATH is prepended with a FAILING `unshare`, so the availability probe
+    // fails for this spawn. The executor must refuse to run anything, mark
+    // the run failed with the reason, and release its quota reservation.
+    // The probe caches only SUCCESS, so removing the stub lets the later
+    // legs probe again and succeed.
+    let fake_bin = root.join("fake-bin");
+    std::fs::create_dir_all(&fake_bin).expect("create fake bin dir");
+    let fake_unshare = fake_bin.join("unshare");
+    std::fs::write(
+        &fake_unshare,
+        "#!/bin/bash\necho 'simulated userns unavailable' >&2\nexit 1\n",
+    )
+    .expect("write failing unshare stub");
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&fake_unshare)
+            .expect("fake unshare metadata")
+            .permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&fake_unshare, perms).expect("chmod fake unshare");
+    }
+    let original_path = std::env::var_os("PATH");
+    // SAFETY: this binary contains exactly one test, and the control/isolated
+    // spawn tasks below wait for this run's terminal state before any later
+    // `set_var` call.
+    unsafe {
+        let mut patched = fake_bin.clone().into_os_string();
+        if let Some(path) = &original_path {
+            patched.push(":");
+            patched.push(path);
+        }
+        std::env::set_var("PATH", patched);
+        std::env::set_var("OXO_FLOW_WEB_ISOLATION", "userns");
+    }
+    let (status, body) = post_run(&app, A_TOKEN, PROBE_WORKFLOW).await;
+    assert_eq!(status, StatusCode::OK, "fail-closed run accepted: {body}");
+    let fail_id = body["run_id"].as_str().expect("run_id").to_string();
+    assert_eq!(
+        wait_terminal(&fail_id, 30).await,
+        "failed",
+        "a requested-but-unavailable userns mode must fail the run"
+    );
+    let fail_dir =
+        oxo_flow_web::workspace::get_run_directory(A_ID, &fail_id).expect("fail-closed run dir");
+    let fail_log = std::fs::read_to_string(fail_dir.join("execution.log")).unwrap_or_default();
+    assert!(
+        fail_log.contains("namespace isolation unavailable"),
+        "the refusal reason must be persisted: {fail_log}"
+    );
+    assert!(
+        !fail_dir.join("probe-results.txt").exists() && !fail_dir.join(".exit-code").exists(),
+        "no CLI or wrapper may execute when the requested isolation is unavailable"
+    );
+    let backend = oxo_flow_web::infra::db::global_backend();
+    let usage = oxo_flow_web::infra::quota::usage(backend.as_deref(), A_ID)
+        .await
+        .expect("quota usage");
+    assert_eq!(
+        usage.active_runs, 0,
+        "a failed spawn must release the quota reservation"
+    );
+    eprintln!(
+        "RB01U fail-closed: run={fail_id} status=failed log_names_reason=true \
+         no_cli_executed=true quota_active_runs={}",
+        usage.active_runs
+    );
+    // SAFETY: the fail-closed run is terminal; its spawn task is gone.
+    unsafe {
+        match original_path {
+            Some(path) => std::env::set_var("PATH", path),
+            None => std::env::remove_var("PATH"),
+        }
+        std::env::remove_var("OXO_FLOW_WEB_ISOLATION");
+    }
+
     // ── Tenant B: a live run inside its own namespace ─────────────────────
     // SAFETY: no spawn task reads this variable before the control run is
     // posted (the control run below waits for its terminal state first).
@@ -530,6 +609,21 @@ shell = "echo rb01u-probe"
         "the namespace /proc must show far fewer processes (host {host_pids}, \
          namespace {ns_pids}) — mount-proc did not take effect"
     );
+    // Ownership, not just `id -u`: a file created INSIDE the namespace must
+    // be owned by the server uid on the host (the single-uid mapping) — the
+    // run's workdir artifacts stay writable by the engine outside.
+    {
+        use std::os::unix::fs::MetadataExt;
+        let created = isolated_dir.join("probe-results.txt");
+        let owner = std::fs::metadata(&created)
+            .expect("probe results file exists")
+            .uid();
+        assert_eq!(
+            owner,
+            server_uid().parse::<u32>().expect("numeric server uid"),
+            "files created inside the namespace must keep the server uid outside"
+        );
+    }
 
     // ── Exit-status propagation through the wrapper ───────────────────────
     // The CLI exits 7; the `.exit-code` wrapper and the web executor must
@@ -564,6 +658,69 @@ shell = "echo rb01u-probe"
         "a process inside tenant B's namespace survived cancel (SIGTERM → SIGKILL): \
          the supervisor's group kill must tear down the whole namespace"
     );
+
+    // ── SIGTERM-only teardown, no SIGKILL involved ────────────────────────
+    // A CLI that traps SIGTERM must get a graceful window: this leg sends
+    // SIGTERM (never SIGKILL) to the wrapper's group and requires the whole
+    // namespace to be gone well inside the supervisor's 5 s SIGKILL
+    // escalation. The inner marker deliberately IGNORES SIGTERM, so it can
+    // only disappear when the namespace init exits and the kernel tears the
+    // namespace down.
+    let plan = oxo_flow_web::userns::configure(Some("userns"), false, false)
+        .expect("userns configure")
+        .expect("mode requested");
+    let sig_marker = format!("rb01u-sigterm-{}", std::process::id());
+    let script = format!(
+        "trap 'exit 0' TERM; bash -c 'trap \"\" TERM; exec -a {sig_marker} sleep 300' & wait"
+    );
+    let exit_file = root.join("sigterm-leg-exit-code");
+    let mut cmd = std::process::Command::new("sh");
+    cmd.arg("-c")
+        .arg(oxo_flow_web::executor::EXIT_CODE_WRAPPER_SCRIPT);
+    cmd.arg("sh").arg(&exit_file);
+    cmd.args(plan.wrap_payload(vec![
+        std::ffi::OsString::from("bash"),
+        std::ffi::OsString::from("-c"),
+        std::ffi::OsString::from(script),
+    ]));
+    cmd.process_group(0)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let mut sig_child = cmd.spawn().expect("spawn SIGTERM-only leg");
+    let sig_pgid = sig_child.id() as i32;
+    oxo_flow_web::process_control::register("rb01u-sigterm-leg", sig_pgid);
+    let start_deadline = Instant::now() + Duration::from_secs(10);
+    while !process_alive_with(&sig_marker) {
+        assert!(
+            Instant::now() < start_deadline,
+            "the SIGTERM-only leg never started"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let t0 = Instant::now();
+    oxo_flow_web::process_control::signal_group(sig_pgid, oxo_flow_web::process_control::SIGTERM)
+        .expect("SIGTERM to the namespace group");
+    assert!(
+        wait_process_gone(&sig_marker, 4),
+        "SIGTERM alone must tear down the namespace without waiting for the \
+         supervisor's SIGKILL escalation"
+    );
+    let elapsed = t0.elapsed();
+    assert!(
+        elapsed < Duration::from_secs(5),
+        "graceful teardown took {elapsed:?}; the escalation window is 5 s, so this \
+         leg proves the SIGTERM path itself"
+    );
+    eprintln!(
+        "RB01U sigterm-only teardown: elapsed={:?} namespace_has_no_survivor=true",
+        elapsed
+    );
+    let _ = oxo_flow_web::process_control::signal_group(
+        sig_pgid,
+        oxo_flow_web::process_control::SIGKILL,
+    );
+    let _ = sig_child.wait();
+    oxo_flow_web::process_control::unregister("rb01u-sigterm-leg");
 
     // ── Cleanup ───────────────────────────────────────────────────────────
     let _ = victim.kill();

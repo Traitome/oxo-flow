@@ -167,17 +167,39 @@ pub fn configure(
     sudo_mode: bool,
     oxo_bin: &Path,
 ) -> Result<Option<SandboxPlan>, String> {
+    // Fail closed on a knob that is set but not valid UTF-8: `.ok()` would
+    // turn it into "unset" and silently disable the requested sandbox.
+    let mode = env_utf8(SANDBOX_MODE_ENV)?;
+    let net = env_utf8(SANDBOX_NET_ENV)?;
+    let read_paths = env_utf8(SANDBOX_READ_PATHS_ENV)?;
+    let write_paths = env_utf8(SANDBOX_WRITE_PATHS_ENV)?;
     configure_with(
-        std::env::var(SANDBOX_MODE_ENV).ok().as_deref(),
-        std::env::var(SANDBOX_NET_ENV).ok().as_deref(),
-        std::env::var(SANDBOX_READ_PATHS_ENV).ok().as_deref(),
-        std::env::var(SANDBOX_WRITE_PATHS_ENV).ok().as_deref(),
+        mode.as_deref(),
+        net.as_deref(),
+        read_paths.as_deref(),
+        write_paths.as_deref(),
         std::env::var("HOME").ok().as_deref(),
         run_dir,
         spawn_envs,
         sudo_mode,
         oxo_bin,
     )
+}
+
+/// Read a sandbox knob as UTF-8, failing closed on a non-UTF-8 value.
+fn env_utf8(name: &str) -> Result<Option<String>, String> {
+    utf8_value(name, std::env::var_os(name))
+}
+
+/// The testable core of [`env_utf8`].
+fn utf8_value(name: &str, value: Option<std::ffi::OsString>) -> Result<Option<String>, String> {
+    match value {
+        None => Ok(None),
+        Some(value) => value
+            .into_string()
+            .map(Some)
+            .map_err(|_| format!("{name} is not valid UTF-8")),
+    }
 }
 
 /// The environment-read-free core of [`configure`] — every knob value is a
@@ -948,6 +970,22 @@ mod linux {
             assert_eq!(parse_net_mode(Some("deny")), Ok(NetMode::Deny));
             assert_eq!(parse_net_mode(Some("require")), Ok(NetMode::Require));
             assert!(parse_net_mode(Some("blocked")).is_err());
+        }
+
+        /// A knob that is set to non-UTF-8 bytes must NOT read as "unset":
+        /// that would silently disable the requested sandbox.
+        #[test]
+        #[cfg(unix)]
+        fn non_utf8_knob_value_fails_closed() {
+            use std::os::unix::ffi::OsStringExt;
+            let raw = std::ffi::OsString::from_vec(vec![0xff, 0xfe]);
+            let err =
+                utf8_value(SANDBOX_MODE_ENV, Some(raw)).expect_err("non-UTF-8 must fail closed");
+            assert!(
+                err.contains(SANDBOX_MODE_ENV) && err.contains("not valid UTF-8"),
+                "{err}"
+            );
+            assert!(utf8_value(SANDBOX_MODE_ENV, None).unwrap().is_none());
         }
 
         #[test]

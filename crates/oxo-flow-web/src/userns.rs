@@ -6,33 +6,41 @@
 //! spawned CLI into a fresh **user namespace** (the server uid maps to uid 0
 //! inside, so files created on the run workdir keep the server uid outside)
 //! and a fresh **PID namespace** (the CLI becomes namespace init, reaps its
-//! rules, and a private `/proc` hides host processes; signals cannot cross
-//! namespace boundaries). It is a command wrapper — `unshare` from util-linux
-//! — not unsafe in-process code.
+//! rules, and a private `/proc` hides host processes; the run cannot see or
+//! signal host or sibling-tenant processes). It is a command wrapper —
+//! `unshare` from util-linux — not unsafe in-process code. The boundary is
+//! one-directional: host-side signals still reach the namespace (an ancestor
+//! PID namespace can signal any descendant), which is exactly how cancel
+//! works.
 //!
 //! ## Contract
 //!
 //! - `OXO_FLOW_WEB_ISOLATION` unset / empty / `off` = disabled (the default;
 //!   behavior is byte-identical to prior releases).
 //! - `userns` = requested. Availability is PROBED with the exact wrapper
-//!   argv before use (as the server uid) and the result is cached for the
-//!   process lifetime. A requested-but-unavailable mode FAILS THE SPAWN with
-//!   a structured message naming the host prerequisite — it never silently
-//!   degrades to an unisolated run.
-//! - Any other value is a configuration error and also fails the spawn.
+//!   argv before use (as the server uid); a successful probe is cached for
+//!   the process lifetime and a failed probe is retried on the next spawn.
+//!   A requested-but-unavailable mode FAILS THE SPAWN with a structured
+//!   message naming the host prerequisite — it never silently degrades to
+//!   an unisolated run.
+//! - Any other value (including a non-UTF-8 value) is a configuration error
+//!   and also fails the spawn.
 //! - Local-only: cluster/remote runs execute on another host and are not
 //!   affected (this module is only consulted by the local spawn path).
 //!
 //! ## Cancellation
 //!
 //! The executor spawns the whole wrapper in its own process group, so the
-//! supervisor's `killpg` reaches `sh`, `unshare`, and the namespace. A PID
-//! namespace's init (PID 1) ignores catchable signals it has no handler for,
-//! so a bare SIGTERM would not stop the CLI. `--kill-child` closes that gap:
-//! when the `unshare` parent is terminated, it SIGKILLs its child, and the
-//! kernel tears down every remaining member of the PID namespace. SIGKILL
-//! and SIGSTOP (the supervisor's final kill and its pause/resume signals)
-//! are kernel-only signals and are delivered to namespace init directly.
+//! supervisor's `killpg` reaches `sh`, `unshare`, and the namespace.
+//! `--kill-child=SIGTERM` makes the `unshare` parent forward SIGTERM to the
+//! namespace init when the parent is terminated, giving a CLI that traps
+//! SIGTERM a graceful shutdown window. A PID namespace's init (PID 1)
+//! ignores catchable signals it has no handler for, so for a CLI that does
+//! not trap SIGTERM the supervisor's existing 5 s SIGKILL escalation is the
+//! guaranteed path: it kills init directly, and the kernel tears down every
+//! remaining member of the PID namespace. SIGKILL and SIGSTOP (the final
+//! kill and the pause/resume signals) are kernel-only and are delivered to
+//! namespace init directly.
 //!
 //! ## Composition
 //!
@@ -87,17 +95,19 @@ pub const ISOLATION_MODE_ENV: &str = "OXO_FLOW_WEB_ISOLATION";
 /// The util-linux program that installs the namespaces.
 const UNSHARE_PROGRAM: &str = "unshare";
 
-/// Namespace flags, in argv order. `--kill-child` makes the unshare parent
-/// SIGKILL the namespace init when the parent is terminated, so a
-/// supervisor SIGTERM tears down the whole namespace (PID 1 ignores SIGTERM
-/// without a handler). `--` ends option parsing before the wrapped command.
+/// Namespace flags, in argv order. `--kill-child=SIGTERM` makes the unshare
+/// parent forward SIGTERM to the namespace init when the parent is
+/// terminated: a CLI that traps SIGTERM can shut down gracefully, and one
+/// that does not is covered by the supervisor's SIGKILL escalation (PID 1
+/// ignores catchable signals without a handler). `--` ends option parsing
+/// before the wrapped command and is part of the probed argv too.
 const UNSHARE_FLAGS: &[&str] = &[
     "--user",
     "--map-root-user",
     "--pid",
     "--fork",
     "--mount-proc",
-    "--kill-child",
+    "--kill-child=SIGTERM",
     "--",
 ];
 
@@ -158,9 +168,12 @@ impl UsernsPlan {
         wrapped
     }
 
-    /// The exact probe argv: the same wrapper flags with `true` as payload.
+    /// The EXACT probe argv — every wrapper flag including the `--`
+    /// separator, with `true` as the payload. The probe must exercise the
+    /// same command shape the spawn uses, so a version of `unshare` that
+    /// rejects `--kill-child=SIGTERM` fails the probe instead of every run.
     fn probe_argv(&self) -> impl Iterator<Item = &str> {
-        std::iter::once(UNSHARE_PROGRAM).chain(UNSHARE_FLAGS.iter().copied().filter(|f| *f != "--"))
+        std::iter::once(UNSHARE_PROGRAM).chain(UNSHARE_FLAGS.iter().copied())
     }
 }
 
@@ -168,14 +181,37 @@ impl UsernsPlan {
 /// environment.
 ///
 /// `Ok(None)` = disabled. Every `Err` is fail-closed: the caller must not
-/// spawn. Reads only [`ISOLATION_MODE_ENV`]; the probe is cached for the
-/// process lifetime.
+/// spawn.
 pub fn configure(
     mode_raw: Option<&str>,
     sudo_mode: bool,
     landlock_enabled: bool,
 ) -> Result<Option<UsernsPlan>, String> {
     configure_with(mode_raw, sudo_mode, landlock_enabled, cached_availability)
+}
+
+/// Read [`ISOLATION_MODE_ENV`] and resolve the plan.
+///
+/// Unlike a `.ok()` read, a value that is not valid UTF-8 is a configuration
+/// error (fail-closed): treating it as unset would silently disable the
+/// isolation the operator requested.
+pub fn configure_env(
+    sudo_mode: bool,
+    landlock_enabled: bool,
+) -> Result<Option<UsernsPlan>, String> {
+    let raw = utf8_mode_value(std::env::var_os(ISOLATION_MODE_ENV))?;
+    configure(raw.as_deref(), sudo_mode, landlock_enabled)
+}
+
+/// Fail-closed UTF-8 conversion for the knob value: a non-UTF-8 value is an
+/// error, never "unset".
+fn utf8_mode_value(value: Option<OsString>) -> Result<Option<String>, String> {
+    match value {
+        None => Ok(None),
+        Some(value) => value.into_string().map(Some).map_err(|_| {
+            format!("{ISOLATION_MODE_ENV} is not valid UTF-8; accepted values: off, userns")
+        }),
+    }
 }
 
 /// The probe-injectable core of [`configure`], so unit tests can drive an
@@ -228,12 +264,21 @@ fn configure_with(
     Ok(Some(UsernsPlan { program }))
 }
 
-/// Process-lifetime cache of the availability probe: the answer cannot
-/// change within one server process without a restart, and probing per run
-/// would add a fork to every spawn.
+/// Process-lifetime cache of a SUCCESSFUL availability probe: the capability
+/// cannot disappear within one server process without a restart, and probing
+/// per run would add a fork to every spawn. A FAILED probe is deliberately
+/// not cached — a transient load failure (fork pressure, a temporarily
+/// unavailable helper) must not disable the mode until the server restarts;
+/// the next spawn probes again and still fails closed if the host is really
+/// incapable.
 fn cached_availability(program: &Path) -> Result<(), String> {
-    static AVAILABLE: OnceLock<Result<(), String>> = OnceLock::new();
-    AVAILABLE.get_or_init(|| probe_unshare(program)).clone()
+    static AVAILABLE: OnceLock<()> = OnceLock::new();
+    if AVAILABLE.get().is_some() {
+        return Ok(());
+    }
+    probe_unshare(program)?;
+    let _ = AVAILABLE.set(());
+    Ok(())
 }
 
 /// Run the exact wrapper argv with `true` as the payload, bounded by
@@ -429,7 +474,7 @@ mod tests {
             "--pid",
             "--fork",
             "--mount-proc",
-            "--kill-child",
+            "--kill-child=SIGTERM",
             "--",
         ]
         .into_iter()
@@ -437,6 +482,51 @@ mod tests {
         .chain(payload)
         .collect();
         assert_eq!(wrapped, expected);
+    }
+
+    /// The probe must exercise the EXACT wrapper shape, including the `--`
+    /// separator, so an `unshare` that rejects any of the flags fails the
+    /// probe instead of every run.
+    #[test]
+    fn probe_argv_matches_the_wrapper_shape() {
+        let plan = UsernsPlan {
+            program: PathBuf::from("unshare"),
+        };
+        let probe: Vec<String> = plan.probe_argv().map(str::to_string).collect();
+        let wrapped: Vec<OsString> = plan.wrap_payload(vec![OsString::from("payload")]);
+        let wrapper_prefix: Vec<String> = wrapped[..wrapped.len() - 1]
+            .iter()
+            .map(|v| v.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(probe, wrapper_prefix);
+        assert_eq!(probe.last().map(String::as_str), Some("--"));
+        assert!(probe.iter().any(|f| f == "--kill-child=SIGTERM"));
+    }
+
+    /// A transient probe failure must not disable the mode for the process
+    /// lifetime: only success is cached, failures are retried.
+    #[test]
+    fn failed_probes_are_not_cached() {
+        let missing = Path::new("/nonexistent/definitely-not-unshare");
+        assert!(cached_availability(missing).is_err());
+        assert!(
+            cached_availability(missing).is_err(),
+            "a failed probe must be retried, not cached as a permanent verdict"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn non_utf8_knob_value_fails_closed() {
+        use std::os::unix::ffi::OsStringExt;
+        let raw = OsString::from_vec(vec![0xff, 0xfe]);
+        let err = utf8_mode_value(Some(raw)).expect_err("non-UTF-8 must fail closed");
+        assert!(err.contains("not valid UTF-8"), "{err}");
+        assert!(utf8_mode_value(None).unwrap().is_none());
+        assert_eq!(
+            utf8_mode_value(Some(OsString::from("userns"))).unwrap(),
+            Some("userns".to_string())
+        );
     }
 
     #[test]

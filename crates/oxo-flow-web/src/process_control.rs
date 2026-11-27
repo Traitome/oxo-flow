@@ -102,13 +102,22 @@ pub fn probe_alive(pid: i32) -> bool {
 /// contains the name — must NOT pass the probe; the guard's only job is to
 /// prove the pid belongs to a run the server itself started.
 pub fn looks_like_oxo_flow(pid: i32) -> bool {
+    let hint = resolved_binary_hint();
     match std::process::Command::new("ps")
         .args(["-p", &pid.to_string(), "-o", "args="])
         .output()
     {
-        Ok(out) => cmdline_is_oxo_flow(&String::from_utf8_lossy(&out.stdout)),
+        Ok(out) => cmdline_is_oxo_flow(&String::from_utf8_lossy(&out.stdout), hint.as_deref()),
         Err(_) => false,
     }
+}
+
+/// The resolved CLI path, when it is discriminating enough to match against
+/// a `ps args=` line. A bare program name (`oxo-flow`) is skipped: it would
+/// not distinguish the CLI from an editor or a `grep`.
+fn resolved_binary_hint() -> Option<String> {
+    let path = crate::executor::find_oxo_flow_binary();
+    (path.components().count() > 1).then(|| path.to_string_lossy().into_owned())
 }
 
 /// Whether one `ps` args= line belongs to the oxo-flow CLI or its wrapper.
@@ -119,16 +128,27 @@ pub fn looks_like_oxo_flow(pid: i32) -> bool {
 ///     lookup — the executor's payload);
 ///   - the executor's wrapper (see [`crate::executor`]): the line carries
 ///     an exit-record path (file name `.exit-code`) followed by the exact
-///     payload composition — the oxo-flow binary token, optionally behind
-///     the `sudo -n -u <user>` prefix and/or the `unshare … --` namespace
-///     wrapper (issue #1401; `process_control` must recognize the same
-///     shapes the executor spawns, or crash recovery cannot attribute its
-///     own CLI).
-fn cmdline_is_oxo_flow(args: &str) -> bool {
-    let tokens: Vec<&str> = args.split_whitespace().collect();
-    if tokens.is_empty() {
+///     payload composition — the oxo-flow binary, optionally behind the
+///     `sudo -n -u <user>` prefix and/or the `unshare … --` namespace
+///     wrapper (issue #1401).
+///
+/// `binary_hint` is the RESOLVED CLI path (executor's `OXO_FLOW_BIN` /
+/// target-dir lookup). Matching against it fixes two blind spots of the
+/// token heuristic: a binary path containing spaces (ps joins argv with
+/// single spaces, so token alignment fails) and a forged `sudo` prefix (the
+/// shape is now validated as `-n -u <user>`). Only a command that STARTS
+/// with the resolved binary is accepted, so a line that merely mentions the
+/// path (e.g. `grep <path>`) never passes.
+fn cmdline_is_oxo_flow(args: &str, binary_hint: Option<&str>) -> bool {
+    if args.trim().is_empty() {
         return false;
     }
+    if let Some(binary) = binary_hint
+        && starts_with_command(args, binary)
+    {
+        return true;
+    }
+    let tokens: Vec<&str> = args.split_whitespace().collect();
     if is_oxo_flow_token(tokens[0]) {
         return true;
     }
@@ -141,7 +161,74 @@ fn cmdline_is_oxo_flow(args: &str) -> bool {
             return true;
         }
     }
+    // Wrapper whose binary path contains spaces: locate the exit record in
+    // the raw line and require the wrapped command to start with the
+    // resolved binary path.
+    if let Some(binary) = binary_hint {
+        let mut rest = args;
+        while let Some(pos) = rest.find(".exit-code") {
+            let after = &rest[pos + ".exit-code".len()..];
+            if payload_command_is_binary(after, binary) {
+                return true;
+            }
+            rest = after;
+        }
+    }
     false
+}
+
+/// Split the first whitespace-delimited token off `input`, returning the
+/// token and the remainder (which keeps its original spacing).
+fn take_token(input: &str) -> (&str, &str) {
+    let input = input.trim_start();
+    match input.find(char::is_whitespace) {
+        Some(i) => (&input[..i], &input[i..]),
+        None => (input, ""),
+    }
+}
+
+/// Whether `args` begins with `command` followed by a token boundary.
+fn starts_with_command(args: &str, command: &str) -> bool {
+    args.trim_start()
+        .strip_prefix(command)
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
+}
+
+/// Whether the wrapped command (the text after the exit record) is the
+/// resolved CLI, after validating the optional `sudo -n -u <user>` and
+/// `unshare … --` prefixes. Comparisons are prefix-based so binary paths
+/// containing spaces survive ps's whitespace joining.
+fn payload_command_is_binary(after_exit_record: &str, binary: &str) -> bool {
+    let (mut token, mut rest) = take_token(after_exit_record);
+    if token == "sudo" {
+        // The executor only ever emits this exact shape; anything else is
+        // not its spawn.
+        let (flag_n, r1) = take_token(rest);
+        let (flag_u, r2) = take_token(r1);
+        let (user, r3) = take_token(r2);
+        if flag_n != "-n" || flag_u != "-u" || user.is_empty() || user.starts_with('-') {
+            return false;
+        }
+        let (cmd, r4) = take_token(r3);
+        token = cmd;
+        rest = r4;
+    }
+    if token == "unshare" {
+        let mut remainder = rest;
+        loop {
+            let (flag, next) = take_token(remainder);
+            if flag.is_empty() {
+                return false;
+            }
+            if flag == "--" {
+                return starts_with_command(next, binary);
+            }
+            remainder = next;
+        }
+    }
+    // Rejoin the token with its original trailing text: a binary path with
+    // spaces spans several whitespace tokens.
+    starts_with_command(&format!("{token}{rest}"), binary)
 }
 
 /// Whether a token sequence is the executor's payload with the CLI at its
@@ -182,26 +269,40 @@ fn is_oxo_flow_token(token: &str) -> bool {
 /// session-or-group on Linux), so all processes are enumerated and filtered
 /// on the `pgid` column instead — identical output on both.
 pub fn group_looks_like_oxo_flow(pgid: i32) -> bool {
+    let hint = resolved_binary_hint();
     match std::process::Command::new("ps")
         .args(["-e", "-o", "pid=,pgid=,args="])
         .output()
     {
         Ok(out) if out.status.success() => {
             String::from_utf8_lossy(&out.stdout).lines().any(|line| {
-                // ps pads columns to the widest value, so `pid pgid` can be
-                // separated by several spaces — split on whitespace RUNS and
-                // rejoin the args column (the rejoin is lossless for the
-                // downstream tokenizer, which splits on whitespace anyway).
-                let mut fields = line.split_whitespace();
-                let member_pgid = fields.nth(1).and_then(|g| g.parse::<i32>().ok());
-                member_pgid == Some(pgid) && {
-                    let args = fields.collect::<Vec<_>>().join(" ");
-                    cmdline_is_oxo_flow(&args)
-                }
+                // Skip the padded `pid`/`pgid` columns while keeping the
+                // args text RAW: re-joining whitespace tokens would rewrite
+                // a binary path that itself contains spaces.
+                let member_pgid = line
+                    .split_whitespace()
+                    .nth(1)
+                    .and_then(|g| g.parse::<i32>().ok());
+                member_pgid == Some(pgid)
+                    && cmdline_is_oxo_flow(after_n_fields(line, 2), hint.as_deref())
             })
         }
         _ => false,
     }
+}
+
+/// The raw remainder of `line` after skipping its first `n` whitespace
+/// fields (internal spacing is preserved).
+fn after_n_fields(line: &str, n: usize) -> &str {
+    let mut rest = line;
+    for _ in 0..n {
+        let (token, next) = take_token(rest);
+        if token.is_empty() {
+            return "";
+        }
+        rest = next;
+    }
+    rest.trim_start()
 }
 
 #[cfg(test)]
@@ -309,45 +410,98 @@ mod tests {
     #[test]
     fn cmdline_identity_is_anchored_not_substring() {
         // Mentions without structure must fail.
-        assert!(!super::cmdline_is_oxo_flow("grep -r oxo-flow ."));
+        assert!(!super::cmdline_is_oxo_flow("grep -r oxo-flow .", None));
         assert!(!super::cmdline_is_oxo_flow(
-            "vim /tmp/oxo-flow-analysis.txt"
+            "vim /tmp/oxo-flow-analysis.txt",
+            None
         ));
-        assert!(!super::cmdline_is_oxo_flow("sh -c oxo-flow"));
-        assert!(!super::cmdline_is_oxo_flow(""));
+        assert!(!super::cmdline_is_oxo_flow("sh -c oxo-flow", None));
+        assert!(!super::cmdline_is_oxo_flow("", None));
         // An exit-record path WITHOUT the binary token must fail.
         assert!(!super::cmdline_is_oxo_flow(
-            "sh -c 'echo hi' sh /tmp/run/.exit-code echo hi"
+            "sh -c 'echo hi' sh /tmp/run/.exit-code echo hi",
+            None
         ));
         // A binary whose name merely CONTAINS "oxo-flow" must fail.
         assert!(!super::cmdline_is_oxo_flow(
-            "sh -c x sh /tmp/run/.exit-code /usr/bin/oxo-flow-bench run wf"
+            "sh -c x sh /tmp/run/.exit-code /usr/bin/oxo-flow-bench run wf",
+            None
         ));
         // The CLI itself: binary path or bare name as the FIRST argv element.
         assert!(super::cmdline_is_oxo_flow(
-            "/usr/local/bin/oxo-flow run wf.oxoflow --workdir /tmp/run"
+            "/usr/local/bin/oxo-flow run wf.oxoflow --workdir /tmp/run",
+            None
         ));
-        assert!(super::cmdline_is_oxo_flow("oxo-flow run wf.oxoflow"));
+        assert!(super::cmdline_is_oxo_flow("oxo-flow run wf.oxoflow", None));
         // The executor wrapper: exit record directly before the binary…
         assert!(super::cmdline_is_oxo_flow(
-            "sh -c f=\"$1\"; shift; \"$@\"; rc=$?; printf '%s' \"$rc\" > \"$f\"; exit \"$rc\" sh /tmp/run/.exit-code /usr/local/bin/oxo-flow run wf.oxoflow --workdir /tmp/run"
+            "sh -c f=\"$1\"; shift; \"$@\"; rc=$?; printf '%s' \"$rc\" > \"$f\"; exit \"$rc\" sh /tmp/run/.exit-code /usr/local/bin/oxo-flow run wf.oxoflow --workdir /tmp/run",
+            None
         ));
         // …including the sudo prefix (`sudo -n -u <user>` between them).
         assert!(super::cmdline_is_oxo_flow(
-            "sh -c f=\"$1\"; shift; \"$@\"; rc=$?; printf '%s' \"$rc\" > \"$f\"; exit \"$rc\" sh /tmp/run/.exit-code sudo -n -u bioinfo /usr/local/bin/oxo-flow run wf.oxoflow"
+            "sh -c f=\"$1\"; shift; \"$@\"; rc=$?; printf '%s' \"$rc\" > \"$f\"; exit \"$rc\" sh /tmp/run/.exit-code sudo -n -u bioinfo /usr/local/bin/oxo-flow run wf.oxoflow",
+            None
         ));
         // …and the userns wrapper (#1401): `unshare <flags> -- <binary>`.
         assert!(super::cmdline_is_oxo_flow(
-            "sh -c f=\"$1\"; shift; \"$@\"; rc=$?; printf '%s' \"$rc\" > \"$f\"; exit \"$rc\" sh /tmp/run/.exit-code unshare --user --map-root-user --pid --fork --mount-proc --kill-child -- /usr/local/bin/oxo-flow run wf.oxoflow"
+            "sh -c f=\"$1\"; shift; \"$@\"; rc=$?; printf '%s' \"$rc\" > \"$f\"; exit \"$rc\" sh /tmp/run/.exit-code unshare --user --map-root-user --pid --fork --mount-proc --kill-child=SIGTERM -- /usr/local/bin/oxo-flow run wf.oxoflow",
+            None
         ));
         // A userns wrapper WITHOUT the `--` separator is not the executor's
         // spawn shape: the wrapped command is not identifiable.
         assert!(!super::cmdline_is_oxo_flow(
-            "sh -c x sh /tmp/run/.exit-code unshare --user --pid /usr/local/bin/oxo-flow run wf"
+            "sh -c x sh /tmp/run/.exit-code unshare --user --pid /usr/local/bin/oxo-flow run wf",
+            None
         ));
         // A wrapper whose wrapped command is NOT the CLI must fail.
         assert!(!super::cmdline_is_oxo_flow(
-            "sh -c x sh /tmp/run/.exit-code unshare --user --pid -- /bin/sleep 30"
+            "sh -c x sh /tmp/run/.exit-code unshare --user --pid -- /bin/sleep 30",
+            None
+        ));
+    }
+
+    /// The resolved binary path fixes the two token-heuristic blind spots: a
+    /// binary path containing spaces, and a forged sudo prefix. The wrapped
+    /// command must START with the resolved path; a mere mention never
+    /// passes.
+    #[test]
+    fn resolved_binary_matching_handles_spaces_and_validates_sudo() {
+        let binary = "/opt/my tools/bin/oxo-flow";
+        // userns wrapper with a path containing spaces.
+        assert!(super::cmdline_is_oxo_flow(
+            "sh -c x sh /tmp/run/.exit-code unshare --user --pid --fork --mount-proc --kill-child=SIGTERM -- /opt/my tools/bin/oxo-flow run wf.oxoflow",
+            Some(binary)
+        ));
+        // Direct payload with spaces.
+        assert!(super::cmdline_is_oxo_flow(
+            "sh -c x sh /tmp/run/.exit-code /opt/my tools/bin/oxo-flow run wf",
+            Some(binary)
+        ));
+        // sudo + unshare (not combined by the executor today, but the shape
+        // validation must handle both prefixes).
+        assert!(super::cmdline_is_oxo_flow(
+            "sh -c x sh /tmp/run/.exit-code sudo -n -u bioinfo unshare --user -- /opt/my tools/bin/oxo-flow run wf",
+            Some(binary)
+        ));
+        // A forged sudo shape must fail.
+        assert!(!super::cmdline_is_oxo_flow(
+            "sh -c x sh /tmp/run/.exit-code sudo -x -u bioinfo /opt/my tools/bin/oxo-flow run wf",
+            Some(binary)
+        ));
+        assert!(!super::cmdline_is_oxo_flow(
+            "sh -c x sh /tmp/run/.exit-code sudo bioinfo /opt/my tools/bin/oxo-flow run wf",
+            Some(binary)
+        ));
+        // A line that merely MENTIONS the resolved path must fail.
+        assert!(!super::cmdline_is_oxo_flow(
+            "grep -r /opt/my tools/bin/oxo-flow /tmp",
+            Some(binary)
+        ));
+        // A different binary after the wrapper must fail even with a hint.
+        assert!(!super::cmdline_is_oxo_flow(
+            "sh -c x sh /tmp/run/.exit-code unshare --user -- /bin/sleep 30",
+            Some(binary)
         ));
     }
 

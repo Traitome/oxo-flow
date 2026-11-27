@@ -684,7 +684,9 @@ weak `W/"7"` form, a multi-token list, or `*` — is rejected with
 > kernel; TCP bind/connect is denied on kernel 6.7+); and the opt-in
 > `OXO_FLOW_WEB_ISOLATION=userns` mode (issue #1401) runs the CLI in a
 > per-run user + PID namespace (root inside, the server uid outside; a
-> private `/proc`; host and cross-tenant signals impossible). The enforcement
+> private `/proc`; the run cannot see or signal host or sibling-tenant
+> processes — host-side signals still reach it, which is exactly how cancel
+> works). The enforcement
 > is **opt-in and Linux-only** — with both modes off, a workflow that guesses
 > another tenant's absolute path can still read (and write) it, and the
 > residual matrix in [Tenant isolation and the run
@@ -2247,7 +2249,7 @@ every probe would catch a regression):
 | uid inside the run | user namespace (`OXO_FLOW_WEB_ISOLATION=userns`) | Linux, host allows unprivileged userns, mode enabled |
 | Host process visibility (`/proc`) | PID namespace + private `/proc` | same |
 | Run → host / cross-tenant signals | PID namespace boundary | same |
-| Cancel/SIGTERM teardown of the whole tree | process-group kill + `unshare --kill-child` | same |
+| Cancel/SIGTERM teardown of the whole tree | process-group kill + `unshare --kill-child=SIGTERM` | same |
 
 Not enforced (residual, honest list): with the sandbox **off** (default),
 none of the filesystem/network rows apply — today's behavior is unchanged;
@@ -2273,21 +2275,27 @@ independent, opt-in boundary for **local** web-spawned runs:
 
 - unset, empty, or `off` — disabled (the default; behavior is unchanged);
 - `userns` — the CLI is spawned through
-  `unshare --user --map-root-user --pid --fork --mount-proc --kill-child -- …`.
+  `unshare --user --map-root-user --pid --fork --mount-proc --kill-child=SIGTERM -- …`.
   The server uid maps to uid 0 inside the namespace, so files created on the
   run workdir (checkpoint, logs, outputs) keep the server uid outside and
   ownership is unchanged. The CLI becomes PID 1 of a fresh PID namespace,
   reaps its rule shells, and sees a private `/proc`; host processes and
-  other tenants' runs are invisible, and signals cannot cross the namespace
-  boundary in either direction. The `.exit-code` wrapper is preserved:
+  other tenants' runs are invisible, and the run cannot signal them or any
+  host process. The boundary is **one-directional**: host-side signals keep
+  working — an ancestor PID namespace can signal every descendant, which is
+  exactly how cancel reaches the namespace. The `.exit-code` wrapper is
+  preserved:
   `unshare` exits with the CLI's status, so run outcomes are recorded
   exactly as before;
 - any other value — a configuration error that **fails the spawn** (a typo
   never silently disables the requested isolation).
 
 **Fail-closed availability.** The mode is probed before use with the exact
-wrapper argv (`… -- true`) as the server uid; the result is cached for the
-server process lifetime. A requested-but-unavailable mode refuses the spawn
+wrapper argv (`… --kill-child=SIGTERM -- true`, the same shape a run uses)
+as the server uid; a successful probe is cached for the server process
+lifetime, while a failed probe is retried on the next spawn (a transient
+failure must not disable the mode until restart). A requested-but-unavailable
+mode refuses the spawn
 and marks the run failed with a structured reason naming the host
 prerequisite — it never degrades to an unisolated run. The host
 requirements are:
@@ -2311,13 +2319,17 @@ a host-`/proc` grant would cover it, which would re-expose every process —
 the disclosure both modes exist to prevent. Run one mode at a time.
 
 **Cancellation.** The supervisor's process-group kill reaches `sh`,
-`unshare`, and the namespace; `--kill-child` covers PID-namespace init
-ignoring catchable signals (it SIGKILLs the init when the `unshare` parent
-is terminated, and the kernel then tears down the namespace). SIGKILL and
+`unshare`, and the namespace; `--kill-child=SIGTERM` forwards the
+supervisor's SIGTERM to the namespace init, so a CLI that traps SIGTERM gets
+a graceful shutdown window. An init that ignores it (PID 1 ignores catchable
+signals without a handler) is covered by the existing 5 s SIGKILL
+escalation, after which the kernel tears down the namespace. SIGKILL and
 SIGSTOP — the final kill and pause/resume — are kernel-only signals and are
 delivered to init directly. The adversarial suite
-`crates/oxo-flow-web/tests/rb01_userns_adversarial.rs` asserts that a
-cancelled run leaves no process in the namespace.
+`crates/oxo-flow-web/tests/rb01_userns_adversarial.rs` asserts both the
+graceful SIGTERM-only teardown (no SIGKILL sent, completed inside the
+escalation window) and that the cancelled real run leaves no process in the
+namespace.
 
 **Residuals (not claimed as covered):**
 

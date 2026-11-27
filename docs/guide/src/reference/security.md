@@ -292,7 +292,8 @@ residual):
   user namespace (the server uid outside) and as PID 1 of a private PID
   namespace with a private `/proc`, so a run cannot see or signal host or
   sibling-tenant processes; cancel tears the whole namespace down
-  (`--kill-child`).
+  (`--kill-child=SIGTERM`, with the supervisor's SIGKILL escalation as the
+  guaranteed path for an init that does not trap it).
 
 Both modes are **fail-closed**: a requested mode that cannot be installed
 (wrong kernel, LSM denial, bad knob value, unsupported combination) refuses
