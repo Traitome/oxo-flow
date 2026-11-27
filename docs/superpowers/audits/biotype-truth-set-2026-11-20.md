@@ -1,5 +1,16 @@
 # BioType truth-set validation — broadened run, with its exclusions (#1163)
 
+> **Governed follow-up (2026-11-27, #1396).** This 54-case set is now
+> **exploratory/exposure**: it was measured while the governed threshold
+> `τ_FA` was UNDECIDED, so it cannot be the confirmatory basis and is never
+> pooled with the held-out corpus. The governed decision — `τ_FA = 0.05`
+> and `N_min = 73` frozen by pre-registration amendment 2 **before** new
+> data, then 0/83 false accepts on a sealed 116-case held-out corpus,
+> exact 95% upper bound 4.3471% ≤ `τ_FA`, **POSITIVE** — is in
+> [`biotype-truth-set-governed-2026-11-27.md`](biotype-truth-set-governed-2026-11-27.md).
+> Everything below remains the historical operational record and is
+> unchanged.
+
 > **Status**: broadened truth set. This supersedes the 18-case first set in
 > [`biotype-truth-set-2026-11-19.md`](biotype-truth-set-2026-11-19.md) as the
 > current measured state, and replaces the *claim* "broad truth-set validation"
