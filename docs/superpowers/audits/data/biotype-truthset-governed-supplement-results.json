@@ -1,0 +1,105 @@
+{
+  "format": "oxo-flow.biotype-truthset-governed-supplement-results/v1",
+  "issue": 1396,
+  "campaign": "#1163 post-hoc governed supplement (descriptive; not confirmatory)",
+  "role": "post-hoc descriptive acceptance controls; never in the FA denominator",
+  "generated_at": "2026-11-27T17:21:59Z",
+  "commit": "0204c1e44ea167b4598be8a27d6b67be13fea207",
+  "binary": "/Users/wsx/Documents/GitHub/oxo-flow/.claude/worktrees/agent-a5361f7d77789467a/target/debug/oxo-flow",
+  "binary_sha256": "463d15e618e28d4e694bc3aab472fe53a11188266e8f3f61a344e3099a820b0a",
+  "engine_version": "oxo-flow 0.32.0",
+  "manifest": "docs/superpowers/preregistration/prerun/C1-governed-supplement-2026-11-28.json",
+  "manifest_sha256": "757891a479948bb2c6933ee61ce3df96a233b8240bf92a4862ad25309e552fc3",
+  "host": {
+    "hostname": "ShixiangWang-WorkSpacedeMacBook-Pro.local",
+    "platform": "macOS-27.2.1-arm64-arm-64bit-Mach-O",
+    "machine": "arm64",
+    "python": "3.13.9"
+  },
+  "budget": {
+    "per_case_timeout_secs": 60,
+    "total_timeout_secs": 7200,
+    "elapsed_secs": 0.67,
+    "enforced": true
+  },
+  "cases": [
+    {
+      "case": "tests/truthset/biotype/governed-supplement/s01_bam_readgroup_accept.oxoflow",
+      "expected": "accept",
+      "actual": "accept",
+      "verdict_correct": "yes",
+      "expected_codes": [],
+      "actual_codes": [],
+      "codes_correct": "yes",
+      "note": "BAM with declared @RG satisfies a matching read-group consumer"
+    },
+    {
+      "case": "tests/truthset/biotype/governed-supplement/s02_bam_readgroup_lb_accept.oxoflow",
+      "expected": "accept",
+      "actual": "accept",
+      "verdict_correct": "yes",
+      "expected_codes": [],
+      "actual_codes": [],
+      "codes_correct": "yes",
+      "note": "BAM with ID,SM,PL,LB read groups satisfies a matching consumer"
+    },
+    {
+      "case": "tests/truthset/biotype/governed-supplement/s03_vcf_explicit_none_accept.oxoflow",
+      "expected": "accept",
+      "actual": "accept",
+      "verdict_correct": "yes",
+      "expected_codes": [],
+      "actual_codes": [],
+      "codes_correct": "yes",
+      "note": "plain VCF with explicit compression=none on both sides"
+    },
+    {
+      "case": "tests/truthset/biotype/governed-supplement/s04_bed_bgzip_tbi_accept.oxoflow",
+      "expected": "accept",
+      "actual": "accept",
+      "verdict_correct": "yes",
+      "expected_codes": [],
+      "actual_codes": [],
+      "codes_correct": "yes",
+      "note": "bgzip BED with a tbi companion on both sides"
+    },
+    {
+      "case": "tests/truthset/biotype/governed-supplement/s05_gtf_grcm39_accept.oxoflow",
+      "expected": "accept",
+      "actual": "accept",
+      "verdict_correct": "yes",
+      "expected_codes": [],
+      "actual_codes": [],
+      "codes_correct": "yes",
+      "note": "GTF with matching mouse build on both sides"
+    },
+    {
+      "case": "tests/truthset/biotype/governed-supplement/s06_fasta_bgzip_fai_accept.oxoflow",
+      "expected": "accept",
+      "actual": "accept",
+      "verdict_correct": "yes",
+      "expected_codes": [],
+      "actual_codes": [],
+      "codes_correct": "yes",
+      "note": "bgzip FASTA with a fai companion and build on both sides"
+    },
+    {
+      "case": "tests/truthset/biotype/governed-supplement/s07_h5ad_attribute_accept.oxoflow",
+      "expected": "accept",
+      "actual": "accept",
+      "verdict_correct": "yes",
+      "expected_codes": [],
+      "actual_codes": [],
+      "codes_correct": "yes",
+      "note": "H5AD with equal assay attribute on both sides"
+    }
+  ],
+  "summary": {
+    "cases_total": 7,
+    "accepted": 7,
+    "rejected": 0,
+    "non_verdicts": 0,
+    "codes_correct": 7,
+    "codes_fail": 0
+  }
+}

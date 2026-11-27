@@ -1,19 +1,32 @@
 # BioType governed truth-set campaign — POSITIVE (#1163 / #1396)
 
-> **Status: GOVERNED POSITIVE, on a held-out corpus, with independent
-> reanalysis and PR-05 sign-off still PENDING.** The frozen pre-registration
+> **Status: GOVERNED POSITIVE on the 83-case post-freeze expected-reject
+> set, with a disclosed control-provenance deviation and independent
+> reanalysis / PR-05 sign-off still PENDING.** The frozen pre-registration
 > (PR-06 amendment 2, 2026-11-27) fixed `τ_FA = 0.05` and `N_min = 73`
-> **before** any case of this corpus was authored or run. On the sealed
-> 116-case held-out corpus the false-accept rate over expected-reject cases
-> was **0/83 = 0.0000%**, exact two-sided 95% Clopper–Pearson CI
+> **before** any expected-reject case was authored or run. On the sealed
+> 116-case corpus the false-accept rate over expected-reject cases was
+> **0/83 = 0.0000%**, exact two-sided 95% Clopper–Pearson CI
 > **[0.0000%, 4.3471%]**. The upper bound is at or below `τ_FA = 0.05`, and
 > `N = 83 ≥ N_min = 73`, so PR-06 §C1's ordered rule returns **POSITIVE**.
+>
+> **Corpus composition (post-review correction, 2026-11-28).** The sealed
+> corpus is 83 expected-reject cases + 24 post-freeze authored acceptance
+> controls + **9 pre-existing `examples/gallery/*.oxoflow` controls whose
+> accept outcome was already known** (they are validated by the gallery
+> gates in `tests/cli_integration.rs` on every CI run). The 9 are disclosed
+> as **exposure**. The ≥30 control floor is met by the 33 sealed controls
+> but not by the held-out authored subset (24); **PR-05 must adjudicate**.
+> The FA primary analysis is unaffected. See the
+> [erratum](biotype-truthset-governed-erratum-2026-11-28.md) and §8.2 for
+> the post-hoc acceptance-control supplement.
 >
 > The 54-case operational set measured on 2026-11-20/22 was observed while
 > `τ_FA` was UNDECIDED. It is **exploratory/exposure**, is not pooled with
 > this corpus, and is reported separately in §8. The governed claim is
-> bounded to the held-out corpus and the exact `τ_FA`; it is not a
-> biological-truth claim and does not pass ledger Gate 3.
+> bounded to the sealed corpus and the exact `τ_FA`; it is **static
+> `validate`-surface validation only, single arm** — not execution
+> evidence, not biological truth, and not a Gate 3 pass.
 >
 > A post-run pilot-disjointness audit (§8.1) identifies two cases that
 > arguably re-assert a pilot index cell under a strict reading. They were
@@ -27,19 +40,22 @@
 
 The BioType checker (`.oxoflow` `[types.*]` / `[rules.types]` contracts) was
 exercised through the real CLI admission surface,
-`oxo-flow validate <case> --json`, on a **held-out governed corpus of 116
-cases** authored **after** the amendment from the published contract:
+`oxo-flow validate <case> --json`, on a **sealed 116-case corpus**:
 
 | Role | N | Meaning |
 | :--- | :--- | :--- |
-| Expected-reject (primary analysis set) | 83 | asserts a blocking `TYPE-001`–`TYPE-007` violation |
-| Expected-accept acceptance controls | 33 | advisory `TYPE-008`/`009`/`010` shapes, multi-dimensional compatible contracts, untyped pipelines, real gallery examples |
+| Expected-reject (primary analysis set) | 83 | asserts a blocking `TYPE-001`–`TYPE-007` violation; all authored post-freeze |
+| Authored acceptance controls | 24 | authored post-freeze from the published contract |
+| Pre-existing gallery controls | 9 | `examples/gallery/*.oxoflow`, untyped, accept outcome already known (CI gallery gates); disclosed exposure |
 
-Every case's expected verdict, expected `TYPE-*` code set, and one-line
-rationale were recorded in its header **before the run**. The case list and
-expectations were then sealed in the pre-run manifest; the campaign runner
-reads the manifest's `cases` array as its single EXPECT source, so the
-sealed list and the executed list cannot drift.
+Every **authored** case's expected verdict, expected `TYPE-*` code set, and
+one-line rationale were recorded in its header **before the run**. The 9
+pre-existing gallery controls are expected-accept because they are shipped,
+untyped examples (typing is opt-in) and were already validated by the
+auto-discovering gallery gates; they carry no authored header. The case
+list and expectations were then sealed in the pre-run manifest; the
+campaign runner reads the manifest's `cases` array as its single EXPECT
+source, so the sealed list and the executed list cannot drift.
 
 The classification of a case as *expected-reject* or *expected-accept* was
 authored from:
@@ -61,14 +77,20 @@ case body was edited after an outcome was seen.
 | Step | Commit | Timestamp (UTC) | Artifact |
 | :--- | :--- | :--- | :--- |
 | Pre-data amendment 2 | `89c4127d78925959cbb6a718595eb78cd2fff9a8` | `2026-11-27T16:46:43Z` | `docs/superpowers/preregistration/` (`AMENDMENTS.md` entry 2; PR-01/02/03/04/06 v1.0.2; manifest `7aeb3ebb…7afb18`) |
-| Held-out corpus + sealed runner/analysis | `20ad630be42ec248e2e96c3729630d849e7c6539` | `2026-11-27T16:49:53Z` | 110 `.oxoflow` files (107 cases + 3 include fixtures) + `scripts/biotype-truthset-governed{,-analysis}.py` |
+| Authored corpus + sealed runner/analysis | `20ad630be42ec248e2e96c3729630d849e7c6539` | `2026-11-27T16:49:53Z` | 110 `.oxoflow` files (83 expected-reject + 24 authored controls + 3 include fixtures) + `scripts/biotype-truthset-governed{,-analysis}.py` |
 | Pre-run manifest sealed | `6fbf38c1441c966aee49aa96ba2a211cbf5bfb3f` | `2026-11-27T16:50:17Z` | `preregistration/prerun/C1-governed-2026-11-27.json` (+`.sha256`) |
 | Confirmatory run | tree at `6fbf38c1` | `2026-11-27T16:50:33Z` | results JSON (§10) |
 | Results + decision committed | `365e563ac5bc35c31860182552a3571131937573` | `2026-11-27T16:51:17Z` | `audits/data/biotype-truthset-governed-{results,decision}.json` |
+| Post-review amendment 4 (erratum) | `ef42c6599a90861962484c96ce6ec9ede4bc94b6` | `2026-11-27T17:21:41Z` | PR-01/02/03/06 v1.0.3; manifest `1d306904…4b4ec9`; [erratum](biotype-truthset-governed-erratum-2026-11-28.md) |
+| Supplement corpus + runner | `742a684b81be06a2a3c723f9b7dbfb7afbae1769` | `2026-11-27T17:21:45Z` | 7 post-hoc acceptance controls + `scripts/biotype-truthset-governed-supplement.py` |
+| Supplement manifest sealed | `0204c1e44ea167b4598be8a27d6b67be13fea207` | `2026-11-27T17:21:57Z` | `preregistration/prerun/C1-governed-supplement-2026-11-28.json` (+`.sha256`) |
+| Supplement run | tree at `0204c1e4` | `2026-11-27T17:21:59Z` | 7/7 accepted, 0.67 s (§8.2) |
 
 The amendment commit precedes the corpus commit, which precedes the seal,
 which precedes the run. The pre-run manifest's hash and the analysis
 script's hash were fixed before the first confirmatory execution.
+Amendment 4 and the supplement were added after independent review and do
+not change the primary chain or its outcome.
 
 ### 2.1 Pre-run manifest (the seal)
 
@@ -81,11 +103,11 @@ script's hash were fixed before the first confirmatory execution.
 | `binary_sha256` | `463d15e618e28d4e694bc3aab472fe53a11188266e8f3f61a344e3099a820b0a` |
 | `schema_sha256` | `7f68d09a481f28a1568fb9a37eb14a75bc6ef57d2d504891ef8ce5aeebca47e0` (`docs/schema/oxoflow-v1.schema.json`) |
 | `case_manifest_sha256` | `b5db36530550ebda1f11478e7edecc2fe5e514225e669ebad6940203d7d1f3e1` |
-| `analysis_script_sha256` | `c5c0311b4f509f93eb4a8f1e40a1ff97bd9536065271d85d5e7263ea04739fbb` |
+| `analysis_script_sha256` | v1 (sealed, used for the run): `c5c0311b4f509f93eb4a8f1e40a1ff97bd9536065271d85d5e7263ea04739fbb`; hardened v2 (override flags removed, amendment 4): `0c431b21f7ca088f720c5fce176ac4bed7ccb9fddef9f88d894d09245ade2000` |
 | `runner_script_sha256` | `e7a8e5fde464faebeedfff220ca75f730c2ddf752f52725027cebbbbffffd0ea` |
 | Model / prompt / seed | none — deterministic static checker, no model call, no seed |
-| Dataset | 116 sealed cases: 83 expected-reject + 33 controls; pilot excluded |
-| Budget | 60 s per case, 7200 s total, static-only, no network |
+| Dataset | 116 sealed cases: 83 expected-reject + 24 authored controls + 9 pre-existing gallery controls (known accept, disclosed exposure); pilot excluded |
+| Budget | Per-case subprocess timeout 60 s (enforced); total declared ceiling 7200 s (observed ~20 s; the sealed runner did not enforce the total as a hard timer — erratum §6); static-only, no network |
 | Decision constants | `τ_FA = 0.05`, `N_min = 73`, non-verdict limit 0, Clopper–Pearson exact 95% |
 
 The `.sha256` companion verifies:
@@ -95,6 +117,17 @@ cd docs/superpowers/preregistration/prerun
 shasum -a 256 -c C1-governed-2026-11-27.json.sha256
 # C1-governed-2026-11-27.json: OK
 ```
+
+**Erratum corrections to the sealed manifest (recorded, not rewritten).**
+The sealed manifest's `toolchain.rustc/cargo` fields recorded the ambient
+shell's 1.97.1; the binary was built by `cargo build` in the repository,
+which honors `rust-toolchain.toml` (1.98.0). The binary SHA-256 above is
+the binding execution identity. The manifest's dataset description
+("held-out governed corpus authored after the amendment") is superseded by
+the composition table in §1. Case bodies are pinned by the stamped commit
+and checked byte-for-byte by `make truthset-stamp`; the gate also verifies
+this manifest's hash and the decision's `results_sha256`. See the
+[erratum](biotype-truthset-governed-erratum-2026-11-28.md) §§1–4.
 
 ## 3. Environment identity (ledger §8)
 
@@ -112,7 +145,9 @@ shasum -a 256 -c C1-governed-2026-11-27.json.sha256
 
 Single arm. The checker is platform-independent pure Rust, so a single arm
 is the correct design for a *logic* truth set; no cross-architecture
-contrast is claimed (unlike #1166).
+contrast is claimed (unlike #1166). The sealed manifest's toolchain fields
+recorded the ambient shell's 1.97.1; the build used the repository pin
+1.98.0 shown here. See erratum §3.
 
 ## 4. Exact commands
 
@@ -152,9 +187,12 @@ the frozen limit is zero.
   true-accept=33  false-accept=0  true-reject=83  false-reject=0
 ```
 
-All 116/116 cases match their pre-registered verdict. The expected-accept
-controls include the nine real gallery examples not used by the pilot
-(`01`, `02`, `03`, `04`, `05`, `10`, `11`, `12`, `15`), all accepted.
+All 116/116 cases match their expected verdict (authored and pre-existing).
+The 33 expected-accept controls comprise 24 authored post-freeze plus the
+nine pre-existing gallery examples not used by the pilot (`01`, `02`, `03`,
+`04`, `05`, `10`, `11`, `12`, `15`), all accepted. The 9 gallery controls
+were already validated by the CI gallery gates before the freeze, so they
+are disclosed **exposure**, not held-out evidence (§1, erratum §1).
 
 ### 5.2 Diagnostic-code cross-check
 
@@ -225,11 +263,11 @@ comfortably at or below `τ_FA = 0.05`; the lower bound is `0`.
 
 | Stage | N | Note |
 | :--- | ---: | :--- |
-| Authored and sealed | 116 | 83 expected-reject + 33 expected-accept controls |
+| Sealed corpus | 116 | 83 expected-reject + 24 authored controls + 9 pre-existing gallery controls (known accept, disclosed exposure); pilot excluded |
 | Pre-run exclusions | 0 | no case was removed before the run |
 | Non-verdicts | 0 | every case produced a parsable `validate --json` verdict |
-| Analyzed (primary denominator) | 83 | expected-reject cases |
-| Acceptance controls (reported descriptively) | 33 | not in the primary denominator |
+| Analyzed (primary denominator) | 83 | expected-reject cases, all authored post-freeze |
+| Acceptance controls (reported descriptively) | 33 | 24 authored + 9 pre-existing; not in the primary denominator |
 | Pilot set (separate, exploratory) | 54 | excluded as exposure; not pooled |
 
 ## 7. Determinism and custody
@@ -292,8 +330,11 @@ A post-run audit under this interpretation flags:
 
 PR-02 §0.2 forbids post-outcome exclusion, so these cases remain in the
 primary analysis set; the audit is disclosed rather than acted on. The
-descriptive sensitivity (the sealed interval function on filtered
-denominators) is:
+sealed headers for `g049`/`g052` say "Distinct … from the pilot's cases";
+that header claim is **superseded** by this audit. The sealed bodies were
+**not edited** — their blobs remain content-identical to the stamped
+commit. The descriptive sensitivity (the sealed interval function on
+filtered denominators) is:
 
 | Exclusions | N | FA | exact 95% upper bound | category |
 | :--- | ---: | ---: | ---: | :--- |
@@ -315,10 +356,39 @@ adopted, for the reasons above. An independent reviewer who adopts it
 would reach UNDERPOWERED; that disagreement is exactly what PR-05 review
 must settle, and it is one reason the result is not publication-ready.
 
+### 8.2 Post-hoc acceptance-control supplement (descriptive only)
+
+The primary corpus had no accept-side contrast for `TYPE-005` (all three
+cases are rejects), which the review flagged. A **post-hoc supplement** of
+7 newly authored acceptance controls was sealed and run after the primary
+outcome:
+
+| Supplement control | Cell | Expected | Actual |
+| :--- | :--- | :--- | :--- |
+| `s01_bam_readgroup_accept` | BAM `@RG` ID,SM,PL satisfied | accept | accept |
+| `s02_bam_readgroup_lb_accept` | BAM `@RG` ID,SM,PL,LB satisfied | accept | accept |
+| `s03_vcf_explicit_none_accept` | VCF `compression=none` both sides | accept | accept |
+| `s04_bed_bgzip_tbi_accept` | BED bgzip + tbi both sides | accept | accept |
+| `s05_gtf_grcm39_accept` | GTF GRCm39 both sides | accept | accept |
+| `s06_fasta_bgzip_fai_accept` | FASTA bgzip + fai + GRCh38 | accept | accept |
+| `s07_h5ad_attribute_accept` | H5AD `assay=scrna` both sides | accept | accept |
+
+Result: **7/7 accepted, codes 7/7**, 0 non-verdicts, elapsed 0.67 s under
+enforced per-case and total deadlines. Seal:
+`preregistration/prerun/C1-governed-supplement-2026-11-28.json` (SHA-256
+`757891a4…2fc3`, commit `0204c1e4`); results:
+`data/biotype-truthset-governed-supplement-results.json`.
+
+**The supplement is not part of the pre-registered confirmatory set**: it
+was authored after the primary outcome, it is descriptive, and it never
+enters the FA denominator. It does not retroactively satisfy the ≥30
+held-out authored-control floor (24), which PR-05 must adjudicate.
+
 ## 9. Defects surfaced
 
-None. Every expected verdict and every expected code set matched. No
-checker defect, documentation defect, or harness defect was surfaced by
+None. Every expected verdict and every expected code set matched. The 7/7
+post-hoc supplement controls also matched (no defect). No checker defect,
+documentation defect, or harness defect was surfaced by
 this campaign, so no separate fix or regression test was required. The
 one defect surfaced by the earlier pilot (`b18`, a documentation
 overstatement about CRAM/BGZF) was already corrected in the pilot wave
@@ -327,14 +397,18 @@ and is unaffected here.
 ## 10. Raw-data lineage and reproduction
 
 - Cases: `tests/truthset/biotype/governed/g001…g107_*.oxoflow` (107 case
-  bodies, each with its pre-registered EXPECT header) plus three include
+  bodies: 83 expected-reject + 24 authored controls, each with its
+  pre-registered EXPECT header) plus three include
   fixtures (`incmod_bam_producer`, `incmod_queryname_producer`,
-  `incmod_gtf_grch38`, no EXPECT rows of their own), and the nine real
-  gallery examples listed in §5.1.
+  `incmod_gtf_grch38`, no EXPECT rows of their own), and the nine
+  pre-existing gallery examples listed in §5.1 (their expected accept was
+  already known from CI).
 - Sealed expectations: `docs/superpowers/preregistration/prerun/C1-governed-2026-11-27.json`
   (`cases` array; SHA-256 `cab5cac4…2ff3`).
 - Runner: `scripts/biotype-truthset-governed.py`; analysis:
-  `scripts/biotype-truthset-governed-analysis.py`.
+  `scripts/biotype-truthset-governed-analysis.py` (v1 sealed
+  `c5c0311b…9fbb`; hardened v2 `0c431b21…2000` reproduces the decision
+  byte-identically).
 - Results: `docs/superpowers/audits/data/biotype-truthset-governed-results.json`
   (`commit` = `6fbf38c1`, the tree the run executed on; `engine_commit` =
   `20ad630b`, the tree the binary was built from).
@@ -343,6 +417,15 @@ and is unaffected here.
   `docs/superpowers/audits/data/biotype-truthset-governed-repeat-check.txt`.
 - Independence sensitivity:
   `docs/superpowers/audits/data/biotype-truthset-governed-sensitivity.json`
+  (descriptive, not the primary analysis).
+- Post-review erratum:
+  `docs/superpowers/audits/biotype-truthset-governed-erratum-2026-11-28.md`.
+- Post-hoc supplement: seal
+  `docs/superpowers/preregistration/prerun/C1-governed-supplement-2026-11-28.json`
+  (SHA-256 `757891a4…2fc3`); cases
+  `tests/truthset/biotype/governed-supplement/s01…s07_*.oxoflow`; runner
+  `scripts/biotype-truthset-governed-supplement.py`; results
+  `docs/superpowers/audits/data/biotype-truthset-governed-supplement-results.json`
   (descriptive, not the primary analysis).
 
 ## 11. Honesty boundary — what this does NOT measure
@@ -369,6 +452,25 @@ and is unaffected here.
   source. The maintainer is also the campaign lead; the independent
   reviewer identity remains PENDING in PR-05, which is exactly the
   governance gap above.
+- **Control provenance (review HIGH, disclosed).** 9 of the 33 controls
+  are pre-existing `examples/gallery/*.oxoflow` examples whose accept
+  outcome was already known (CI gallery gates). Only 24 controls were
+  authored post-freeze. The 33 meet the numeric ≥30 floor; the held-out
+  authored subset (24) does not. **PR-05 must adjudicate.** The 83
+  expected-reject cases — the FA primary analysis — were all authored
+  post-freeze and are unaffected (erratum §1).
+- **Toolchain manifest fields.** The sealed manifest recorded the ambient
+  shell's rustc/cargo 1.97.1; the binary was built under the repository
+  pin (`rust-toolchain.toml`, 1.98.0). The binary SHA-256 is the binding
+  identity; the erratum §3 records the correction.
+- **`TYPE-005` accept-side contrast.** Absent from the primary corpus;
+  supplied only by the post-hoc supplement (7/7 accepted, descriptive, not
+  in the FA denominator; erratum §5).
+- **Budget enforcement.** The sealed runner enforced the 60 s per-case
+  timeout but not the 7200 s total as a hard timer; the observed wall time
+  was ~20 s. The supplement runner enforces both (erratum §6).
+- **Analysis-script overrides.** Removed in the hardened v2; it reproduces
+  the committed decision byte-identically (erratum §9).
 - **Pilot exposure disclosed** (§8). The 54-case pilot remains exploratory
   and is never pooled with this corpus.
 - **Independence interpretation disclosed** (§8.1). The POSITIVE category
@@ -383,18 +485,23 @@ and is unaffected here.
 
 - `README.md` §Research program / BioTypes: the governed POSITIVE result
   is added beside the pilot's operational result; the pilot stays labelled
-  exploratory and the bounded claim is stated.
+  exploratory, the authored/exposed control split and the bounded claim are
+  stated, and the static-only/single-arm boundary points to §11.
 - `ROADMAP.md` (BioTypes maturity row): the truth-set exit criterion moves
-  from UNMET to met for this bounded, governed corpus; Gate 3 and
-  publication readiness remain open.
+  from UNMET to met for this bounded, governed corpus; the control
+  provenance, static-only/single-arm boundary, Gate 3, and publication
+  readiness remain open.
 - `docs/guide/src/vision.md`: "broad truth-set validation outstanding" is
-  replaced with the governed result and its boundary.
+  replaced with the governed result, its control composition, and its
+  static-only/single-arm boundary.
 - `docs/superpowers/audits/industrial-scientific-audit-ledger.md`:
-  WF-04 and §7 wave 7 record the campaign, its commit bindings, and the
-  remaining independent-reanalysis/sign-off gaps.
+  WF-04 and §7 wave 7 record the campaign, its commit bindings, the
+  erratum, and the remaining independent-reanalysis/sign-off gaps.
 - `docs/superpowers/preregistration/README.md` §3 and `AMENDMENTS.md`
-  entry 3: the #1163 confirmatory-data status is updated with an explicit
-  "no rule changed" post-result status entry.
+  entries 3–4: the #1163 confirmatory-data status, the control-provenance
+  erratum, and the post-hoc supplement are recorded.
+- `docs/superpowers/audits/biotype-truthset-governed-erratum-2026-11-28.md`:
+  the review findings and every fix, with hashes and the PR-05 checklist.
 
 ## 13. References
 
@@ -409,7 +516,10 @@ and is unaffected here.
   §C1 — host, budget, dataset, and the pre-run manifest requirement.
 - `docs/superpowers/preregistration/PR-04-leakage-and-custody.md` (v1.0.2)
   §C1 — custody record and seal.
-- `docs/superpowers/preregistration/AMENDMENTS.md` entries 2–3.
+- `docs/superpowers/preregistration/AMENDMENTS.md` entries 2–4.
+- `docs/superpowers/audits/biotype-truthset-governed-erratum-2026-11-28.md`
+  — the post-review erratum, control provenance, toolchain/custody
+  corrections, and the supplement record.
 - `docs/superpowers/audits/biotype-truth-set-2026-11-20.md` — the
   exploratory 54-case operational report.
 - `docs/guide/src/reference/workflow-format.md` — Biological Type Contracts.

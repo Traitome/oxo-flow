@@ -3,11 +3,15 @@
 > **Governed follow-up (2026-11-27, #1396).** This 54-case set is now
 > **exploratory/exposure**: it was measured while the governed threshold
 > `τ_FA` was UNDECIDED, so it cannot be the confirmatory basis and is never
-> pooled with the held-out corpus. The governed decision — `τ_FA = 0.05`
+> pooled with the governed corpus. The governed decision — `τ_FA = 0.05`
 > and `N_min = 73` frozen by pre-registration amendment 2 **before** new
-> data, then 0/83 false accepts on a sealed 116-case held-out corpus,
+> data, then 0/83 false accepts on a sealed 116-case corpus (83
+> expected-reject + 24 authored controls + 9 pre-existing gallery
+> controls),
 > exact 95% upper bound 4.3471% ≤ `τ_FA`, **POSITIVE** — is in
-> [`biotype-truth-set-governed-2026-11-27.md`](biotype-truth-set-governed-2026-11-27.md).
+> [`biotype-truth-set-governed-2026-11-27.md`](biotype-truth-set-governed-2026-11-27.md);
+> the control-provenance correction is in
+> [`biotype-truthset-governed-erratum-2026-11-28.md`](biotype-truthset-governed-erratum-2026-11-28.md).
 > Everything below remains the historical operational record and is
 > unchanged.
 
@@ -17,9 +21,9 @@
 > with a *number*: a **54-case** set run through the real `oxo-flow validate
 > --json` surface, yielding **32 true-accept, 0 false-accept, 22 true-reject, 0
 > false-reject**, with a diagnostic-code cross-check of **54/54**. It is a
-> *breadth* improvement over N=18 but is still **not** the full governed
-> campaign: the pre-registration threshold `τ_FA` remains UNDECIDED, so no
-> governed POSITIVE/NEGATIVE decision is claimed.
+> *breadth* improvement over N=18 but was still **not** the full governed
+> campaign: at that time the pre-registration threshold `τ_FA` was
+> UNDECIDED, so no governed POSITIVE/NEGATIVE decision was claimed.
 >
 > **One defect surfaced and it is a DOC defect, not a checker defect.** Case
 > `b18` was authored from the CRAM specification to expect a **reject** and it
@@ -345,8 +349,9 @@ case is what caught a wrong claim in the reference text.
 
 - **Correctness of this 54-case set vs the pre-registered operational
   criterion: PASS** (0 false-accepts, 0 false-rejects; codes 54/54). Not a
-  governed verdict: `τ_FA` is UNDECIDED in the frozen pre-registration
-  (PR-06 §C1), so no POSITIVE/NEGATIVE/INCONCLUSIVE decision is claimed.
+  governed verdict: at that time `τ_FA` was UNDECIDED in the frozen
+  pre-registration (PR-06 §C1), so no POSITIVE/NEGATIVE/INCONCLUSIVE
+  decision was claimed.
 - **Breadth:** 3.0× the first set (54 vs 18 cases) and it now drives every
   `BioFormat` enum variant except `Generic`, plus the named-table path, the
   index-kind boundary, the advisory TYPE-009 path, a `transform.*`
@@ -391,9 +396,10 @@ Reported with its exclusions, as the exit gate requires:
   breadth boundary.
 - **Single arm, single toolchain** (macOS arm64, rustc 1.98.0). No
   cross-platform or cross-version contrast intended or performed.
-- **Not the governed campaign.** `τ_FA` remains UNDECIDED (PR-06 §C1), so even
-  this 54-case, 0/0 result cannot be scored POSITIVE/NEGATIVE/INCONCLUSIVE; the
-  exact 95% upper bound on the false-accept rate is still ≈15.4% at N=22.
+- **Not the governed campaign.** At the time of this report `τ_FA` was
+  UNDECIDED (PR-06 §C1), so even
+  this 54-case, 0/0 result could not be scored POSITIVE/NEGATIVE/INCONCLUSIVE; the
+  exact 95% upper bound on the false-accept rate was ≈15.4% at N=22.
 - **The examples were validated, not executed** — no real data was staged and no
   bioinformatics tool was run.
 

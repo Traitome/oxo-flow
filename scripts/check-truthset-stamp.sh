@@ -35,6 +35,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 FILES=(
   "docs/superpowers/audits/data/biotype-truth-set-results.json"
   "docs/superpowers/audits/data/biotype-truthset-governed-results.json"
+  "docs/superpowers/audits/data/biotype-truthset-governed-supplement-results.json"
 )
 
 fail() { echo "truthset-stamp: FAIL — $*" >&2; exit 1; }
@@ -71,6 +72,8 @@ import json, sys
 d = json.load(open(sys.argv[1]))
 cases = d.get("cases") or []
 total = d.get("cases_total")
+if total is None:
+    total = (d.get("summary") or {}).get("cases_total")
 if total is None or len(cases) != total:
     print(f"cases_total={total} but {len(cases)} case rows are present", file=sys.stderr)
     sys.exit(3)
@@ -90,10 +93,21 @@ PY
     if ! git -C "$ROOT" cat-file -e "${stamp}:${rel}" 2>/dev/null; then
       echo "truthset-stamp: case missing at stamped commit ${stamp}: $rel (from $json)" >&2
       missing=$((missing + 1))
+      continue
+    fi
+    # Content custody: the working-tree case body must be byte-identical to
+    # the blob in the stamped commit. A post-stamp edit of a case body (which
+    # would silently change the measured corpus) fails closed here.
+    local stamped_blob worktree_blob
+    stamped_blob="$(git -C "$ROOT" rev-parse "${stamp}:${rel}")"
+    worktree_blob="$(git -C "$ROOT" hash-object "$ROOT/$rel")"
+    if [[ "$stamped_blob" != "$worktree_blob" ]]; then
+      echo "truthset-stamp: case body differs from the stamped commit ${stamp}: $rel (stamped blob ${stamped_blob:0:12}, worktree blob ${worktree_blob:0:12}) — the corpus was edited after the stamp; re-run the campaign and commit the refreshed artifact" >&2
+      missing=$((missing + 1))
     fi
   done <<< "$cases"
 
-  (( missing == 0 )) || fail "$missing case file(s) listed in $json do not exist at the stamped commit $stamp — the stamp cannot reproduce the recorded data; re-run the campaign at HEAD and commit the refreshed artifact"
+  (( missing == 0 )) || fail "$missing case file(s) listed in $json are missing or content-differ at the stamped commit $stamp — the stamp cannot reproduce the recorded data; re-run the campaign at HEAD and commit the refreshed artifact"
 
   # (b-implied) [[include]] fixtures referenced by the case files must also
   # exist at the stamp. Read from the stamped tree (not the working tree —
@@ -143,7 +157,40 @@ PY
 
   (( inc_missing == 0 )) || fail "$inc_missing include-implied fixture(s) missing at the stamped commit $stamp in $json (see stderr) — re-run the campaign at HEAD and commit the refreshed artifact"
 
-  echo "truthset-stamp: $json — stamp $stamp ($(git -C "$ROOT" rev-parse --short "$stamp")) is an ancestor of HEAD and contains all $checked listed case file(s) + $inc_checked include-implied fixture(s)"
+  # Manifest binding: every governed results file names the sealed
+  # pre-run/supplement manifest it was produced under; verify its hash.
+  local manifest_field expected_manifest actual_manifest
+  manifest_field="$(python3 - "$json_abs" <<'PY'
+import json, sys
+print(json.load(open(sys.argv[1])).get("manifest") or "")
+PY
+)"
+  if [[ -n "$manifest_field" ]]; then
+    expected_manifest="$(python3 - "$json_abs" <<'PY'
+import json, sys
+print(json.load(open(sys.argv[1])).get("manifest_sha256") or "")
+PY
+)"
+    actual_manifest="$(shasum -a 256 "$ROOT/$manifest_field" | awk '{print $1}')"
+    [[ "$actual_manifest" == "$expected_manifest" ]] \
+      || fail "$json records manifest_sha256 $expected_manifest but $manifest_field hashes to $actual_manifest — the results are not bound to the sealed manifest"
+  fi
+
+  # Decision binding: the governed primary decision must hash the results
+  # file it claims to analyze.
+  local decision="$ROOT/docs/superpowers/audits/data/biotype-truthset-governed-decision.json"
+  if [[ "$json" == "docs/superpowers/audits/data/biotype-truthset-governed-results.json" && -f "$decision" ]]; then
+    python3 - "$decision" "$json_abs" <<'PY' || fail "decision file does not bind this results file (results_sha256 mismatch)"
+import hashlib, json, sys
+dec = json.load(open(sys.argv[1]))
+h = hashlib.sha256(open(sys.argv[2], "rb").read()).hexdigest()
+if dec.get("results_sha256") != h:
+    print(f"decision results_sha256={dec.get('results_sha256')} but results hash to {h}", file=sys.stderr)
+    sys.exit(1)
+PY
+  fi
+
+  echo "truthset-stamp: $json — stamp $stamp ($(git -C "$ROOT" rev-parse --short "$stamp")) is an ancestor of HEAD and contains all $checked listed case file(s) (content-identical) + $inc_checked include-implied fixture(s)"
 }
 
 for f in "${FILES[@]}"; do
