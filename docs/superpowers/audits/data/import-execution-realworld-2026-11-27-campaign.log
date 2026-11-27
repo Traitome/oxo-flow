@@ -1,7 +1,7 @@
 # import-execution-equivalence corpus run
 # binary:       /home/ubuntu/oxo-1398/target/debug/oxo-flow
 # fixture root: /home/ubuntu/oxo-1398/tests/fixtures/import
-# date:         2026-11-27T15:23:10Z
+# date:         2026-11-27T15:28:47Z
 # (report-only; pass --strict to fail on drift for executed fixtures)
 
 # import-execution-equivalence run

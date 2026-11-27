@@ -26,7 +26,7 @@
           "run",
           "W.oxoflow",
           "-d",
-          "/tmp/tmp.m7dzy2yT82/nextflow_nfcore_faidx.ok.nf_run"
+          "/tmp/tmp.vG6HVVHFzI/nextflow_nfcore_faidx.ok.nf_run"
         ],
         "ran": true,
         "reason": ""
@@ -61,7 +61,7 @@
           "run",
           "W.oxoflow",
           "-d",
-          "/tmp/tmp.m7dzy2yT82/nextflow_nfcore_module.ok.nf_run"
+          "/tmp/tmp.vG6HVVHFzI/nextflow_nfcore_module.ok.nf_run"
         ],
         "ran": false,
         "reason": "exit 1: Error: workflow execution failed"
@@ -90,7 +90,7 @@
           "run",
           "W.oxoflow",
           "-d",
-          "/tmp/tmp.m7dzy2yT82/nextflow_samtools_sort.ok.nf_run"
+          "/tmp/tmp.vG6HVVHFzI/nextflow_samtools_sort.ok.nf_run"
         ],
         "ran": false,
         "reason": "exit 1: Error: failed to expand wildcard rules"
@@ -133,7 +133,7 @@
           "run",
           "W.oxoflow",
           "-d",
-          "/tmp/tmp.m7dzy2yT82/snakemake_training_faidx.ok.smk_run"
+          "/tmp/tmp.vG6HVVHFzI/snakemake_training_faidx.ok.smk_run"
         ],
         "ran": true,
         "reason": ""

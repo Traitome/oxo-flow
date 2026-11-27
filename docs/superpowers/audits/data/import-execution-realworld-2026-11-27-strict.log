@@ -1,7 +1,7 @@
 # import-execution-equivalence corpus run
 # binary:       /home/ubuntu/oxo-1398/target/debug/oxo-flow
 # fixture root: /home/ubuntu/oxo-1398/tests/fixtures/import
-# date:         2026-11-27T15:24:48Z
+# date:         2026-11-27T15:29:18Z
 # (report-only; pass --strict to fail on drift for executed fixtures)
 
 # import-execution-equivalence run
@@ -25,3 +25,4 @@ EXECUTION-EQUIVALENCE TALLY (fixtures=8)
 
 {"EXECUTED": 2, "SKIPPED": 6, "MATCHED": 2, "DRIFTED": 0, "NO_ARTIFACTS": 0}
 RECORDS	/home/ubuntu/1398-work/strict-records.json
+strict_rc=0

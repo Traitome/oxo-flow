@@ -52,13 +52,13 @@ listed in the fixture header and in §6.
 | Field | Value |
 | :--- | :--- |
 | `campaign` | #1398 real-world import execution-equivalence |
-| `engine_commit` | host checkout at campaign time = the campaign commit containing this report; exact SHA captured in `data/import-execution-realworld-2026-11-27-identity.txt`. The binary was built from `8be843433dfeab31312e22969d1c98adee822649`; later commits touched fixtures/scripts/docs only |
+| `engine_commit` | host checkout at campaign time = the campaign commit containing this report; exact SHA captured in `data/import-execution-realworld-2026-11-27-identity.txt`. The binary was built from `8be843433dfeab31312e22969d1c98adee822649`; later commits touched fixtures/scripts/docs plus a comment/attribute-only move in `nextflow.rs` (no code or codegen change) |
 | `engine_version` | `oxo-flow 0.32.0` (`target/debug/oxo-flow`) |
 | `binary_sha256` | `2a9e7e89a49a04b0c882bb88e533c979380519c5e6d51bc46207ca35339b19c7` |
 | `schema_sha256` | `7f68d09a481f28a1568fb9a37eb14a75bc6ef57d2d504891ef8ce5aeebca47e0` (`docs/schema/oxoflow-v1.schema.json`) |
 | `analysis_script_sha256` | runner `3c6f18ea098787973dab8624540f65ac8e539bab473bb4c606159e01bca27e06`; wrapper `4bf51520e78340c51207d3f8fab54be0af995cb79ce65eb1e06dd03f5f36ceaa`; truth table `e0133af31aaf93db9d4d98a53bde66022dfcdfcc370cc271abf4a77955ebe7ba` |
 | `fixture_sha256` | `nextflow/nfcore_faidx.ok.nf` `4357594f3a36d9280ce9ad40cd932e91f75cdc0dabdb92b57b1d315132299afc`; `snakemake/training_faidx.ok.smk` `217d1261c2a767e8ad21aaf90c64d2fe9cb7517f439894e8b1455befba85265a` |
-| `importer_source_sha256` | `nextflow.rs` `0c6d74882cebca70eb6d83a3c6454fb556d8762578848c14f4a67df77ba1ee80`; `snakemake.rs` `6d094b57253009b7c172b12154bd9ede5bc8842003e3c835028e80b06a27e48c` |
+| `importer_source_sha256` | `nextflow.rs` `0be1fd8b865f6cc194be2200ed1aaabcb6cbca1c014c00e9f541e12bb2aff1f6`; `snakemake.rs` `6d094b57253009b7c172b12154bd9ede5bc8842003e3c835028e80b06a27e48c` |
 | `model` | None — execution is deterministic, no provider call |
 | `prompt_sha256` | None — no prompt |
 | `toolchain` | Nextflow **26.10.6 build 15032**; Snakemake **9.27.2**; OpenJDK 21.0.11; Python 3.12.3; Docker 29.7.2; Apptainer 1.3.6 |
@@ -272,9 +272,8 @@ installed Nextflow compiles unmodified.
 | Baseline log (0 executed / 8 skipped) | `docs/superpowers/audits/data/import-execution-realworld-2026-11-27-baseline.log` |
 | Campaign log | `docs/superpowers/audits/data/import-execution-realworld-2026-11-27-campaign.log` |
 | Campaign raw records (per-arm command, exit, artifact SHA-256) | `docs/superpowers/audits/data/import-execution-realworld-2026-11-27-records.json` |
-| Strict-run log | `docs/superpowers/audits/data/import-execution-realworld-2026-11-27-strict.log` |
+| Strict-run log (ends with `strict_rc=0`) | `docs/superpowers/audits/data/import-execution-realworld-2026-11-27-strict.log` |
 | Strict-run raw records | `docs/superpowers/audits/data/import-execution-realworld-2026-11-27-strict-records.json` |
-| Strict exit-code capture (`strict_rc=0`) | `docs/superpowers/audits/data/import-execution-realworld-2026-11-27-strict-rc.log` |
 | Campaign identity (head, binary hash, image/SIF digests) | `docs/superpowers/audits/data/import-execution-realworld-2026-11-27-identity.txt` |
 
 Reproduce: build the CLI, plant the two FASTA files, set

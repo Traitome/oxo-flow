@@ -1875,8 +1875,6 @@ fn bare_output_pattern(expr: &str) -> std::result::Result<String, String> {
     Ok(inside.to_string())
 }
 
-/// Translate Nextflow bash script variables into oxo-flow `{var}` syntax.
-#[allow(clippy::too_many_arguments)]
 /// Decode the Groovy escape sequences a Nextflow script string carries at
 /// runtime, so the emitted shell is the text Nextflow would actually execute.
 ///
@@ -1912,6 +1910,8 @@ fn decode_nextflow_escapes(text: &str) -> String {
     out
 }
 
+/// Translate Nextflow bash script variables into oxo-flow `{var}` syntax.
+#[allow(clippy::too_many_arguments)]
 fn translate_nextflow_script(
     process_name: &str,
     process_line: usize,

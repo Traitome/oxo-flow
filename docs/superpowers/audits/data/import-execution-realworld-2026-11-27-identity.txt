@@ -1,5 +1,5 @@
 === campaign identity ===
-git_head: c695e4d7e1d21e562011ea9233d48dcc69e52433
+git_head: 94f3c8ec2b4ae05564a102c83caa95255396f8a9
 binary_sha256: 2a9e7e89a49a04b0c882bb88e533c979380519c5e6d51bc46207ca35339b19c7
 engine_versions: nextflow 26.10.6 build 15032; snakemake 9.27.2; java 21.0.11; python 3.12.3; docker 29.7.2; apptainer 1.3.6
 container: community.wave.seqera.io/library/htslib_samtools:1.25--704fb80d75745bd4
