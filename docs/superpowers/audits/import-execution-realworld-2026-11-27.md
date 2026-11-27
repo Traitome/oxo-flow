@@ -128,7 +128,10 @@ The harness contract (authored for #1300, hardened by #1349, unchanged here):
 > arm did not run (missing runtime, missing backend, non-zero exit) is
 > **SKIPPED** with the reason, never MATCHED. Two executed arms with empty
 > artifact sets are **NO_ARTIFACTS**. **DRIFTED** names the differing paths.
-> `--strict` exits non-zero iff an executed fixture drifted.
+> `--strict` exits non-zero iff an executed fixture drifted. The review
+> hardening adds two fail-closed SKIP conditions: a pinned
+> `execution.container` that the imported environment does not run, and a
+> literal declared output missing from either arm.
 
 The campaign was run twice (report-only and `--strict`); the strict invocation
 returned `strict_rc=0`.
