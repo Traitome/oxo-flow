@@ -1,0 +1,39 @@
+# S01 — BAM with declared @RG satisfies a matching read-group consumer
+#
+# SUPPLEMENT — post-hoc descriptive acceptance control. NOT part of the
+# pre-registered confirmatory analysis; authored after the primary outcome
+# was seen; never enters the false-accept denominator.
+# The producer declares BAM[sort_order=coordinate] with read_groups
+# required=true and fields ID,SM,PL; the consumer declares the same named
+# contract. The declared @RG metadata satisfies the consumer requirement,
+# so no TYPE diagnostic. This supplies the primary corpus's missing
+# TYPE-005 accept-side contrast (descriptive supplement only).
+#
+# EXPECTED (authored 2026-11-28 from the published contract, before the supplement run):
+#   accept — no TYPE diagnostic.
+
+[workflow]
+name = "s01"
+
+[types.bam_rg]
+format = "bam"
+sort_order = "coordinate"
+
+[types.bam_rg.read_groups]
+required = true
+fields = ["ID", "SM", "PL"]
+
+[[rules]]
+name = "produce"
+output = ["aln.bam"]
+shell = "bwa mem ref.fa r1.fq r2.fq | samtools sort -o aln.bam"
+[rules.types]
+outputs = { default = "bam_rg" }
+
+[[rules]]
+name = "bqsr"
+input = ["aln.bam"]
+output = ["recal.table"]
+shell = "gatk BaseRecalibrator -I aln.bam -R ref.fa -O recal.table"
+[rules.types]
+inputs = { default = "bam_rg" }

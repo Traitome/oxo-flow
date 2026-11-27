@@ -1,0 +1,38 @@
+# S02 — BAM with ID,SM,PL,LB read groups satisfies a matching consumer
+#
+# SUPPLEMENT — post-hoc descriptive acceptance control. NOT part of the
+# pre-registered confirmatory analysis; authored after the primary outcome
+# was seen; never enters the false-accept denominator.
+# The producer and consumer share the named contract bam_rg_lb with
+# read_groups fields ID,SM,PL,LB. The declared metadata matches the
+# requirement, so no TYPE diagnostic. A second TYPE-005 accept cell with
+# a different required-field set (descriptive supplement only).
+#
+# EXPECTED (authored 2026-11-28 from the published contract, before the supplement run):
+#   accept — no TYPE diagnostic.
+
+[workflow]
+name = "s02"
+
+[types.bam_rg_lb]
+format = "bam"
+sort_order = "coordinate"
+
+[types.bam_rg_lb.read_groups]
+required = true
+fields = ["ID", "SM", "PL", "LB"]
+
+[[rules]]
+name = "produce"
+output = ["aln.bam"]
+shell = "bwa mem ref.fa r1.fq r2.fq | samtools sort -o aln.bam"
+[rules.types]
+outputs = { default = "bam_rg_lb" }
+
+[[rules]]
+name = "markdup"
+input = ["aln.bam"]
+output = ["dedup.bam"]
+shell = "picard MarkDuplicates -I aln.bam -O dedup.bam"
+[rules.types]
+inputs = { default = "bam_rg_lb" }

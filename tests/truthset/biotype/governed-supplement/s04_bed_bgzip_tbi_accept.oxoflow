@@ -1,0 +1,29 @@
+# S04 — bgzip BED with a tbi companion on both sides
+#
+# SUPPLEMENT — post-hoc descriptive acceptance control. NOT part of the
+# pre-registered confirmatory analysis; authored after the primary outcome
+# was seen; never enters the false-accept denominator.
+# Both sides declare BED[compression=bgzip,index=tbi]. The compression
+# and declared companion-index requirements agree, so no TYPE diagnostic.
+# This is a new format/index cell (descriptive supplement only).
+#
+# EXPECTED (authored 2026-11-28 from the published contract, before the supplement run):
+#   accept — no TYPE diagnostic.
+
+[workflow]
+name = "s04"
+
+[[rules]]
+name = "produce"
+output = ["peaks.bed.gz"]
+shell = "macs2 callpeak -t aln.bam -f BAM && bgzip peaks.bed && tabix -p bed peaks.bed.gz"
+[rules.types]
+outputs = { default = "BED[compression=bgzip,index=tbi]" }
+
+[[rules]]
+name = "merge"
+input = ["peaks.bed.gz"]
+output = ["merged.bed"]
+shell = "zcat peaks.bed.gz | bedtools merge -i - > merged.bed"
+[rules.types]
+inputs = { default = "BED[compression=bgzip,index=tbi]" }

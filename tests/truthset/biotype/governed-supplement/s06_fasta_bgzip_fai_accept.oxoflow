@@ -1,0 +1,29 @@
+# S06 — bgzip FASTA with a fai companion and build on both sides
+#
+# SUPPLEMENT — post-hoc descriptive acceptance control. NOT part of the
+# pre-registered confirmatory analysis; authored after the primary outcome
+# was seen; never enters the false-accept denominator.
+# Both sides declare FASTA[compression=bgzip,index=fai,reference_build=GRCh38].
+# The compression, companion-index and build requirements agree, so no
+# TYPE diagnostic (descriptive supplement only).
+#
+# EXPECTED (authored 2026-11-28 from the published contract, before the supplement run):
+#   accept — no TYPE diagnostic.
+
+[workflow]
+name = "s06"
+
+[[rules]]
+name = "produce"
+output = ["genome.fa.gz"]
+shell = "bgzip genome.fa && samtools faidx genome.fa.gz"
+[rules.types]
+outputs = { default = "FASTA[compression=bgzip,index=fai,reference_build=GRCh38]" }
+
+[[rules]]
+name = "index"
+input = ["genome.fa.gz"]
+output = ["genome.mmi"]
+shell = "minimap2 -d genome.mmi genome.fa.gz"
+[rules.types]
+inputs = { default = "FASTA[compression=bgzip,index=fai,reference_build=GRCh38]" }

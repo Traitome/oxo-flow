@@ -1,0 +1,35 @@
+# S07 — H5AD with equal assay attribute on both sides
+#
+# SUPPLEMENT — post-hoc descriptive acceptance control. NOT part of the
+# pre-registered confirmatory analysis; authored after the primary outcome
+# was seen; never enters the false-accept denominator.
+# Both sides share the named contract h5ad_scrna: H5AD with attribute
+# assay=scrna. The declared attribute values are equal, so no TYPE
+# diagnostic (descriptive supplement only).
+#
+# EXPECTED (authored 2026-11-28 from the published contract, before the supplement run):
+#   accept — no TYPE diagnostic.
+
+[workflow]
+name = "s07"
+
+[types.h5ad_scrna]
+format = "h5ad"
+
+[types.h5ad_scrna.attributes]
+assay = "scrna"
+
+[[rules]]
+name = "produce"
+output = ["matrix.h5ad"]
+shell = "scanpy write matrix.h5ad"
+[rules.types]
+outputs = { default = "h5ad_scrna" }
+
+[[rules]]
+name = "report"
+input = ["matrix.h5ad"]
+output = ["summary.tsv"]
+shell = "python -c 'import scanpy; scanpy.read_h5ad(\"matrix.h5ad\").obs.to_csv(\"summary.tsv\", sep=\"\\t\")'"
+[rules.types]
+inputs = { default = "h5ad_scrna" }

@@ -1,0 +1,29 @@
+# S03 — plain VCF with explicit compression=none on both sides
+#
+# SUPPLEMENT — post-hoc descriptive acceptance control. NOT part of the
+# pre-registered confirmatory analysis; authored after the primary outcome
+# was seen; never enters the false-accept denominator.
+# Both sides declare VCF[compression=none]. The explicit encodings agree,
+# so no TYPE diagnostic; this is a same-value compression control.
+# Descriptive supplement only.
+#
+# EXPECTED (authored 2026-11-28 from the published contract, before the supplement run):
+#   accept — no TYPE diagnostic.
+
+[workflow]
+name = "s03"
+
+[[rules]]
+name = "produce"
+output = ["calls.vcf"]
+shell = "bcftools call -Ov -o calls.vcf"
+[rules.types]
+outputs = { default = "VCF[compression=none]" }
+
+[[rules]]
+name = "stats"
+input = ["calls.vcf"]
+output = ["stats.txt"]
+shell = "bcftools stats calls.vcf > stats.txt"
+[rules.types]
+inputs = { default = "VCF[compression=none]" }
