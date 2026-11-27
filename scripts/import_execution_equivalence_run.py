@@ -16,15 +16,16 @@ while writing nothing is not evidence of equivalence (issue #1349). A green
 tally must mean runs happened.
 
 The comparison endpoint is the COMPLETE produced-artifact path->SHA-256 map
-(planted inputs, the seeded workflow files, and engine metadata excluded), so
-an incidental file can never be the only agreement. When the imported
-workflow declares literal outputs (no wildcard syntax), each must also be
-present in both arms or the fixture is SKIPPED as "declared output missing".
-A fixture whose `execution` block pins a container must import to that same
-container (the `docker://` scheme prefix is normalized before comparison),
-else it is SKIPPED as a container mismatch. Wildcard declared outputs are not
-expanded for the membership check; the artifact-set comparison still covers
-whatever the arms produced.
+(planted inputs, the seeded workflow files, and engine metadata excluded).
+Additionally, when the imported workflow declares literal outputs (no
+wildcard syntax), each must be present in both arms or the fixture is SKIPPED
+as "declared output missing" -- for those fixtures an incidental file cannot
+be the only agreement. Wildcard declared outputs are not expanded for the
+membership check, so a wildcard-output fixture relies on the complete-map
+comparison alone; that limitation is documented in the audit report and the
+import guide. A fixture whose `execution` block pins a container must import
+to that same container (the `docker://` scheme prefix is normalized before
+comparison), else it is SKIPPED as a container mismatch.
 
 Requires Python >= 3.11 (tomllib). On an older interpreter the harness exits 2
 with an explicit message instead of a silent-green empty result.
@@ -47,7 +48,6 @@ import hashlib
 import importlib.util
 import json
 import os
-import re
 import shutil
 import subprocess
 import sys
