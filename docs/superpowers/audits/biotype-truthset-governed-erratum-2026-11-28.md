@@ -197,7 +197,8 @@ report §11; it is not execution evidence and not biological truth.
 | Amendment 4 commit | `ef42c6599a90861962484c96ce6ec9ede4bc94b6` |
 | Amendment 5 commit (PR-04 caveat) | `00677a9be84c2ddf4ff0ba832d159f55e75af9f3` |
 | v1.0.3 `MANIFEST.sha256` (amendment 4) | `1d3069043f53bdf13386b248392ba63ef35b296e46b65b764fac251d2e4b4ec9` |
-| v1.0.3 `MANIFEST.sha256` (amendment 5, current) | `e3863f53fe0245b191a8215279623a8756f0b472e3a096e7f91ea3042f97eb8e` |
+| v1.0.3 `MANIFEST.sha256` (amendment 5; superseded by the merged 1.0.4 manifest) | `e3863f53fe0245b191a8215279623a8756f0b472e3a096e7f91ea3042f97eb8e` |
+| Merged 1.0.4 `MANIFEST.sha256` (current, #1163 + #1166 governance) | `7e3984771249522314d360a617132609c741daae96b8d11cd1f2e8615121bbfe` |
 | Supplement corpus + runner commit | `742a684b81be06a2a3c723f9b7dbfb7afbae1769` |
 | Supplement seal commit | `0204c1e44ea167b4598be8a27d6b67be13fea207` |
 | Supplement manifest SHA-256 | `757891a479948bb2c6933ee61ce3df96a233b8240bf92a4862ad25309e552fc3` |

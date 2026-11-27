@@ -41,7 +41,7 @@
     "scripts/cross-arch-provenance-governed-corpus.json": "33a7531882f266dc067ba705b91863eacb709dee36bc00c2720aa0e6aba20bfa",
     "scripts/cross-arch-provenance-governed.sh": "fc5f29c80d9678cdac415c83be37e7cfdb5f3769a10ca836c6d62da1ecc3c35a"
   },
-  "files_note": "The `files` map is the executed/final-run seal at commit 56b109c1. Post-run hardened script hashes are in `post_run_hardening`; the scientific corpus/workflow/PR-06/MANIFEST hashes are unchanged.",
+  "files_note": "The `files` map is the executed/final-run seal at commit 56b109c1 for the corpus, workflow, harness, and analysis-script entries. Its two governance-file entries are post-merge values, not executed-time bytes: `PR-06-publication-decision-rule.md` = 94a29848... and `MANIFEST.sha256` = 7e398477... are the merged 1.0.4 files the analysis binds on disk (the executed-time PR-06 was e3e098c5... at v1.0.2; the pre-merge branch manifest was b07721b8...); see `governance.merge_note`. Post-run hardened script hashes are in `post_run_hardening`; the scientific corpus/workflow hashes are unchanged.",
   "final_run_manifest": {
     "commit": "56b109c17b95e4c610a874aaf63fc0ae583a57a6",
     "commit_time_utc": "2026-11-27T17:00:43Z",
@@ -72,6 +72,7 @@
     "merge_note": "The #1166 amendment 6 was merged with the #1163 1.0.3 governance text into the 1.0.4 manifest. The branch freeze-time manifest 0eaca24b and final-run manifest 770ae8f2 remain historical records computed against the pre-merge branch manifest b077.",
     "pr06_c4_section": "docs/superpowers/preregistration/PR-06-publication-decision-rule.md#c4--1166-cross-architecture-reproduction",
     "pr06_version": "1.0.2",
+    "pr06_version_note": "`pr06_version` is the PR-06 version whose C4 rule was frozen for this campaign (1.0.2, amendment 2). The merged PR-06 file is 1.0.4; its C4 rule text is unchanged (the merge only renumbered the amendment reference from 2 to 6), and the `files`/`governance.manifest_sha256` entries carry the merged 1.0.4 hashes.",
     "preregistration_readme": "docs/superpowers/preregistration/README.md",
     "publication_gate": "PR-05 C4 independent reviewer sign-off is PENDING. Per PR-05, no result may be described as pre-registered or confirmatory until that row is completed. The governed category is computed under the frozen rule and reported with this limitation; it is not a publication-ready confirmatory result."
   },
@@ -215,7 +216,7 @@
     "analysis-script or corpus hash mismatch",
     "native aarch64 leg not achieved (emulation is never reported as native)",
     "host-arch normalized to aarch64/x86_64 must equal container-arch (native execution, no emulation)",
-    "sealed corpus/workflow/PR-06/MANIFEST hashes must match the manifest files map",
+    "sealed corpus/workflow hashes must match the manifest files map, and the on-disk merged 1.0.4 PR-06/MANIFEST files must match the manifest's post-merge entries",
     "normalized @sha256 digest of every rule env_lock_identity must match across arms and equal the frozen digest",
     "wc version must be recorded and equal across arms",
     "image-src and staged-tag must match the corpus image block"
