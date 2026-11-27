@@ -168,6 +168,63 @@ EXPECTED = {
             },
         },
     },
+    # Real-world EXECUTION corpus (issue #1398): the same nf-core module and
+    # community tutorial rule the execution harness runs SOURCE vs IMPORTED on
+    # tx-ubuntu. `execution` carries the SOURCE-arm command/backend and the
+    # pinned container so the runner does not hardcode one engine's flags.
+    "nextflow/nfcore_faidx.ok.nf": {
+        "status": "supported",
+        "cited": "nf-core/modules modules/nf-core/samtools/faidx/main.nf "
+                 "(commit 49d0ca7a887eeb1b85cfb68ab18c8039753bd1de, retrieved 2026-11-27): "
+                 "process SAMTOOLS_FAIDX; wrapper changes documented in the fixture header",
+        "workflow_name_advisory": "samtools_faidx_pipeline",
+        "rules": ["samtools_faidx"],
+        "edges": [],
+        "rule_specs": {
+            "samtools_faidx": {
+                "threads": 2, "memory": "2G", "time_limit": "4h",
+                # upstream declares both container and conda; Nextflow runs the
+                # container, so only the container is emitted.
+                "environment": {"docker": "community.wave.seqera.io/library/htslib_samtools:1.25--704fb80d75745bd4"},
+                "input": ["GENOME_PATH/genome.fna"],
+                "output": ["GENOME_PATH/genome.fna.fai"],
+                "shell_verb": "samtools",
+                "shell_tokens": ["config.ext_args", "input"],
+            },
+        },
+        "execution": {
+            "source": ["nextflow", "run", "{src}", "-with-docker",
+                       "-ansi-log", "false", "-work-dir", "work"],
+            "source_backend": "docker",
+            "container": "community.wave.seqera.io/library/htslib_samtools:1.25--704fb80d75745bd4",
+            "timeout": 1200,
+        },
+    },
+    "snakemake/training_faidx.ok.smk": {
+        "status": "supported",
+        "cited": "troycomi/snakemake-training 2_containers/Snakefile rule index_reference "
+                 "(commit 1b2861ccc52bda56c0838cdd5b6f55c23fc16e2e, upstream L49-59, "
+                 "retrieved 2026-11-27); wrapper changes documented in the fixture header",
+        "workflow_name_advisory": "index_reference_pipeline",
+        "rules": ["index_reference"],
+        "edges": [],
+        "rule_specs": {
+            "index_reference": {
+                "threads": None, "memory": None, "time_limit": None,
+                "environment": {"docker": "community.wave.seqera.io/library/htslib_samtools:1.25--704fb80d75745bd4"},
+                "input": ["GENOME_PATH/GCF_000001215.4_Release_6_plus_ISO1_MT_genomic.fna"],
+                "output": ["GENOME_PATH/GCF_000001215.4_Release_6_plus_ISO1_MT_genomic.fna.fai"],
+                "shell_verb": "samtools",
+                "shell_tokens": ["input"],
+            },
+        },
+        "execution": {
+            "source": ["snakemake", "-s", "{src}", "--cores", "2", "--use-singularity"],
+            "source_backend": "singularity",
+            "container": "docker://community.wave.seqera.io/library/htslib_samtools:1.25--704fb80d75745bd4",
+            "timeout": 1200,
+        },
+    },
 }
 
 # Every rejected fixture and the out-of-subset construct it trips on, as

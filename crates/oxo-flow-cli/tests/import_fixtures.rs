@@ -251,6 +251,19 @@ fn assert_fixture_invariants(file_name: &str, toml: &str, config: &WorkflowConfi
             r#"time_limit = "4h""#,
             "samtools sort",
         ],
+        "nfcore_faidx.ok.nf" => &[
+            r#"input = ["GENOME_PATH/genome.fna"]"#,
+            r#"output = ["GENOME_PATH/genome.fna.fai"]"#,
+            r#"memory = "2G""#,
+            r#"environment = { docker = "community.wave.seqera.io/library/htslib_samtools:1.25--704fb80d75745bd4" }"#,
+            "samtools",
+        ],
+        "training_faidx.ok.smk" => &[
+            r#"input = ["GENOME_PATH/GCF_000001215.4_Release_6_plus_ISO1_MT_genomic.fna"]"#,
+            r#"output = ["GENOME_PATH/GCF_000001215.4_Release_6_plus_ISO1_MT_genomic.fna.fai"]"#,
+            r#"environment = { docker = "community.wave.seqera.io/library/htslib_samtools:1.25--704fb80d75745bd4" }"#,
+            "samtools faidx",
+        ],
         "rseqc_stat.ok.smk" => &[
             r#"input = ["results/star/{sample}-{unit}/Aligned.sortedByCoord.out.bam"]"#,
             r#"output = ["results/qc/rseqc/{sample}-{unit}.stats.txt"]"#,

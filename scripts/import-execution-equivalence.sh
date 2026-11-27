@@ -40,6 +40,12 @@ if [ -z "$BIN" ] || [ ! -x "$BIN" ]; then
   echo "no oxo-flow binary found (build it or set OXO_FLOW_BIN/--bin)" >&2
   exit 2
 fi
+# Arms run with cwd set to their staged directory, so a relative --bin would be
+# resolved against that directory and fail with ENOENT (issue #1398 campaign
+# finding). Anchor it to this invocation's working directory.
+if [ "${BIN#/}" = "$BIN" ]; then
+  BIN="$(cd "$(dirname "$BIN")" && pwd)/$(basename "$BIN")"
+fi
 
 echo "# import-execution-equivalence corpus run"
 echo "# binary:       $BIN"

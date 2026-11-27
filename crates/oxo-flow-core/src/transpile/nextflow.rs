@@ -1875,6 +1875,41 @@ fn bare_output_pattern(expr: &str) -> std::result::Result<String, String> {
     Ok(inside.to_string())
 }
 
+/// Decode the Groovy escape sequences a Nextflow script string carries at
+/// runtime, so the emitted shell is the text Nextflow would actually execute.
+///
+/// The load-bearing case is `\\` (line continuation in nf-core modules): left
+/// verbatim it becomes a literal backslash argument in bash, so `samtools \\`
+/// runs `samtools` with an argument instead of continuing the command. `\$` is
+/// the other common one: Nextflow uses it to keep a `$` literal through
+/// interpolation, and bash must then see the bare `$`. Unknown escapes are
+/// preserved (the backslash is significant shell syntax too).
+fn decode_nextflow_escapes(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars();
+    while let Some(ch) = chars.next() {
+        if ch != '\\' {
+            out.push(ch);
+            continue;
+        }
+        match chars.next() {
+            Some('n') => out.push('\n'),
+            Some('t') => out.push('\t'),
+            Some('r') => out.push('\r'),
+            Some('\\') => out.push('\\'),
+            Some('$') => out.push('$'),
+            Some('"') => out.push('"'),
+            Some('\'') => out.push('\''),
+            Some(other) => {
+                out.push('\\');
+                out.push(other);
+            }
+            None => out.push('\\'),
+        }
+    }
+    out
+}
+
 /// Translate Nextflow bash script variables into oxo-flow `{var}` syntax.
 #[allow(clippy::too_many_arguments)]
 fn translate_nextflow_script(
@@ -1897,7 +1932,13 @@ fn translate_nextflow_script(
 
     for (line_no, raw_line) in script_lines {
         let line_no = *line_no;
-        let line = raw_line.as_str();
+        // Nextflow script bodies are Groovy strings: the engine decodes their
+        // escape sequences before the shell sees them. The importer must do the
+        // same or real modules break — nf-core writes `samtools \\` line
+        // continuations, and a copied `\\` reaches bash as a literal backslash
+        // argument (issue #1398's execution run).
+        let decoded = decode_nextflow_escapes(raw_line);
+        let line = decoded.as_str();
         let trimmed = line.trim();
         if trimmed.starts_with("cat <<-END_VERSIONS") || trimmed.starts_with("cat <<END_VERSIONS") {
             skip_versions_block = true;
@@ -3222,6 +3263,42 @@ workflow { P(Channel.fromPath("data/*.txt")) }
 "#;
         let toml = transpile_nextflow(nf).expect("script body must be preserved");
         assert!(toml.contains("env | sort"), "{toml}");
+    }
+
+    #[test]
+    fn nextflow_string_escapes_decode_to_the_runtime_shell_text() {
+        // Direct helper coverage of the Groovy escape decoder.
+        assert_eq!(decode_nextflow_escapes(r"samtools \\"), "samtools \\");
+        assert_eq!(decode_nextflow_escapes(r"echo \$HOME"), "echo $HOME");
+        assert_eq!(decode_nextflow_escapes(r"printf 'a\tb'"), "printf 'a\tb'");
+        assert_eq!(decode_nextflow_escapes(r"'$1'"), "'$1'");
+    }
+
+    #[test]
+    fn line_continuations_are_decoded_in_the_emitted_shell() {
+        // Real nf-core shape: a `\\` continuation must become a single `\`,
+        // otherwise bash runs the fragment as a separate command (issue #1398).
+        let nf = r#"
+process P {
+    input: path x
+    output: "${x}.faidx"
+    script: """
+    samtools \\
+        faidx \\
+        ${x}
+    """
+}
+workflow { P(Channel.fromPath("data/*.txt")) }
+"#;
+        let toml = transpile_nextflow(nf).expect("continuations must transpile");
+        assert!(
+            toml.contains("samtools \\\n"),
+            "the continuation must be a single backslash: {toml}"
+        );
+        assert!(
+            !toml.contains("samtools \\\\"),
+            "the copied double backslash must not survive: {toml}"
+        );
     }
 
     #[test]

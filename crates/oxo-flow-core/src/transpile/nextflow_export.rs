@@ -586,16 +586,17 @@ fn translate_shell(rule: &Rule, name: &str, inputs: &[String]) -> Result<String>
                 format!("$in{position}")
             }
         };
-        translated.push_str(&shell[last_match..whole.start()]);
+        translated.push_str(&encode_shell_literal(&shell[last_match..whole.start()]));
         translated.push_str(&replacement);
         last_match = whole.end();
     }
-    translated.push_str(&shell[last_match..]);
+    translated.push_str(&encode_shell_literal(&shell[last_match..]));
 
     // Constructs the importer skips or rejects outright — in the authored
     // body or after translation (identical line shapes): `def` preludes are
-    // stripped, version blocks are skipped, `Channel.*` is rejected, and
-    // `"""` would terminate the emitted script body early.
+    // stripped, version blocks are skipped, and `Channel.*` is rejected.
+    // (`"""` is no longer a refusal: literal quotes are escaped by
+    // `encode_shell_literal`, so they cannot terminate the script body.)
     for (offset, line) in translated.lines().enumerate() {
         let trimmed = line.trim_start();
         if trimmed.starts_with("def ") {
@@ -620,13 +621,31 @@ fn translate_shell(rule: &Rule, name: &str, inputs: &[String]) -> Result<String>
              resolve the channel in the workflow wiring or hand-port the rule"
         )));
     }
-    if translated.contains("\"\"\"") {
-        return Err(export_error(format!(
-            "rule '{name}' shell contains a triple-double-quote — it would terminate the \
-             emitted Nextflow script body; hand-port the rule"
-        )));
-    }
     Ok(translated)
+}
+
+/// Inverse of the importer's Groovy escape decoding
+/// (`decode_nextflow_escapes`): serialize a literal shell segment into the
+/// emitted `"""` script body so the importer reproduces it byte-for-byte and
+/// the exported Nextflow executes the same shell text.
+///
+/// Only literal segments are encoded; the exporter's own interpolations
+/// (`${meta.id}`, `$task.*`, `$inN`) are inserted raw and must interpolate.
+/// A leading backslash is doubled, a dollar is escaped so it never becomes a
+/// Groovy interpolation, a double quote is escaped, and a CR becomes `\r`.
+/// Newlines and tabs stay literal (the importer preserves them).
+fn encode_shell_literal(segment: &str) -> String {
+    let mut out = String::with_capacity(segment.len());
+    for ch in segment.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '$' => out.push_str("\\$"),
+            '"' => out.push_str("\\\""),
+            '\r' => out.push_str("\\r"),
+            _ => out.push(ch),
+        }
+    }
+    out
 }
 
 /// Map a source input pattern onto the single-`*` glob the importer maps
@@ -1093,6 +1112,43 @@ shell = "samtools index {input}"
     }
 
     #[test]
+    fn shell_escapes_round_trip_through_the_exported_groovy_string() {
+        // The importer decodes Groovy string escapes before the shell runs, so
+        // the exporter must emit their exact inverse for literal shell text:
+        // a raw `printf 'a\tb'` or `$HOME` would otherwise reach the re-import
+        // as a real tab / a Nextflow interpolation. Regression for the #1398
+        // review HIGH finding.
+        let toml = r#"
+[workflow]
+name = "esc_pipeline"
+version = "0.1.0"
+sample_pattern = "data/{sample}.txt"
+
+[defaults]
+threads = 1
+
+[[rules]]
+name = "esc"
+input = ["data/{sample}.txt"]
+output = ["{sample}.out"]
+shell = "printf 'a\\tb' {input} > {sample}.out && echo $HOME >> {sample}.out && echo '\"\"\"' >> {sample}.out"
+
+"#;
+        let exported = export_toml(toml);
+        // The literal backslash and dollar are escaped in the Groovy source;
+        // the exporter's own interpolations stay raw.
+        assert!(exported.contains(r"printf 'a\\tb'"), "{exported}");
+        assert!(exported.contains(r"\$HOME"), "{exported}");
+        let reimported = transpile(&exported, crate::transpile::SourceFormat::Nextflow)
+            .expect("the escaped export re-imports");
+        assert_eq!(
+            reimported.as_bytes(),
+            toml.trim_start().as_bytes(),
+            "exported shell escapes must round-trip byte-for-byte"
+        );
+    }
+
+    #[test]
     fn out_of_subset_constructs_are_hard_errors_naming_the_construct() {
         // Never silent loss: each construct is refused with its name.
         let cases: &[(&str, &str)] = &[
@@ -1264,7 +1320,9 @@ shell = '''echo $PATH > a.txt
 '''
 "#;
         let exported = export_toml(toml);
-        assert!(exported.contains("echo $PATH > a.txt"), "{exported}");
+        // The literal `$` is escaped in the emitted Groovy source so Nextflow
+        // does not interpolate `PATH`; the importer decodes it back below.
+        assert!(exported.contains(r"echo \$PATH > a.txt"), "{exported}");
         let reimported =
             transpile(&exported, crate::transpile::SourceFormat::Nextflow).expect("re-imports");
         let config = WorkflowConfig::parse(&reimported).unwrap();

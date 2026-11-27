@@ -172,6 +172,44 @@ through content inspection.
 | `-o, --output <OUTPUT>` | Output `.oxoflow` file (prints to stdout if omitted). Existing files are never overwritten |
 | `--json` | Emit one machine-readable JSON document on stdout (see [JSON output](#json-output)) instead of raw TOML |
 
+## Measured execution equivalence (real-world corpus)
+
+`scripts/import-execution-equivalence.sh` runs each supported fixture's
+SOURCE engine and the IMPORTED `.oxoflow` workflow on identical planted inputs
+and compares the complete produced-artifact path→SHA-256 map (planted inputs,
+workflow seeds, and engine metadata are excluded). When the imported workflow
+declares literal outputs, each must also be present in both arms, and a
+fixture whose `execution` block pins a container must import to that same
+container (scheme-insensitive); otherwise the fixture is SKIPPED. A fixture is
+MATCHED only when **both** arms genuinely execute and produce artifacts; a
+missing runtime, missing environment backend, or non-zero exit is SKIPPED with
+the reason — never MATCHED. Two executed arms that write nothing are an
+explicit NO_ARTIFACTS verdict.
+
+As of 2026-11-27, two real-world fixtures execute on both arms and match:
+
+- an nf-core `samtools/faidx` module (upstream commit cited in the fixture),
+  run as Nextflow `-with-docker` versus imported; and
+- a community Snakemake tutorial `index_reference` rule, run with
+  `--use-singularity` versus imported.
+
+Both arms used the pinned `htslib_samtools:1.25` image and produced a
+byte-identical `.fai` (SHA-256 `696683592f087bb9aa2bf8cb2b9bd85df1b482c809c3770d86c9450d629d6cfe`).
+Over the eight supported fixtures the measured tally was executed 2 /
+matched 2 / drifted 0 / skipped 6. The six skips: four name a missing backend
+(three conda/mamba, one HPC modules), one source fixture is not valid DSL2 for
+the installed Nextflow engine, and one (`samtools_sort.ok.nf`) is an imported
+arm whose wildcard expansion finds no planted BAM (its source arm exits 0
+without a declared artifact). No skip is counted as a match. See
+[`import-execution-realworld-2026-11-27.md`](../../../superpowers/audits/import-execution-realworld-2026-11-27.md).
+
+```bash
+# source vs imported on identical inputs (engine binaries must be on PATH)
+scripts/import-execution-equivalence.sh --bin ./target/debug/oxo-flow
+# falsifiable: exit non-zero only if an executed fixture drifted
+scripts/import-execution-equivalence.sh --strict --bin ./target/debug/oxo-flow
+```
+
 ## Examples
 
 Transpile a Nextflow pipeline and print to stdout:

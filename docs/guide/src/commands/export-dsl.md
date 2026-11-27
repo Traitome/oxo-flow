@@ -101,9 +101,11 @@ declaration order:
 - Source input patterns with wildcards other than a single `{sample}`.
 - Shell constructs the importer rejects or skips: non-shell-env `$`
   interpolations, indexed refs, `def` preludes, version blocks, `Channel.*`,
-  `{output}`-style placeholders, `"""`, and leading/trailing whitespace that
+  `{output}`-style placeholders, and leading/trailing whitespace that
   the importer's body trim would strip (a trailing newline on a multi-line
-  body is fine — it is what the importer itself serializes).
+  body is fine — it is what the importer itself serializes). Literal
+  backslashes, dollars and quotes are escaped into the emitted Groovy string
+  and round-trip byte-identically.
 - `--format snakemake` (or any other target): the exporter covers Nextflow
   DSL2 only — it refuses rather than guessing. CWL/WDL export remains out
   of scope (see the roadmap).
@@ -112,11 +114,14 @@ declaration order:
 
 Two exports of the same workflow are byte-identical (pinned by tests). The
 fixture-corpus round trip is measured in `tests/transpile_roundtrip.rs`: of
-the 25 `tests/fixtures/import/**` fixtures, 19 are rejected by the importer
-(no parsed model to export), the 3 accepted Nextflow fixtures export and
-re-import **byte-identically**, and the 3 accepted Snakemake fixtures are
-refused naming the constructs Snakemake import emits that Nextflow cannot
-carry back (`[wildcard_constraints]`, rule `benchmark`, rule `log`).
+the 27 `tests/fixtures/import/**` fixtures, 19 are rejected by the importer
+(no parsed model to export), **5** accepted fixtures export and re-import
+**byte-identically** (the 4 accepted Nextflow fixtures plus the Snakemake
+fixture `training_faidx.ok.smk`, whose imported model carries none of the
+unexportable fields), and the 3 accepted Snakemake fixtures that declare
+`[wildcard_constraints]`, rule `benchmark`, or rule `log` are refused naming
+those constructs (Nextflow has no equivalent for what Snakemake import emits
+there).
 
 `[types.*]` contracts and per-rule `types` are not emitted (Nextflow has no
 equivalent); the importer re-derives them from tool-name/IO inference on
