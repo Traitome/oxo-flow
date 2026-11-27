@@ -1,0 +1,25 @@
+# G089 — bgzip VCF with CSI and build on both sides
+# Both sides declare VCF[compression=bgzip,index=csi,reference_build=GRCh37];
+# compression, index kind and build all agree, so no TYPE diagnostic. The
+# pilot's bgzip accept used tbi and named no build.
+#
+# EXPECTED (authored 2026-11-27 from the published contract, before running):
+#   accept — no TYPE diagnostic.
+
+[workflow]
+name = "g089"
+
+[[rules]]
+name = "produce"
+output = ["calls.vcf.gz"]
+shell = "bcftools call -Oz -o calls.vcf.gz && bcftools index calls.vcf.gz"
+[rules.types]
+outputs = { default = "VCF[compression=bgzip,index=csi,reference_build=GRCh37]" }
+
+[[rules]]
+name = "consume"
+input = ["calls.vcf.gz"]
+output = ["stats.txt"]
+shell = "bcftools stats calls.vcf.gz > stats.txt"
+[rules.types]
+inputs = { default = "VCF[compression=bgzip,index=csi,reference_build=GRCh37]" }

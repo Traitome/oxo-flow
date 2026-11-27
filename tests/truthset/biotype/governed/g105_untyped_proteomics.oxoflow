@@ -1,0 +1,22 @@
+# G105 — untyped proteomics search pipeline
+# The workflow declares no [types.*] tables and no [rules.types]
+# annotations. The published type system is opt-in: with no contracts
+# there is nothing to violate, so `validate` must accept it. This is a
+# distinct real assay pipeline, not a pilot case.
+#
+# EXPECTED (authored 2026-11-27 from the published contract, before running):
+#   accept — no TYPE diagnostic.
+
+[workflow]
+name = "g105"
+
+[[rules]]
+name = "prepare"
+output = ["sample.raw"]
+shell = "tool0  > sample.raw"
+
+[[rules]]
+name = "process"
+input = ["sample.raw"]
+output = ["peptides.tsv"]
+shell = "tool1 sample.raw > peptides.tsv"

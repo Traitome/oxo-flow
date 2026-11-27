@@ -1,0 +1,28 @@
+# G104 — untyped metagenomic profiling pipeline
+# The workflow declares no [types.*] tables and no [rules.types]
+# annotations. The published type system is opt-in: with no contracts
+# there is nothing to violate, so `validate` must accept it. This is a
+# distinct real assay pipeline, not a pilot case.
+#
+# EXPECTED (authored 2026-11-27 from the published contract, before running):
+#   accept — no TYPE diagnostic.
+
+[workflow]
+name = "g104"
+
+[[rules]]
+name = "prepare"
+output = ["r1.fq"]
+shell = "tool0  > r1.fq"
+
+[[rules]]
+name = "process"
+input = ["r1.fq"]
+output = ["r2.fq"]
+shell = "tool1 r1.fq > r2.fq"
+
+[[rules]]
+name = "summarize"
+input = ["r2.fq"]
+output = ["abundance.tsv"]
+shell = "tool2 r2.fq > abundance.tsv"

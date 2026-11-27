@@ -1,0 +1,27 @@
+# G075 — zstd TSV fed to a gzip consumer
+# The producer declares TSV[compression=zstd]; the consumer requires TSV[compression=gzip].
+# The published compression field names block/stream encodings; only
+# BAM implies BGZF, and a different declared encoding does not satisfy
+# the requirement, so the edge violates TYPE-006. This compression
+# pair was not asserted by the pilot.
+#
+# EXPECTED (authored 2026-11-27 from the published contract, before running):
+#   reject — TYPE-006.
+
+[workflow]
+name = "g075"
+
+[[rules]]
+name = "produce"
+output = ["counts.tsv.zst"]
+shell = "zstd -c counts.tsv > counts.tsv.zst"
+[rules.types]
+outputs = { default = "TSV[compression=zstd]" }
+
+[[rules]]
+name = "consume"
+input = ["counts.tsv.zst"]
+output = ["result.dat"]
+shell = "zstd -d counts.tsv.zst -o counts.tsv.gz"
+[rules.types]
+inputs = { default = "TSV[compression=gzip]" }

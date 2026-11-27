@@ -31,8 +31,8 @@
     "wc_note": "The sealed run-time container.txt omitted wc; the post-run container-supplement.txt records `wc (GNU coreutils) 9.7` on both arms from the same pinned digest, and the analysis compares it."
   },
   "files": {
-    "docs/superpowers/preregistration/MANIFEST.sha256": "b07721b846cbd74808cae156cebdbb93f4e6c140cf289aad217ea6cc06e07609",
-    "docs/superpowers/preregistration/PR-06-publication-decision-rule.md": "e3e098c53d791c9a3ad6de8fd21802965b9eb8ac0237b19c9fa59308233bef21",
+    "docs/superpowers/preregistration/MANIFEST.sha256": "7e3984771249522314d360a617132609c741daae96b8d11cd1f2e8615121bbfe",
+    "docs/superpowers/preregistration/PR-06-publication-decision-rule.md": "94a29848281d55d4970de5c3929189a68389df5b05a3b414e2fd2d093993c5b8",
     "eval/scripts/test_crossarch_governed.py": "7667609c436e2a349a5deed5b83637dd5e854400a7b060f3c16a3fc60a036df7",
     "scripts/cross-arch-provenance-arm.sh": "ceee31e545c02a1f44b47ebe0957154641609bd28a78bc646236d480905b955a",
     "scripts/cross-arch-provenance-governed-a.oxoflow": "8daa37215b0a5871253094d23cbe32035d21737c9a5fa097f63bbd5587e12847",
@@ -57,18 +57,19 @@
   },
   "freeze_statement": "The #1166 thresholds and corpus were frozen at commit dd5dcd44ee91a2c93bfd24c29f189d8de32e87d5 (2026-11-27T16:52:56Z), before any campaign run; the freeze-time manifest was 0eaca24b. Two harness revisions followed before the final analyzable run: 834dc183 (pre-run staging fix, after an identity-only attempt-1 at 16:56:36Z) and 56b109c1 (pre-analysis / pre-final-run evidence-stem fix, after a complete attempt-2 at 16:59:18Z whose raw evidence exists but was not analyzed). The final run started at 17:01:00Z with the final-run manifest 770ae8f2. This file's current content is the post-run governance/validity-hardening revision: it preserves the executed scientific hashes and records the timeline, attempts, and post-run supplements below.",
   "governance": {
-    "amendment": "2 (2026-11-28)",
+    "amendment": "6 (2026-11-28; merged as 1.0.4)",
     "amendment_log_entries": [
-      2,
-      3,
-      4,
-      5,
-      6
+      6,
+      7,
+      8,
+      9,
+      10
     ],
     "final_run_manifest_sha256": "770ae8f2769f112cd308249ea94882dee2b8c6e7a7e383550d790c229c2a75bf",
     "freeze_manifest_sha256": "0eaca24be6d00f5ab369f1fb6769131bfeed336107128e76b26ccb6c4ff63908",
     "manifest_file": "docs/superpowers/preregistration/MANIFEST.sha256",
-    "manifest_sha256": "b07721b846cbd74808cae156cebdbb93f4e6c140cf289aad217ea6cc06e07609",
+    "manifest_sha256": "7e3984771249522314d360a617132609c741daae96b8d11cd1f2e8615121bbfe",
+    "merge_note": "The #1166 amendment 6 was merged with the #1163 1.0.3 governance text into the 1.0.4 manifest. The branch freeze-time manifest 0eaca24b and final-run manifest 770ae8f2 remain historical records computed against the pre-merge branch manifest b077.",
     "pr06_c4_section": "docs/superpowers/preregistration/PR-06-publication-decision-rule.md#c4--1166-cross-architecture-reproduction",
     "pr06_version": "1.0.2",
     "preregistration_readme": "docs/superpowers/preregistration/README.md",

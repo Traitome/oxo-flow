@@ -1,0 +1,25 @@
+# G091 — gzip GTF with matching build on both sides
+# Both sides declare GTF[compression=gzip,reference_build=GRCh38]; gzip is
+# the declared encoding on both sides and the builds agree, so no TYPE
+# diagnostic.
+#
+# EXPECTED (authored 2026-11-27 from the published contract, before running):
+#   accept — no TYPE diagnostic.
+
+[workflow]
+name = "g091"
+
+[[rules]]
+name = "produce"
+output = ["genes.gtf.gz"]
+shell = "stringtie -o genes.gtf aln.bam && gzip genes.gtf"
+[rules.types]
+outputs = { default = "GTF[compression=gzip,reference_build=GRCh38]" }
+
+[[rules]]
+name = "consume"
+input = ["genes.gtf.gz"]
+output = ["counts.txt"]
+shell = "zcat genes.gtf.gz | featureCounts -a - -o counts.txt aln.bam"
+[rules.types]
+inputs = { default = "GTF[compression=gzip,reference_build=GRCh38]" }

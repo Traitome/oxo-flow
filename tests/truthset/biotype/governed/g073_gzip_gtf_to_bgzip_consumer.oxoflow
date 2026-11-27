@@ -1,0 +1,27 @@
+# G073 — gzip GTF fed to a bgzip consumer
+# The producer declares GTF[compression=gzip]; the consumer requires GTF[compression=bgzip].
+# The published compression field names block/stream encodings; only
+# BAM implies BGZF, and a different declared encoding does not satisfy
+# the requirement, so the edge violates TYPE-006. This compression
+# pair was not asserted by the pilot.
+#
+# EXPECTED (authored 2026-11-27 from the published contract, before running):
+#   reject — TYPE-006.
+
+[workflow]
+name = "g073"
+
+[[rules]]
+name = "produce"
+output = ["genes.gtf.gz"]
+shell = "gzip -c genes.gtf > genes.gtf.gz"
+[rules.types]
+outputs = { default = "GTF[compression=gzip]" }
+
+[[rules]]
+name = "consume"
+input = ["genes.gtf.gz"]
+output = ["result.dat"]
+shell = "zcat genes.gtf.gz | bgzip -c > genes.gtf.bgz"
+[rules.types]
+inputs = { default = "GTF[compression=bgzip]" }

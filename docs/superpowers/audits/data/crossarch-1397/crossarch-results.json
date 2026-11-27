@@ -730,18 +730,19 @@
       "sha256": "0eaca24be6d00f5ab369f1fb6769131bfeed336107128e76b26ccb6c4ff63908"
     },
     "governance": {
-      "amendment": "2 (2026-11-28)",
+      "amendment": "6 (2026-11-28; merged as 1.0.4)",
       "amendment_log_entries": [
-        2,
-        3,
-        4,
-        5,
-        6
+        6,
+        7,
+        8,
+        9,
+        10
       ],
       "final_run_manifest_sha256": "770ae8f2769f112cd308249ea94882dee2b8c6e7a7e383550d790c229c2a75bf",
       "freeze_manifest_sha256": "0eaca24be6d00f5ab369f1fb6769131bfeed336107128e76b26ccb6c4ff63908",
       "manifest_file": "docs/superpowers/preregistration/MANIFEST.sha256",
-      "manifest_sha256": "b07721b846cbd74808cae156cebdbb93f4e6c140cf289aad217ea6cc06e07609",
+      "manifest_sha256": "7e3984771249522314d360a617132609c741daae96b8d11cd1f2e8615121bbfe",
+      "merge_note": "The #1166 amendment 6 was merged with the #1163 1.0.3 governance text into the 1.0.4 manifest. The branch freeze-time manifest 0eaca24b and final-run manifest 770ae8f2 remain historical records computed against the pre-merge branch manifest b077.",
       "pr06_c4_section": "docs/superpowers/preregistration/PR-06-publication-decision-rule.md#c4--1166-cross-architecture-reproduction",
       "pr06_version": "1.0.2",
       "preregistration_readme": "docs/superpowers/preregistration/README.md",

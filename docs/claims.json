@@ -155,6 +155,33 @@
       ]
     },
     {
+      "id": "biotype.governed_truth_set_cases",
+      "description": "Number of sealed cases in the governed held-out BioType truth set (#1396); cases_total must equal the case rows.",
+      "source": {
+        "kind": "json_number",
+        "path": "docs/superpowers/audits/data/biotype-truthset-governed-results.json",
+        "key": "cases_total",
+        "must_equal_len_of": "cases"
+      },
+      "checks": [
+        {
+          "path": "README.md",
+          "contains": ["{value} sealed cases"],
+          "not_contains": ["115 sealed cases", "117 sealed cases"]
+        },
+        {
+          "path": "ROADMAP.md",
+          "contains": ["{value} sealed cases"],
+          "not_contains": ["115 sealed cases", "117 sealed cases"]
+        },
+        {
+          "path": "docs/guide/src/vision.md",
+          "contains": ["{value} sealed cases"],
+          "not_contains": ["115 sealed cases", "117 sealed cases"]
+        }
+      ]
+    },
+    {
       "id": "repair.verified_campaign",
       "description": "Verified-repair campaign result parsed from eval/frontier/PILOT_FINDINGS.md (applied and verified rerun must agree).",
       "source": {
@@ -361,6 +388,22 @@
           "path": "docs/guide/src/development/contributing.md",
           "contains": ["claims-check", "docs/claims.json"]
         }
+      ]
+    },
+    {
+      "id": "web.userns_isolation",
+      "description": "The opt-in per-run user + PID namespace knob must stay documented in the overview docs (drift guard for issue #1401).",
+      "source": {
+        "kind": "rust_const_strings",
+        "path": "crates/oxo-flow-web/src/userns.rs",
+        "regex": "pub const ISOLATION_MODE_ENV: &str = \"(OXO_FLOW_WEB_ISOLATION)\";"
+      },
+      "checks": [
+        { "path": "README.md", "contains": "{first}" },
+        { "path": "ROADMAP.md", "contains": "{first}" },
+        { "path": "docs/guide/src/vision.md", "contains": "{first}" },
+        { "path": "docs/guide/src/how-to/deploy-modes.md", "contains": "{first}" },
+        { "path": "AGENTS.md", "contains": "{first}" }
       ]
     }
   ]

@@ -3,10 +3,10 @@
 | Freeze record | Value |
 | :--- | :--- |
 | Artifact | PR-03 (Task 4.0 required artifact 3 of 6) |
-| Version | 1.0.2 |
-| Freeze status | FROZEN (values marked TBD are deliberately open) |
-| Freeze date | 2026-11-18 (original freeze; amendment 1 same date; amendment 2 on 2026-11-28) |
-| Amendment | 1 (2026-11-18): review fixes D1–D5 and clarifications — see [`AMENDMENTS.md`](AMENDMENTS.md) entry 1. 2 (2026-11-28): #1166 hardware, dataset, and budget frozen — see entry 2 |
+| Version | 1.0.4 |
+| Freeze status | FROZEN |
+| Freeze date | 2026-11-18 (original freeze; amendments 1–5 on main; amendment 6 on 2026-11-28 for #1166) |
+| Amendment | 1 (2026-11-18): review fixes D1–D5 and clarifications; 2–5 (2026-11-27/28): #1163 governed campaign (`τ_FA = 0.05`, held-out corpus, status/erratum/PR-04 caveat); 6 (2026-11-28): #1166 campaign parameters (`τ_ARCH = 0.80`, `n_min = 3`) — see [`AMENDMENTS.md`](AMENDMENTS.md) entries 1–10 |
 | Content binding | SHA-256 recorded in [`MANIFEST.sha256`](MANIFEST.sha256) |
 | Campaigns covered | #1163, #1164, #1165, #1166 |
 | Change control | Post-freeze edits only through [`AMENDMENTS.md`](AMENDMENTS.md) |
@@ -53,9 +53,17 @@ without an amendment makes the campaign non-compliant.
 | Prompt | None — no generation call | FIXED |
 | Tool | `oxo-flow` CLI built from the frozen engine commit; `validate --json` is the verdict surface, with `lint --json` / `dry-run --json` recorded for context only and never substituted for `validate` | FIXED |
 | Seed | None — deterministic; a repeated run must be byte-identical, and any difference is an infrastructure failure that voids the case | FIXED |
-| Hardware | Any named host that runs the frozen binary; host identity, OS, and CPU recorded per run | TBD — owner: campaign lead; deadline: before data collection |
-| Dataset | Independently authored truth set; case bodies and expected verdicts committed and sealed by SHA-256; coverage spans `TYPE-001`–`TYPE-009` and untyped accept cases | Case content FIXED by PR-02 rules; size TBD — owner: campaign lead; deadline: before data collection |
-| Budget | Static-only: no execution, no provider calls. Wall-clock cap per case and total campaign cap | TBD — owner: campaign lead; deadline: before data collection |
+| Hardware | Single arm: the campaign lead's macOS arm64 workstation, host identity (`hostname`, `uname -srm`, CPU model, RAM), rustc version, and binary SHA-256 recorded in the pre-run manifest and the report. No cross-platform contrast is claimed | FIXED 2026-11-27 (amendment 2) |
+| Dataset | Truth set: 83 expected-reject cases + 24 acceptance controls authored post-freeze, plus 9 pre-existing gallery controls disclosed as exposure (expected-accept, outside the FA denominator); at least 73 expected-reject cases; coverage spans `TYPE-001`–`TYPE-010`, every non-`generic` format, a `transform.*` generated edge, and an `[[include]]`-contributed edge; the 54-case pilot set is excluded as exposure. Expected verdicts are sealed by the pre-run manifest's canonical `cases` array hash; case bodies are pinned by the stamped commit and checked byte-for-byte by `make truthset-stamp`. | FIXED 2026-11-27 (amendment 2); custody wording corrected 2026-11-28 (amendment 4) |
+| Budget | Static-only: no execution, no provider calls, no network. Per-case subprocess timeout 60 s (enforced by the sealed runner); total declared ceiling 7200 s (the primary campaign observed ~20 s; the sealed runner did not enforce the total as a hard timer — disclosed in the campaign erratum; the post-hoc supplement runner enforces both and records elapsed time) | FIXED 2026-11-27 (amendment 2); enforcement wording corrected 2026-11-28 (amendment 4) |
+
+The pre-run manifest is
+`docs/superpowers/preregistration/prerun/C1-governed-2026-11-27.json`
+(plus its `.sha256` companion), committed before the first confirmatory
+run. It carries the §0 fields and the full per-case expected-verdict
+records; `case_manifest_sha256` is the canonical hash of its `cases`
+array, and the campaign runner reads the `cases` array as its EXPECT
+source so the sealed list and the executed list cannot drift.
 
 ## C2 — #1164 repair-campaign manifest
 
@@ -99,9 +107,9 @@ observation.
 | Prompt | None | FIXED |
 | Tool | `oxo-flow` at the frozen engine commit, run with `--provenance`; comparison via `oxo-flow provenance verify --json` on each arm's checkpoint | FIXED |
 | Seed | None at the engine level; any tool-level non-determinism is measured, not seeded away | FIXED (no seed) |
-| Hardware | Two architectures: x86_64 and aarch64. The Linux x86_64 reference host is `tx-ubuntu` (designated Linux validation host, native x86_64 docker). The aarch64 host is the local Apple Silicon macOS host running Docker Desktop's **native linux/arm64 VM** (no qemu). Both container legs execute the same multi-arch manifest-list digest; host OS/kernel/CPU class are recorded per arm | FROZEN 2026-11-28 (amendment 2) |
-| Dataset | Two frozen workflows (`scripts/cross-arch-provenance-governed-a.oxoflow`, `-b.oxoflow`) with 24 primary declared outputs (12 each) in 8 classes of 3, plus one excluded negative control. Corpus manifest: `scripts/cross-arch-provenance-governed-corpus.json`; image pinned by multi-arch manifest-list digest `sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b` | FROZEN 2026-11-28 (amendment 2) |
-| Budget | Two hosts × two workflows; each workflow is minutes of CPU and well under 1 GiB of storage; no cloud or paid calls | FROZEN 2026-11-28 (amendment 2) |
+| Hardware | Two architectures: x86_64 and aarch64. The Linux x86_64 reference host is `tx-ubuntu` (designated Linux validation host, native x86_64 docker). The aarch64 host is the local Apple Silicon macOS host running Docker Desktop's **native linux/arm64 VM** (no qemu). Both container legs execute the same multi-arch manifest-list digest; host OS/kernel/CPU class are recorded per arm | FROZEN 2026-11-28 (amendment 6) |
+| Dataset | Two frozen workflows (`scripts/cross-arch-provenance-governed-a.oxoflow`, `-b.oxoflow`) with 24 primary declared outputs (12 each) in 8 classes of 3, plus one excluded negative control. Corpus manifest: `scripts/cross-arch-provenance-governed-corpus.json`; image pinned by multi-arch manifest-list digest `sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b` | FROZEN 2026-11-28 (amendment 6) |
+| Budget | Two hosts × two workflows; each workflow is minutes of CPU and well under 1 GiB of storage; no cloud or paid calls | FROZEN 2026-11-28 (amendment 6) |
 
 The container digest (or the conda-family environment-lock identity) is a
 first-class manifest value, not metadata: if it differs between arms, the

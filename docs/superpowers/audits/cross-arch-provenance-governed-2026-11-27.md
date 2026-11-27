@@ -1,6 +1,6 @@
 # Governed cross-architecture reproduction campaign (#1166 / #1397)
 
-> **Status: governed campaign executed under PR-06 §C4 (amendment 2).**
+> **Status: governed campaign executed under PR-06 §C4 (amendment 6).**
 > The pre-registration values were frozen and committed before the first run
 > (freeze commit `dd5dcd44ee91a2c93bfd24c29f189d8de32e87d5`, 2026-11-28
 > 00:52:56 +08:00 / 2026-11-27T16:52:56Z). Two harness revisions followed
@@ -29,17 +29,17 @@ environment is the same and only the CPU architecture differs.
 | :--- | :--- |
 | Campaign | #1166 (governed run filed as #1397) |
 | Pre-registration section | PR-06 §C4 |
-| Version | PR-06 v1.0.2 (amendment 2) |
+| Version | PR-06 v1.0.4 (amendment 6; merged with #1163 amendments 1–5) |
 | Freeze date | 2026-11-28 |
 | Parameter-freeze commit | `dd5dcd44ee91a2c93bfd24c29f189d8de32e87d5` |
 | Parameter-freeze timestamp | 2026-11-28T00:52:56+08:00 (`2026-11-27T16:52:56Z`) |
 | Freeze-time manifest SHA-256 | `0eaca24be6d00f5ab369f1fb6769131bfeed336107128e76b26ccb6c4ff63908` |
 | Final-run manifest SHA-256 | `770ae8f2769f112cd308249ea94882dee2b8c6e7a7e383550d790c229c2a75bf` (commit `56b109c17b95e4c610a874aaf63fc0ae583a57a6`, 2026-11-27T17:00:43Z) |
-| Post-run review-hardened manifest SHA-256 | `3082b22899537eef7a75585f61347b4d81cf57d727565ee35d5f0f062f1e550e` |
-| `MANIFEST.sha256` | `b07721b846cbd74808cae156cebdbb93f4e6c140cf289aad217ea6cc06e07609` |
+| Post-run review-hardened manifest SHA-256 | `4f11b490d2c4a36924fb8aa879250367a5db89e7cf162f818d92cc1a190a388e` |
+| `MANIFEST.sha256` | `7e3984771249522314d360a617132609c741daae96b8d11cd1f2e8615121bbfe` (merged 1.0.4; the pre-merge #1166 branch manifest was `b07721b8…`) |
 | Pre-run/final-run manifest | `docs/superpowers/audits/data/crossarch-1397/preregistration.json` |
 
-The amendment log entry 2 records the value changes and that **no confirmatory
+The amendment log entry 6 records the value changes and that **no confirmatory
 outcome was examined** before the parameter freeze. The two earlier #1166
 observations (the OS-confounded 2026-11-19 field observation and the
 2026-11-20 native-amd64-versus-qemu-emulated-arm64 container observation) are
@@ -57,9 +57,14 @@ manifest `770ae8f2`; `17:01:00`–`17:01:19` final analyzable run. The
 freeze-time and final-run manifests carry the **same scientific hashes**
 (corpus, workflows, analysis script, PR-06, MANIFEST); only harness hashes and
 status text changed. The current file is the post-run review-hardened
-revision (amendment log entry 6), which adds sealed-hash/host-arch/tool/
+revision (amendment log entry 10), which adds sealed-hash/host-arch/tool/
 env-lock checks without changing the scientific values or the observed
-hashes.
+hashes. The #1166 branch governance was merged with main’s #1163 1.0.3
+text into the **1.0.4** manifest `7e3984771249522314d360a617132609c741daae96b8d11cd1f2e8615121bbfe`;
+the branch’s freeze-time (`0eaca24b`) and final-run (`770ae8f2`) manifests
+remain historical records computed against the pre-merge branch manifest
+`b07721b8…`. Amendment 6 is the #1166 parameter freeze; amendments 7–10
+are the #1166 harness/status/tooling entries.
 
 ### 2.2 Frozen values
 
@@ -105,7 +110,7 @@ unchanged from the freeze-time manifest.
 
 The hardened analysis re-derives the same **POSITIVE** result on the committed
 evidence; its output is the current `crossarch-results.json` (SHA-256
-`5dd4ce2813a8059a319983437932a63552f23bfbfe549f850cc5b75fcd988407`).
+`809be892859911cfccc6989d3c07628f3f192eadb6ad55b76d988f696744f217`).
 
 ### 2.4 Pre-data harness revision
 
@@ -118,7 +123,7 @@ with a fail-closed architecture check, and the orchestrator now pre-stages
 both images without `docker rmi`. No threshold, endpoint, corpus, class,
 denominator, environment identity, or negative-control value changed; the
 same manifest-list digest remains the lock. The amendment log records this as
-entry 3.
+entry 7.
 
 ### 2.5 Pre-analysis / pre-final-run harness revision 2
 
@@ -133,7 +138,7 @@ stem-fix commit `56b109c1` (17:00:43Z) was committed after attempt-2 and
 before the final analyzable run; the arm script now derives the stem from the
 workflow's declared `[workflow] name`, matching the frozen corpus keys. No
 threshold, endpoint, corpus, class, denominator, environment identity, or
-analysis script changed. The amendment log records this as entry 4.
+analysis script changed. The amendment log records this as entry 8.
 
 ## 3. Corpus
 
@@ -404,7 +409,7 @@ and they are excluded from the provenance denominator.
   the same scientific hashes. Attempt-2 produced checkpoint/output evidence
   but was not analyzed as the campaign result; both the interrupted staging
   attempt and attempt-2 are preserved and disclosed. The current file is the
-  post-run review-hardened revision (`3082b228`).
+  post-run review-hardened revision (`4f11b490`).
 - **Native-execution assertion.** The hardened analysis requires each arm's
   normalized host architecture to equal its container architecture; an
   emulated arm on an x86 host would now be INVALID, not silently accepted.
@@ -419,7 +424,9 @@ all bioinformatics tools or hardware.
 ## 13. Raw-data lineage
 
 - Final-run / review-hardened manifest: `docs/superpowers/audits/data/crossarch-1397/preregistration.json`
-  (freeze-time `0eaca24b…`, final-run `770ae8f2…`, post-run hardened `3082b228…`).
+  (freeze-time `0eaca24b…`, final-run `770ae8f2…`, post-run hardened `4f11b490…`).
+  The freeze/final-run manifests are pre-merge branch records computed against
+  `b07721b8…`; the merged governance text is the 1.0.4 manifest `7e398477…`.
 - Frozen corpus: `scripts/cross-arch-provenance-governed-corpus.json`,
   `scripts/cross-arch-provenance-governed-a.oxoflow`,
   `scripts/cross-arch-provenance-governed-b.oxoflow`.
@@ -434,13 +441,13 @@ all bioinformatics tools or hardware.
 - Interrupted staging attempt (identity only): `docs/superpowers/audits/data/crossarch-1397/attempt-1-docker-stopped/`.
 - First complete run with the stem-naming defect (not analyzed as the
   campaign result): `docs/superpowers/audits/data/crossarch-1397/attempt-2-stem-mismatch/`.
-- Governance: `docs/superpowers/preregistration/AMENDMENTS.md` entries 2–6;
+- Governance: `docs/superpowers/preregistration/AMENDMENTS.md` entries 6–10 for #1166 (main’s 1–5 cover #1163);
   `docs/superpowers/preregistration/MANIFEST.sha256`.
 
 The raw per-artifact digests are the `artifacts.sha256` files in each arm
 directory; the checkpoints retain the engine-recorded values; the analysis
 script cross-checks the two before deciding. The governed results JSON has
-SHA-256 `5dd4ce2813a8059a319983437932a63552f23bfbfe549f850cc5b75fcd988407`;
+SHA-256 `809be892859911cfccc6989d3c07628f3f192eadb6ad55b76d988f696744f217`;
 the orchestrator log has SHA-256
 `79f9e26befa195acf75b6c2f639d93cf7f608d7497c05f8d0a47725a4ed47849`.
 

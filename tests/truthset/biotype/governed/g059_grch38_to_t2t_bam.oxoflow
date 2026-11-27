@@ -1,0 +1,27 @@
+# G059 — GRCh38 BAM fed to a T2T-CHM13 consumer
+# The producer declares reference_build=GRCh38; the consumer requires
+# reference_build=T2T-CHM13. The published reference-build field is checked
+# when both sides name a build and aliases do not make these equal, so
+# the edge violates TYPE-004. This build pair was not asserted by any
+# pilot case (the pilot used the human GRCh37/GRCh38 family).
+#
+# EXPECTED (authored 2026-11-27 from the published contract, before running):
+#   reject — TYPE-004.
+
+[workflow]
+name = "g059"
+
+[[rules]]
+name = "produce"
+output = ["aln.bam"]
+shell = "bwa mem grch38.fa r1.fq r2.fq | samtools sort -o aln.bam"
+[rules.types]
+outputs = { default = "BAM[sort_order=coordinate,reference_build=GRCh38]" }
+
+[[rules]]
+name = "consume"
+input = ["aln.bam"]
+output = ["result.txt"]
+shell = "gatk HaplotypeCaller -R t2t.fa -I aln.bam -O calls.vcf.gz"
+[rules.types]
+inputs = { default = "BAM[sort_order=coordinate,reference_build=T2T-CHM13]" }

@@ -1,0 +1,27 @@
+# G054 — dm6 BED fed to a dm3 consumer
+# The producer declares reference_build=dm6; the consumer requires
+# reference_build=dm3. The published reference-build field is checked
+# when both sides name a build and aliases do not make these equal, so
+# the edge violates TYPE-004. This build pair was not asserted by any
+# pilot case (the pilot used the human GRCh37/GRCh38 family).
+#
+# EXPECTED (authored 2026-11-27 from the published contract, before running):
+#   reject — TYPE-004.
+
+[workflow]
+name = "g054"
+
+[[rules]]
+name = "produce"
+output = ["peaks.bed"]
+shell = "macs2 callpeak -t aln.bam -f BAM -g dm"
+[rules.types]
+outputs = { default = "BED[reference_build=dm6]" }
+
+[[rules]]
+name = "consume"
+input = ["peaks.bed"]
+output = ["result.txt"]
+shell = "bedtools intersect -a peaks.bed -b dm3_genes.bed"
+[rules.types]
+inputs = { default = "BED[reference_build=dm3]" }

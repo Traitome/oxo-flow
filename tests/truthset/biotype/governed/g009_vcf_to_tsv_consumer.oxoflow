@@ -1,0 +1,26 @@
+# G009 — VCF calls fed to a TSV table consumer
+# A VCF producer feeds a consumer whose declared contract is TSV.
+# The published format enum makes them distinct formats; no coercion
+# arm applies, so the edge violates TYPE-001 (format incompatibility).
+# Distinct format pair not asserted by any pilot case.
+#
+# EXPECTED (authored 2026-11-27 from the published contract, before running):
+#   reject — TYPE-001.
+
+[workflow]
+name = "g009"
+
+[[rules]]
+name = "produce"
+output = ["calls.vcf"]
+shell = "bcftools call -Ov -o calls.vcf"
+[rules.types]
+outputs = { default = "VCF" }
+
+[[rules]]
+name = "consume"
+input = ["calls.vcf"]
+output = ["result.dat"]
+shell = "bcftools query -f '%CHROM\\t%POS\\n' calls.vcf > calls.tsv"
+[rules.types]
+inputs = { default = "TSV" }

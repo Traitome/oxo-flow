@@ -1,0 +1,26 @@
+# G076 — plain VCF fed to the built-in gvcf alias consumer
+# The consumer uses the documented `gvcf` built-in alias, which parses as
+# VCF with attribute variant_type=germline. The producer is a plain VCF
+# with no attributes, so the required attribute is missing: TYPE-007.
+# This is the TYPE-007 row's own documented example.
+#
+# EXPECTED (authored 2026-11-27 from the published contract, before running):
+#   reject — TYPE-007.
+
+[workflow]
+name = "g076"
+
+[[rules]]
+name = "produce"
+output = ["calls.vcf"]
+shell = "bcftools call -Ov -o calls.vcf"
+[rules.types]
+outputs = { default = "VCF" }
+
+[[rules]]
+name = "joint"
+input = ["calls.vcf"]
+output = ["joint.vcf.gz"]
+shell = "gatk GenomicsDBImport --variant calls.vcf"
+[rules.types]
+inputs = { default = "gvcf" }

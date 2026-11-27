@@ -1,0 +1,24 @@
+# G093 — gzip TSV on both sides
+# Both sides declare TSV[compression=gzip]; the encodings agree and no
+# other field is constrained, so no TYPE diagnostic.
+#
+# EXPECTED (authored 2026-11-27 from the published contract, before running):
+#   accept — no TYPE diagnostic.
+
+[workflow]
+name = "g093"
+
+[[rules]]
+name = "produce"
+output = ["counts.tsv.gz"]
+shell = "cut -f1,2 counts.tsv | gzip > counts.tsv.gz"
+[rules.types]
+outputs = { default = "TSV[compression=gzip]" }
+
+[[rules]]
+name = "consume"
+input = ["counts.tsv.gz"]
+output = ["summary.tsv"]
+shell = "zcat counts.tsv.gz | cut -f1 > summary.tsv"
+[rules.types]
+inputs = { default = "TSV[compression=gzip]" }

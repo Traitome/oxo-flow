@@ -1,0 +1,27 @@
+# G040 — queryname-sorted CRAM fed to a coordinate consumer
+# The producer declares CRAM[sort_order=queryname]; the consumer
+# requires CRAM[sort_order=coordinate]. The published sort-order field
+# is a consumer requirement, and a different recorded order does not
+# satisfy it, so the edge violates TYPE-002. The pilot asserted only
+# BAM queryname<->coordinate, so this format/order pair is new.
+#
+# EXPECTED (authored 2026-11-27 from the published contract, before running):
+#   reject — TYPE-002.
+
+[workflow]
+name = "g040"
+
+[[rules]]
+name = "produce"
+output = ["aln.cram"]
+shell = "samtools view -C -n -o aln.cram aln.bam"
+[rules.types]
+outputs = { default = "CRAM[sort_order=queryname]" }
+
+[[rules]]
+name = "consume"
+input = ["aln.cram"]
+output = ["result.txt"]
+shell = "samtools mpileup -f ref.fa aln.cram > pileup.txt"
+[rules.types]
+inputs = { default = "CRAM[sort_order=coordinate]" }

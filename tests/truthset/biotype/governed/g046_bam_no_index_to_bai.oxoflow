@@ -1,0 +1,26 @@
+# G046 — unindexed coordinate BAM fed to an index=bai consumer
+# The producer declares BAM[sort_order=coordinate]; the consumer requires BAM[sort_order=coordinate,index=bai].
+# The index field is a companion-artifact requirement; an absent index
+# or a different index kind cannot satisfy it, so the edge violates
+# TYPE-003. Distinct index/format pair from the pilot's cases.
+#
+# EXPECTED (authored 2026-11-27 from the published contract, before running):
+#   reject — TYPE-003.
+
+[workflow]
+name = "g046"
+
+[[rules]]
+name = "produce"
+output = ["aln.bam"]
+shell = "samtools sort -o aln.bam in.bam"
+[rules.types]
+outputs = { default = "BAM[sort_order=coordinate]" }
+
+[[rules]]
+name = "consume"
+input = ["aln.bam"]
+output = ["result.txt"]
+shell = "gatk BaseRecalibrator -I aln.bam -R ref.fa -O recal.table"
+[rules.types]
+inputs = { default = "BAM[sort_order=coordinate,index=bai]" }

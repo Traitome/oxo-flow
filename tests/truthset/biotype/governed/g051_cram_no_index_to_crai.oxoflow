@@ -1,0 +1,26 @@
+# G051 — unindexed CRAM fed to an index=crai consumer
+# The producer declares CRAM[sort_order=coordinate]; the consumer requires CRAM[sort_order=coordinate,index=crai].
+# The index field is a companion-artifact requirement; an absent index
+# or a different index kind cannot satisfy it, so the edge violates
+# TYPE-003. Distinct index/format pair from the pilot's cases.
+#
+# EXPECTED (authored 2026-11-27 from the published contract, before running):
+#   reject — TYPE-003.
+
+[workflow]
+name = "g051"
+
+[[rules]]
+name = "produce"
+output = ["aln.cram"]
+shell = "samtools view -C -o aln.cram aln.bam"
+[rules.types]
+outputs = { default = "CRAM[sort_order=coordinate]" }
+
+[[rules]]
+name = "consume"
+input = ["aln.cram"]
+output = ["result.txt"]
+shell = "samtools depth -a aln.cram > depth.txt"
+[rules.types]
+inputs = { default = "CRAM[sort_order=coordinate,index=crai]" }

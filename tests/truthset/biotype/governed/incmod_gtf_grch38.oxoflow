@@ -1,0 +1,13 @@
+# incmod_gtf_grch38.oxoflow — include-module fixture for g100.
+# Produces a GRCh38 GTF consumed across the [[include]] boundary. This
+# fixture has no EXPECT row of its own.
+
+[workflow]
+name = "incmod_gtf_grch38"
+
+[[rules]]
+name = "produce_gtf"
+output = ["genes.gtf"]
+shell = "make-gtf > genes.gtf"
+[rules.types]
+outputs = { default = "GTF[reference_build=GRCh38]" }

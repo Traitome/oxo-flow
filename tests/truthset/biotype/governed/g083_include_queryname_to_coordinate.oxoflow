@@ -1,0 +1,22 @@
+# G083 — include-contributed queryname BAM fed to a coordinate consumer
+# The included module declares BAM[sort_order=queryname]; the main
+# workflow's consumer requires BAM[sort_order=coordinate]. The sort
+# contract propagates across the [[include]] boundary and violates
+# TYPE-002, a construct/order pair the pilot's include case did not use.
+#
+# EXPECTED (authored 2026-11-27 from the published contract, before running):
+#   reject — TYPE-002.
+
+[workflow]
+name = "g083"
+
+[[include]]
+path = "incmod_queryname_producer.oxoflow"
+
+[[rules]]
+name = "consume"
+input = ["reads.bam"]
+output = ["depth.txt"]
+shell = "samtools depth -a {input} > {output}"
+[rules.types]
+inputs = { default = "BAM[sort_order=coordinate]" }

@@ -1,0 +1,26 @@
+# G018 — PARQUET table fed to a TSV consumer
+# A PARQUET producer feeds a consumer whose declared contract is TSV.
+# The published format enum makes them distinct formats; no coercion
+# arm applies, so the edge violates TYPE-001 (format incompatibility).
+# Distinct format pair not asserted by any pilot case.
+#
+# EXPECTED (authored 2026-11-27 from the published contract, before running):
+#   reject — TYPE-001.
+
+[workflow]
+name = "g018"
+
+[[rules]]
+name = "produce"
+output = ["features.parquet"]
+shell = "Rscript -e 'arrow::write_parquet(df, \"features.parquet\")'"
+[rules.types]
+outputs = { default = "PARQUET" }
+
+[[rules]]
+name = "consume"
+input = ["features.parquet"]
+output = ["result.dat"]
+shell = "python -c 'import pandas; pandas.read_parquet(\"features.parquet\").to_csv(\"features.tsv\", sep=\"\\t\")'"
+[rules.types]
+inputs = { default = "TSV" }

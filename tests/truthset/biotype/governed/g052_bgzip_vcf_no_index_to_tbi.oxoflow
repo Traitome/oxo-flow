@@ -1,0 +1,26 @@
+# G052 — bgzip VCF without index fed to a bgzip+tbi consumer
+# The producer declares VCF[compression=bgzip]; the consumer requires VCF[compression=bgzip,index=tbi].
+# The index field is a companion-artifact requirement; an absent index
+# or a different index kind cannot satisfy it, so the edge violates
+# TYPE-003. Distinct index/format pair from the pilot's cases.
+#
+# EXPECTED (authored 2026-11-27 from the published contract, before running):
+#   reject — TYPE-003.
+
+[workflow]
+name = "g052"
+
+[[rules]]
+name = "produce"
+output = ["calls.vcf.gz"]
+shell = "bcftools call -Oz -o calls.vcf.gz"
+[rules.types]
+outputs = { default = "VCF[compression=bgzip]" }
+
+[[rules]]
+name = "consume"
+input = ["calls.vcf.gz"]
+output = ["result.txt"]
+shell = "bcftools stats calls.vcf.gz > stats.txt"
+[rules.types]
+inputs = { default = "VCF[compression=bgzip,index=tbi]" }

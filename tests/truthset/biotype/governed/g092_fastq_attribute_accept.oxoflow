@@ -1,0 +1,33 @@
+# G092 — gzip FASTQ with equal attributes on both sides
+# Both sides declare the same named contract fastq_reverse_gz: FASTQ with
+# compression=gzip and attribute strandedness=reverse. The declared
+# attribute values are equal and the compression agrees, so no TYPE
+# diagnostic.
+#
+# EXPECTED (authored 2026-11-27 from the published contract, before running):
+#   accept — no TYPE diagnostic.
+
+[workflow]
+name = "g092"
+
+[types.fastq_reverse_gz]
+format = "fastq"
+compression = "gzip"
+
+[types.fastq_reverse_gz.attributes]
+strandedness = "reverse"
+
+[[rules]]
+name = "produce"
+output = ["reads.fq.gz"]
+shell = "fastp -i r1.fq.gz -o reads.fq.gz"
+[rules.types]
+outputs = { default = "fastq_reverse_gz" }
+
+[[rules]]
+name = "consume"
+input = ["reads.fq.gz"]
+output = ["quant.sf"]
+shell = "salmon quant -l A -r reads.fq.gz -o quant"
+[rules.types]
+inputs = { default = "fastq_reverse_gz" }

@@ -1,0 +1,40 @@
+# G080 — WES BAM fed to a WGS assay consumer
+# The producer declares the named contract bam_wes (BAM, coordinate,
+# attribute assay=wes); the consumer requires bam_wgs (BAM, coordinate,
+# attribute assay=wgs). The values differ, so the edge violates TYPE-007
+# on the BAM format, an attribute assertion the pilot did not exercise.
+#
+# EXPECTED (authored 2026-11-27 from the published contract, before running):
+#   reject — TYPE-007.
+
+[workflow]
+name = "g080"
+
+[types.bam_wes]
+format = "bam"
+sort_order = "coordinate"
+
+[types.bam_wes.attributes]
+assay = "wes"
+
+[types.bam_wgs]
+format = "bam"
+sort_order = "coordinate"
+
+[types.bam_wgs.attributes]
+assay = "wgs"
+
+[[rules]]
+name = "produce"
+output = ["aln.bam"]
+shell = "bwa mem ref.fa r1.fq r2.fq | samtools sort -o aln.bam"
+[rules.types]
+outputs = { default = "bam_wes" }
+
+[[rules]]
+name = "call"
+input = ["aln.bam"]
+output = ["calls.vcf.gz"]
+shell = "gatk HaplotypeCaller -I aln.bam -O calls.vcf.gz"
+[rules.types]
+inputs = { default = "bam_wgs" }

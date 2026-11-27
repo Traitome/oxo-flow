@@ -3,10 +3,10 @@
 | Freeze record | Value |
 | :--- | :--- |
 | Artifact | PR-04 (Task 4.0 required artifact 4 of 6) |
-| Version | 1.0.2 |
+| Version | 1.0.4 |
 | Freeze status | FROZEN |
-| Freeze date | 2026-11-18 (original freeze; amendment 1 same date; amendment 2 on 2026-11-28) |
-| Amendment | 1 (2026-11-18): review fixes D1–D5 and clarifications — see [`AMENDMENTS.md`](AMENDMENTS.md) entry 1. 2 (2026-11-28): #1166 workflow, host, and artifact-class seal frozen — see entry 2 |
+| Freeze date | 2026-11-18 (original freeze; amendments 1–5 on main; amendment 6 on 2026-11-28 for #1166) |
+| Amendment | 1 (2026-11-18): review fixes D1–D5 and clarifications; 2–5 (2026-11-27/28): #1163 governed campaign (`τ_FA = 0.05`, held-out corpus, status/erratum/PR-04 caveat); 6 (2026-11-28): #1166 campaign parameters (`τ_ARCH = 0.80`, `n_min = 3`) — see [`AMENDMENTS.md`](AMENDMENTS.md) entries 1–10 |
 | Content binding | SHA-256 recorded in [`MANIFEST.sha256`](MANIFEST.sha256) |
 | Campaigns covered | #1163, #1164, #1165, #1166 |
 | Change control | Post-freeze edits only through [`AMENDMENTS.md`](AMENDMENTS.md) |
@@ -112,9 +112,26 @@ collection.
   verdict file is sealed by hash. Cases must not be pruned or reworded to
   make the checker pass; any pre-run correction is recorded as an
   exclusion/replacement with the original hash.
+- **Governed-corpus custody record (amendment 2).** The #1163
+  confirmatory corpus is sealed in the pre-run manifest
+  `docs/superpowers/preregistration/prerun/C1-governed-2026-11-27.json`
+  and its `.sha256` companion, both committed before the first
+  confirmatory run. The manifest's `cases` array is the expected-verdict
+  record and the campaign runner's single EXPECT source;
+  `case_manifest_sha256` is the canonical hash of that array, and the
+  campaign report records the manifest hash and the commit that contains
+  it. The 54-case pilot set is exposure and is absent from the
+  confirmatory manifest; it is reported separately as exploratory.
 - **Independent author.** The expected verdicts must be authored or
   independently reviewed by someone who is not the author of the
-  `TYPE-*` change under test. The identity is PENDING in PR-05.
+  `TYPE-*` change under test. For the authored portion of the governed
+  corpus (83 expected-reject cases + 24 authored controls) no `TYPE-*`
+  code is changed; the author derived every expected verdict from the
+  published contract without reading the checker source. The 9
+  pre-existing `examples/gallery/*.oxoflow` controls are **exposure**
+  (their accept outcome was already known from CI; see the campaign
+  erratum §1 and AMENDMENTS entry 5). The independent reviewer identity
+  remains PENDING in PR-05.
 - **Audit at freeze.** No truth set has been authored yet, so the
   pre-run leakage audit has no held-out material to scan. The obligation
   attaches to the pre-run seal.
@@ -182,7 +199,7 @@ collection.
 - **Audit at freeze.** The two-workflow corpus, the aarch64 host identity, the
   environment lock (one multi-arch manifest-list digest), and the eight
   artifact classes are fixed in the pre-run manifest (frozen 2026-11-28;
-  amendment 2). The sealing obligation now attaches to that committed
+  amendment 6). The sealing obligation now attaches to that committed
   manifest; the corpus, class map, and analysis script hashes are recorded
   there before the first confirmatory run.
 
