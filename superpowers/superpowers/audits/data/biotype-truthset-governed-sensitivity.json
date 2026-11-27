@@ -1,0 +1,70 @@
+{
+  "format": "oxo-flow.biotype-truthset-governed-sensitivity/v1",
+  "issue": 1396,
+  "results_file": "docs/superpowers/audits/data/biotype-truthset-governed-results.json",
+  "interpretation": "Coverage-cell level: format, construct (plain/transform/include), edge direction, and additional contract dimensions are distinct cells; a case is a duplicate only when every dimension and value pair of an asserted pilot cell are identical. A post-run audit flags g049 and g052 as re-asserting the pilot t04 VCF index cell (none -> tbi) with a different compression context; g048 reverses b07's index pair (a distinct edge direction, consistent with the pilot's b09/b31 direction precedent); g066 adds sort/index/build dimensions and is distinct. PR-02 section 0.2 forbids post-outcome exclusion, so the sealed N=83 set is the primary analysis; these are descriptive sensitivity analyses only.",
+  "sets": {
+    "as_sealed": {
+      "excluded": [],
+      "n": 83,
+      "fa": 0,
+      "ci_lower": 0.0,
+      "ci_upper": 0.043471152166148386,
+      "category": "POSITIVE",
+      "report_label": "POSITIVE"
+    },
+    "minus_g049_g052": {
+      "excluded": [
+        "g049",
+        "g052"
+      ],
+      "n": 81,
+      "fa": 0,
+      "ci_lower": 0.0,
+      "ci_upper": 0.04452026245644447,
+      "category": "POSITIVE",
+      "report_label": "POSITIVE"
+    },
+    "minus_g049_g052_g066": {
+      "excluded": [
+        "g049",
+        "g052",
+        "g066"
+      ],
+      "n": 80,
+      "fa": 0,
+      "ci_lower": 0.0,
+      "ci_upper": 0.04506403506775314,
+      "category": "POSITIVE",
+      "report_label": "POSITIVE"
+    },
+    "minus_g049_g052_g048": {
+      "excluded": [
+        "g048",
+        "g049",
+        "g052"
+      ],
+      "n": 80,
+      "fa": 0,
+      "ci_lower": 0.0,
+      "ci_upper": 0.04506403506775314,
+      "category": "POSITIVE",
+      "report_label": "POSITIVE"
+    },
+    "minus_g049_g052_g048_g066": {
+      "excluded": [
+        "g048",
+        "g049",
+        "g052",
+        "g066"
+      ],
+      "n": 79,
+      "fa": 0,
+      "ci_lower": 0.0,
+      "ci_upper": 0.045621252758337505,
+      "category": "POSITIVE",
+      "report_label": "POSITIVE"
+    }
+  }
+}
+

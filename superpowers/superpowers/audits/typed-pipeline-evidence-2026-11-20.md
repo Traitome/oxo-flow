@@ -8,9 +8,14 @@
 > That clause is now **falsified**: shipped gallery example
 > `examples/gallery/17_typed_variant_calling.oxoflow` declares a
 > `[types.*]` / `[rules.types]` contract on **every crossing edge** of a real,
-> complete, runnable pipeline. It is **not** the governed campaign; the
-> pre-registration threshold `τ_FA` remains UNDECIDED and no governed verdict is
-> claimed here.
+> complete, runnable pipeline. It is **not** the governed campaign; at the
+> time of this evidence the pre-registration threshold `τ_FA` was
+> UNDECIDED and no governed verdict was claimed here. (A governed campaign
+> has since been run: see
+> [`biotype-truth-set-governed-2026-11-27.md`](biotype-truth-set-governed-2026-11-27.md)
+> and its
+> [`erratum`](biotype-truthset-governed-erratum-2026-11-28.md). This
+> addendum remains a non-governed single-pipeline evidence note.)
 
 ## 1. What was added
 
@@ -136,7 +141,7 @@ still uncommitted (working-tree only), so `e855fa6a` does not contain
 43-case result. This addendum and the results JSON now pin `7ce1df52`, the
 commit that adds the file, at which the harness was re-run. This is a
 provenance/identity correction only: it changes no verdict and decides no
-threshold, and `tau_FA` remains UNDECIDED.
+threshold; at that time `tau_FA` was UNDECIDED.
 
 Because the harness is a *measurement* (exit 0 always), this does not gate CI;
 the example is independently covered by the auto-discovering gallery gates
@@ -158,11 +163,15 @@ the example is independently covered by the auto-discovering gallery gates
 - **Validated, not executed.** The pipeline was parsed, DAG-built, validated,
   linted, and dry-run — no real data was staged and no bioinformatics tool was
   run.
-- **Not the governed campaign.** `τ_FA` remains UNDECIDED (PR-06 §C1), so no
-  POSITIVE/NEGATIVE/INCONCLUSIVE decision is claimed. This is one real pipeline,
-  not a breadth corpus; the truth-set breadth boundary in the 42-case report §9
-  still applies (no `transform.*`-generated rules, no `[[include]]`-contributed
-  types on this example; formats limited to FASTQ/BAM/TSV/VCF).
+- **Not the governed campaign.** At the time of this addendum `τ_FA` was
+  UNDECIDED (PR-06 §C1), so no POSITIVE/NEGATIVE/INCONCLUSIVE decision is
+  claimed here. The later governed campaign is reported separately
+  ([report](biotype-truth-set-governed-2026-11-27.md);
+  [erratum](biotype-truthset-governed-erratum-2026-11-28.md)). This is one
+  real pipeline, not a breadth corpus; the truth-set breadth boundary in
+  the 42-case report §9 still applies (no `transform.*`-generated rules, no
+  `[[include]]`-contributed types on this example; formats limited to
+  FASTQ/BAM/TSV/VCF).
 - **gVCF attribute path.** The `germline_gvcf` type uses the expanded form of
   the built-in `gvcf` alias (`format = "vcf"`, `compression = "bgzip"`,
   `attributes = { variant_type = "germline" }`); the alias equivalence itself is

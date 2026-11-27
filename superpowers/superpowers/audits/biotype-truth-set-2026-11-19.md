@@ -1,5 +1,17 @@
 # BioType truth-set validation — first measured confusion matrix (#1163)
 
+> **Governed follow-up (2026-11-27, #1396).** This 18-case set, like the
+> later 54-case set, is **exploratory/exposure**: it was measured while the
+> governed threshold `τ_FA` was UNDECIDED and cannot be the confirmatory
+> basis. The governed decision — `τ_FA = 0.05` and `N_min = 73` frozen by
+> pre-registration amendment 2 **before** new data, then 0/83 false accepts
+> on a sealed 116-case corpus (83 expected-reject + 24 authored controls +
+> 9 pre-existing gallery controls) — is in
+> [`biotype-truth-set-governed-2026-11-27.md`](biotype-truth-set-governed-2026-11-27.md);
+> the control-provenance correction is in
+> [`biotype-truthset-governed-erratum-2026-11-28.md`](biotype-truthset-governed-erratum-2026-11-28.md).
+> Everything below remains the historical operational record.
+
 > **Status**: first measured truth set. This replaces the *claim* "broad
 > truth-set validation" with a *number*: an 18-case set run through the real
 > `oxo-flow validate --json` surface, yielding **8 true-accept, 2 false-accept,
@@ -282,8 +294,8 @@ verdict cell stays `yes`, then restores cleanly.
 
 **Verdict vs the operational criterion (post-fix): PASS (0 false-accepts).**
 The residual honesty boundary in Section 9 still applies: this is a small
-18-case set, not a corpus, and `τ_FA` remains undecided — so this is an
-operational pass on *this* set, not a governed campaign verdict.
+18-case set, not a corpus, and at that time `τ_FA` was undecided — so this
+was an operational pass on *this* set, not a governed campaign verdict.
 
 ## 7. Enumerated false cells (defect reports)
 
