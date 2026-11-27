@@ -3,10 +3,10 @@
 | Freeze record | Value |
 | :--- | :--- |
 | Artifact | PR-02 (Task 4.0 required artifact 2 of 6) |
-| Version | 1.0.2 |
+| Version | 1.0.3 |
 | Freeze status | FROZEN |
 | Freeze date | 2026-11-18 (original freeze; amendment 1 same date) |
-| Amendment | 1 (2026-11-18): review fixes D1–D5 and clarifications; 2 (2026-11-27): #1163 confirmatory corpus size, pilot disjointness, expansion protocol, zero non-verdict limit — see [`AMENDMENTS.md`](AMENDMENTS.md) entries 1–2 |
+| Amendment | 1 (2026-11-18): review fixes D1–D5 and clarifications; 2 (2026-11-27): #1163 confirmatory corpus size, pilot disjointness, expansion protocol, zero non-verdict limit; 3 (2026-11-27): status-ledger update only; 4 (2026-11-28): control provenance and TYPE-005 accept-side disclosure — see [`AMENDMENTS.md`](AMENDMENTS.md) entries 1–4 |
 | Content binding | SHA-256 recorded in [`MANIFEST.sha256`](MANIFEST.sha256) |
 | Campaigns covered | #1163, #1164, #1165, #1166 |
 | Change control | Post-freeze edits only through [`AMENDMENTS.md`](AMENDMENTS.md) |
@@ -124,14 +124,24 @@ a result.
   from the checker source, from a prior checker run, or from observed
   checker behavior rather than the published contract.
 
-**Concrete numbers (amendment 2, frozen).** The confirmatory truth-set
-size is **at least 73 expected-reject cases** in the primary analysis set
-(PR-06 §C1's `N_min`), plus **at least 30 expected-accept acceptance
-controls**. Coverage is fixed by the rule above:
+**Concrete numbers (amendment 2, frozen; control provenance clarified
+by amendment 4).** The confirmatory truth-set size is **at least 73
+expected-reject cases** in the primary analysis set (PR-06 §C1's
+`N_min`), plus **at least 30 expected-accept acceptance controls** in the
+sealed corpus. Of the 33 sealed controls, **24 were authored post-freeze
+and 9 are pre-existing `examples/gallery/*.oxoflow` controls whose accept
+outcome was already known** (they are validated by the gallery gates in
+`tests/cli_integration.rs` on every CI run). PR-05 adjudicates whether the
+≥30 floor applies to held-out authored controls only (24) or to the sealed
+corpus as a whole (33); the 9 pre-existing controls are expected-accept
+cases outside the FA denominator. Coverage is fixed by the rule above:
 
 - every blocking code `TYPE-001`–`TYPE-007` has at least one
   expected-reject case, and every such code with an available accept-side
-  contrast has one;
+  contrast has one. **`TYPE-005` had no accept-side contrast in the
+  primary corpus**; the gap is disclosed in AMENDMENTS entry 4 and the
+  campaign erratum, and two post-hoc supplementary accept controls supply
+  the contrast without entering the primary analysis;
 - every advisory code `TYPE-008`/`TYPE-009`/`TYPE-010` has at least one
   expected-accept case that declares the advisory code;
 - untyped acceptable workflows are present;

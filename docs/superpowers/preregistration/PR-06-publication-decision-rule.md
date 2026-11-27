@@ -3,10 +3,10 @@
 | Freeze record | Value |
 | :--- | :--- |
 | Artifact | PR-06 (Task 4.0 required artifact 6 of 6) |
-| Version | 1.0.2 |
+| Version | 1.0.3 |
 | Freeze status | FROZEN |
 | Freeze date | 2026-11-18 (original freeze; amendment 1 same date) |
-| Amendment | 1 (2026-11-18): review fixes D1–D5 and clarifications; 2 (2026-11-27): `τ_FA` frozen at 0.05 for #1163, held-out confirmatory corpus and pilot firewall, minimum sample and non-verdict limit — see [`AMENDMENTS.md`](AMENDMENTS.md) entries 1–2 |
+| Amendment | 1 (2026-11-18): review fixes D1–D5 and clarifications; 2 (2026-11-27): `τ_FA` frozen at 0.05 for #1163, held-out confirmatory corpus and pilot firewall, minimum sample and non-verdict limit; 3 (2026-11-27): status-ledger update only; 4 (2026-11-28): post-review erratum — control provenance, `N_min` rationale, and custody wording corrected, no endpoint change — see [`AMENDMENTS.md`](AMENDMENTS.md) entries 1–4 |
 | Content binding | SHA-256 recorded in [`MANIFEST.sha256`](MANIFEST.sha256) |
 | Campaigns covered | #1163, #1164, #1165, #1166 |
 | Change control | Post-freeze edits only through [`AMENDMENTS.md`](AMENDMENTS.md) |
@@ -121,20 +121,33 @@ true-reject / 0 false-reject) was observed while `τ_FA` was UNDECIDED
 (PR-06 v1.0.1). Under PR-06 §1 rule 2 it cannot be the confirmatory basis,
 cannot set `τ_FA`, and cannot be pooled with a confirmatory dataset; it is
 reported separately and labelled **exploratory/pilot**. The confirmatory
-dataset is a **held-out governed corpus** authored after amendment 2 from
-the published contract (schema, `workflow-format.md`, the TYPE-* catalogue,
-and published tool contracts), with no case outcome observed when `τ_FA`
-was frozen, and with case assertions disjoint from the pilot set. This is
-the C1 analogue of the C2 pilot firewall: the pilot exposure makes the
-pilot non-confirmatory; it does not retroactively invalidate a held-out
-dataset whose outcomes did not exist when the threshold was frozen.
+dataset is a sealed 116-case corpus: **83 expected-reject cases and 24
+expected-accept controls authored after amendment 2** from the published
+contract (schema, `workflow-format.md`, the TYPE-* catalogue, and published
+tool contracts), plus **9 pre-existing `examples/gallery/*.oxoflow`
+controls whose accept outcome was already known** — they are validated by
+the gallery gates in `tests/cli_integration.rs` on every CI run. No
+expected-reject case and no authored-control outcome existed when `τ_FA`
+was frozen, and the authored cases' assertions are disjoint from the pilot
+set. The 9 pre-existing controls are disclosed as **exposure**; they are
+expected-accept cases outside the primary FA denominator and cannot
+contribute to a false-accept claim. The control-provenance deviation is
+recorded in AMENDMENTS entry 4 and the campaign erratum; **PR-05 must
+adjudicate** whether the ≥30 control floor applies to held-out authored
+controls only (24) or to the sealed corpus as a whole (33). This is the C1
+analogue of the C2 pilot firewall: the pilot exposure makes the pilot
+non-confirmatory; it does not retroactively invalidate held-out cases whose
+outcomes did not exist when the threshold was frozen.
 
 **Minimum sample (frozen).** `N_min = 73` expected-reject cases in the
 primary analysis set, plus at least **30 expected-accept acceptance
-controls** (the controls are reported in the TA/FR cells and are not in
-the primary denominator). 73 is the smallest expected-reject count for
-which zero false accepts yields an exact 95% upper bound `U ≤ 0.05`
-(`1 − 0.025^(1/73) = 0.0493`). A run with fewer than `N_min`
+controls** in the sealed corpus (the controls are reported in the TA/FR
+cells and are not in the primary denominator). **72 — not 73 — is the
+smallest expected-reject count** for which zero false accepts yields an
+exact 95% upper bound `U ≤ 0.05` (`1 − 0.025^(1/72) = 0.0499441`; 0/71 =
+0.0506294). The campaign froze **73**, a one-case conservative margin, and
+that frozen value is unchanged; the rationale is corrected here by
+amendment 4. A run with fewer than `N_min`
 expected-reject cases is **INVALID** with sub-reason
 `minimum_sample_not_reached`; the report labels that outcome
 **UNDERPOWERED** (UNDERPOWERED is not a sixth PR-06 category — it is the

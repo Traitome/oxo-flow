@@ -3,10 +3,10 @@
 | Freeze record | Value |
 | :--- | :--- |
 | Artifact | PR-01 (Task 4.0 required artifact 1 of 6) |
-| Version | 1.0.2 |
+| Version | 1.0.3 |
 | Freeze status | FROZEN |
 | Freeze date | 2026-11-18 (original freeze; amendment 1 same date) |
-| Amendment | 1 (2026-11-18): review fixes D1–D5 and clarifications; 2 (2026-11-27): `τ_FA = 0.05`, held-out confirmatory corpus, `N_min = 73`, zero non-verdict limit for #1163 — see [`AMENDMENTS.md`](AMENDMENTS.md) entries 1–2 |
+| Amendment | 1 (2026-11-18): review fixes D1–D5 and clarifications; 2 (2026-11-27): `τ_FA = 0.05`, held-out confirmatory corpus, `N_min = 73`, zero non-verdict limit for #1163; 3 (2026-11-27): status-ledger update only; 4 (2026-11-28): control provenance and `N_min` rationale corrected — see [`AMENDMENTS.md`](AMENDMENTS.md) entries 1–4 |
 | Content binding | SHA-256 recorded in [`MANIFEST.sha256`](MANIFEST.sha256) |
 | Campaigns covered | #1163, #1164, #1165, #1166 |
 | Change control | Post-freeze edits only through [`AMENDMENTS.md`](AMENDMENTS.md) |
@@ -134,15 +134,21 @@ consistency check, not replication: any disagreement between two runs of
 the same binary and case is an infrastructure failure and voids that case.
 
 **Confirmatory corpus and minimum sample (amendment 2, frozen
-2026-11-27).** The threshold is `τ_FA = 0.05` (PR-06 §C1). The
-confirmatory analysis set is the held-out governed corpus of
-**N_min = 73 expected-reject cases**, plus at least 30 expected-accept
-acceptance controls, authored after the amendment from the published
-contract and disjoint from the 54-case pilot. The pilot remains
-**exploratory/exposure** under the C1 pilot firewall in PR-06 §C1; it is
-reported separately and never pooled. Fewer than 73 expected-reject cases
-is INVALID with sub-reason `minimum_sample_not_reached`
-(UNDERPOWERED). Zero non-verdicts are permitted (PR-02 §C1).
+2026-11-27; corrected by amendment 4).** The threshold is `τ_FA = 0.05`
+(PR-06 §C1). The confirmatory analysis set is the sealed 116-case corpus:
+**83 expected-reject cases and 24 expected-accept controls authored after
+the amendment**, plus **9 pre-existing gallery controls whose accept
+outcome was already known** (disclosed as exposure; outside the FA
+denominator). The authored corpus is disjoint from the 54-case pilot. The
+pilot remains **exploratory/exposure** under the C1 pilot firewall in
+PR-06 §C1; it is reported separately and never pooled. `N_min = 73`
+expected-reject cases is unchanged; 72 is the smallest count for a
+zero-event exact 95% upper bound ≤ 0.05 (0/72 = 0.0499441; 0/71 =
+0.0506294), and 73 was frozen with a one-case conservative margin. Fewer
+than 73 expected-reject cases is INVALID with sub-reason
+`minimum_sample_not_reached` (UNDERPOWERED). Zero non-verdicts are
+permitted (PR-02 §C1). The control-provenance deviation is recorded in
+AMENDMENTS entry 4; PR-05 adjudicates the ≥30 control floor.
 
 **What the result can and cannot support.** A pass supports the checker
 only on the frozen truth set and its declared coverage. It does not

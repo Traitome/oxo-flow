@@ -16,6 +16,12 @@ The interval is computed from the binomial CDF by deterministic bisection
 (stdlib only; no scipy). This script is sealed (SHA-256) in the pre-run
 manifest before the confirmatory run, per PR-01 §0 rule 9.
 
+The frozen constants `TAU_FA` and `N_MIN` below are the only thresholds
+this script can use: the optional `--tau`/`--n-min` overrides of the
+original sealed version were removed after independent review (amendment
+4), so a sealed-mode invocation cannot recompute the decision with
+non-frozen constants.
+
 Usage:
   python3 scripts/biotype-truthset-governed-analysis.py \
       docs/superpowers/audits/data/biotype-truthset-governed-results.json
@@ -192,8 +198,6 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("results")
     ap.add_argument("--out", default=None)
-    ap.add_argument("--tau", type=float, default=TAU_FA)
-    ap.add_argument("--n-min", type=int, default=N_MIN)
     args = ap.parse_args()
 
     results_path = Path(args.results)
@@ -203,9 +207,9 @@ def main():
     n_primary = int(primary["denominator"])
     non_verdicts = int(data.get("non_verdicts", 0))
 
-    decision = decide(fa, n_primary, non_verdicts, args.tau, args.n_min)
+    decision = decide(fa, n_primary, non_verdicts)
     worst_case = decide(fa + non_verdicts, n_primary + non_verdicts,
-                        non_verdicts, args.tau, args.n_min) if non_verdicts else None
+                        non_verdicts) if non_verdicts else None
     out = {
         "format": "oxo-flow.biotype-truthset-governed-decision/v1",
         "issue": 1396,
