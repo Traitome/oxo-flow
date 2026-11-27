@@ -119,7 +119,7 @@ not. It must be updated only by amendment.
 
 | Item | Status |
 | :--- | :--- |
-| PR-01 through PR-06 written | Yes, version 1.0.1 (amendment 1), frozen |
+| PR-01 through PR-06 written | Yes, version 1.0.2 (amendment 2); PR-05 remains 1.0.1 with sign-off PENDING |
 | Manifest hashes recorded | Yes; verify with `shasum -a 256 -c MANIFEST.sha256`. The original v1.0.0 hashes are retained in `AMENDMENTS.md` §2.1. |
 | Independent reviewer sign-off (#1163) | PENDING |
 | Independent reviewer sign-off (#1164) | PENDING |

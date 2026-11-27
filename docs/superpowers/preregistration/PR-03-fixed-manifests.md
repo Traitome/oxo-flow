@@ -3,10 +3,10 @@
 | Freeze record | Value |
 | :--- | :--- |
 | Artifact | PR-03 (Task 4.0 required artifact 3 of 6) |
-| Version | 1.0.1 |
+| Version | 1.0.2 |
 | Freeze status | FROZEN (values marked TBD are deliberately open) |
-| Freeze date | 2026-11-18 (original freeze; amendment 1 same date) |
-| Amendment | 1 (2026-11-18): review fixes D1–D5 and clarifications — see [`AMENDMENTS.md`](AMENDMENTS.md) entry 1 |
+| Freeze date | 2026-11-18 (original freeze; amendment 1 same date; amendment 2 on 2026-11-28) |
+| Amendment | 1 (2026-11-18): review fixes D1–D5 and clarifications — see [`AMENDMENTS.md`](AMENDMENTS.md) entry 1. 2 (2026-11-28): #1166 hardware, dataset, and budget frozen — see entry 2 |
 | Content binding | SHA-256 recorded in [`MANIFEST.sha256`](MANIFEST.sha256) |
 | Campaigns covered | #1163, #1164, #1165, #1166 |
 | Change control | Post-freeze edits only through [`AMENDMENTS.md`](AMENDMENTS.md) |
@@ -99,9 +99,9 @@ observation.
 | Prompt | None | FIXED |
 | Tool | `oxo-flow` at the frozen engine commit, run with `--provenance`; comparison via `oxo-flow provenance verify --json` on each arm's checkpoint | FIXED |
 | Seed | None at the engine level; any tool-level non-determinism is measured, not seeded away | FIXED (no seed) |
-| Hardware | Two architectures: x86_64 and aarch64. The Linux x86_64 reference host is `tx-ubuntu` (the designated Linux validation host). The aarch64 host is not yet fixed. Same OS family, kernel family, CPU class recorded per arm | aarch64 host TBD — owner: infrastructure owner; deadline: before data collection |
-| Dataset | One or more frozen workflows with declared outputs, pinned inputs and references by content hash, and an identical environment lock or container digest on both arms. Workflow set and artifact count TBD | Workflow set and artifact count TBD — owner: campaign lead; deadline: before data collection |
-| Budget | Two arms × workflow set; compute-hour and storage cap specified before the run | TBD — owner: campaign lead; deadline: before data collection |
+| Hardware | Two architectures: x86_64 and aarch64. The Linux x86_64 reference host is `tx-ubuntu` (designated Linux validation host, native x86_64 docker). The aarch64 host is the local Apple Silicon macOS host running Docker Desktop's **native linux/arm64 VM** (no qemu). Both container legs execute the same multi-arch manifest-list digest; host OS/kernel/CPU class are recorded per arm | FROZEN 2026-11-28 (amendment 2) |
+| Dataset | Two frozen workflows (`scripts/cross-arch-provenance-governed-a.oxoflow`, `-b.oxoflow`) with 24 primary declared outputs (12 each) in 8 classes of 3, plus one excluded negative control. Corpus manifest: `scripts/cross-arch-provenance-governed-corpus.json`; image pinned by multi-arch manifest-list digest `sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b` | FROZEN 2026-11-28 (amendment 2) |
+| Budget | Two hosts × two workflows; each workflow is minutes of CPU and well under 1 GiB of storage; no cloud or paid calls | FROZEN 2026-11-28 (amendment 2) |
 
 The container digest (or the conda-family environment-lock identity) is a
 first-class manifest value, not metadata: if it differs between arms, the

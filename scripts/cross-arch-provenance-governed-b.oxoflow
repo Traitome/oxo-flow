@@ -1,0 +1,131 @@
+# Frozen governed cross-architecture corpus B (#1397 / #1166): checksums,
+# IEEE-754 floating point, integer arithmetic, and structured JSON.
+#
+# Deterministic by construction: fixed inputs, fixed iteration counts,
+# `LC_ALL=C`, canonical JSON (`sort_keys=True`, compact separators), and no
+# timestamps or randomness. Every rule runs inside the SAME pinned multi-arch
+# manifest-list digest named by the corpus manifest; only the resolved CPU
+# architecture differs per arm.
+#
+# Primary artifacts (12, four classes of three):
+#   checksum-manifest   manifest.sha256, digests.tsv, checksums.txt
+#   ieee754-float       float.txt, float_series.txt, float_fsum.csv
+#   integer-arithmetic  factorial.txt, primes.txt, bigint.txt
+#   json-structured     data.json, summary.json, matrix.json
+
+[workflow]
+name = "crossarch-governed-b"
+version = "1.0.0"
+description = "Frozen governed cross-architecture corpus B: checksums, IEEE-754, integers, JSON"
+author = "oxo-flow research program"
+
+[[rules]]
+name = "checksums"
+environment = { docker = "crossarch1397:pin" }
+output = ["manifest.sha256", "digests.tsv", "checksums.txt"]
+shell = """
+set -eu
+export LC_ALL=C
+python3 -c "
+import sys
+sys.stdout.buffer.write(bytes((i * 29 + 11) % 256 for i in range(1024)))
+" > scratch_a.bin
+python3 -c "
+import sys
+sys.stdout.buffer.write(bytes((i * 71 + 3) % 256 for i in range(1536)))
+" > scratch_b.bin
+python3 -c "
+import sys
+lines = ['alpha', 'beta', 'gamma', 'delta', 'epsilon']
+sys.stdout.write(chr(10).join(lines) + chr(10))
+" > scratch_c.txt
+sha256sum scratch_a.bin scratch_b.bin > {output[0]}
+python3 -c "
+import hashlib, sys
+for name in ('scratch_a.bin', 'scratch_b.bin', 'scratch_c.txt'):
+    h = hashlib.sha256(open(name, 'rb').read()).hexdigest()
+    sys.stdout.write(name + chr(9) + h + chr(10))
+" > {output[1]}
+sha256sum scratch_c.txt > {output[2]}
+"""
+
+[[rules]]
+name = "floats"
+environment = { docker = "crossarch1397:pin" }
+output = ["float.txt", "float_series.txt", "float_fsum.csv"]
+shell = """
+set -eu
+export LC_ALL=C
+python3 -c "print('%.17g' % sum(1.0/i for i in range(1, 1001)))" > {output[0]}
+python3 -c "
+import math
+vals = [1.0/i for i in range(1, 2001)]
+print('%.17g' % math.fsum(vals))
+print('%.17g' % sum(vals))
+print('%.17g' % (sum(vals) - math.fsum(vals)))
+" > {output[1]}
+python3 -c "
+import math
+vals = [1.0/(i*i) for i in range(1, 101)]
+for i in range(0, 100, 10):
+    print('%.17g' % math.fsum(vals[:i+1]))
+" > {output[2]}
+"""
+
+[[rules]]
+name = "integers"
+environment = { docker = "crossarch1397:pin" }
+output = ["factorial.txt", "primes.txt", "bigint.txt"]
+shell = """
+set -eu
+export LC_ALL=C
+python3 -c "import math; print(math.factorial(100))" > {output[0]}
+python3 -c "
+def primes(n):
+    out = []
+    x = 2
+    while len(out) < n:
+        if all(x % p for p in out if p * p <= x):
+            out.append(x)
+        x += 1
+    return out
+print(' '.join(str(p) for p in primes(200)))
+" > {output[1]}
+python3 -c "
+print(2**256)
+print(3**100 + 7**50)
+print((2**127 - 1) % 1000000007)
+print(sum(i * i for i in range(1, 10001)))
+" > {output[2]}
+"""
+
+[[rules]]
+name = "structured"
+environment = { docker = "crossarch1397:pin" }
+output = ["data.json", "summary.json", "matrix.json"]
+shell = """
+set -eu
+export LC_ALL=C
+python3 -c "
+import json
+obj = {
+    'workflow': 'crossarch-governed-b',
+    'version': 1,
+    'classes': ['checksum-manifest', 'ieee754-float', 'integer-arithmetic', 'json-structured'],
+    'limits': {'min': -(10**18), 'max': 10**18},
+    'nested': {'a': [1, 2, 3], 'b': {'c': 4, 'd': 5}},
+    'truth': [True, False, None],
+}
+print(json.dumps(obj, sort_keys=True, separators=(',', ':'), ensure_ascii=True))
+" > {output[0]}
+python3 -c "
+import json
+obj = {'counts': {str(i): i * i for i in range(10)}, 'names': ['alpha', 'beta', 'gamma'], 'version': '1.0.0'}
+print(json.dumps(obj, sort_keys=True, separators=(',', ':'), ensure_ascii=True))
+" > {output[1]}
+python3 -c "
+import json
+m = [[(i * 10 + j) * (i + j + 1) for j in range(10)] for i in range(10)]
+print(json.dumps(m, sort_keys=True, separators=(',', ':')))
+" > {output[2]}
+"""

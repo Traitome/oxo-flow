@@ -3,10 +3,10 @@
 | Freeze record | Value |
 | :--- | :--- |
 | Artifact | PR-01 (Task 4.0 required artifact 1 of 6) |
-| Version | 1.0.1 |
+| Version | 1.0.2 |
 | Freeze status | FROZEN |
-| Freeze date | 2026-11-18 (original freeze; amendment 1 same date) |
-| Amendment | 1 (2026-11-18): review fixes D1–D5 and clarifications — see [`AMENDMENTS.md`](AMENDMENTS.md) entry 1 |
+| Freeze date | 2026-11-18 (original freeze; amendment 1 same date; amendment 2 on 2026-11-28) |
+| Amendment | 1 (2026-11-18): review fixes D1–D5 and clarifications — see [`AMENDMENTS.md`](AMENDMENTS.md) entry 1. 2 (2026-11-28): #1166 campaign parameters frozen (τ_ARCH = 0.80, n_min = 3) — see entry 2 |
 | Content binding | SHA-256 recorded in [`MANIFEST.sha256`](MANIFEST.sha256) |
 | Campaigns covered | #1163, #1164, #1165, #1166 |
 | Change control | Post-freeze edits only through [`AMENDMENTS.md`](AMENDMENTS.md) |
@@ -291,7 +291,7 @@ pre-declared minimum artifact count and 100% agreement.
 | #1163 | False-accept proportion on expected-reject cases | lower is better | PR-06 §C1 (τ value UNDECIDED; owner: campaign lead + independent reviewer; deadline: before data collection) |
 | #1164 | Full-loop verified-repair proportion, recovery-eligible cases | higher is better | PR-06 §C2 (τ value UNDECIDED; owner: campaign lead + independent reviewer; deadline: before data collection) |
 | #1165 | Strict declared-output equivalence proportion | higher is better | PR-06 §C3 (τ value UNDECIDED; owner: campaign lead + independent reviewer; deadline: before data collection) |
-| #1166 | Architecture-stable artifact proportion | higher is better | PR-06 §C4 (per-class minimum count and τ UNDECIDED; owner: campaign lead + independent reviewer; deadline: before data collection) |
+| #1166 | Architecture-stable artifact proportion | higher is better | PR-06 §C4: `τ_ARCH = 0.80`, `n_min = 3` (frozen 2026-11-28; amendment 2) |
 
 An UNDECIDED threshold is a deliberate, visible gap. It must be filled by a
 pre-data amendment (PR-05/README freeze protocol) before the first

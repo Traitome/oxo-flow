@@ -1,0 +1,106 @@
+# Frozen governed cross-architecture corpus A (#1397 / #1166): bytes and text.
+#
+# Deterministic by construction: fixed text, fixed byte patterns (no
+# /dev/urandom), `gzip -n` (header mtime/name stripped), `LC_ALL=C` in every
+# shell, and no timestamps. Every rule runs inside the SAME pinned multi-arch
+# manifest-list digest named by the corpus manifest; only the resolved CPU
+# architecture differs per arm.
+#
+# Primary artifacts (12, four classes of three):
+#   pure-text             data/payload.txt, data/alphabet.txt, data/notes.txt
+#   raw-binary            data/bytes.bin, data/pattern.bin, data/mask.bin
+#   derived-text          summary.txt, sorted.txt, dedup.txt
+#   byte-exact-compressed data/payload.txt.gz, data/bytes.bin.gz, data/pattern.bin.gz
+# Excluded negative control (not a primary artifact):
+#   control/os_arch.txt   `uname -m` (must DIFFER across native x86_64 / arm64)
+
+[workflow]
+name = "crossarch-governed-a"
+version = "1.0.0"
+description = "Frozen governed cross-architecture corpus A: text, binary, derived-text, compressed"
+author = "oxo-flow research program"
+
+[[rules]]
+name = "prepare"
+environment = { docker = "crossarch1397:pin" }
+output = [
+  "data/payload.txt",
+  "data/alphabet.txt",
+  "data/notes.txt",
+  "data/bytes.bin",
+  "data/pattern.bin",
+  "data/mask.bin",
+  "control/os_arch.txt",
+]
+shell = """
+set -eu
+export LC_ALL=C
+mkdir -p data control
+: > data/payload.txt
+i=1
+while [ "$i" -le 64 ]; do
+  echo "line $i value $((i * 37 % 97))" >> data/payload.txt
+  i=$((i + 1))
+done
+python3 -c "
+import sys
+for i in range(1, 27):
+    sys.stdout.write('letter %02d %s' % (i, chr(96 + i)) + chr(10))
+" > data/alphabet.txt
+python3 -c "
+import sys
+lines = [
+    'frozen governed cross-architecture corpus',
+    'deterministic bytes only',
+    'no timestamps',
+    'no urandom',
+    'native x86_64 versus native aarch64',
+]
+sys.stdout.write(chr(10).join(lines) + chr(10))
+" > data/notes.txt
+python3 -c "
+import sys
+sys.stdout.buffer.write(bytes((i * 53 + 7) % 256 for i in range(4096)))
+" > data/bytes.bin
+python3 -c "
+import sys
+sys.stdout.buffer.write(bytes((i * 131 + 17) % 256 for i in range(8192)))
+" > data/pattern.bin
+python3 -c "
+import sys
+x = 0x12345678
+out = bytearray()
+for i in range(2048):
+    x = (1103515245 * x + 12345) & 0x7fffffff
+    out.append((x >> 16) & 0xff)
+sys.stdout.buffer.write(bytes(out))
+" > data/mask.bin
+uname -m > control/os_arch.txt
+"""
+
+[[rules]]
+name = "derive"
+environment = { docker = "crossarch1397:pin" }
+input = ["data/payload.txt", "data/bytes.bin", "data/pattern.bin"]
+output = [
+  "summary.txt",
+  "sorted.txt",
+  "dedup.txt",
+  "data/payload.txt.gz",
+  "data/bytes.bin.gz",
+  "data/pattern.bin.gz",
+]
+shell = """
+set -eu
+export LC_ALL=C
+{
+  echo "lines $(sort {input[0]} | wc -l)"
+  echo "unique $(sort -u {input[0]} | wc -l)"
+  sort {input[0]} | head -n 3
+} > {output[0]}
+sort {input[0]} > {output[1]}
+sort -u {input[0]} | sed -n '1,10p' > {output[2]}
+gzip -n -c {input[0]} > {output[3]}
+gzip -n -c {input[1]} > {output[4]}
+gzip -n -c {input[2]} > {output[5]}
+"""

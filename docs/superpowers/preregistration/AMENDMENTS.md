@@ -2,13 +2,13 @@
 
 **Original freeze version:** 1.0.0
 
-**Current version:** 1.0.1 (amendment 1)
+**Current version:** 1.0.2 (amendment 2)
 
 **Freeze date:** 2026-11-18
 
 **Manifest file:** [`MANIFEST.sha256`](MANIFEST.sha256) — current SHA-256
-`d4fa650cf09afd42c7b23718e36674a0a54fdce8d326f2b757df3c89cde691b8`; the superseded v1.0.0 manifest hash is retained in the
-history table in §2.1.
+`b07721b846cbd74808cae156cebdbb93f4e6c140cf289aad217ea6cc06e07609`; the superseded v1.0.1 and v1.0.0 manifest hashes are
+retained in the history table in §2.1.
 
 **Freeze commit:** `62d9161b2992` (the commit that introduced this
 directory). The amendment-1 commit is recorded in
@@ -29,6 +29,7 @@ hash that was actually signed.
 | # | Date | Artifact / section | Change | Reason | Outcome exposure | Effect | Approver |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 | 1 | 2026-11-18 | PR-06 §0.1 and §C1–§C4; PR-01 §C3; PR-02 §C3; PR-03 §C3; PR-04 §2.3 table; README §2.3; AMENDMENTS §1 | v1.0.0 → v1.0.1: (D1) added the ordered evaluation algorithm and inclusive/exclusive interval boundary rules so exactly one of POSITIVE/NEGATIVE/INCONCLUSIVE/INVALID/STOPPED applies, and defined #1166's class-level NEGATIVE precedence plus `τ_ARCH` as the campaign-level threshold (class stability is 100% by definition, not a free parameter); (D2) corrected the false claim that the Nextflow version was unrecorded — `benches/comparative/README.md` records Nextflow 25.10.4 and Snakemake 9.19.0; (D3) added the missing `bwa-mem2` stub (nine stub tools, matching `fault_injection.py`); (D4) fixed the broken internal references (PR-01 → PR-02 §0.3, PR-01 → PR-03 §0, PR-02 → PR-04 §2.2); (D5) a case with zero declared outputs is INVALID for #1165 equivalence and cannot count as vacuously equivalent; (nit) corrected the signature/manifest recompute wording in README/AMENDMENTS and noted that `make eval-lint` needs a built engine binary | Independent review of PR #1225 (D1–D5 and two nits) | None — no confirmatory outcome was examined | Confirmatory; pre-data correction, no endpoint or direction changed | Campaign maintainer (pre-data correction requested by independent review) |
+| 2 | 2026-11-28 | PR-01 §5; PR-02 §C4; PR-03 §C4; PR-04 §C4; PR-06 §C4 and header; preregistration README §3; AMENDMENTS §2/§3 | v1.0.1 → v1.0.2: closed the #1166 pre-data values — `τ_ARCH = 0.80` and `n_min = 3`; primary endpoint fixed as the architecture-stable artifact proportion over a frozen 2-workflow / 24-artifact corpus in 8 classes of 3; exact Clopper-Pearson 95% CI (all-identical lower bound `0.025^(1/24) = 0.8574`); environment lock = one shared multi-arch manifest-list digest `sha256:5e2bdb1b…4fa5b`, identical in-container tool versions, same engine commit with a clean workflow tree; native x86_64 (`tx-ubuntu`) vs native aarch64 (Apple Silicon Docker Desktop linux/arm64 VM, no qemu); negative control `uname -m` excluded from the primary endpoint and required to differ; missingness limit 0% and the remaining INVALID conditions; corpus and analysis-script hashes sealed in the pre-run manifest | PR-05/README freeze protocol requires every UNDECIDED/TBD value to be closed by a pre-data amendment before the campaign starts | None — no confirmatory #1166 outcome was examined. The 2026-11-19 OS-confounded field observation and the 2026-11-20 native-amd64-vs-qemu-emulated-arm64 container observation are report-local operational measurements; they are not this frozen corpus, and no cross-arm run of this corpus existed at freeze | Confirmatory; pre-data amendment. The primary endpoint, direction, denominator, and threshold are fixed before data collection. PR-05 C4 independent reviewer sign-off remains PENDING and is disclosed in the campaign report; the governed category is not described as a publication-ready confirmatory result until sign-off | Campaign lead (repository owner-directed research session); infrastructure-owner role filled in the same session; independent reviewer sign-off PENDING |
 
 ### 2.1 Hash history
 
@@ -40,7 +41,19 @@ v1.0.1 manifest. The v1.0.0 content is recoverable from commit
 | Version | Date | `MANIFEST.sha256` | Note |
 | :--- | :--- | :--- | :--- |
 | 1.0.0 | 2026-11-18 | `df1cc1b084cf7f9312ffbdcf2e8e6afdc194a05c8551ac7b8cfca77e62c40450` | Original freeze commit `62d9161b2992`; superseded by amendment 1 |
-| 1.0.1 | 2026-11-18 | `d4fa650cf09afd42c7b23718e36674a0a54fdce8d326f2b757df3c89cde691b8` | Current; amendment 1 |
+| 1.0.1 | 2026-11-18 | `d4fa650cf09afd42c7b23718e36674a0a54fdce8d326f2b757df3c89cde691b8` | Amendment 1; superseded by amendment 2 |
+| 1.0.2 | 2026-11-28 | `b07721b846cbd74808cae156cebdbb93f4e6c140cf289aad217ea6cc06e07609` | Amendment 2; #1166 campaign parameters frozen |
+
+Amendment-2 artifact hashes:
+
+| Artifact | v1.0.2 SHA-256 |
+| :--- | :--- |
+| PR-01 | `efd17494e47f7d47df626ea6276180d75c19cf86a917169a53e7e4cb99a002c3` |
+| PR-02 | `93d6bd19ad62a3cc0659fbbed61922267906cdd0db297ee7f4d19d9695290db0` |
+| PR-03 | `489e8875818691fc5ab2cdc0b1eab5518e43aae17c57b5df4074cfa5706604f6` |
+| PR-04 | `9a19109b4d3eb89c01081841ff72cac5ba36be639887a83b3298a4fcb7dffab4` |
+| PR-05 | `9a65c632fcb8388fdc06b303578dad61ac413e603c8a2cbaa0ad0e6b08b1b5c5` (unchanged) |
+| PR-06 | `e3e098c53d791c9a3ad6de8fd21802965b9eb8ac0237b19c9fa59308233bef21` |
 
 Original v1.0.0 artifact hashes:
 
@@ -99,14 +112,22 @@ cannot start with any of its rows still open.
 
 ### #1166
 
-| Open value | Artifact | Owner | Deadline |
-| :--- | :--- | :--- | :--- |
-| `n_min` and `τ_ARCH` per artifact class | PR-01 §5, PR-06 §C4 | Campaign lead + infrastructure owner + independent reviewer | Before data collection |
-| aarch64 host identity | PR-03 §C4 | Infrastructure owner | Before data collection |
-| Frozen workflow set and artifact count | PR-02 §C4, PR-03 §C4 | Campaign lead | Before data collection |
-| Missingness invalidity limit | PR-02 §C4 | Campaign lead | Before data collection |
-| Compute-hour and storage budget | PR-03 §C4 | Campaign lead | Before data collection |
-| Independent reviewer sign-off | PR-05 C4 | Independent reviewer | Before data collection |
+| Open value | Artifact | Status |
+| :--- | :--- | :--- |
+| `n_min` and `τ_ARCH` per artifact class | PR-01 §5, PR-06 §C4 | **CLOSED 2026-11-28 (amendment 2):** `τ_ARCH = 0.80`, `n_min = 3` |
+| aarch64 host identity | PR-03 §C4 | **CLOSED 2026-11-28 (amendment 2):** local Apple Silicon macOS host, Docker Desktop native linux/arm64 VM (no qemu) |
+| Frozen workflow set and artifact count | PR-02 §C4, PR-03 §C4 | **CLOSED 2026-11-28 (amendment 2):** 2 workflows, 24 primary artifacts, 8 classes of 3; corpus manifest `scripts/cross-arch-provenance-governed-corpus.json` |
+| Missingness invalidity limit | PR-02 §C4 | **CLOSED 2026-11-28 (amendment 2):** 0% |
+| Compute-hour and storage budget | PR-03 §C4 | **CLOSED 2026-11-28 (amendment 2):** 2 hosts × 2 workflows, minutes of CPU and < 1 GiB storage; no cloud/paid calls |
+| Independent reviewer sign-off | PR-05 C4 | **PENDING** — external publication-package gate. Per PR-05, no result may be described as pre-registered or confirmatory until this row is completed. The #1397 campaign report discloses this limitation and labels its category a governed decision under the frozen rule, not a publication-ready confirmatory result. It is not a campaign-validity condition in PR-02 or PR-06 §C4. |
+
+**Protocol note (2026-11-28).** Amendment 2 closes the six
+campaign-parameter values above. The independent reviewer sign-off is an
+external publication gate, not a parameter this session is authorized to
+self-sign; it remains visibly PENDING rather than fabricated. The campaign
+is therefore run and reported as a governed decision under the frozen rule
+with that limitation disclosed, and the preregistration README's honest
+status ledger says exactly that.
 
 ## 4. Amendment entry template
 

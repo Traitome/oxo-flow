@@ -1,0 +1,89 @@
+{
+  "format": "oxo-flow.crossarch-preregistration/v1",
+  "campaign": "1397",
+  "underlying_campaign": "1166",
+  "created_utc": "2026-11-28",
+  "freeze_statement": "This manifest is committed before the first run of the frozen corpus. No cross-arm outcome of this corpus was examined before this commit. The 2026-11-19 OS-confounded field observation and the 2026-11-20 native-amd64-vs-qemu-emulated-arm64 container observation are different, report-local operational measurements; they are not this corpus and did not set any value below.",
+  "governance": {
+    "preregistration_readme": "docs/superpowers/preregistration/README.md",
+    "amendment": "2 (2026-11-28)",
+    "pr06_version": "1.0.2",
+    "pr06_c4_section": "docs/superpowers/preregistration/PR-06-publication-decision-rule.md#c4--1166-cross-architecture-reproduction",
+    "manifest_sha256": "b07721b846cbd74808cae156cebdbb93f4e6c140cf289aad217ea6cc06e07609",
+    "manifest_file": "docs/superpowers/preregistration/MANIFEST.sha256",
+    "publication_gate": "PR-05 C4 independent reviewer sign-off is PENDING. Per PR-05, no result may be described as pre-registered or confirmatory until that row is completed. The governed category is computed under the frozen rule and reported with this limitation; it is not a publication-ready confirmatory result."
+  },
+  "thresholds": {
+    "tau_ARCH": 0.8,
+    "n_min": 3,
+    "alpha": 0.05,
+    "ci_method": "Clopper-Pearson exact two-sided 95%",
+    "direction": "higher is better",
+    "primary_endpoint": "architecture-stable artifact proportion (artifacts with identical SHA-256 in both arms / artifacts produced in both arms)",
+    "threshold_derivation": "With N=24 and all artifacts identical, the exact lower bound is Beta.ppf(0.025, 24, 1) = 0.025^(1/24) = 0.857526, which clears tau_ARCH=0.80. The threshold is a campaign-level capability floor fixed by the planned N and the exact interval construction, not by an observed outcome."
+  },
+  "planned_corpus": {
+    "workflows": 2,
+    "primary_artifacts": 24,
+    "artifacts_per_workflow": 12,
+    "classes": 8,
+    "artifacts_per_class": 3,
+    "negative_controls": 1,
+    "class_names": [
+      "pure-text",
+      "raw-binary",
+      "derived-text",
+      "byte-exact-compressed",
+      "checksum-manifest",
+      "ieee754-float",
+      "integer-arithmetic",
+      "json-structured"
+    ]
+  },
+  "environment_lock": {
+    "definition": "Same multi-arch manifest-list digest; identical in-container tool versions (python3, GNU coreutils sort/wc/sha256sum, gzip, glibc); same engine commit (checkpoint workflow_git_sha) with workflow_git_dirty=false; per-platform image ids recorded but expected to differ.",
+    "manifest_list_digest": "sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+    "image_ref": "python@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+    "staged_tag": "crossarch1397:pin"
+  },
+  "arms": {
+    "x86_64": {
+      "host": "tx-ubuntu",
+      "platform": "linux/amd64",
+      "execution": "native x86_64",
+      "engine_build": "oxo-flow CLI built from the freeze commit on the host"
+    },
+    "aarch64": {
+      "host": "local Apple Silicon macOS host (ShixiangWang-WorkSpacedeMacBook-Pro.local)",
+      "platform": "linux/arm64",
+      "execution": "native aarch64 silicon, Docker Desktop native linux/arm64 VM, no qemu",
+      "engine_build": "oxo-flow CLI built from the freeze commit on the host"
+    }
+  },
+  "negative_control": {
+    "artifact": "crossarch-governed-a/control/os_arch.txt",
+    "producer": "uname -m",
+    "role": "excluded from the primary endpoint and every class statement; must differ across arms; identical output makes the campaign INVALID (harness failure)"
+  },
+  "validity_conditions": [
+    "any missing primary artifact in either arm (missingness limit 0%)",
+    "any in-arm provenance verify mismatch or recorded-vs-independent hash mismatch",
+    "environment-lock mismatch: manifest-list digest, in-container tool version, engine commit, or dirty workflow tree",
+    "negative control identical across arms",
+    "any undeclared artifact produced",
+    "analysis-script or corpus hash mismatch",
+    "native aarch64 leg not achieved (emulation is never reported as native)"
+  ],
+  "files": {
+    "scripts/cross-arch-provenance-governed-corpus.json": "33a7531882f266dc067ba705b91863eacb709dee36bc00c2720aa0e6aba20bfa",
+    "scripts/cross-arch-provenance-governed-a.oxoflow": "8daa37215b0a5871253094d23cbe32035d21737c9a5fa097f63bbd5587e12847",
+    "scripts/cross-arch-provenance-governed-b.oxoflow": "8e6d1cf56939df49e2e760cf68249a85e32e53569b3bc9dd50043dc0fcaa8048",
+    "scripts/cross-arch-provenance-governed-analyze.py": "fb7ee1f5af85dcefa721283dcbb3e2cfc67ae2b8212c0f4578fb7c30a1d989b8",
+    "scripts/cross-arch-provenance-arm.sh": "5117b301fca5a2bc225d4ec4fae747e121d7ea61c4814a0f0559f6ba8352fbd5",
+    "scripts/cross-arch-provenance-governed.sh": "182a34277391b72037016ab395a2bf042c868a107889d5ac684add287dd3be70",
+    "eval/scripts/test_crossarch_governed.py": "7667609c436e2a349a5deed5b83637dd5e854400a7b060f3c16a3fc60a036df7",
+    "docs/superpowers/preregistration/MANIFEST.sha256": "b07721b846cbd74808cae156cebdbb93f4e6c140cf289aad217ea6cc06e07609",
+    "docs/superpowers/preregistration/PR-06-publication-decision-rule.md": "e3e098c53d791c9a3ad6de8fd21802965b9eb8ac0237b19c9fa59308233bef21"
+  },
+  "outcome_exposure": "None. No cross-arm run of this frozen corpus existed before this manifest."
+}

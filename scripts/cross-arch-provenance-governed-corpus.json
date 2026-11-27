@@ -1,0 +1,72 @@
+{
+  "format": "oxo-flow.crossarch-corpus/v1",
+  "campaign": "1397",
+  "description": "Frozen governed cross-architecture corpus (#1397 / #1166): two workflows, 24 primary declared artifacts in eight classes of three, plus one excluded negative control. The thresholds and validity rules are frozen in docs/superpowers/preregistration/PR-06-publication-decision-rule.md (amendment 2).",
+  "image": {
+    "ref": "python@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+    "manifest_list_digest": "sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+    "staged_tag": "crossarch1397:pin"
+  },
+  "workflows": [
+    {
+      "stem": "crossarch-governed-a",
+      "file": "scripts/cross-arch-provenance-governed-a.oxoflow"
+    },
+    {
+      "stem": "crossarch-governed-b",
+      "file": "scripts/cross-arch-provenance-governed-b.oxoflow"
+    }
+  ],
+  "classes": {
+    "pure-text": [
+      "crossarch-governed-a/data/payload.txt",
+      "crossarch-governed-a/data/alphabet.txt",
+      "crossarch-governed-a/data/notes.txt"
+    ],
+    "raw-binary": [
+      "crossarch-governed-a/data/bytes.bin",
+      "crossarch-governed-a/data/pattern.bin",
+      "crossarch-governed-a/data/mask.bin"
+    ],
+    "derived-text": [
+      "crossarch-governed-a/summary.txt",
+      "crossarch-governed-a/sorted.txt",
+      "crossarch-governed-a/dedup.txt"
+    ],
+    "byte-exact-compressed": [
+      "crossarch-governed-a/data/payload.txt.gz",
+      "crossarch-governed-a/data/bytes.bin.gz",
+      "crossarch-governed-a/data/pattern.bin.gz"
+    ],
+    "checksum-manifest": [
+      "crossarch-governed-b/manifest.sha256",
+      "crossarch-governed-b/digests.tsv",
+      "crossarch-governed-b/checksums.txt"
+    ],
+    "ieee754-float": [
+      "crossarch-governed-b/float.txt",
+      "crossarch-governed-b/float_series.txt",
+      "crossarch-governed-b/float_fsum.csv"
+    ],
+    "integer-arithmetic": [
+      "crossarch-governed-b/factorial.txt",
+      "crossarch-governed-b/primes.txt",
+      "crossarch-governed-b/bigint.txt"
+    ],
+    "json-structured": [
+      "crossarch-governed-b/data.json",
+      "crossarch-governed-b/summary.json",
+      "crossarch-governed-b/matrix.json"
+    ]
+  },
+  "negative_controls": [
+    "crossarch-governed-a/control/os_arch.txt"
+  ],
+  "primary_artifact_count": 24,
+  "analysis": {
+    "method": "clopper-pearson-exact",
+    "alpha": 0.05,
+    "tau_ARCH": 0.8,
+    "n_min": 3
+  }
+}
