@@ -224,8 +224,8 @@ as run when it had exited non-zero.
 
 ## 8. Importer defects found while making real workflows work (fixed, with regression tests)
 
-Two importer defects were found in this work and fixed in this PR. Their
-provenance differs, and the report states it exactly:
+Two importer defects and one exporter defect were found in this work and
+fixed in this PR. Their provenance differs, and the report states it exactly:
 
 - **Snakemake multi-line directive values kept the trailing list separator.**
   Found while generalizing multi-line directive parsing for the real-world
