@@ -1,0 +1,14 @@
+hostname:        VM-4-4-ubuntu
+host-uname:      Linux VM-4-4-ubuntu 6.8.0-137-generic #137-Ubuntu SMP PREEMPT_DYNAMIC Fri Jul 17 20:28:23 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux
+host-arch:       x86_64
+nproc:           4
+cpu-model:       unknown
+os-release:      Linux
+kernel:          6.8.0-137-generic
+oxo-flow:        oxo-flow 0.32.0
+binary-sha256:   aef9eecc49a09d177bcdbe102f309f64891935f2f18858fd441193c009b0cefd
+engine-commit:   834dc183ddab1e1a9562bf65aa4da1d09f1e32ec
+engine-dirty:    0
+platform:        linux/amd64
+passthru:        DOCKER_DEFAULT_PLATFORM
+date-utc:        2026-11-27T16:59:31Z

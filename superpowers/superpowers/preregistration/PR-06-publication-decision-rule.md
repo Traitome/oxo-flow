@@ -3,10 +3,10 @@
 | Freeze record | Value |
 | :--- | :--- |
 | Artifact | PR-06 (Task 4.0 required artifact 6 of 6) |
-| Version | 1.0.3 |
+| Version | 1.0.4 |
 | Freeze status | FROZEN |
-| Freeze date | 2026-11-18 (original freeze; amendment 1 same date) |
-| Amendment | 1 (2026-11-18): review fixes D1–D5 and clarifications; 2 (2026-11-27): `τ_FA` frozen at 0.05 for #1163, held-out confirmatory corpus and pilot firewall, minimum sample and non-verdict limit; 3 (2026-11-27): status-ledger update only; 4 (2026-11-28): post-review erratum — control provenance, `N_min` rationale, and custody wording corrected, no endpoint change — see [`AMENDMENTS.md`](AMENDMENTS.md) entries 1–4 |
+| Freeze date | 2026-11-18 (original freeze; amendments 1–5 on main; amendment 6 on 2026-11-28 for #1166) |
+| Amendment | 1 (2026-11-18): review fixes D1–D5 and clarifications; 2–5 (2026-11-27/28): #1163 governed campaign (`τ_FA = 0.05`, held-out corpus, status/erratum/PR-04 caveat); 6 (2026-11-28): #1166 campaign parameters (`τ_ARCH = 0.80`, `n_min = 3`) — see [`AMENDMENTS.md`](AMENDMENTS.md) entries 1–10 |
 | Content binding | SHA-256 recorded in [`MANIFEST.sha256`](MANIFEST.sha256) |
 | Campaigns covered | #1163, #1164, #1165, #1166 |
 | Change control | Post-freeze edits only through [`AMENDMENTS.md`](AMENDMENTS.md) |
@@ -267,15 +267,46 @@ rule and showing the differing-field set.
 
 ## C4 — #1166 cross-architecture reproduction
 
-**Thresholds.** Two values are **UNDECIDED** (owner: campaign lead +
-infrastructure owner + independent reviewer; deadline: before data
-collection), and they govern different things:
+**Thresholds.** Two values govern different things and were **UNDECIDED** at
+the v1.0.1 freeze; both are frozen below by amendment 6 before any
+confirmatory data collection:
 
 - `τ_ARCH` is the **campaign-level** threshold for the primary endpoint
   (the overall architecture-stable artifact proportion over all declared
   artifacts). It is a free parameter fixed before data collection.
 - `n_min` is the minimum number of artifacts a class must contain to be
   eligible for a class-level statement.
+
+**Frozen #1166 campaign parameters (amendment 6, 2026-11-28; before data
+collection).**
+
+| Parameter | Frozen value |
+| :--- | :--- |
+| `τ_ARCH` | **0.80** |
+| `n_min` | **3** |
+| Primary endpoint | Architecture-stable artifact proportion over the frozen corpus: artifacts with identical SHA-256 in both arms / artifacts produced in both arms. Higher is better. |
+| Planned N | **24** primary declared artifacts (2 workflows × 12) in **8 classes of 3** |
+| CI method | Exact Clopper-Pearson two-sided 95% interval (PR-01 §0.1); no p-value |
+| Threshold derivation | With all 24 artifacts identical, the exact lower bound is `Beta.ppf(0.025, 24, 1) = 0.025^(1/24) = 0.8574`, which clears 0.80. The threshold is set by the planned N and the exact interval construction, not by an observed outcome. |
+| Environment lock | The same multi-arch **manifest-list digest** `sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b`; identical in-container tool versions (Python, GNU coreutils `sort`/`wc`/`sha256sum`, gzip, glibc); the same engine commit (`workflow_git_sha`) with `workflow_git_dirty = false`; per-platform image ids are recorded but are expected to differ because one manifest list resolves to per-platform layer sets. |
+| Corpus | `scripts/cross-arch-provenance-governed-a.oxoflow` and `-b.oxoflow`, bound by `scripts/cross-arch-provenance-governed-corpus.json`; classes: pure-text, raw-binary, derived-text, byte-exact-compressed, checksum-manifest, ieee754-float, integer-arithmetic, json-structured (3 artifacts each) |
+| Native arms | **native x86_64** on `tx-ubuntu` (Linux, native docker) and **native aarch64** on the local Apple Silicon macOS host's Docker Desktop **native linux/arm64 VM** (no qemu). If the native arm64 leg is not achieved, the campaign is INVALID for the native claim; an emulated leg is never reported as native. |
+| Negative control | `crossarch-governed-a/control/os_arch.txt`, produced by `uname -m`. It is excluded from the primary endpoint and every class statement and must **differ** across arms. If it is identical, the harness cannot detect a known architecture-dependent output and the campaign is INVALID. |
+| Analysis script | `scripts/cross-arch-provenance-governed-analyze.py`, sealed by SHA-256 in the pre-run manifest |
+| Validity conditions (INVALID first) | Any missing primary artifact (missingness limit **0%**); any in-arm `provenance verify` mismatch or recorded-vs-independent hash mismatch; an environment-lock mismatch (manifest-list digest, in-container tool version, engine commit) or a dirty workflow tree; a negative control that is identical; an unexpected/undeclared artifact; or an analysis-script/corpus hash mismatch. |
+
+Class-level statements are decided at `n_min = 3`: every class contains
+exactly three artifacts, so every class is eligible, and a class is
+architecture-stable only if all three are identical. The negative control has
+no class and cannot create a class-level verdict. The campaign-level
+proportion still includes every primary artifact.
+
+**Host-OS note.** The arm64 leg executes the pinned Linux container natively
+on arm64 silicon through Docker Desktop's Linux VM; the macOS host is
+infrastructure, while the executed OS and toolchain are the container's. This
+is **not** the PR-01 §C4 macOS-arm64 versus Linux-x86_64 confounded contrast,
+because the executed environment is Linux on both arms and only the CPU
+architecture differs.
 
 Class-level stability is **not** parameterized: a class is
 **architecture-stable only if every artifact in it is SHA-256 identical**.

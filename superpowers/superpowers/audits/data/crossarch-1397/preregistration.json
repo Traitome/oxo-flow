@@ -1,0 +1,224 @@
+{
+  "arms": {
+    "aarch64": {
+      "engine_build": "oxo-flow CLI built from engine commit 56b109c17b95e4c610a874aaf63fc0ae583a57a6 on the host",
+      "execution": "native aarch64 silicon, Docker Desktop native linux/arm64 VM, no qemu",
+      "host": "local Apple Silicon macOS host (ShixiangWang-WorkSpacedeMacBook-Pro.local)",
+      "platform": "linux/arm64"
+    },
+    "x86_64": {
+      "engine_build": "oxo-flow CLI built from engine commit 56b109c17b95e4c610a874aaf63fc0ae583a57a6 on the host",
+      "execution": "native x86_64",
+      "host": "tx-ubuntu",
+      "platform": "linux/amd64"
+    }
+  },
+  "campaign": "1397",
+  "created_utc": "2026-11-28",
+  "environment_lock": {
+    "definition": "Same multi-arch manifest-list digest; identical in-container tool versions (python3, GNU coreutils sort/wc/sha256sum, gzip, glibc); same engine commit (checkpoint workflow_git_sha) with workflow_git_dirty=false; per-platform image ids recorded but expected to differ.",
+    "image_ref": "python@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+    "manifest_list_digest": "sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+    "staged_tag": "crossarch1397:pin",
+    "tools": [
+      "python3",
+      "sort",
+      "wc",
+      "gzip",
+      "sha256sum",
+      "glibc"
+    ],
+    "wc_note": "The sealed run-time container.txt omitted wc; the post-run container-supplement.txt records `wc (GNU coreutils) 9.7` on both arms from the same pinned digest, and the analysis compares it."
+  },
+  "files": {
+    "docs/superpowers/preregistration/MANIFEST.sha256": "7e3984771249522314d360a617132609c741daae96b8d11cd1f2e8615121bbfe",
+    "docs/superpowers/preregistration/PR-06-publication-decision-rule.md": "94a29848281d55d4970de5c3929189a68389df5b05a3b414e2fd2d093993c5b8",
+    "eval/scripts/test_crossarch_governed.py": "7667609c436e2a349a5deed5b83637dd5e854400a7b060f3c16a3fc60a036df7",
+    "scripts/cross-arch-provenance-arm.sh": "ceee31e545c02a1f44b47ebe0957154641609bd28a78bc646236d480905b955a",
+    "scripts/cross-arch-provenance-governed-a.oxoflow": "8daa37215b0a5871253094d23cbe32035d21737c9a5fa097f63bbd5587e12847",
+    "scripts/cross-arch-provenance-governed-analyze.py": "fb7ee1f5af85dcefa721283dcbb3e2cfc67ae2b8212c0f4578fb7c30a1d989b8",
+    "scripts/cross-arch-provenance-governed-b.oxoflow": "8e6d1cf56939df49e2e760cf68249a85e32e53569b3bc9dd50043dc0fcaa8048",
+    "scripts/cross-arch-provenance-governed-corpus.json": "33a7531882f266dc067ba705b91863eacb709dee36bc00c2720aa0e6aba20bfa",
+    "scripts/cross-arch-provenance-governed.sh": "fc5f29c80d9678cdac415c83be37e7cfdb5f3769a10ca836c6d62da1ecc3c35a"
+  },
+  "files_note": "The `files` map is the executed/final-run seal at commit 56b109c1 for the corpus, workflow, harness, and analysis-script entries. Its two governance-file entries are post-merge values, not executed-time bytes: `PR-06-publication-decision-rule.md` = 94a29848... and `MANIFEST.sha256` = 7e398477... are the merged 1.0.4 files the analysis binds on disk (the executed-time PR-06 was e3e098c5... at v1.0.2; the pre-merge branch manifest was b07721b8...); see `governance.merge_note`. Post-run hardened script hashes are in `post_run_hardening`; the scientific corpus/workflow hashes are unchanged.",
+  "final_run_manifest": {
+    "commit": "56b109c17b95e4c610a874aaf63fc0ae583a57a6",
+    "commit_time_utc": "2026-11-27T17:00:43Z",
+    "note": "Final-run manifest: committed after attempt-2 and before the final analyzable run at 17:01:00Z. Same scientific hashes as the freeze manifest; only harness hashes and status text changed.",
+    "sha256": "770ae8f2769f112cd308249ea94882dee2b8c6e7a7e383550d790c229c2a75bf"
+  },
+  "format": "oxo-flow.crossarch-preregistration/v1",
+  "freeze_manifest": {
+    "commit": "dd5dcd44ee91a2c93bfd24c29f189d8de32e87d5",
+    "commit_time_utc": "2026-11-27T16:52:56Z",
+    "note": "Parameter-freeze manifest: the #1166 thresholds/corpus were fixed and no campaign run existed. Its scientific hashes equal the final-run manifest.",
+    "sha256": "0eaca24be6d00f5ab369f1fb6769131bfeed336107128e76b26ccb6c4ff63908"
+  },
+  "freeze_statement": "The #1166 thresholds and corpus were frozen at commit dd5dcd44ee91a2c93bfd24c29f189d8de32e87d5 (2026-11-27T16:52:56Z), before any campaign run; the freeze-time manifest was 0eaca24b. Two harness revisions followed before the final analyzable run: 834dc183 (pre-run staging fix, after an identity-only attempt-1 at 16:56:36Z) and 56b109c1 (pre-analysis / pre-final-run evidence-stem fix, after a complete attempt-2 at 16:59:18Z whose raw evidence exists but was not analyzed). The final run started at 17:01:00Z with the final-run manifest 770ae8f2. This file's current content is the post-run governance/validity-hardening revision: it preserves the executed scientific hashes and records the timeline, attempts, and post-run supplements below.",
+  "governance": {
+    "amendment": "6 (2026-11-28; merged as 1.0.4)",
+    "amendment_log_entries": [
+      6,
+      7,
+      8,
+      9,
+      10
+    ],
+    "final_run_manifest_sha256": "770ae8f2769f112cd308249ea94882dee2b8c6e7a7e383550d790c229c2a75bf",
+    "freeze_manifest_sha256": "0eaca24be6d00f5ab369f1fb6769131bfeed336107128e76b26ccb6c4ff63908",
+    "manifest_file": "docs/superpowers/preregistration/MANIFEST.sha256",
+    "manifest_sha256": "7e3984771249522314d360a617132609c741daae96b8d11cd1f2e8615121bbfe",
+    "merge_note": "The #1166 amendment 6 was merged with the #1163 1.0.3 governance text into the 1.0.4 manifest. The branch freeze-time manifest 0eaca24b and final-run manifest 770ae8f2 remain historical records computed against the pre-merge branch manifest b077.",
+    "pr06_c4_section": "docs/superpowers/preregistration/PR-06-publication-decision-rule.md#c4--1166-cross-architecture-reproduction",
+    "pr06_version": "1.0.2",
+    "pr06_version_note": "`pr06_version` is the PR-06 version whose C4 rule was frozen for this campaign (1.0.2, amendment 2). The merged PR-06 file is 1.0.4; its C4 rule text is unchanged (the merge only renumbered the amendment reference from 2 to 6), and the `files`/`governance.manifest_sha256` entries carry the merged 1.0.4 hashes.",
+    "preregistration_readme": "docs/superpowers/preregistration/README.md",
+    "publication_gate": "PR-05 C4 independent reviewer sign-off is PENDING. Per PR-05, no result may be described as pre-registered or confirmatory until that row is completed. The governed category is computed under the frozen rule and reported with this limitation; it is not a publication-ready confirmatory result."
+  },
+  "harness_revision": {
+    "commit": "834dc183ddab1e1a9562bf65aa4da1d09f1e32ec",
+    "commit_time_utc": "2026-11-27T16:59:01Z",
+    "outcome_exposure": "Attempt-1 produced only identity.txt; no workflow artifact existed before this revision.",
+    "reason": "Docker Desktop 4.94 crashed on `docker rmi` of the digest-only reference during the first staging attempt. No workflow artifact was produced; the identity-only attempt is preserved under docs/superpowers/audits/data/crossarch-1397/attempt-1-docker-stopped/. The arm script now supports CROSSARCH_STAGE=0 (operator pre-staged image, fail-closed architecture verification) and the orchestrator pre-stages without `docker rmi`.",
+    "unchanged": [
+      "tau_ARCH",
+      "n_min",
+      "primary endpoint",
+      "corpus",
+      "classes",
+      "manifest-list digest",
+      "native arm definition",
+      "negative control",
+      "missingness limit"
+    ]
+  },
+  "harness_revision_2": {
+    "commit": "56b109c17b95e4c610a874aaf63fc0ae583a57a6",
+    "commit_time_utc": "2026-11-27T17:00:43Z",
+    "outcome_exposure": "Attempt-2 checkpoint/output evidence exists but no cross-arm comparison was made or used. The final analyzable run is at 17:01:00Z.",
+    "reason": "The first complete two-arm run (attempt-2) produced intact checkpoints and outputs, but the harness named the per-workflow evidence files by the .oxoflow file basename (cross-arch-provenance-governed-a) instead of the frozen workflow name (crossarch-governed-a), so the analysis could not pair the evidence. Attempt-2 evidence is preserved under docs/superpowers/audits/data/crossarch-1397/attempt-2-stem-mismatch/ and was NOT analyzed as the campaign result. The arm script now derives the stem from the workflow declared [workflow] name, matching the frozen corpus keys; this revision was committed before the final analyzable run.",
+    "unchanged": [
+      "tau_ARCH",
+      "n_min",
+      "primary endpoint",
+      "corpus",
+      "classes",
+      "manifest-list digest",
+      "native arm definition",
+      "negative control",
+      "missingness limit",
+      "analysis script"
+    ]
+  },
+  "negative_control": {
+    "artifact": "crossarch-governed-a/control/os_arch.txt",
+    "producer": "uname -m",
+    "role": "excluded from the primary endpoint and every class statement; must differ across arms; identical output makes the campaign INVALID (harness failure)"
+  },
+  "outcome_exposure": "The freeze manifest (0eaca24b) had no outcome exposure. Attempt-2 produced complete two-arm checkpoint/output evidence but was not analyzed for the campaign result because of the evidence-stem defect; its raw evidence is preserved under attempt-2-stem-mismatch. The final-run manifest (770ae8f2) was committed after attempt-2 and before the final analyzable run. The scientific thresholds, corpus, and analysis decision logic were unchanged throughout; the post-run hardening only adds sealed-hash, host-architecture, tool, and env-lock-identity checks.",
+  "planned_corpus": {
+    "artifacts_per_class": 3,
+    "artifacts_per_workflow": 12,
+    "class_names": [
+      "pure-text",
+      "raw-binary",
+      "derived-text",
+      "byte-exact-compressed",
+      "checksum-manifest",
+      "ieee754-float",
+      "integer-arithmetic",
+      "json-structured"
+    ],
+    "classes": 8,
+    "negative_controls": 1,
+    "primary_artifacts": 24,
+    "workflows": 2
+  },
+  "post_run_hardening": {
+    "analysis_script_sha256": "e31bc0e0443ec4789381341833755b3aaaaefc8c60810bbe3ff8f3ea81785df8",
+    "arm_script_sha256": "8647a0c303f1208c05a2985f9623a56ab8bb1086f3c4088dfcb2949faa298ce3",
+    "captured_utc": "2026-11-27T17:25:45Z",
+    "orchestrator_sha256": "634dd6a7722de1d72ce36e3eef42f5958b5f83b797891f2e1a6d03a3812a796d",
+    "reason": "Independent review of PR #1444 found unmechanized validity checks and record-integrity wording. Post-run hardening: the analysis now asserts the sealed corpus/workflow/PR-06/MANIFEST hashes, host-arch versus container-arch, the wc tool version, image identity, and normalized env-lock digests; the arm script reads the image block from the corpus and records wc/docker/CPU; the orchestrator documents remote/local cleanup. Scientific thresholds, corpus, and observed hashes are unchanged.",
+    "review": "https://github.com/Traitome/oxo-flow/pull/1444",
+    "test_sha256": "6441be427ab612b9f18571a419f8669a00ff1e90a885e628da93e8b13f712137"
+  },
+  "supplemental_evidence": {
+    "captured_utc": "2026-11-27T17:25:45Z",
+    "docker": {
+      "arm_local": "29.8.2 aarch64 Docker Desktop",
+      "arm_remote": "29.7.2 x86_64 Ubuntu 24.04.4 LTS"
+    },
+    "files": [
+      "arm-local-arm64/host-supplement.txt",
+      "arm-local-arm64/container-supplement.txt",
+      "arm-remote-amd64/host-supplement.txt",
+      "arm-remote-amd64/container-supplement.txt"
+    ],
+    "host_cpu": {
+      "arm_local": "Apple M5",
+      "arm_remote": "Intel(R) Xeon(R) Platinum 8255C CPU @ 2.50GHz"
+    },
+    "scope": "Post-run host inventory (CPU/Docker version) and the wc version from the same pinned image. NOT part of the sealed run-time identity; cited in report sections 5 and 6.",
+    "wc_version": "wc (GNU coreutils) 9.7"
+  },
+  "thresholds": {
+    "alpha": 0.05,
+    "ci_method": "Clopper-Pearson exact two-sided 95%",
+    "direction": "higher is better",
+    "n_min": 3,
+    "primary_endpoint": "architecture-stable artifact proportion (artifacts with identical SHA-256 in both arms / artifacts produced in both arms)",
+    "tau_ARCH": 0.8,
+    "threshold_derivation": "With N=24 and all artifacts identical, the exact lower bound is Beta.ppf(0.025, 24, 1) = 0.025^(1/24) = 0.857526, which clears tau_ARCH=0.80. The threshold is a campaign-level capability floor fixed by the planned N and the exact interval construction, not by an observed outcome."
+  },
+  "timeline": [
+    {
+      "event": "parameter freeze commit dd5dcd44; freeze manifest 0eaca24b",
+      "utc": "2026-11-27T16:52:56Z"
+    },
+    {
+      "event": "attempt-1 starts; Docker Desktop crashes on docker rmi during staging; no workflow artifact exists",
+      "utc": "2026-11-27T16:56:36Z"
+    },
+    {
+      "event": "pre-run staging harness commit 834dc183 (CROSSARCH_STAGE=0 pre-staged path)",
+      "utc": "2026-11-27T16:59:01Z"
+    },
+    {
+      "event": "attempt-2 complete two-arm run; evidence-stem defect; checkpoints/outputs exist but are NOT analyzed as the campaign result (preserved under attempt-2-stem-mismatch)",
+      "utc": "2026-11-27T16:59:18Z"
+    },
+    {
+      "event": "pre-analysis / pre-final-run stem-fix commit 56b109c1; final-run manifest 770ae8f2",
+      "utc": "2026-11-27T17:00:43Z"
+    },
+    {
+      "event": "final analyzable run starts",
+      "utc": "2026-11-27T17:01:00Z"
+    },
+    {
+      "event": "final run ends; 24/24 artifacts identical",
+      "utc": "2026-11-27T17:01:19Z"
+    },
+    {
+      "event": "post-run supplementary host/container inventory captured for independent-review remediation",
+      "utc": "2026-11-27T17:25:45Z"
+    }
+  ],
+  "underlying_campaign": "1166",
+  "validity_conditions": [
+    "any missing primary artifact in either arm (missingness limit 0%)",
+    "any in-arm provenance verify mismatch or recorded-vs-independent hash mismatch",
+    "environment-lock mismatch: manifest-list digest, in-container tool version, engine commit, or dirty workflow tree",
+    "negative control identical across arms",
+    "any undeclared artifact produced",
+    "analysis-script or corpus hash mismatch",
+    "native aarch64 leg not achieved (emulation is never reported as native)",
+    "host-arch normalized to aarch64/x86_64 must equal container-arch (native execution, no emulation)",
+    "sealed corpus/workflow hashes must match the manifest files map, and the on-disk merged 1.0.4 PR-06/MANIFEST files must match the manifest's post-merge entries",
+    "normalized @sha256 digest of every rule env_lock_identity must match across arms and equal the frozen digest",
+    "wc version must be recorded and equal across arms",
+    "image-src and staged-tag must match the corpus image block"
+  ]
+}

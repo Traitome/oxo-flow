@@ -1,12 +1,12 @@
 # Pre-Registration and Evidence Governance — Task 4.0
 
-**Status: artifacts frozen at version 1.0.3 (amendments 4–5, post-review
-erratum and PR-04 caveat); independent sign-off PENDING. #1163 has
-collected governed confirmatory data under amendment 2 (the sealed corpus,
-its pre-run manifest, and the erratum are linked from §3); #1164, #1165,
-and #1166 have collected no confirmatory data under this protocol.** Task
-4.0 is not passed, and ledger Gate 3 remains unpassed. Artifact creation
-is not gate passage.
+**Status: artifacts frozen at version 1.0.4 (amendments 1–10; amendment 6 is
+the #1166 parameter freeze); independent sign-off PENDING. #1163 and #1166
+have collected governed confirmatory data (under amendments 2 and 6
+respectively; #1163's erratum/PR-04 caveat are amendments 4–5); #1164 and
+#1165 have collected no confirmatory data under this protocol.** Task 4.0 is
+not passed, and ledger Gate 3 remains unpassed. Artifact creation is not gate
+passage; neither governed result is publication-ready until PR-05 sign-off.
 
 This directory is the governance layer required by
 [`docs/superpowers/plans/industrial-scientific-implementation-plan.md`](../plans/industrial-scientific-implementation-plan.md)
@@ -123,8 +123,8 @@ not. It must be updated only by amendment.
 
 | Item | Status |
 | :--- | :--- |
-| PR-01 through PR-06 written | Yes, version 1.0.3 (amendments 4–5), frozen |
-| Manifest hashes recorded | Yes; verify with `shasum -a 256 -c MANIFEST.sha256`. Current manifest `e3863f53…f97eb8e`; the v1.0.0, v1.0.1, v1.0.2, and pre-amendment-5 v1.0.3 hashes are retained in `AMENDMENTS.md` §2.1. |
+| PR-01 through PR-06 written | Yes, version 1.0.4 (amendments 1–10), frozen; PR-05 remains 1.0.1 with sign-off PENDING |
+| Manifest hashes recorded | Yes; verify with `shasum -a 256 -c MANIFEST.sha256`. Current manifest `7e3984771249522314d360a617132609c741daae96b8d11cd1f2e8615121bbfe`; the v1.0.0–v1.0.3 and pre-merge #1166 branch manifest hashes are retained in `AMENDMENTS.md` §2.1. |
 | Independent reviewer sign-off (#1163) | PENDING |
 | Independent reviewer sign-off (#1164) | PENDING |
 | Independent reviewer sign-off (#1165) | PENDING |
@@ -132,8 +132,8 @@ not. It must be updated only by amendment.
 | #1163 confirmatory data | **Collected 2026-11-27 under amendment 2; erratum 2026-11-28 (amendments 4–5).** Sealed 116-case corpus: 83 expected-reject + 24 post-freeze authored controls + 9 pre-existing gallery controls whose accept outcome was already known (disclosed exposure). Result: 0/83 false accepts, exact 95% upper bound 4.3471% ≤ `τ_FA = 0.05`, POSITIVE ([report](../audits/biotype-truth-set-governed-2026-11-27.md); [erratum](../audits/biotype-truthset-governed-erratum-2026-11-28.md)). The ≥30 control floor is met by the 33 sealed controls but not by the held-out authored subset (24); PR-05 adjudicates. A separately sealed post-hoc supplement adds acceptance controls, including the missing `TYPE-005` contrast (descriptive only; not in the FA denominator). Independent reanalysis and PR-05 sign-off remain PENDING; the earlier 54-case set is exploratory/exposure. |
 | #1164 confirmatory data | None; a ten-case pilot was measured on 2026-11-18 **before this freeze** (3/10 applied, 3/10 verified, 3/3 recovery-eligible). It is pilot evidence and cannot be cited as pre-registered or confirmatory. A held-out re-run is required. |
 | #1165 confirmatory data | None collected |
-| #1166 confirmatory data | None collected |
-| Task 4.0 gate | **Not passed** — PR-05 sign-off is outstanding, and the pre-run manifests, case seals, and analysis-script hashes are outstanding for #1164/#1165/#1166. #1163 now has its pre-run manifest, case seal, and analysis-script hash, plus a post-result control-provenance erratum and a separately sealed post-hoc supplement. |
+| #1166 confirmatory data | One governed campaign measured 2026-11-28: 24/24 declared artifacts SHA-256 identical (100%, exact 95% CI [85.75%, 100%]), all 8 classes architecture-stable, the `uname -m` negative control differed (`aarch64` vs `x86_64`), category POSITIVE under the frozen rule. PR-05 C4 sign-off remains PENDING. Evidence: [`cross-arch-provenance-governed-2026-11-27.md`](../audits/cross-arch-provenance-governed-2026-11-27.md). |
+| Task 4.0 gate | **Not passed** — PR-05 sign-off is outstanding; #1163 and #1166 have their pre-run manifests, case seals, and analysis-script hashes, but the #1164/#1165 pre-run manifests/case seals and all reviewer signatures remain outstanding. #1163 also has a post-result control-provenance erratum and a separately sealed post-hoc supplement. |
 | Ledger Gate 3 (Scientific Validity) | **Not passed** |
 
 This directory was frozen before any campaign ran and claims no empirical

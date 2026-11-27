@@ -3,10 +3,10 @@
 | Freeze record | Value |
 | :--- | :--- |
 | Artifact | PR-02 (Task 4.0 required artifact 2 of 6) |
-| Version | 1.0.3 |
+| Version | 1.0.4 |
 | Freeze status | FROZEN |
-| Freeze date | 2026-11-18 (original freeze; amendment 1 same date) |
-| Amendment | 1 (2026-11-18): review fixes D1–D5 and clarifications; 2 (2026-11-27): #1163 confirmatory corpus size, pilot disjointness, expansion protocol, zero non-verdict limit; 3 (2026-11-27): status-ledger update only; 4 (2026-11-28): control provenance and TYPE-005 accept-side disclosure — see [`AMENDMENTS.md`](AMENDMENTS.md) entries 1–4 |
+| Freeze date | 2026-11-18 (original freeze; amendments 1–5 on main; amendment 6 on 2026-11-28 for #1166) |
+| Amendment | 1 (2026-11-18): review fixes D1–D5 and clarifications; 2–5 (2026-11-27/28): #1163 governed campaign (`τ_FA = 0.05`, held-out corpus, status/erratum/PR-04 caveat); 6 (2026-11-28): #1166 campaign parameters (`τ_ARCH = 0.80`, `n_min = 3`) — see [`AMENDMENTS.md`](AMENDMENTS.md) entries 1–10 |
 | Content binding | SHA-256 recorded in [`MANIFEST.sha256`](MANIFEST.sha256) |
 | Campaigns covered | #1163, #1164, #1165, #1166 |
 | Change control | Post-freeze edits only through [`AMENDMENTS.md`](AMENDMENTS.md) |
@@ -310,6 +310,11 @@ result.
 
 - An artifact not produced in both arms is not a stability observation; it
   is missing data (below).
+- The frozen negative control (`crossarch-governed-a/control/os_arch.txt`,
+  produced by `uname -m`) is a declared output but is **not** a primary
+  artifact and has no class. It is excluded from the primary endpoint and
+  from every class-level statement; it must differ across arms (see
+  **Concrete numbers**).
 - An artifact whose path differs between arms for a declared reason is
   reported under path parity, not silently matched.
 - A workflow whose environment cannot be pinned identically on both arms
@@ -317,20 +322,40 @@ result.
   but the environment mismatch is recorded; it cannot support a
   reproducibility claim and is reported as a tooling-attribution case.
 
-**Concrete numbers.** Number of workflows, number of declared artifacts,
-minimum artifacts per class, and the aarch64 host identity are
-**UNDECIDED** (owner: campaign lead + infrastructure owner; deadline:
-before data collection). The architecture count is fixed at **2** (x86_64
-and aarch64); a third architecture is optional and secondary.
+**Concrete numbers (frozen 2026-11-28; amendment 6).**
 
-**Missing data.**
+- **2 workflows**: `scripts/cross-arch-provenance-governed-a.oxoflow` and
+  `scripts/cross-arch-provenance-governed-b.oxoflow`, bound together by the
+  frozen corpus manifest `scripts/cross-arch-provenance-governed-corpus.json`
+  (its SHA-256 is recorded in the pre-run manifest).
+- **24 primary declared artifacts**, 12 per workflow, in **8 artifact
+  classes of 3** each: pure-text, raw-binary, derived-text,
+  byte-exact-compressed, checksum-manifest, ieee754-float,
+  integer-arithmetic, and json-structured.
+- **`n_min = 3`**: every class contains exactly 3 artifacts and is therefore
+  eligible for a class-level statement. A class is architecture-stable only
+  if all 3 of its artifacts are SHA-256 identical.
+- **x86_64 host**: the designated `tx-ubuntu` Linux host (native docker).
+  **aarch64 host**: the local Apple Silicon macOS host running Docker
+  Desktop's **native linux/arm64 VM** (no qemu on either leg). Both container
+  legs execute the same multi-arch manifest-list digest; the host OS/kernel
+  difference is infrastructure, because the executed toolchain is the pinned
+  Linux container.
+- **Negative control**: `crossarch-governed-a/control/os_arch.txt`, produced
+  by `uname -m`. It must **differ** across the two arms. If it does not, the
+  harness cannot detect a known architecture-dependent output and the
+  campaign is INVALID (a harness failure, never a stable artifact).
+- The architecture count is fixed at **2** (x86_64 and aarch64); a third
+  architecture is optional and secondary.
+
+**Missing data (frozen 2026-11-28; amendment 6).**
 
 - Artifacts produced in only one arm are excluded from the primary
   denominator and reported in the flow table with the arm that produced
-  them. If missingness in either arm exceeds **UNDECIDED** percent (owner:
-  campaign lead; deadline: before data collection), the campaign is
-  INVALID.
-- Worst-case sensitivity: all missing artifacts are counted as differing.
+  them. The missingness limit is **0%**: any missing primary artifact in
+  either arm makes the campaign INVALID.
+- Worst-case sensitivity: all missing artifacts are counted as differing
+  (reported beside the INVALID verdict, never as a stability result).
 
 **Stopping / outliers.** No interim analysis. No continuous primary
 endpoint; timing is descriptive only. If the container digest or

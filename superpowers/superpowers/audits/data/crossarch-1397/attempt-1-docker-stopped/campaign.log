@@ -1,0 +1,12 @@
+campaign: 1397
+started-utc: 2026-11-27T16:56:36Z
+local-commit: dd5dcd44ee91a2c93bfd24c29f189d8de32e87d5
+remote-commit: dd5dcd44ee91a2c93bfd24c29f189d8de32e87d5
+local-platform: linux/arm64
+remote-platform: linux/amd64
+remote-host: tx-ubuntu
+corpus: /Users/wsx/Documents/GitHub/oxo-flow/.claude/worktrees/agent-a4811d73744c25b76/scripts/cross-arch-provenance-governed-corpus.json
+corpus-sha256: 33a7531882f266dc067ba705b91863eacb709dee36bc00c2720aa0e6aba20bfa
+building local oxo-flow from dd5dcd44ee91a2c93bfd24c29f189d8de32e87d5
+building remote oxo-flow from dd5dcd44ee91a2c93bfd24c29f189d8de32e87d5
+running local arm (linux/arm64) -> /Users/wsx/Documents/GitHub/oxo-flow/.claude/worktrees/agent-a4811d73744c25b76/docs/superpowers/audits/data/crossarch-1397/arm-local-arm64

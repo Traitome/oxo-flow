@@ -3,10 +3,10 @@
 | Freeze record | Value |
 | :--- | :--- |
 | Artifact | PR-01 (Task 4.0 required artifact 1 of 6) |
-| Version | 1.0.3 |
+| Version | 1.0.4 |
 | Freeze status | FROZEN |
-| Freeze date | 2026-11-18 (original freeze; amendment 1 same date) |
-| Amendment | 1 (2026-11-18): review fixes D1–D5 and clarifications; 2 (2026-11-27): `τ_FA = 0.05`, held-out confirmatory corpus, `N_min = 73`, zero non-verdict limit for #1163; 3 (2026-11-27): status-ledger update only; 4 (2026-11-28): control provenance and `N_min` rationale corrected — see [`AMENDMENTS.md`](AMENDMENTS.md) entries 1–4 |
+| Freeze date | 2026-11-18 (original freeze; amendments 1–5 on main; amendment 6 on 2026-11-28 for #1166) |
+| Amendment | 1 (2026-11-18): review fixes D1–D5 and clarifications; 2–5 (2026-11-27/28): #1163 governed campaign (`τ_FA = 0.05`, held-out corpus, status/erratum/PR-04 caveat); 6 (2026-11-28): #1166 campaign parameters (`τ_ARCH = 0.80`, `n_min = 3`) — see [`AMENDMENTS.md`](AMENDMENTS.md) entries 1–10 |
 | Content binding | SHA-256 recorded in [`MANIFEST.sha256`](MANIFEST.sha256) |
 | Campaigns covered | #1163, #1164, #1165, #1166 |
 | Change control | Post-freeze edits only through [`AMENDMENTS.md`](AMENDMENTS.md) |
@@ -308,7 +308,7 @@ pre-declared minimum artifact count and 100% agreement.
 | #1163 | False-accept proportion on expected-reject cases | lower is better | PR-06 §C1: `τ_FA = 0.05` (frozen 2026-11-27, amendment 2); `N_min = 73` expected-reject cases |
 | #1164 | Full-loop verified-repair proportion, recovery-eligible cases | higher is better | PR-06 §C2 (τ value UNDECIDED; owner: campaign lead + independent reviewer; deadline: before data collection) |
 | #1165 | Strict declared-output equivalence proportion | higher is better | PR-06 §C3 (τ value UNDECIDED; owner: campaign lead + independent reviewer; deadline: before data collection) |
-| #1166 | Architecture-stable artifact proportion | higher is better | PR-06 §C4 (per-class minimum count and τ UNDECIDED; owner: campaign lead + independent reviewer; deadline: before data collection) |
+| #1166 | Architecture-stable artifact proportion | higher is better | PR-06 §C4: `τ_ARCH = 0.80`, `n_min = 3` (frozen 2026-11-28; amendment 6) |
 
 An UNDECIDED threshold is a deliberate, visible gap. It must be filled by a
 pre-data amendment (PR-05/README freeze protocol) before the first

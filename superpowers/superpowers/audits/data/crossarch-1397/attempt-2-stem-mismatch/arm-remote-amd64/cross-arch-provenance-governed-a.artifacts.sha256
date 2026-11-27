@@ -1,0 +1,13 @@
+aaf631698ae5160ceb04a97681a14887fdcab47cd6e0f163c87485b3b1340b62  cross-arch-provenance-governed-a/control/os_arch.txt
+9e593b90f6fd0ef5636102094a488600be03a4913ea6e08836a5c924401b66c7  cross-arch-provenance-governed-a/data/alphabet.txt
+103066039ffcce85ebb793b744cae7e0017cd660c2bb6dff327ecbfe55212f75  cross-arch-provenance-governed-a/data/bytes.bin
+62de65398cfb8c3a523eeb8707ae1b65c5318003328d08d408db5f996ab1b536  cross-arch-provenance-governed-a/data/bytes.bin.gz
+9c478d59f2a43f86656e4a15b12fbfa14d0f9026bfba48f92e0b5a9e620d1a15  cross-arch-provenance-governed-a/data/mask.bin
+64c9a93dcb7c3a6da918cbf728e3a2ae6745760625e132b99eea6047cb0e5800  cross-arch-provenance-governed-a/data/notes.txt
+0dd21bd42470a439e676fa1e6e4706bb7909712910d854e229671a51a26a3941  cross-arch-provenance-governed-a/data/pattern.bin
+ff3c7d2f916148f28ec0bef862c8969f777b749b3c99a3083f11de4a4b20a397  cross-arch-provenance-governed-a/data/pattern.bin.gz
+c3d522d442fe9b8e08ea1cc225886a96b7c6f2520e3ed49ce616912e8de61440  cross-arch-provenance-governed-a/data/payload.txt
+4f8c577971a39ab66656127c2e228a35afad3cf185facfba1cf669f9d96e68ff  cross-arch-provenance-governed-a/data/payload.txt.gz
+9932a2cc85d679f070afd979ccd9640daf4c46c9bd99e579d9a0e012b7e40f94  cross-arch-provenance-governed-a/dedup.txt
+aa7d83943d7ebf9dfb0f0d0e0ad57a231efadf5fcf481935cb85eec3b9fbe80c  cross-arch-provenance-governed-a/sorted.txt
+83d625670eed3424f9db4e517856744778dba9c5d40155cb84152fcd4d4d398a  cross-arch-provenance-governed-a/summary.txt
