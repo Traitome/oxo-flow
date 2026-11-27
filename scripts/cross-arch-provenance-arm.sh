@@ -77,17 +77,45 @@ fi
 # Stage this platform's image from the ONE shared manifest-list digest under a
 # fixed local tag. Docker's classic snapshotter pins a digest-only reference to
 # exactly ONE platform and refuses to re-resolve it to another ("cannot
-# overwrite digest"), so drop any prior reference for this source first.
-docker rmi -f "$tag" >/dev/null 2>&1 || true
-docker rmi -f "python@$digest" >/dev/null 2>&1 || true
-docker pull --platform "$platform" "python@$digest" >/dev/null 2>&1
-docker tag "python@$digest" "$tag"
+# overwrite digest"), so a fresh host normally clears the prior reference first.
+#
+# CROSSARCH_STAGE=0 uses an image the operator has already pre-staged (pull +
+# tag, no `docker rmi`) and verifies its architecture fail-closed. The
+# operator path exists because Docker Desktop 4.94 crashed on `docker rmi` of
+# the digest-only reference during the #1397 campaign; it does not change the
+# environment identity, which is still the shared manifest-list digest.
+stage="${CROSSARCH_STAGE:-1}"
+if [ "$stage" = "1" ]; then
+  docker rmi -f "$tag" >/dev/null 2>&1 || true
+  docker rmi -f "python@$digest" >/dev/null 2>&1 || true
+  docker pull --platform "$platform" "python@$digest" >/dev/null 2>&1
+  docker tag "python@$digest" "$tag"
+  staging="harness-pull"
+else
+  staging="pre-staged"
+fi
+
+case "$platform" in
+  linux/amd64) expected_image_arch="amd64" ;;
+  linux/arm64) expected_image_arch="arm64" ;;
+  *) echo "unsupported platform: $platform" >&2; exit 2 ;;
+esac
+docker image inspect "$tag" >/dev/null 2>&1 || {
+  echo "image tag $tag is absent; pre-stage it or run with CROSSARCH_STAGE=1" >&2
+  exit 2
+}
+actual_image_arch="$(docker image inspect "$tag" --format '{{.Architecture}}')"
+[ "$actual_image_arch" = "$expected_image_arch" ] || {
+  echo "image tag $tag resolves to $actual_image_arch, expected $expected_image_arch" >&2
+  exit 2
+}
 
 {
   echo "image-src:            python@$digest"
   echo "manifest-list-digest: $digest"
   echo "staged-tag:           $tag"
   echo "platform:             $platform"
+  echo "staging:              $staging"
   echo "image-id:             $(docker image inspect "$tag" --format '{{.Id}}' 2>/dev/null || echo unknown)"
   echo "image-arch:           $(docker image inspect "$tag" --format '{{.Architecture}}' 2>/dev/null || echo unknown)"
   docker run --rm --pull=never "$tag" sh -c '

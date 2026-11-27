@@ -130,6 +130,21 @@ if [ "$skip_build" = "0" ]; then
 fi
 [ -x "$bin" ] || { echo "local binary missing: $bin (build it or pass --bin)" >&2; exit 2; }
 
+read -r image_ref image_digest image_tag <<< "$(python3 -I -c '
+import json, sys
+c = json.load(open(sys.argv[1]))["image"]
+print(c["ref"], c["manifest_list_digest"], c["staged_tag"])
+' "$corpus")"
+echo "pre-staging local image ($image_ref) for $local_platform" | tee -a "$log"
+docker pull --platform "$local_platform" "$image_ref" >/dev/null
+docker tag "$image_ref" "$image_tag"
+echo "pre-staging remote image ($image_ref) for $remote_platform" | tee -a "$log"
+ssh "$remote_host" "docker pull --platform $(printf %q "$remote_platform") $(printf %q "$image_ref") >/dev/null && docker tag $(printf %q "$image_ref") $(printf %q "$image_tag")"
+# The arm script verifies the pre-staged tag's architecture fail-closed and
+# records `staging: pre-staged` in container.txt; the image identity remains
+# the shared manifest-list digest.
+export CROSSARCH_STAGE=0
+
 local_arm="$outroot/arm-local-$local_label"
 remote_arm="$outroot/arm-remote-$remote_label"
 echo "running local arm ($local_platform) -> $local_arm" | tee -a "$log"
@@ -137,7 +152,7 @@ bash "$repo/scripts/cross-arch-provenance-arm.sh" \
   "$local_platform" "$local_arm" "$repo" "$bin" "${workflow_paths[@]}" | tee -a "$log"
 
 echo "running remote arm ($remote_platform) on $remote_host -> $remote_out" | tee -a "$log"
-remote_cmd="cd $(printf %q "$remote_repo") && bash $(printf %q "$remote_repo/scripts/cross-arch-provenance-arm.sh") $(printf %q "$remote_platform") $(printf %q "$remote_out") $(printf %q "$remote_repo") $(printf %q "$remote_bin")"
+remote_cmd="cd $(printf %q "$remote_repo") && CROSSARCH_STAGE=0 bash $(printf %q "$remote_repo/scripts/cross-arch-provenance-arm.sh") $(printf %q "$remote_platform") $(printf %q "$remote_out") $(printf %q "$remote_repo") $(printf %q "$remote_bin")"
 for wf in "${workflow_files[@]}"; do
   remote_cmd+=" $(printf %q "$remote_repo/$wf")"
 done
