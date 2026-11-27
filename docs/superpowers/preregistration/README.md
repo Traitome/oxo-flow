@@ -1,8 +1,11 @@
 # Pre-Registration and Evidence Governance — Task 4.0
 
-**Status: artifacts frozen; independent sign-off PENDING; no campaign has
-collected confirmatory data under this protocol.** Task 4.0 is not passed,
-and ledger Gate 3 remains unpassed. Artifact creation is not gate passage.
+**Status: artifacts frozen; independent sign-off PENDING; one governed
+#1166 campaign has collected data under amendment 2 (2026-11-28) and is
+reported with PR-05 sign-off PENDING.** Task 4.0 is not passed, and ledger
+Gate 3 remains unpassed. Artifact creation is not gate passage, and the
+governed #1166 decision is not a publication-ready confirmatory result until
+PR-05 is signed.
 
 This directory is the governance layer required by
 [`docs/superpowers/plans/industrial-scientific-implementation-plan.md`](../plans/industrial-scientific-implementation-plan.md)
@@ -128,8 +131,8 @@ not. It must be updated only by amendment.
 | #1163 confirmatory data | None collected |
 | #1164 confirmatory data | None; a ten-case pilot was measured on 2026-11-18 **before this freeze** (3/10 applied, 3/10 verified, 3/3 recovery-eligible). It is pilot evidence and cannot be cited as pre-registered or confirmatory. A held-out re-run is required. |
 | #1165 confirmatory data | None collected |
-| #1166 confirmatory data | None collected |
-| Task 4.0 gate | **Not passed** — sign-off, pre-run manifests, case seals, and analysis-script hashes are outstanding |
+| #1166 confirmatory data | One governed campaign measured 2026-11-28: 24/24 declared artifacts SHA-256 identical (100%, exact 95% CI [85.75%, 100%]), all 8 classes architecture-stable, the `uname -m` negative control differed (`aarch64` vs `x86_64`), category POSITIVE under the frozen rule. PR-05 C4 sign-off remains PENDING. Evidence: [`cross-arch-provenance-governed-2026-11-27.md`](../audits/cross-arch-provenance-governed-2026-11-27.md). |
+| Task 4.0 gate | **Not passed** — independent sign-off is outstanding; the #1166 pre-run manifest and analysis-script hash now exist, but the other campaigns' pre-run manifests/case seals and all reviewer signatures remain outstanding |
 | Ledger Gate 3 (Scientific Validity) | **Not passed** |
 
 No campaign was run to produce this directory. No empirical result is

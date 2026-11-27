@@ -8,6 +8,14 @@
 > comparison that PR-01 explicitly declares **confounded** (architecture + OS +
 > toolchain). It may be reported as an operational field observation and must
 > never be reported as a pure architecture claim.
+>
+> **Update (2026-11-28).** A governed follow-up now exists:
+> [`cross-arch-provenance-governed-2026-11-27.md`](cross-arch-provenance-governed-2026-11-27.md)
+> froze `τ_ARCH = 0.80`/`n_min = 3` before data collection and measured native
+> x86_64 vs native aarch64 through one shared container digest: 24/24 declared
+> artifacts SHA-256 identical (100%, exact 95% CI [85.75%, 100%]), eight/eight
+> classes stable, category POSITIVE. This 2026-11-19 observation remains the
+> OS-confounded first field observation and is not the governed result.
 
 ## 1. What was measured
 

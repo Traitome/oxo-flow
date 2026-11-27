@@ -1,0 +1,14 @@
+hostname:        ShixiangWang-WorkSpacedeMacBook-Pro.local
+host-uname:      Darwin ShixiangWang-WorkSpacedeMacBook-Pro.local 27.2.0 Darwin Kernel Version 27.2.0: Wed Oct 14 23:48:06 PDT 2026; root:xnu-13432.41.4~25/RELEASE_ARM64_T8142 arm64
+host-arch:       arm64
+nproc:           10
+cpu-model:       Apple M5
+os-release:      Darwin
+kernel:          27.2.0
+oxo-flow:        oxo-flow 0.32.0
+binary-sha256:   9ce0065a42e60afe17dcb3308a9e430813301ea8e01bbf2964a75d14719236d6
+engine-commit:   56b109c17b95e4c610a874aaf63fc0ae583a57a6
+engine-dirty:    0
+platform:        linux/arm64
+passthru:        DOCKER_DEFAULT_PLATFORM
+date-utc:        2026-11-27T17:01:06Z

@@ -1,0 +1,232 @@
+{
+  "checkpoint_format_version": 1,
+  "completed_rules": [
+    "checksums",
+    "floats",
+    "integers",
+    "structured"
+  ],
+  "failed_rules": [],
+  "benchmarks": {
+    "checksums": {
+      "rule": "checksums",
+      "wall_time_secs": 0.19,
+      "max_memory_mb": 1,
+      "cpu_seconds": 0.0,
+      "retries": 0
+    },
+    "floats": {
+      "rule": "floats",
+      "wall_time_secs": 0.162,
+      "max_memory_mb": 1,
+      "cpu_seconds": 0.0,
+      "retries": 0
+    },
+    "integers": {
+      "rule": "integers",
+      "wall_time_secs": 0.163,
+      "max_memory_mb": 1,
+      "cpu_seconds": 0.0,
+      "retries": 0
+    },
+    "structured": {
+      "rule": "structured",
+      "wall_time_secs": 0.237,
+      "max_memory_mb": 30,
+      "cpu_seconds": 0.015672,
+      "retries": 0
+    }
+  },
+  "workflow_path": "/Users/wsx/Documents/GitHub/oxo-flow/.claude/worktrees/agent-a4811d73744c25b76/scripts/cross-arch-provenance-governed-b.oxoflow",
+  "workflow_git_sha": "56b109c17b95e4c610a874aaf63fc0ae583a57a6",
+  "workflow_content_hash": "sha256:8e6d1cf56939df49e2e760cf68249a85e32e53569b3bc9dd50043dc0fcaa8048",
+  "workflow_resolved_hash": "sha256:0ab4db830dad16fb09f5cdce948eed270cb147ab0b52e1edf9bd0a1df26b7a40",
+  "workflow_git_dirty": false,
+  "workdir": "/Users/wsx/Documents/GitHub/oxo-flow/.claude/worktrees/agent-a4811d73744c25b76/docs/superpowers/audits/data/crossarch-1397/arm-local-arm64/work/crossarch-governed-b",
+  "checksums": {
+    "bigint.txt": "sha256:f37bc9fc6aea0616f9a29eae674d2f338303bae5b7e945402e7ef4b96d2be4c9",
+    "checksums.txt": "sha256:bd9115c27eba63ea00e2aa6c8cfaa4ecb201c8d39139f65953d6b239eb7bddc6",
+    "data.json": "sha256:1a71d62870e6fcbe16d3627157a13efe702c0daf722c9736f402cdace64cbd9d",
+    "digests.tsv": "sha256:16db5c58f158af791b00d823662d4d9c08529e7028aaf27b937a35db4dce1ee2",
+    "factorial.txt": "sha256:dca230c95c8aa7362ef2ee4de386ab3bc5306a146068a6971bc9bd0c5b27a9b0",
+    "float.txt": "sha256:71d665e59199296a7ad04a87a6dec9a1e796263eb29384bb179f65f932423dd6",
+    "float_fsum.csv": "sha256:f49e8e422da86bdf1dba1b4ac9e66dc5b911ef0b9c6f9962d79b53056898ebaa",
+    "float_series.txt": "sha256:9633031545425a1574fd1952b8f4dd36ad75a135aaa2baa8e6d4a0e1c7d54ee3",
+    "manifest.sha256": "sha256:06a1fffa11a94b58b0702f75eb12c154a0f54d0c5659f47f53fc8bd2cfd8ff01",
+    "matrix.json": "sha256:ef1fe569b7215a3517f7a444cbfe4c5079533d742ad998f40245e2800f2f0873",
+    "primes.txt": "sha256:80eb224ba892fac76623089f2b5d4921466627afd5d5aae207573c4ca2ddd61a",
+    "summary.json": "sha256:bad1cbcd3a5d48ad9dc851bfe161504cc036f7e53b3da6681b3dfcefc0ddd156"
+  },
+  "output_manifests": {
+    "checksums": [
+      {
+        "path": "manifest.sha256",
+        "size": 160,
+        "sha256": "sha256:06a1fffa11a94b58b0702f75eb12c154a0f54d0c5659f47f53fc8bd2cfd8ff01"
+      },
+      {
+        "path": "digests.tsv",
+        "size": 237,
+        "sha256": "sha256:16db5c58f158af791b00d823662d4d9c08529e7028aaf27b937a35db4dce1ee2"
+      },
+      {
+        "path": "checksums.txt",
+        "size": 80,
+        "sha256": "sha256:bd9115c27eba63ea00e2aa6c8cfaa4ecb201c8d39139f65953d6b239eb7bddc6"
+      }
+    ],
+    "floats": [
+      {
+        "path": "float.txt",
+        "size": 19,
+        "sha256": "sha256:71d665e59199296a7ad04a87a6dec9a1e796263eb29384bb179f65f932423dd6"
+      },
+      {
+        "path": "float_series.txt",
+        "size": 38,
+        "sha256": "sha256:9633031545425a1574fd1952b8f4dd36ad75a135aaa2baa8e6d4a0e1c7d54ee3"
+      },
+      {
+        "path": "float_fsum.csv",
+        "size": 173,
+        "sha256": "sha256:f49e8e422da86bdf1dba1b4ac9e66dc5b911ef0b9c6f9962d79b53056898ebaa"
+      }
+    ],
+    "integers": [
+      {
+        "path": "factorial.txt",
+        "size": 159,
+        "sha256": "sha256:dca230c95c8aa7362ef2ee4de386ab3bc5306a146068a6971bc9bd0c5b27a9b0"
+      },
+      {
+        "path": "primes.txt",
+        "size": 803,
+        "sha256": "sha256:80eb224ba892fac76623089f2b5d4921466627afd5d5aae207573c4ca2ddd61a"
+      },
+      {
+        "path": "bigint.txt",
+        "size": 151,
+        "sha256": "sha256:f37bc9fc6aea0616f9a29eae674d2f338303bae5b7e945402e7ef4b96d2be4c9"
+      }
+    ],
+    "structured": [
+      {
+        "path": "data.json",
+        "size": 266,
+        "sha256": "sha256:1a71d62870e6fcbe16d3627157a13efe702c0daf722c9736f402cdace64cbd9d"
+      },
+      {
+        "path": "summary.json",
+        "size": 130,
+        "sha256": "sha256:bad1cbcd3a5d48ad9dc851bfe161504cc036f7e53b3da6681b3dfcefc0ddd156"
+      },
+      {
+        "path": "matrix.json",
+        "size": 423,
+        "sha256": "sha256:ef1fe569b7215a3517f7a444cbfe4c5079533d742ad998f40245e2800f2f0873"
+      }
+    ]
+  },
+  "rule_fingerprints": {
+    "checksums": "sha256:672e05b4d3dbf5d734fc5f2942cb5aaa46c9f6a1761d53cd3e98587b33153d3d",
+    "floats": "sha256:9a21948fc719c11cc59cdd4c1feaef35a72a625aa91691a1884ff19b25086c5f",
+    "integers": "sha256:a833052817c8b1b23e2b8feebc50d54068fc905a1286d36e999da67338e862d9",
+    "structured": "sha256:cd33d5d2f84984f3919ab70e7e6666643529fb00f62e01cd8e3eaf4be76479ba"
+  },
+  "rule_fingerprints_no_input": {
+    "checksums": "sha256:7bfd158a4b03a18382135920d07f916ac00ef219a339d11de34cb42ee599153c",
+    "floats": "sha256:b3a3545c129eab09ca0a19294075e532fbe8b25b77bed7dd045c344be5f70e80",
+    "integers": "sha256:6bc1d6a14ba76efe8fc3be1d54f2e8746e24f67d774a2179e15d12cb976bada6",
+    "structured": "sha256:8fa2611b9fd3e05a95d12e25efb2c9951b24c80819cc30b6688a521d5c8b232e"
+  },
+  "rule_runs": {
+    "checksums": {
+      "exit_code": 0,
+      "started_at": "2026-11-27T17:01:07.905658Z",
+      "finished_at": "2026-11-27T17:01:08.096570Z",
+      "command": "docker run --rm --user $(id -u):$(id -g) -v '/Users/wsx/Documents/GitHub/oxo-flow/.claude/worktrees/agent-a4811d73744c25b76/docs/superpowers/audits/data/crossarch-1397/arm-local-arm64/work/crossarch-governed-b':'/Users/wsx/Documents/GitHub/oxo-flow/.claude/worktrees/agent-a4811d73744c25b76/docs/superpowers/audits/data/crossarch-1397/arm-local-arm64/work/crossarch-governed-b' -w '/Users/wsx/Documents/GitHub/oxo-flow/.claude/worktrees/agent-a4811d73744c25b76/docs/superpowers/audits/data/crossarch-1397/arm-local-arm64/work/crossarch-governed-b' 'crossarch1397:pin' sh -c 'if command -v bash >/dev/null 2>&1; then exec bash -c \"$1\"; else exec sh -c \"$1\"; fi' sh 'set -eu\nexport LC_ALL=C\npython3 -c \"\nimport sys\nsys.stdout.buffer.write(bytes((i * 29 + 11) % 256 for i in range(1024)))\n\" > scratch_a.bin\npython3 -c \"\nimport sys\nsys.stdout.buffer.write(bytes((i * 71 + 3) % 256 for i in range(1536)))\n\" > scratch_b.bin\npython3 -c \"\nimport sys\nlines = ['\\''alpha'\\'', '\\''beta'\\'', '\\''gamma'\\'', '\\''delta'\\'', '\\''epsilon'\\'']\nsys.stdout.write(chr(10).join(lines) + chr(10))\n\" > scratch_c.txt\nsha256sum scratch_a.bin scratch_b.bin > manifest.sha256\npython3 -c \"\nimport hashlib, sys\nfor name in ('\\''scratch_a.bin'\\'', '\\''scratch_b.bin'\\'', '\\''scratch_c.txt'\\''):\n    h = hashlib.sha256(open(name, '\\''rb'\\'').read()).hexdigest()\n    sys.stdout.write(name + chr(9) + h + chr(10))\n\" > digests.tsv\nsha256sum scratch_c.txt > checksums.txt\n'",
+      "stderr_tail": "",
+      "stdout_tail": "",
+      "status": "success"
+    },
+    "floats": {
+      "exit_code": 0,
+      "started_at": "2026-11-27T17:01:08.119849Z",
+      "finished_at": "2026-11-27T17:01:08.281864Z",
+      "command": "docker run --rm --user $(id -u):$(id -g) -v '/Users/wsx/Documents/GitHub/oxo-flow/.claude/worktrees/agent-a4811d73744c25b76/docs/superpowers/audits/data/crossarch-1397/arm-local-arm64/work/crossarch-governed-b':'/Users/wsx/Documents/GitHub/oxo-flow/.claude/worktrees/agent-a4811d73744c25b76/docs/superpowers/audits/data/crossarch-1397/arm-local-arm64/work/crossarch-governed-b' -w '/Users/wsx/Documents/GitHub/oxo-flow/.claude/worktrees/agent-a4811d73744c25b76/docs/superpowers/audits/data/crossarch-1397/arm-local-arm64/work/crossarch-governed-b' 'crossarch1397:pin' sh -c 'if command -v bash >/dev/null 2>&1; then exec bash -c \"$1\"; else exec sh -c \"$1\"; fi' sh 'set -eu\nexport LC_ALL=C\npython3 -c \"print('\\''%.17g'\\'' % sum(1.0/i for i in range(1, 1001)))\" > float.txt\npython3 -c \"\nimport math\nvals = [1.0/i for i in range(1, 2001)]\nprint('\\''%.17g'\\'' % math.fsum(vals))\nprint('\\''%.17g'\\'' % sum(vals))\nprint('\\''%.17g'\\'' % (sum(vals) - math.fsum(vals)))\n\" > float_series.txt\npython3 -c \"\nimport math\nvals = [1.0/(i*i) for i in range(1, 101)]\nfor i in range(0, 100, 10):\n    print('\\''%.17g'\\'' % math.fsum(vals[:i+1]))\n\" > float_fsum.csv\n'",
+      "stderr_tail": "",
+      "stdout_tail": "",
+      "status": "success"
+    },
+    "integers": {
+      "exit_code": 0,
+      "started_at": "2026-11-27T17:01:08.301071Z",
+      "finished_at": "2026-11-27T17:01:08.464124Z",
+      "command": "docker run --rm --user $(id -u):$(id -g) -v '/Users/wsx/Documents/GitHub/oxo-flow/.claude/worktrees/agent-a4811d73744c25b76/docs/superpowers/audits/data/crossarch-1397/arm-local-arm64/work/crossarch-governed-b':'/Users/wsx/Documents/GitHub/oxo-flow/.claude/worktrees/agent-a4811d73744c25b76/docs/superpowers/audits/data/crossarch-1397/arm-local-arm64/work/crossarch-governed-b' -w '/Users/wsx/Documents/GitHub/oxo-flow/.claude/worktrees/agent-a4811d73744c25b76/docs/superpowers/audits/data/crossarch-1397/arm-local-arm64/work/crossarch-governed-b' 'crossarch1397:pin' sh -c 'if command -v bash >/dev/null 2>&1; then exec bash -c \"$1\"; else exec sh -c \"$1\"; fi' sh 'set -eu\nexport LC_ALL=C\npython3 -c \"import math; print(math.factorial(100))\" > factorial.txt\npython3 -c \"\ndef primes(n):\n    out = []\n    x = 2\n    while len(out) < n:\n        if all(x % p for p in out if p * p <= x):\n            out.append(x)\n        x += 1\n    return out\nprint('\\'' '\\''.join(str(p) for p in primes(200)))\n\" > primes.txt\npython3 -c \"\nprint(2**256)\nprint(3**100 + 7**50)\nprint((2**127 - 1) % 1000000007)\nprint(sum(i * i for i in range(1, 10001)))\n\" > bigint.txt\n'",
+      "stderr_tail": "",
+      "stdout_tail": "",
+      "status": "success"
+    },
+    "structured": {
+      "exit_code": 0,
+      "started_at": "2026-11-27T17:01:08.481959Z",
+      "finished_at": "2026-11-27T17:01:08.719160Z",
+      "command": "docker run --rm --user $(id -u):$(id -g) -v '/Users/wsx/Documents/GitHub/oxo-flow/.claude/worktrees/agent-a4811d73744c25b76/docs/superpowers/audits/data/crossarch-1397/arm-local-arm64/work/crossarch-governed-b':'/Users/wsx/Documents/GitHub/oxo-flow/.claude/worktrees/agent-a4811d73744c25b76/docs/superpowers/audits/data/crossarch-1397/arm-local-arm64/work/crossarch-governed-b' -w '/Users/wsx/Documents/GitHub/oxo-flow/.claude/worktrees/agent-a4811d73744c25b76/docs/superpowers/audits/data/crossarch-1397/arm-local-arm64/work/crossarch-governed-b' 'crossarch1397:pin' sh -c 'if command -v bash >/dev/null 2>&1; then exec bash -c \"$1\"; else exec sh -c \"$1\"; fi' sh 'set -eu\nexport LC_ALL=C\npython3 -c \"\nimport json\nobj = {\n    '\\''workflow'\\'': '\\''crossarch-governed-b'\\'',\n    '\\''version'\\'': 1,\n    '\\''classes'\\'': ['\\''checksum-manifest'\\'', '\\''ieee754-float'\\'', '\\''integer-arithmetic'\\'', '\\''json-structured'\\''],\n    '\\''limits'\\'': {'\\''min'\\'': -(10**18), '\\''max'\\'': 10**18},\n    '\\''nested'\\'': {'\\''a'\\'': [1, 2, 3], '\\''b'\\'': {'\\''c'\\'': 4, '\\''d'\\'': 5}},\n    '\\''truth'\\'': [True, False, None],\n}\nprint(json.dumps(obj, sort_keys=True, separators=('\\'','\\'', '\\'':'\\''), ensure_ascii=True))\n\" > data.json\npython3 -c \"\nimport json\nobj = {'\\''counts'\\'': {str(i): i * i for i in range(10)}, '\\''names'\\'': ['\\''alpha'\\'', '\\''beta'\\'', '\\''gamma'\\''], '\\''version'\\'': '\\''1.0.0'\\''}\nprint(json.dumps(obj, sort_keys=True, separators=('\\'','\\'', '\\'':'\\''), ensure_ascii=True))\n\" > summary.json\npython3 -c \"\nimport json\nm = [[(i * 10 + j) * (i + j + 1) for j in range(10)] for i in range(10)]\nprint(json.dumps(m, sort_keys=True, separators=('\\'','\\'', '\\'':'\\'')))\n\" > matrix.json\n'",
+      "stderr_tail": "",
+      "stdout_tail": "",
+      "status": "success"
+    }
+  },
+  "env_lock_identity": {
+    "checksums": "docker|crossarch1397@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+    "floats": "docker|crossarch1397@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+    "integers": "docker|crossarch1397@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+    "structured": "docker|crossarch1397@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b"
+  },
+  "resource_usage": {
+    "checksums": {
+      "max_rss_bytes": 655360,
+      "cpu_seconds": 0.0,
+      "source": {
+        "backend": "local",
+        "tool": "sysinfo",
+        "raw_fields": {
+          "sample_interval_ms": "200"
+        }
+      }
+    },
+    "floats": {
+      "max_rss_bytes": 655360,
+      "cpu_seconds": 0.0,
+      "source": {
+        "backend": "local",
+        "tool": "sysinfo",
+        "raw_fields": {
+          "sample_interval_ms": "200"
+        }
+      }
+    },
+    "integers": {
+      "max_rss_bytes": 671744,
+      "cpu_seconds": 0.0,
+      "source": {
+        "backend": "local",
+        "tool": "sysinfo",
+        "raw_fields": {
+          "sample_interval_ms": "200"
+        }
+      }
+    },
+    "structured": {
+      "max_rss_bytes": 30998528,
+      "cpu_seconds": 0.015672,
+      "source": {
+        "backend": "local",
+        "tool": "sysinfo",
+        "raw_fields": {
+          "sample_interval_ms": "200"
+        }
+      }
+    }
+  }
+}

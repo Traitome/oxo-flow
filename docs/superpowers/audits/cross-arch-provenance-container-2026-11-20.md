@@ -9,6 +9,16 @@
 > remain UNDECIDED, and one arm runs under **CPU emulation** (stated below).
 > The per-artifact and per-class verdicts are reported as an operational
 > measurement, with every caveat the brief requires.
+>
+> **Update (2026-11-28).** A governed follow-up now exists:
+> [`cross-arch-provenance-governed-2026-11-27.md`](cross-arch-provenance-governed-2026-11-27.md)
+> froze `τ_ARCH = 0.80`/`n_min = 3` before data collection and replaced the
+> qemu-emulated arm64 leg with a **native aarch64** leg (Apple Silicon Docker
+> Desktop `linux/arm64` VM): 2 workflows / 24 declared artifacts / 8 classes,
+> one shared manifest-list digest, 24/24 artifacts SHA-256 identical (100%,
+> exact 95% CI [85.75%, 100%]), eight/eight classes stable, category POSITIVE.
+> This 2026-11-20 emulated-arm measurement remains an operational measurement
+> and is not the governed result.
 
 This supersedes the earlier **OS-confounded** `system`-backend observation
 (`docs/superpowers/audits/cross-arch-provenance-2026-11-19.md`, macOS-arm64 vs
