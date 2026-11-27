@@ -1,0 +1,65 @@
+# Issue #1401 userns acceptance - key output (tx-ubuntu, 2026-11-27)
+#
+# Host: Linux VM-4-4-ubuntu 6.8.0-137-generic x86_64, Intel Xeon 8255C,
+#       4 vCPU / 3.6 GiB RAM, unshare from util-linux 2.39.3
+# Run identity verified: uid 1000; AppArmor profile "oxo-flow-userns (unconfined)"
+# Build: CARGO_BUILD_JOBS=1, isolated CARGO_TARGET_DIR,
+#        cargo test -p oxo-flow-web --test rb01_userns_adversarial --no-run --locked
+# Full run log (including the build) stayed on the host at
+#   /home/ubuntu/rb1401-host-run.log
+#
+=== build result ===
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6m 21s
+  Executable tests/rb01_userns_adversarial.rs (/home/ubuntu/oxo-build-target-1401/debug/deps/rb01_userns_adversarial-bbb0e71c35c9a0c7)
+
+=== test binary: /home/ubuntu/oxo-build-target-1401/debug/deps/rb01_userns_adversarial-bbb0e71c35c9a0c7 ===
+=== AppArmor profile inherited through sudo -u ubuntu? ===
+unshare-control exit=0
+=== uid-1000 Landlock composition probe (evidence for the docs claim) ===
+probe variant=none abi=4
+variant=none exit=0
+probe variant=system-only abi=4
+landlock ruleset installed
+unshare: cannot open /proc/self/uid_map: Permission denied
+variant=system-only exit=1
+probe variant=proc-grants abi=4
+landlock ruleset installed
+unshare: cannot open /proc/self/uid_map: Permission denied
+variant=proc-grants exit=1
+probe variant=proc-self-dir abi=4
+landlock ruleset installed
+unshare: cannot open /proc/self/uid_map: Permission denied
+variant=proc-self-dir exit=1
+
+=== adversarial suite (--nocapture --test-threads=1) ===
+running 1 test
+test userns_run_is_isolated_from_host_and_tenants ... RB01U CONTROL probe results:
+RB01U   nproc: 14566
+RB01U   proc-environ: LEAKED
+RB01U   proc-pid-count: 210
+RB01U   proc-server-visible: VISIBLE
+RB01U   signal-server: SIGNALLED
+RB01U   signal-tenantb: SIGNALLED
+RB01U   signal-victim: SIGNALLED
+RB01U   uid: 1000
+RB01U   workdir-write: pass
+RB01U ISOLATED probe results:
+RB01U   nproc: 4096
+RB01U   proc-environ: denied
+RB01U   proc-pid-count: 4
+RB01U   proc-server-visible: hidden
+RB01U   signal-server: denied
+RB01U   signal-tenantb: denied
+RB01U   signal-victim: denied
+RB01U   uid: 0
+RB01U   workdir-write: pass
+RB01U exit-code run: status=failed (CLI exit 7 through unshare)
+RB01U cancel: run=8771e728-1be2-4e7b-9c52-808c921f7f58 status=cancelled tenant_b_host_pid=1649870 marker=rb01u-b-marker-1649855 namespace_has_no_survivor=true
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.77s
+
+# The run was launched as uid 1000 (not root) so the user namespace is a real
+# unprivileged creation, and the AppArmor profile was verified independently
+# (`unshare -Ur true` exits 0; /proc/self/attr/current = "oxo-flow-userns
+# (unconfined)").
