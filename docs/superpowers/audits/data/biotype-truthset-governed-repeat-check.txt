@@ -1,0 +1,8 @@
+repeat-run consistency check (PR-01: deterministic checker)
+first run : 2026-11-27T16:50:33Z commit 6fbf38c1441c966aee49aa96ba2a211cbf5bfb3f
+repeat run: 2026-11-27T16:50:53Z commit 6fbf38c1441c966aee49aa96ba2a211cbf5bfb3f
+case rows byte-identical: True
+confusion matrix equal: True
+codes (correct/fail) equal: True
+first-run case rows sha256: 3568ca8357a724844d992b09303d8849c3e9da1ef9654c077867264002cf768c
+repeat-run case rows sha256: 3568ca8357a724844d992b09303d8849c3e9da1ef9654c077867264002cf768c

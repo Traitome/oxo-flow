@@ -1,0 +1,39 @@
+{
+  "format": "oxo-flow.biotype-truthset-governed-decision/v1",
+  "issue": 1396,
+  "campaign": "#1163 governed BioTypes truth set (held-out corpus)",
+  "results_file": "docs/superpowers/audits/data/biotype-truthset-governed-results.json",
+  "results_sha256": "d7e38fed85c37806467ca63f4e447b46302b612147b4219fcf2739a7c5858de4",
+  "results_commit": "6fbf38c1441c966aee49aa96ba2a211cbf5bfb3f",
+  "binary_sha256": "463d15e618e28d4e694bc3aab472fe53a11188266e8f3f61a344e3099a820b0a",
+  "confusion_matrix": {
+    "true_accept": 33,
+    "false_accept": 0,
+    "true_reject": 83,
+    "false_reject": 0
+  },
+  "primary": {
+    "definition": "FA / (FA + TR) over expected-reject cases",
+    "denominator": 83,
+    "false_accepts": 0,
+    "true_rejects": 83
+  },
+  "decision": {
+    "category": "POSITIVE",
+    "report_label": "POSITIVE",
+    "invalid_sub_reason": null,
+    "tau_fa": 0.05,
+    "n_min": 73,
+    "primary_denominator": 83,
+    "false_accepts": 0,
+    "point_estimate": 0.0,
+    "ci_lower": 0.0,
+    "ci_upper": 0.043471152166148386,
+    "ci_level": 0.95,
+    "ci_method": "Clopper-Pearson exact (two-sided)",
+    "non_verdicts": 0,
+    "decision_rule": "INVALID first (N<N_min -> UNDERPOWERED, or any non-verdict); POSITIVE iff U<=tau; NEGATIVE iff L>tau; else INCONCLUSIVE"
+  },
+  "worst_case_sensitivity": null,
+  "statement": "On the frozen held-out truth set of 83 expected-reject cases, the BioTypes checker false-accepted 0 of 83 expected-reject cases (0.0000%, exact 95% CI [0.0000%, 4.3471%]), within the pre-registered bound tau_FA = 0.05. This validates the checker on this set; it does not establish biological truth or coverage outside the listed dimensions."
+}
