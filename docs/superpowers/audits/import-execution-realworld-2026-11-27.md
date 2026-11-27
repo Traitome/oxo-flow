@@ -52,7 +52,7 @@ listed in the fixture header and in §6.
 | Field | Value |
 | :--- | :--- |
 | `campaign` | #1398 real-world import execution-equivalence |
-| `engine_commit` | host checkout at campaign time = the campaign commit containing this report; exact SHA captured in `data/import-execution-realworld-2026-11-27-identity.txt`. The binary was built from `8be843433dfeab31312e22969d1c98adee822649`; later commits touched fixtures/scripts/docs plus a comment/attribute-only move in `nextflow.rs` (no code or codegen change) |
+| `engine_commit` | host checkout at campaign time `94f3c8ec2b4ae05564a102c83caa95255396f8a9` (recorded in `data/import-execution-realworld-2026-11-27-identity.txt`). The binary was built from `8be843433dfeab31312e22969d1c98adee822649`; commits between are fixtures/scripts/docs only, and the only later `nextflow.rs` change is a comment/attribute move (no codegen change) |
 | `engine_version` | `oxo-flow 0.32.0` (`target/debug/oxo-flow`) |
 | `binary_sha256` | `2a9e7e89a49a04b0c882bb88e533c979380519c5e6d51bc46207ca35339b19c7` |
 | `schema_sha256` | `7f68d09a481f28a1568fb9a37eb14a75bc6ef57d2d504891ef8ce5aeebca47e0` (`docs/schema/oxoflow-v1.schema.json`) |
