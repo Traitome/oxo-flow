@@ -1,0 +1,27 @@
+# G060 — GRCm39 GTF fed to a GRCm38 consumer
+# The producer declares reference_build=GRCm39; the consumer requires
+# reference_build=GRCm38. The published reference-build field is checked
+# when both sides name a build and aliases do not make these equal, so
+# the edge violates TYPE-004. This build pair was not asserted by any
+# pilot case (the pilot used the human GRCh37/GRCh38 family).
+#
+# EXPECTED (authored 2026-11-27 from the published contract, before running):
+#   reject — TYPE-004.
+
+[workflow]
+name = "g060"
+
+[[rules]]
+name = "produce"
+output = ["genes.gtf"]
+shell = "stringtie -o genes.gtf aln.bam"
+[rules.types]
+outputs = { default = "GTF[reference_build=GRCm39]" }
+
+[[rules]]
+name = "consume"
+input = ["genes.gtf"]
+output = ["result.txt"]
+shell = "gffcompare -r grcm38.gtf genes.gtf"
+[rules.types]
+inputs = { default = "GTF[reference_build=GRCm38]" }

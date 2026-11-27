@@ -1,0 +1,25 @@
+# G088 — BAM producer and consumer with matching sort/index/build
+# Both sides declare BAM[sort_order=coordinate,index=bai,reference_build=GRCh38];
+# the multi-dimensional contract is fully satisfied, so no TYPE diagnostic.
+# This conjunction (sort+index+build) is not asserted by a pilot accept.
+#
+# EXPECTED (authored 2026-11-27 from the published contract, before running):
+#   accept — no TYPE diagnostic.
+
+[workflow]
+name = "g088"
+
+[[rules]]
+name = "produce"
+output = ["aln.bam"]
+shell = "bwa mem grch38.fa r1.fq r2.fq | samtools sort -o aln.bam && samtools index aln.bam"
+[rules.types]
+outputs = { default = "BAM[sort_order=coordinate,index=bai,reference_build=GRCh38]" }
+
+[[rules]]
+name = "consume"
+input = ["aln.bam"]
+output = ["calls.vcf.gz"]
+shell = "gatk HaplotypeCaller -I aln.bam -O calls.vcf.gz"
+[rules.types]
+inputs = { default = "BAM[sort_order=coordinate,index=bai,reference_build=GRCh38]" }

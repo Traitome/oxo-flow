@@ -1,0 +1,27 @@
+# G072 — gzip BED fed to a bgzip consumer
+# The producer declares BED[compression=gzip]; the consumer requires BED[compression=bgzip].
+# The published compression field names block/stream encodings; only
+# BAM implies BGZF, and a different declared encoding does not satisfy
+# the requirement, so the edge violates TYPE-006. This compression
+# pair was not asserted by the pilot.
+#
+# EXPECTED (authored 2026-11-27 from the published contract, before running):
+#   reject — TYPE-006.
+
+[workflow]
+name = "g072"
+
+[[rules]]
+name = "produce"
+output = ["peaks.bed.gz"]
+shell = "gzip -c peaks.bed > peaks.bed.gz"
+[rules.types]
+outputs = { default = "BED[compression=gzip]" }
+
+[[rules]]
+name = "consume"
+input = ["peaks.bed.gz"]
+output = ["result.dat"]
+shell = "zcat peaks.bed.gz | bgzip -c > peaks.bed.bgz"
+[rules.types]
+inputs = { default = "BED[compression=bgzip]" }

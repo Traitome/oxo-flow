@@ -1,0 +1,25 @@
+# G084 — SAM producer and consumer with matching sort contract
+# Both sides declare SAM[sort_order=coordinate]; the format and sort
+# fields agree, so no TYPE diagnostic. SAM is the one alignment format the
+# pilot did not use as a same-format accept.
+#
+# EXPECTED (authored 2026-11-27 from the published contract, before running):
+#   accept — no TYPE diagnostic.
+
+[workflow]
+name = "g084"
+
+[[rules]]
+name = "produce"
+output = ["aln.sam"]
+shell = "bwa mem ref.fa r1.fq r2.fq | samtools sort -o aln.sam"
+[rules.types]
+outputs = { default = "SAM[sort_order=coordinate]" }
+
+[[rules]]
+name = "consume"
+input = ["aln.sam"]
+output = ["fixed.sam"]
+shell = "samtools fixmate -m aln.sam fixed.sam"
+[rules.types]
+inputs = { default = "SAM[sort_order=coordinate]" }

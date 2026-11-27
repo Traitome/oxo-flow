@@ -1,0 +1,26 @@
+# G010 — BED intervals fed to a VCF consumer
+# A BED producer feeds a consumer whose declared contract is VCF.
+# The published format enum makes them distinct formats; no coercion
+# arm applies, so the edge violates TYPE-001 (format incompatibility).
+# Distinct format pair not asserted by any pilot case.
+#
+# EXPECTED (authored 2026-11-27 from the published contract, before running):
+#   reject — TYPE-001.
+
+[workflow]
+name = "g010"
+
+[[rules]]
+name = "produce"
+output = ["regions.bed"]
+shell = "bedtools merge -i peaks.bed > regions.bed"
+[rules.types]
+outputs = { default = "BED" }
+
+[[rules]]
+name = "consume"
+input = ["regions.bed"]
+output = ["result.dat"]
+shell = "bcftools annotate -a regions.bed -O v -o annotated.vcf"
+[rules.types]
+inputs = { default = "VCF" }

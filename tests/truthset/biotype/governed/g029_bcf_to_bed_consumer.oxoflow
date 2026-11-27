@@ -1,0 +1,26 @@
+# G029 — BCF calls fed to a BED consumer
+# A BCF producer feeds a consumer whose declared contract is BED.
+# The published format enum makes them distinct formats; no coercion
+# arm applies, so the edge violates TYPE-001 (format incompatibility).
+# Distinct format pair not asserted by any pilot case.
+#
+# EXPECTED (authored 2026-11-27 from the published contract, before running):
+#   reject — TYPE-001.
+
+[workflow]
+name = "g029"
+
+[[rules]]
+name = "produce"
+output = ["calls.bcf"]
+shell = "bcftools call -Ob -o calls.bcf"
+[rules.types]
+outputs = { default = "BCF" }
+
+[[rules]]
+name = "consume"
+input = ["calls.bcf"]
+output = ["result.dat"]
+shell = "bcftools query -f '%CHROM\\t%POS\\n' calls.bcf > calls.bed"
+[rules.types]
+inputs = { default = "BED" }

@@ -1,0 +1,28 @@
+# G103 — untyped long-read assembly pipeline
+# The workflow declares no [types.*] tables and no [rules.types]
+# annotations. The published type system is opt-in: with no contracts
+# there is nothing to violate, so `validate` must accept it. This is a
+# distinct real assay pipeline, not a pilot case.
+#
+# EXPECTED (authored 2026-11-27 from the published contract, before running):
+#   accept — no TYPE diagnostic.
+
+[workflow]
+name = "g103"
+
+[[rules]]
+name = "prepare"
+output = ["reads.fq"]
+shell = "tool0  > reads.fq"
+
+[[rules]]
+name = "process"
+input = ["reads.fq"]
+output = ["corrected.fq"]
+shell = "tool1 reads.fq > corrected.fq"
+
+[[rules]]
+name = "summarize"
+input = ["corrected.fq"]
+output = ["contigs.fa"]
+shell = "tool2 corrected.fq > contigs.fa"

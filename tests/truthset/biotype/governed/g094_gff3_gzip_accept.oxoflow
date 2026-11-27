@@ -1,0 +1,24 @@
+# G094 — gzip GFF3 on both sides
+# Both sides declare GFF3[compression=gzip]; the encodings agree and no
+# other field is constrained, so no TYPE diagnostic.
+#
+# EXPECTED (authored 2026-11-27 from the published contract, before running):
+#   accept — no TYPE diagnostic.
+
+[workflow]
+name = "g094"
+
+[[rules]]
+name = "produce"
+output = ["genes.gff3.gz"]
+shell = "prokka --outdir . genome.fa && gzip genes.gff3"
+[rules.types]
+outputs = { default = "GFF3[compression=gzip]" }
+
+[[rules]]
+name = "consume"
+input = ["genes.gff3.gz"]
+output = ["genes.bed"]
+shell = "zcat genes.gff3.gz | bedtools sort -i - > genes.bed"
+[rules.types]
+inputs = { default = "GFF3[compression=gzip]" }

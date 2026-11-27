@@ -1,0 +1,27 @@
+# G074 — gzip FASTA fed to a bgzip consumer
+# The producer declares FASTA[compression=gzip]; the consumer requires FASTA[compression=bgzip].
+# The published compression field names block/stream encodings; only
+# BAM implies BGZF, and a different declared encoding does not satisfy
+# the requirement, so the edge violates TYPE-006. This compression
+# pair was not asserted by the pilot.
+#
+# EXPECTED (authored 2026-11-27 from the published contract, before running):
+#   reject — TYPE-006.
+
+[workflow]
+name = "g074"
+
+[[rules]]
+name = "produce"
+output = ["genome.fa.gz"]
+shell = "gzip -c genome.fa > genome.fa.gz"
+[rules.types]
+outputs = { default = "FASTA[compression=gzip]" }
+
+[[rules]]
+name = "consume"
+input = ["genome.fa.gz"]
+output = ["result.dat"]
+shell = "zcat genome.fa.gz | bgzip -c > genome.fa.gz"
+[rules.types]
+inputs = { default = "FASTA[compression=bgzip]" }

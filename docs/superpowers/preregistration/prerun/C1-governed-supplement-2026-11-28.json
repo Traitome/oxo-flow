@@ -1,0 +1,120 @@
+{
+  "format": "oxo-flow.supplement-manifest/v1",
+  "campaign": {
+    "issue": 1396,
+    "preregistration_campaign": "#1163",
+    "name": "BioTypes post-hoc governed supplement (descriptive)",
+    "role": "post-hoc acceptance controls authored after the primary outcome was seen; NOT part of the pre-registered confirmatory set; never enters the FA denominator",
+    "amendment": "AMENDMENTS entry 4 (2026-11-28)",
+    "parent_prerun_manifest_sha256": "cab5cac4990a5755a86ec7029cfb9a6ebea9be920230c1949ea0915f2c892ff3",
+    "parent_results_commit": "365e563ac5bc35c31860182552a3571131937573",
+    "parent_analysis_script_sha256": "c5c0311b4f509f93eb4a8f1e40a1ff97bd9536065271d85d5e7263ea04739fbb",
+    "parent_analysis_script_sha256_hardened": "0c431b21f7ca088f720c5fce176ac4bed7ccb9fddef9f88d894d09245ade2000"
+  },
+  "engine_commit": "742a684b81be06a2a3c723f9b7dbfb7afbae1769",
+  "engine_version": "oxo-flow 0.32.0",
+  "binary": "target/debug/oxo-flow",
+  "binary_sha256": "463d15e618e28d4e694bc3aab472fe53a11188266e8f3f61a344e3099a820b0a",
+  "schema_sha256": "7f68d09a481f28a1568fb9a37eb14a75bc6ef57d2d504891ef8ce5aeebca47e0",
+  "case_manifest_sha256": "9b41a04d332850e483ec57a39d5e78125552754090bf2e516aa1e0576a2075a9",
+  "runner_script": "scripts/biotype-truthset-governed-supplement.py",
+  "runner_script_sha256": "47bb15017cf8859e60e6e9517837ae6a2de77ab9416b954cde5b432fa1074423",
+  "model": {
+    "provider": null,
+    "note": "deterministic static checker; no model call"
+  },
+  "prompt_sha256": {
+    "note": "none"
+  },
+  "toolchain": {
+    "rustc": "rustc 1.98.0 (88d9e12ae 2026-08-18)",
+    "cargo": "cargo 1.98.0 (797e8a9bc 2026-08-05)",
+    "verdict_surface": "oxo-flow validate <case> --json",
+    "codes_surface": "union of TYPE-NNN on validate --json and lint --json",
+    "note": "captured from the repository-pinned toolchain (rust-toolchain.toml)"
+  },
+  "seed": {
+    "value": null,
+    "note": "deterministic"
+  },
+  "hardware": {
+    "hostname": "ShixiangWang-WorkSpacedeMacBook-Pro.local",
+    "platform": "macOS-27.2.1-arm64-arm-64bit-Mach-O",
+    "machine": "arm64",
+    "system": "Darwin 27.2.0 arm64",
+    "cpu": "Apple M5",
+    "ram_bytes": 25769803776,
+    "arms": 1
+  },
+  "budget": {
+    "mode": "static-only; no network, no execution, no provider calls",
+    "per_case_timeout_secs": 60,
+    "total_timeout_secs": 7200,
+    "enforced": "both deadlines enforced by the supplement runner; elapsed recorded in the results"
+  },
+  "cases": [
+    {
+      "id": "s01",
+      "case": "tests/truthset/biotype/governed-supplement/s01_bam_readgroup_accept.oxoflow",
+      "expected": "accept",
+      "codes": [],
+      "role": "post-hoc-acceptance-control",
+      "source": "supplement-authored",
+      "note": "BAM with declared @RG satisfies a matching read-group consumer"
+    },
+    {
+      "id": "s02",
+      "case": "tests/truthset/biotype/governed-supplement/s02_bam_readgroup_lb_accept.oxoflow",
+      "expected": "accept",
+      "codes": [],
+      "role": "post-hoc-acceptance-control",
+      "source": "supplement-authored",
+      "note": "BAM with ID,SM,PL,LB read groups satisfies a matching consumer"
+    },
+    {
+      "id": "s03",
+      "case": "tests/truthset/biotype/governed-supplement/s03_vcf_explicit_none_accept.oxoflow",
+      "expected": "accept",
+      "codes": [],
+      "role": "post-hoc-acceptance-control",
+      "source": "supplement-authored",
+      "note": "plain VCF with explicit compression=none on both sides"
+    },
+    {
+      "id": "s04",
+      "case": "tests/truthset/biotype/governed-supplement/s04_bed_bgzip_tbi_accept.oxoflow",
+      "expected": "accept",
+      "codes": [],
+      "role": "post-hoc-acceptance-control",
+      "source": "supplement-authored",
+      "note": "bgzip BED with a tbi companion on both sides"
+    },
+    {
+      "id": "s05",
+      "case": "tests/truthset/biotype/governed-supplement/s05_gtf_grcm39_accept.oxoflow",
+      "expected": "accept",
+      "codes": [],
+      "role": "post-hoc-acceptance-control",
+      "source": "supplement-authored",
+      "note": "GTF with matching mouse build on both sides"
+    },
+    {
+      "id": "s06",
+      "case": "tests/truthset/biotype/governed-supplement/s06_fasta_bgzip_fai_accept.oxoflow",
+      "expected": "accept",
+      "codes": [],
+      "role": "post-hoc-acceptance-control",
+      "source": "supplement-authored",
+      "note": "bgzip FASTA with a fai companion and build on both sides"
+    },
+    {
+      "id": "s07",
+      "case": "tests/truthset/biotype/governed-supplement/s07_h5ad_attribute_accept.oxoflow",
+      "expected": "accept",
+      "codes": [],
+      "role": "post-hoc-acceptance-control",
+      "source": "supplement-authored",
+      "note": "H5AD with equal assay attribute on both sides"
+    }
+  ]
+}

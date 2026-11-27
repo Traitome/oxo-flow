@@ -1,0 +1,27 @@
+# G097 — GTF producer omits build; consumer names GRCh38
+# The producer declares GTF[compression=gzip] and names no reference_build;
+# the consumer requires GTF[compression=gzip,reference_build=GRCh38]. The
+# consumer states a checkable build requirement the producer cannot
+# confirm, which is the documented advisory TYPE-009 (never fatal). The
+# pilot's TYPE-009 case was BAM, so this GTF shape is new.
+#
+# EXPECTED (authored 2026-11-27 from the published contract, before running):
+#   accept — TYPE-009 (advisory, never fatal).
+
+[workflow]
+name = "g097"
+
+[[rules]]
+name = "produce"
+output = ["genes.gtf.gz"]
+shell = "stringtie -o genes.gtf aln.bam && gzip genes.gtf"
+[rules.types]
+outputs = { default = "GTF[compression=gzip]" }
+
+[[rules]]
+name = "consume"
+input = ["genes.gtf.gz"]
+output = ["counts.txt"]
+shell = "zcat {input} | featureCounts -a - -o {output} aln.bam"
+[rules.types]
+inputs = { default = "GTF[compression=gzip,reference_build=GRCh38]" }

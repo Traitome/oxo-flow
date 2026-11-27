@@ -1,0 +1,26 @@
+# G025 — BED intervals fed to a PARQUET consumer
+# A BED producer feeds a consumer whose declared contract is PARQUET.
+# The published format enum makes them distinct formats; no coercion
+# arm applies, so the edge violates TYPE-001 (format incompatibility).
+# Distinct format pair not asserted by any pilot case.
+#
+# EXPECTED (authored 2026-11-27 from the published contract, before running):
+#   reject — TYPE-001.
+
+[workflow]
+name = "g025"
+
+[[rules]]
+name = "produce"
+output = ["regions.bed"]
+shell = "bedtools merge -i peaks.bed > regions.bed"
+[rules.types]
+outputs = { default = "BED" }
+
+[[rules]]
+name = "consume"
+input = ["regions.bed"]
+output = ["result.dat"]
+shell = "Rscript -e 'arrow::write_parquet(read.table(\"regions.bed\"), \"regions.parquet\")'"
+[rules.types]
+inputs = { default = "PARQUET" }

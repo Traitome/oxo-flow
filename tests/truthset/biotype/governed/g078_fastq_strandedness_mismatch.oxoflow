@@ -1,0 +1,38 @@
+# G078 — unstranded FASTQ fed to a reverse-stranded consumer
+# The producer declares the named contract fastq_unstranded with attribute
+# strandedness=unstranded; the consumer requires fastq_reverse with
+# strandedness=reverse (a stranded RNA-seq protocol). The attribute values
+# differ, so the edge violates TYPE-007 on a key the pilot did not use.
+#
+# EXPECTED (authored 2026-11-27 from the published contract, before running):
+#   reject — TYPE-007.
+
+[workflow]
+name = "g078"
+
+[types.fastq_unstranded]
+format = "fastq"
+
+[types.fastq_unstranded.attributes]
+strandedness = "unstranded"
+
+[types.fastq_reverse]
+format = "fastq"
+
+[types.fastq_reverse.attributes]
+strandedness = "reverse"
+
+[[rules]]
+name = "produce"
+output = ["reads.fq"]
+shell = "fastp -i r1.fq -o reads.fq"
+[rules.types]
+outputs = { default = "fastq_unstranded" }
+
+[[rules]]
+name = "quant"
+input = ["reads.fq"]
+output = ["quant.sf"]
+shell = "salmon quant -l A -r reads.fq -o quant"
+[rules.types]
+inputs = { default = "fastq_reverse" }

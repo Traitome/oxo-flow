@@ -1,0 +1,26 @@
+# G016 — H5AD object fed to an RDS consumer
+# A H5AD producer feeds a consumer whose declared contract is RDS.
+# The published format enum makes them distinct formats; no coercion
+# arm applies, so the edge violates TYPE-001 (format incompatibility).
+# Distinct format pair not asserted by any pilot case.
+#
+# EXPECTED (authored 2026-11-27 from the published contract, before running):
+#   reject — TYPE-001.
+
+[workflow]
+name = "g016"
+
+[[rules]]
+name = "produce"
+output = ["matrix.h5ad"]
+shell = "scanpy write matrix.h5ad"
+[rules.types]
+outputs = { default = "H5AD" }
+
+[[rules]]
+name = "consume"
+input = ["matrix.h5ad"]
+output = ["result.dat"]
+shell = "Rscript -e 'saveRDS(read_h5ad(\"matrix.h5ad\"), \"matrix.rds\")'"
+[rules.types]
+inputs = { default = "RDS" }

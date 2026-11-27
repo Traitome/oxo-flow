@@ -1,0 +1,25 @@
+# G085 — CRAM producer and consumer with matching sort/index/build
+# Both sides declare CRAM[sort_order=coordinate,index=crai,reference_build=GRCm39];
+# every declared requirement is satisfied, so no TYPE diagnostic. CRAM is
+# not covered as a same-format accept by the pilot.
+#
+# EXPECTED (authored 2026-11-27 from the published contract, before running):
+#   accept — no TYPE diagnostic.
+
+[workflow]
+name = "g085"
+
+[[rules]]
+name = "produce"
+output = ["aln.cram"]
+shell = "samtools view -C -o aln.cram aln.bam && samtools index aln.cram"
+[rules.types]
+outputs = { default = "CRAM[sort_order=coordinate,index=crai,reference_build=GRCm39]" }
+
+[[rules]]
+name = "consume"
+input = ["aln.cram"]
+output = ["depth.txt"]
+shell = "samtools depth -a aln.cram > depth.txt"
+[rules.types]
+inputs = { default = "CRAM[sort_order=coordinate,index=crai,reference_build=GRCm39]" }

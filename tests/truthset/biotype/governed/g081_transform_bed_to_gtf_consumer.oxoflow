@@ -1,0 +1,39 @@
+# G081 — transform scatter/combine BED output fed to a GTF consumer
+# The authored scatter/combine rule declares BED[reference_build=GRCh37]
+# as its merged output; the downstream consumer requires GTF. On the
+# validate surface the authored rule drives the typed edge and the format
+# boundary violates TYPE-001. This is a generated-rule edge with a format
+# pair the pilot's transform case did not use.
+#
+# EXPECTED (authored 2026-11-27 from the published contract, before running):
+#   reject — TYPE-001.
+
+[workflow]
+name = "g081"
+
+[config]
+chromosomes = ["chr1", "chr2"]
+
+[[rules]]
+name = "scatter_regions"
+input = ["sample.bam"]
+output = ["regions.bed"]
+shell = "custom -o {output} {input}"
+[rules.types]
+outputs = { default = "BED[reference_build=GRCh37]" }
+inputs = { default = "BAM" }
+[rules.transform.split]
+by = "chr"
+values_from = "config.chromosomes"
+[rules.transform]
+map = "call -L {chr} -o {output} {input}"
+[rules.transform.combine]
+shell = "merge {chunks} -o {output}"
+
+[[rules]]
+name = "annotate"
+input = ["regions.bed"]
+output = ["annotated.gtf"]
+shell = "annotate {input} > {output}"
+[rules.types]
+inputs = { default = "GTF" }

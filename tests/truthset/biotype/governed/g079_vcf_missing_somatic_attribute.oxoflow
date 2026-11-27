@@ -1,0 +1,25 @@
+# G079 — plain VCF fed to an explicit somatic-attribute consumer
+# The consumer declares attributes variant_type=somatic; the producer is a
+# plain VCF with no attribute declaration. A required attribute that is
+# missing (not merely different) violates TYPE-007.
+#
+# EXPECTED (authored 2026-11-27 from the published contract, before running):
+#   reject — TYPE-007.
+
+[workflow]
+name = "g079"
+
+[[rules]]
+name = "produce"
+output = ["calls.vcf"]
+shell = "bcftools call -Ov -o calls.vcf"
+[rules.types]
+outputs = { default = "VCF" }
+
+[[rules]]
+name = "filter"
+input = ["calls.vcf"]
+output = ["filtered.vcf"]
+shell = "bcftools filter -i 'INFO/STATUS=\"PASS\"' calls.vcf > filtered.vcf"
+[rules.types]
+inputs = { default = "VCF[variant_type=somatic]" }

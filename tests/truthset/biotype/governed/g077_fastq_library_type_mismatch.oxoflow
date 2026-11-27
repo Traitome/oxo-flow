@@ -1,0 +1,39 @@
+# G077 — polyA FASTQ fed to a riboZero consumer
+# The producer declares the named contract fastq_polya, whose extensible
+# attribute library_type=polyA; the consumer requires fastq_ribozero with
+# library_type=riboZero. A different value for the same declared attribute
+# violates TYPE-007. Named tables keep the extensible attribute map in the
+# documented table form.
+#
+# EXPECTED (authored 2026-11-27 from the published contract, before running):
+#   reject — TYPE-007.
+
+[workflow]
+name = "g077"
+
+[types.fastq_polya]
+format = "fastq"
+
+[types.fastq_polya.attributes]
+library_type = "polyA"
+
+[types.fastq_ribozero]
+format = "fastq"
+
+[types.fastq_ribozero.attributes]
+library_type = "riboZero"
+
+[[rules]]
+name = "produce"
+output = ["reads.fq"]
+shell = "fastp -i r1.fq -o reads.fq"
+[rules.types]
+outputs = { default = "fastq_polya" }
+
+[[rules]]
+name = "quant"
+input = ["reads.fq"]
+output = ["quant.sf"]
+shell = "salmon quant -l A -r reads.fq -o quant"
+[rules.types]
+inputs = { default = "fastq_ribozero" }

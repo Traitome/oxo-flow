@@ -1,0 +1,38 @@
+# G099 — transform scatter/combine BED edge with matching contract
+# The authored scatter/combine rule declares BED[reference_build=GRCh37] as
+# its merged output and the downstream consumer requires the same BED
+# contract. The generated-rule edge is compatible, so no TYPE diagnostic.
+# The pilot's transform accept used VCF, so this BED transform is new.
+#
+# EXPECTED (authored 2026-11-27 from the published contract, before running):
+#   accept — no TYPE diagnostic.
+
+[workflow]
+name = "g099"
+
+[config]
+chromosomes = ["chr1", "chr2"]
+
+[[rules]]
+name = "scatter_regions"
+input = ["sample.bam"]
+output = ["regions.bed"]
+shell = "custom -o {output} {input}"
+[rules.types]
+outputs = { default = "BED[reference_build=GRCh37]" }
+inputs = { default = "BAM" }
+[rules.transform.split]
+by = "chr"
+values_from = "config.chromosomes"
+[rules.transform]
+map = "call -L {chr} -o {output} {input}"
+[rules.transform.combine]
+shell = "merge {chunks} -o {output}"
+
+[[rules]]
+name = "annotate"
+input = ["regions.bed"]
+output = ["annotated.bed"]
+shell = "annotate {input} > {output}"
+[rules.types]
+inputs = { default = "BED[reference_build=GRCh37]" }

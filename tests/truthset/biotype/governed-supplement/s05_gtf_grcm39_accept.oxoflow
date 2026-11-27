@@ -1,0 +1,29 @@
+# S05 — GTF with matching mouse build on both sides
+#
+# SUPPLEMENT — post-hoc descriptive acceptance control. NOT part of the
+# pre-registered confirmatory analysis; authored after the primary outcome
+# was seen; never enters the false-accept denominator.
+# Both sides declare GTF[reference_build=GRCm39]. The builds agree, so
+# no TYPE diagnostic; this is a mouse-build accept cell.
+# Descriptive supplement only.
+#
+# EXPECTED (authored 2026-11-28 from the published contract, before the supplement run):
+#   accept — no TYPE diagnostic.
+
+[workflow]
+name = "s05"
+
+[[rules]]
+name = "produce"
+output = ["genes.gtf"]
+shell = "stringtie -o genes.gtf aln.bam"
+[rules.types]
+outputs = { default = "GTF[reference_build=GRCm39]" }
+
+[[rules]]
+name = "compare"
+input = ["genes.gtf"]
+output = ["cmp.txt"]
+shell = "gffcompare -r genes.gtf aln.gtf > cmp.txt"
+[rules.types]
+inputs = { default = "GTF[reference_build=GRCm39]" }

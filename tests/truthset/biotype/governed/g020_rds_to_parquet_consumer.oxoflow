@@ -1,0 +1,26 @@
+# G020 — RDS object fed to a PARQUET consumer
+# A RDS producer feeds a consumer whose declared contract is PARQUET.
+# The published format enum makes them distinct formats; no coercion
+# arm applies, so the edge violates TYPE-001 (format incompatibility).
+# Distinct format pair not asserted by any pilot case.
+#
+# EXPECTED (authored 2026-11-27 from the published contract, before running):
+#   reject — TYPE-001.
+
+[workflow]
+name = "g020"
+
+[[rules]]
+name = "produce"
+output = ["matrix.rds"]
+shell = "Rscript -e 'saveRDS(seurat_obj, \"matrix.rds\")'"
+[rules.types]
+outputs = { default = "RDS" }
+
+[[rules]]
+name = "consume"
+input = ["matrix.rds"]
+output = ["result.dat"]
+shell = "Rscript -e 'arrow::write_parquet(as.data.frame(matrix.rds), \"matrix.parquet\")'"
+[rules.types]
+inputs = { default = "PARQUET" }

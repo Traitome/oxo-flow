@@ -1,0 +1,1322 @@
+{
+  "format": "oxo-flow.prerun-manifest/v1",
+  "campaign": {
+    "issue": 1396,
+    "preregistration_campaign": "#1163",
+    "name": "BioTypes governed truth set, held-out corpus",
+    "amendment": "PR-06 amendment 2, 2026-11-27",
+    "freeze_commit": "89c4127d78925959cbb6a718595eb78cd2fff9a8"
+  },
+  "engine_commit": "20ad630be42ec248e2e96c3729630d849e7c6539",
+  "engine_version": "oxo-flow 0.32.0",
+  "binary": "target/debug/oxo-flow",
+  "binary_sha256": "463d15e618e28d4e694bc3aab472fe53a11188266e8f3f61a344e3099a820b0a",
+  "schema_sha256": "7f68d09a481f28a1568fb9a37eb14a75bc6ef57d2d504891ef8ce5aeebca47e0",
+  "case_manifest_sha256": "b5db36530550ebda1f11478e7edecc2fe5e514225e669ebad6940203d7d1f3e1",
+  "analysis_script": "scripts/biotype-truthset-governed-analysis.py",
+  "analysis_script_sha256": "c5c0311b4f509f93eb4a8f1e40a1ff97bd9536065271d85d5e7263ea04739fbb",
+  "runner_script": "scripts/biotype-truthset-governed.py",
+  "runner_script_sha256": "e7a8e5fde464faebeedfff220ca75f730c2ddf752f52725027cebbbbffffd0ea",
+  "model": {
+    "provider": null,
+    "note": "the BioType checker is deterministic; no model call"
+  },
+  "prompt_sha256": {
+    "note": "none — no prompt is used"
+  },
+  "toolchain": {
+    "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+    "cargo": "cargo 1.97.1 (c980f4866 2026-06-30)",
+    "verdict_surface": "oxo-flow validate <case> --json",
+    "codes_surface": "union of TYPE-NNN on validate --json and lint --json"
+  },
+  "seed": {
+    "value": null,
+    "note": "none — deterministic; a repeated run must be byte-identical"
+  },
+  "hardware": {
+    "hostname": "ShixiangWang-WorkSpacedeMacBook-Pro.local",
+    "platform": "macOS-27.2.1-arm64-arm-64bit-Mach-O",
+    "machine": "arm64",
+    "system": "Darwin 27.2.0 arm64",
+    "cpu": "Apple M5",
+    "ram_bytes": 25769803776,
+    "arms": 1,
+    "note": "single arm; no cross-platform contrast is claimed"
+  },
+  "dataset": {
+    "description": "held-out governed corpus authored after the amendment; pilot excluded",
+    "cases_total": 116,
+    "expected_reject_cases": 83,
+    "expected_accept_controls": 33,
+    "blocking_code_counts": {
+      "TYPE-001": 39,
+      "TYPE-002": 9,
+      "TYPE-003": 7,
+      "TYPE-004": 11,
+      "TYPE-005": 3,
+      "TYPE-006": 9,
+      "TYPE-007": 5
+    },
+    "advisory_code_controls": {
+      "TYPE-008": 1,
+      "TYPE-009": 1,
+      "TYPE-010": 1
+    },
+    "pilot_cases_reused": 0,
+    "formats_driven": [
+      "bam",
+      "sam",
+      "cram",
+      "vcf",
+      "bcf",
+      "bed",
+      "gtf",
+      "gff3",
+      "fasta",
+      "fastq",
+      "h5ad",
+      "rds",
+      "parquet",
+      "tsv"
+    ]
+  },
+  "budget": {
+    "mode": "static-only; no network, no execution, no provider calls",
+    "per_case_timeout_secs": 60,
+    "total_timeout_secs": 7200
+  },
+  "decision_constants": {
+    "tau_fa": 0.05,
+    "n_min_expected_reject": 73,
+    "non_verdict_limit": 0,
+    "ci_method": "Clopper-Pearson exact two-sided 95%",
+    "direction": "lower is better",
+    "mapping": "INVALID first (N<N_min -> UNDECIDED-minimum sample, reported UNDERPOWERED; any non-verdict -> INVALID); POSITIVE iff U<=tau_FA; NEGATIVE iff L>tau_FA; else INCONCLUSIVE"
+  },
+  "exclusions": [
+    {
+      "kind": "pilot-exposure",
+      "paths": "tests/truthset/biotype/cases/*.oxoflow and the 8 pilot gallery examples",
+      "reason": "the 54-case operational set was measured while tau_FA was UNDECIDED (PR-06 section 1 rule 2); it is exploratory and never pooled"
+    }
+  ],
+  "cases": [
+    {
+      "id": "g001",
+      "case": "tests/truthset/biotype/governed/g001_bam_to_vcf_consumer.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-001"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "BAM producer -> VCF consumer (format boundary)"
+    },
+    {
+      "id": "g002",
+      "case": "tests/truthset/biotype/governed/g002_bam_to_fastq_consumer.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-001"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "BAM producer -> FASTQ consumer (format boundary)"
+    },
+    {
+      "id": "g003",
+      "case": "tests/truthset/biotype/governed/g003_fastq_to_bam_consumer.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-001"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "FASTQ producer -> BAM consumer (format boundary)"
+    },
+    {
+      "id": "g004",
+      "case": "tests/truthset/biotype/governed/g004_sam_to_vcf_consumer.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-001"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "SAM producer -> VCF consumer (format boundary)"
+    },
+    {
+      "id": "g005",
+      "case": "tests/truthset/biotype/governed/g005_sam_to_fastq_consumer.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-001"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "SAM producer -> FASTQ consumer (format boundary)"
+    },
+    {
+      "id": "g006",
+      "case": "tests/truthset/biotype/governed/g006_cram_to_vcf_consumer.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-001"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "CRAM producer -> VCF consumer (format boundary)"
+    },
+    {
+      "id": "g007",
+      "case": "tests/truthset/biotype/governed/g007_cram_to_fastq_consumer.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-001"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "CRAM producer -> FASTQ consumer (format boundary)"
+    },
+    {
+      "id": "g008",
+      "case": "tests/truthset/biotype/governed/g008_vcf_to_bed_consumer.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-001"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "VCF producer -> BED consumer (format boundary)"
+    },
+    {
+      "id": "g009",
+      "case": "tests/truthset/biotype/governed/g009_vcf_to_tsv_consumer.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-001"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "VCF producer -> TSV consumer (format boundary)"
+    },
+    {
+      "id": "g010",
+      "case": "tests/truthset/biotype/governed/g010_bed_to_vcf_consumer.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-001"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "BED producer -> VCF consumer (format boundary)"
+    },
+    {
+      "id": "g011",
+      "case": "tests/truthset/biotype/governed/g011_gtf_to_bed_consumer.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-001"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "GTF producer -> BED consumer (format boundary)"
+    },
+    {
+      "id": "g012",
+      "case": "tests/truthset/biotype/governed/g012_gtf_to_gff3_consumer.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-001"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "GTF producer -> GFF3 consumer (format boundary)"
+    },
+    {
+      "id": "g013",
+      "case": "tests/truthset/biotype/governed/g013_gff3_to_bed_consumer.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-001"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "GFF3 producer -> BED consumer (format boundary)"
+    },
+    {
+      "id": "g014",
+      "case": "tests/truthset/biotype/governed/g014_fasta_to_bam_consumer.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-001"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "FASTA producer -> BAM consumer (format boundary)"
+    },
+    {
+      "id": "g015",
+      "case": "tests/truthset/biotype/governed/g015_fasta_to_vcf_consumer.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-001"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "FASTA producer -> VCF consumer (format boundary)"
+    },
+    {
+      "id": "g016",
+      "case": "tests/truthset/biotype/governed/g016_h5ad_to_rds_consumer.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-001"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "H5AD producer -> RDS consumer (format boundary)"
+    },
+    {
+      "id": "g017",
+      "case": "tests/truthset/biotype/governed/g017_rds_to_h5ad_consumer.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-001"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "RDS producer -> H5AD consumer (format boundary)"
+    },
+    {
+      "id": "g018",
+      "case": "tests/truthset/biotype/governed/g018_parquet_to_tsv_consumer.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-001"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "PARQUET producer -> TSV consumer (format boundary)"
+    },
+    {
+      "id": "g019",
+      "case": "tests/truthset/biotype/governed/g019_tsv_to_parquet_consumer.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-001"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "TSV producer -> PARQUET consumer (format boundary)"
+    },
+    {
+      "id": "g020",
+      "case": "tests/truthset/biotype/governed/g020_rds_to_parquet_consumer.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-001"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "RDS producer -> PARQUET consumer (format boundary)"
+    },
+    {
+      "id": "g021",
+      "case": "tests/truthset/biotype/governed/g021_parquet_to_rds_consumer.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-001"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "PARQUET producer -> RDS consumer (format boundary)"
+    },
+    {
+      "id": "g022",
+      "case": "tests/truthset/biotype/governed/g022_h5ad_to_tsv_consumer.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-001"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "H5AD producer -> TSV consumer (format boundary)"
+    },
+    {
+      "id": "g023",
+      "case": "tests/truthset/biotype/governed/g023_tsv_to_h5ad_consumer.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-001"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "TSV producer -> H5AD consumer (format boundary)"
+    },
+    {
+      "id": "g024",
+      "case": "tests/truthset/biotype/governed/g024_gtf_to_parquet_consumer.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-001"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "GTF producer -> PARQUET consumer (format boundary)"
+    },
+    {
+      "id": "g025",
+      "case": "tests/truthset/biotype/governed/g025_bed_to_parquet_consumer.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-001"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "BED producer -> PARQUET consumer (format boundary)"
+    },
+    {
+      "id": "g026",
+      "case": "tests/truthset/biotype/governed/g026_bam_to_bed_consumer.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-001"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "BAM producer -> BED consumer (format boundary)"
+    },
+    {
+      "id": "g027",
+      "case": "tests/truthset/biotype/governed/g027_fastq_to_sam_consumer.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-001"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "FASTQ producer -> SAM consumer (format boundary)"
+    },
+    {
+      "id": "g028",
+      "case": "tests/truthset/biotype/governed/g028_sam_to_bed_consumer.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-001"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "SAM producer -> BED consumer (format boundary)"
+    },
+    {
+      "id": "g029",
+      "case": "tests/truthset/biotype/governed/g029_bcf_to_bed_consumer.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-001"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "BCF producer -> BED consumer (format boundary)"
+    },
+    {
+      "id": "g030",
+      "case": "tests/truthset/biotype/governed/g030_bcf_to_tsv_consumer.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-001"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "BCF producer -> TSV consumer (format boundary)"
+    },
+    {
+      "id": "g031",
+      "case": "tests/truthset/biotype/governed/g031_fasta_to_gtf_consumer.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-001"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "FASTA producer -> GTF consumer (format boundary)"
+    },
+    {
+      "id": "g032",
+      "case": "tests/truthset/biotype/governed/g032_fastq_to_vcf_consumer.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-001"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "FASTQ producer -> VCF consumer (format boundary)"
+    },
+    {
+      "id": "g033",
+      "case": "tests/truthset/biotype/governed/g033_vcf_to_gtf_consumer.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-001"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "VCF producer -> GTF consumer (format boundary)"
+    },
+    {
+      "id": "g034",
+      "case": "tests/truthset/biotype/governed/g034_gtf_to_fasta_consumer.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-001"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "GTF producer -> FASTA consumer (format boundary)"
+    },
+    {
+      "id": "g035",
+      "case": "tests/truthset/biotype/governed/g035_cram_to_sam_consumer.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-001"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "CRAM producer -> SAM consumer (format boundary)"
+    },
+    {
+      "id": "g036",
+      "case": "tests/truthset/biotype/governed/g036_bam_to_tsv_consumer.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-001"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "BAM producer -> TSV consumer (format boundary)"
+    },
+    {
+      "id": "g037",
+      "case": "tests/truthset/biotype/governed/g037_parquet_to_bed_consumer.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-001"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "PARQUET producer -> BED consumer (format boundary)"
+    },
+    {
+      "id": "g038",
+      "case": "tests/truthset/biotype/governed/g038_sam_queryname_to_coordinate.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-002"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "SAM queryname -> coordinate consumer (sort boundary)"
+    },
+    {
+      "id": "g039",
+      "case": "tests/truthset/biotype/governed/g039_sam_coordinate_to_queryname.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-002"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "SAM coordinate -> queryname consumer (sort boundary)"
+    },
+    {
+      "id": "g040",
+      "case": "tests/truthset/biotype/governed/g040_cram_queryname_to_coordinate.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-002"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "CRAM queryname -> coordinate consumer (sort boundary)"
+    },
+    {
+      "id": "g041",
+      "case": "tests/truthset/biotype/governed/g041_cram_coordinate_to_queryname.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-002"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "CRAM coordinate -> queryname consumer (sort boundary)"
+    },
+    {
+      "id": "g042",
+      "case": "tests/truthset/biotype/governed/g042_bam_unsorted_to_coordinate.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-002"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "BAM unsorted -> coordinate consumer (sort boundary)"
+    },
+    {
+      "id": "g043",
+      "case": "tests/truthset/biotype/governed/g043_cram_unsorted_to_coordinate.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-002"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "CRAM unsorted -> coordinate consumer (sort boundary)"
+    },
+    {
+      "id": "g044",
+      "case": "tests/truthset/biotype/governed/g044_sam_unsorted_to_queryname.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-002"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "SAM unsorted -> queryname consumer (sort boundary)"
+    },
+    {
+      "id": "g045",
+      "case": "tests/truthset/biotype/governed/g045_bam_unsorted_to_queryname.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-002"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "BAM unsorted -> queryname consumer (sort boundary)"
+    },
+    {
+      "id": "g046",
+      "case": "tests/truthset/biotype/governed/g046_bam_no_index_to_bai.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-003"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "BAM[sort_order=coordinate] -> BAM[sort_order=coordinate,index=bai] (index boundary)"
+    },
+    {
+      "id": "g047",
+      "case": "tests/truthset/biotype/governed/g047_bam_no_index_to_csi.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-003"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "BAM[sort_order=coordinate] -> BAM[sort_order=coordinate,index=csi] (index boundary)"
+    },
+    {
+      "id": "g048",
+      "case": "tests/truthset/biotype/governed/g048_bam_csi_to_bai.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-003"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "BAM[sort_order=coordinate,index=csi] -> BAM[sort_order=coordinate,index=bai] (index boundary)"
+    },
+    {
+      "id": "g049",
+      "case": "tests/truthset/biotype/governed/g049_vcf_no_index_to_tbi.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-003"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "VCF -> VCF[index=tbi] (index boundary)"
+    },
+    {
+      "id": "g050",
+      "case": "tests/truthset/biotype/governed/g050_vcf_tbi_to_csi.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-003"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "VCF[index=tbi] -> VCF[index=csi] (index boundary)"
+    },
+    {
+      "id": "g051",
+      "case": "tests/truthset/biotype/governed/g051_cram_no_index_to_crai.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-003"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "CRAM[sort_order=coordinate] -> CRAM[sort_order=coordinate,index=crai] (index boundary)"
+    },
+    {
+      "id": "g052",
+      "case": "tests/truthset/biotype/governed/g052_bgzip_vcf_no_index_to_tbi.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-003"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "VCF[compression=bgzip] -> VCF[compression=bgzip,index=tbi] (index boundary)"
+    },
+    {
+      "id": "g053",
+      "case": "tests/truthset/biotype/governed/g053_grcm38_to_grcm39_bam.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-004"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "GRCm38 -> GRCm39 (BAM build boundary)"
+    },
+    {
+      "id": "g054",
+      "case": "tests/truthset/biotype/governed/g054_dm6_to_dm3_bed.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-004"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "dm6 -> dm3 (BED build boundary)"
+    },
+    {
+      "id": "g055",
+      "case": "tests/truthset/biotype/governed/g055_t2t_to_grch38_bam.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-004"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "T2T-CHM13 -> GRCh38 (BAM build boundary)"
+    },
+    {
+      "id": "g056",
+      "case": "tests/truthset/biotype/governed/g056_grch37_to_grcm38_bed.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-004"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "GRCh37 -> GRCm38 (BED build boundary)"
+    },
+    {
+      "id": "g057",
+      "case": "tests/truthset/biotype/governed/g057_grcm38_to_grcm39_fasta.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-004"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "GRCm38 -> GRCm39 (FASTA build boundary)"
+    },
+    {
+      "id": "g058",
+      "case": "tests/truthset/biotype/governed/g058_grch38_to_grcm39_vcf.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-004"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "GRCh38 -> GRCm39 (VCF build boundary)"
+    },
+    {
+      "id": "g059",
+      "case": "tests/truthset/biotype/governed/g059_grch38_to_t2t_bam.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-004"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "GRCh38 -> T2T-CHM13 (BAM build boundary)"
+    },
+    {
+      "id": "g060",
+      "case": "tests/truthset/biotype/governed/g060_grcm39_to_grcm38_gtf.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-004"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "GRCm39 -> GRCm38 (GTF build boundary)"
+    },
+    {
+      "id": "g061",
+      "case": "tests/truthset/biotype/governed/g061_dm3_to_dm6_vcf.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-004"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "dm3 -> dm6 (VCF build boundary)"
+    },
+    {
+      "id": "g062",
+      "case": "tests/truthset/biotype/governed/g062_t2t_to_grcm39_fasta.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-004"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "T2T-CHM13 -> GRCm39 (FASTA build boundary)"
+    },
+    {
+      "id": "g063",
+      "case": "tests/truthset/biotype/governed/g063_grcm38_to_dm6_vcf.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-004"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "GRCm38 -> dm6 (VCF build boundary)"
+    },
+    {
+      "id": "g064",
+      "case": "tests/truthset/biotype/governed/g064_bam_no_rg_to_markdup.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-005"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "no-@RG BAM -> consumer requiring ID,SM"
+    },
+    {
+      "id": "g065",
+      "case": "tests/truthset/biotype/governed/g065_bam_no_rg_to_named_strict.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-005"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "no-@RG BAM -> named consumer requiring ID,SM,PL,LB"
+    },
+    {
+      "id": "g066",
+      "case": "tests/truthset/biotype/governed/g066_bam_no_rg_otherwise_satisfied.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-005"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "sorted+indexed BAM without @RG -> consumer requiring @RG"
+    },
+    {
+      "id": "g067",
+      "case": "tests/truthset/biotype/governed/g067_plain_vcf_to_bgzip_consumer.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-006"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "VCF -> VCF[compression=bgzip] (compression boundary)"
+    },
+    {
+      "id": "g068",
+      "case": "tests/truthset/biotype/governed/g068_zstd_vcf_to_bgzip_consumer.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-006"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "VCF[compression=zstd] -> VCF[compression=bgzip] (compression boundary)"
+    },
+    {
+      "id": "g069",
+      "case": "tests/truthset/biotype/governed/g069_bgzip_vcf_to_zstd_consumer.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-006"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "VCF[compression=bgzip] -> VCF[compression=zstd] (compression boundary)"
+    },
+    {
+      "id": "g070",
+      "case": "tests/truthset/biotype/governed/g070_bam_to_zstd_consumer.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-006"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "BAM -> BAM[compression=zstd] (compression boundary)"
+    },
+    {
+      "id": "g071",
+      "case": "tests/truthset/biotype/governed/g071_cram_to_zstd_consumer.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-006"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "CRAM -> CRAM[compression=zstd] (compression boundary)"
+    },
+    {
+      "id": "g072",
+      "case": "tests/truthset/biotype/governed/g072_gzip_bed_to_bgzip_consumer.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-006"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "BED[compression=gzip] -> BED[compression=bgzip] (compression boundary)"
+    },
+    {
+      "id": "g073",
+      "case": "tests/truthset/biotype/governed/g073_gzip_gtf_to_bgzip_consumer.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-006"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "GTF[compression=gzip] -> GTF[compression=bgzip] (compression boundary)"
+    },
+    {
+      "id": "g074",
+      "case": "tests/truthset/biotype/governed/g074_gzip_fasta_to_bgzip_consumer.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-006"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "FASTA[compression=gzip] -> FASTA[compression=bgzip] (compression boundary)"
+    },
+    {
+      "id": "g075",
+      "case": "tests/truthset/biotype/governed/g075_zstd_tsv_to_gzip_consumer.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-006"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "TSV[compression=zstd] -> TSV[compression=gzip] (compression boundary)"
+    },
+    {
+      "id": "g076",
+      "case": "tests/truthset/biotype/governed/g076_plain_vcf_to_gvcf_consumer.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-007"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "plain VCF -> gvcf alias consumer (missing variant_type)"
+    },
+    {
+      "id": "g077",
+      "case": "tests/truthset/biotype/governed/g077_fastq_library_type_mismatch.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-007"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "FASTQ library_type polyA -> riboZero consumer"
+    },
+    {
+      "id": "g078",
+      "case": "tests/truthset/biotype/governed/g078_fastq_strandedness_mismatch.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-007"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "FASTQ strandedness unstranded -> reverse consumer"
+    },
+    {
+      "id": "g079",
+      "case": "tests/truthset/biotype/governed/g079_vcf_missing_somatic_attribute.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-007"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "plain VCF -> consumer requiring variant_type=somatic (missing)"
+    },
+    {
+      "id": "g080",
+      "case": "tests/truthset/biotype/governed/g080_bam_assay_mismatch.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-007"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "BAM assay wes -> wgs consumer"
+    },
+    {
+      "id": "g081",
+      "case": "tests/truthset/biotype/governed/g081_transform_bed_to_gtf_consumer.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-001"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "transform.* BED output -> GTF consumer (generated edge)"
+    },
+    {
+      "id": "g082",
+      "case": "tests/truthset/biotype/governed/g082_include_bam_to_vcf_consumer.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-001"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "include-contributed BAM -> VCF consumer (include boundary)"
+    },
+    {
+      "id": "g083",
+      "case": "tests/truthset/biotype/governed/g083_include_queryname_to_coordinate.oxoflow",
+      "expected": "reject",
+      "codes": [
+        "TYPE-002"
+      ],
+      "role": "primary",
+      "source": "authored",
+      "note": "include-contributed queryname BAM -> coordinate consumer"
+    },
+    {
+      "id": "g084",
+      "case": "tests/truthset/biotype/governed/g084_sam_accept.oxoflow",
+      "expected": "accept",
+      "codes": [],
+      "role": "acceptance-control",
+      "source": "authored",
+      "note": "SAM -> SAM coordinate accept (new format accept)"
+    },
+    {
+      "id": "g085",
+      "case": "tests/truthset/biotype/governed/g085_cram_accept.oxoflow",
+      "expected": "accept",
+      "codes": [],
+      "role": "acceptance-control",
+      "source": "authored",
+      "note": "CRAM -> CRAM coordinate+crai+GRCm39 accept"
+    },
+    {
+      "id": "g086",
+      "case": "tests/truthset/biotype/governed/g086_bcf_accept.oxoflow",
+      "expected": "accept",
+      "codes": [],
+      "role": "acceptance-control",
+      "source": "authored",
+      "note": "BCF -> BCF accept (new format accept)"
+    },
+    {
+      "id": "g087",
+      "case": "tests/truthset/biotype/governed/g087_fasta_accept.oxoflow",
+      "expected": "accept",
+      "codes": [],
+      "role": "acceptance-control",
+      "source": "authored",
+      "note": "FASTA -> FASTA fai+GRCh38 accept"
+    },
+    {
+      "id": "g088",
+      "case": "tests/truthset/biotype/governed/g088_bam_full_contract_accept.oxoflow",
+      "expected": "accept",
+      "codes": [],
+      "role": "acceptance-control",
+      "source": "authored",
+      "note": "BAM coordinate+bai+GRCh38 both sides accept"
+    },
+    {
+      "id": "g089",
+      "case": "tests/truthset/biotype/governed/g089_vcf_csi_build_accept.oxoflow",
+      "expected": "accept",
+      "codes": [],
+      "role": "acceptance-control",
+      "source": "authored",
+      "note": "VCF bgzip+csi+GRCh37 both sides accept"
+    },
+    {
+      "id": "g090",
+      "case": "tests/truthset/biotype/governed/g090_bed_bgzip_accept.oxoflow",
+      "expected": "accept",
+      "codes": [],
+      "role": "acceptance-control",
+      "source": "authored",
+      "note": "BED bgzip+GRCh38 both sides accept"
+    },
+    {
+      "id": "g091",
+      "case": "tests/truthset/biotype/governed/g091_gtf_gzip_accept.oxoflow",
+      "expected": "accept",
+      "codes": [],
+      "role": "acceptance-control",
+      "source": "authored",
+      "note": "GTF gzip+GRCh38 both sides accept"
+    },
+    {
+      "id": "g092",
+      "case": "tests/truthset/biotype/governed/g092_fastq_attribute_accept.oxoflow",
+      "expected": "accept",
+      "codes": [],
+      "role": "acceptance-control",
+      "source": "authored",
+      "note": "FASTQ gzip+strandedness equal accept"
+    },
+    {
+      "id": "g093",
+      "case": "tests/truthset/biotype/governed/g093_tsv_gzip_accept.oxoflow",
+      "expected": "accept",
+      "codes": [],
+      "role": "acceptance-control",
+      "source": "authored",
+      "note": "TSV gzip both sides accept"
+    },
+    {
+      "id": "g094",
+      "case": "tests/truthset/biotype/governed/g094_gff3_gzip_accept.oxoflow",
+      "expected": "accept",
+      "codes": [],
+      "role": "acceptance-control",
+      "source": "authored",
+      "note": "GFF3 gzip both sides accept"
+    },
+    {
+      "id": "g095",
+      "case": "tests/truthset/biotype/governed/g095_cram_none_compression_accept.oxoflow",
+      "expected": "accept",
+      "codes": [],
+      "role": "acceptance-control",
+      "source": "authored",
+      "note": "CRAM coordinate+crai+compression=none accept"
+    },
+    {
+      "id": "g096",
+      "case": "tests/truthset/biotype/governed/g096_typed_consumer_untyped_vcf_producer.oxoflow",
+      "expected": "accept",
+      "codes": [
+        "TYPE-008"
+      ],
+      "role": "acceptance-control",
+      "source": "authored",
+      "note": "typed VCF consumer <- untyped producer (advisory TYPE-008)"
+    },
+    {
+      "id": "g097",
+      "case": "tests/truthset/biotype/governed/g097_build_incomplete_gtf.oxoflow",
+      "expected": "accept",
+      "codes": [
+        "TYPE-009"
+      ],
+      "role": "acceptance-control",
+      "source": "authored",
+      "note": "GTF no-build producer -> GRCh38 consumer (advisory TYPE-009)"
+    },
+    {
+      "id": "g098",
+      "case": "tests/truthset/biotype/governed/g098_three_channel_unpairable.oxoflow",
+      "expected": "accept",
+      "codes": [
+        "TYPE-010"
+      ],
+      "role": "acceptance-control",
+      "source": "authored",
+      "note": "three-channel producer, non-matching consumer channels (advisory TYPE-010)"
+    },
+    {
+      "id": "g099",
+      "case": "tests/truthset/biotype/governed/g099_transform_accept.oxoflow",
+      "expected": "accept",
+      "codes": [],
+      "role": "acceptance-control",
+      "source": "authored",
+      "note": "transform.* BED output -> BED consumer accept"
+    },
+    {
+      "id": "g100",
+      "case": "tests/truthset/biotype/governed/g100_include_accept.oxoflow",
+      "expected": "accept",
+      "codes": [],
+      "role": "acceptance-control",
+      "source": "authored",
+      "note": "include-contributed GTF[GRCh38] -> matching consumer accept"
+    },
+    {
+      "id": "g101",
+      "case": "tests/truthset/biotype/governed/g101_untyped_chipseq.oxoflow",
+      "expected": "accept",
+      "codes": [],
+      "role": "acceptance-control",
+      "source": "authored",
+      "note": "ChIP-seq: FASTQ -> BAM -> peaks -> BED"
+    },
+    {
+      "id": "g102",
+      "case": "tests/truthset/biotype/governed/g102_untyped_atacseq.oxoflow",
+      "expected": "accept",
+      "codes": [],
+      "role": "acceptance-control",
+      "source": "authored",
+      "note": "ATAC-seq: FASTQ -> BAM -> peaks -> BED"
+    },
+    {
+      "id": "g103",
+      "case": "tests/truthset/biotype/governed/g103_untyped_assembly.oxoflow",
+      "expected": "accept",
+      "codes": [],
+      "role": "acceptance-control",
+      "source": "authored",
+      "note": "Assembly: FASTQ -> corrected reads -> contigs FASTA"
+    },
+    {
+      "id": "g104",
+      "case": "tests/truthset/biotype/governed/g104_untyped_metagenomics.oxoflow",
+      "expected": "accept",
+      "codes": [],
+      "role": "acceptance-control",
+      "source": "authored",
+      "note": "Metagenomics: FASTQ -> abundance TSV"
+    },
+    {
+      "id": "g105",
+      "case": "tests/truthset/biotype/governed/g105_untyped_proteomics.oxoflow",
+      "expected": "accept",
+      "codes": [],
+      "role": "acceptance-control",
+      "source": "authored",
+      "note": "Proteomics: RAW -> peptide TSV"
+    },
+    {
+      "id": "g106",
+      "case": "tests/truthset/biotype/governed/g106_untyped_spatial.oxoflow",
+      "expected": "accept",
+      "codes": [],
+      "role": "acceptance-control",
+      "source": "authored",
+      "note": "Spatial: FASTQ -> H5AD -> summary TSV"
+    },
+    {
+      "id": "g107",
+      "case": "tests/truthset/biotype/governed/g107_untyped_crispr.oxoflow",
+      "expected": "accept",
+      "codes": [],
+      "role": "acceptance-control",
+      "source": "authored",
+      "note": "CRISPR screen: FASTQ -> BAM -> guide counts TSV"
+    },
+    {
+      "id": "g108",
+      "case": "examples/gallery/01_hello_world.oxoflow",
+      "expected": "accept",
+      "codes": [],
+      "role": "acceptance-control",
+      "source": "repository-example",
+      "note": "real gallery example 01 (hello world)"
+    },
+    {
+      "id": "g109",
+      "case": "examples/gallery/02_file_pipeline.oxoflow",
+      "expected": "accept",
+      "codes": [],
+      "role": "acceptance-control",
+      "source": "repository-example",
+      "note": "real gallery example 02 (file pipeline)"
+    },
+    {
+      "id": "g110",
+      "case": "examples/gallery/03_parallel_samples.oxoflow",
+      "expected": "accept",
+      "codes": [],
+      "role": "acceptance-control",
+      "source": "repository-example",
+      "note": "real gallery example 03 (parallel samples)"
+    },
+    {
+      "id": "g111",
+      "case": "examples/gallery/04_scatter_gather.oxoflow",
+      "expected": "accept",
+      "codes": [],
+      "role": "acceptance-control",
+      "source": "repository-example",
+      "note": "real gallery example 04 (scatter-gather)"
+    },
+    {
+      "id": "g112",
+      "case": "examples/gallery/05_conda_environments.oxoflow",
+      "expected": "accept",
+      "codes": [],
+      "role": "acceptance-control",
+      "source": "repository-example",
+      "note": "real gallery example 05 (conda environments)"
+    },
+    {
+      "id": "g113",
+      "case": "examples/gallery/10_transform_operator.oxoflow",
+      "expected": "accept",
+      "codes": [],
+      "role": "acceptance-control",
+      "source": "repository-example",
+      "note": "real gallery example 10 (transform operator)"
+    },
+    {
+      "id": "g114",
+      "case": "examples/gallery/11_conditional_workflow.oxoflow",
+      "expected": "accept",
+      "codes": [],
+      "role": "acceptance-control",
+      "source": "repository-example",
+      "note": "real gallery example 11 (conditional workflow)"
+    },
+    {
+      "id": "g115",
+      "case": "examples/gallery/12_cohort_analysis.oxoflow",
+      "expected": "accept",
+      "codes": [],
+      "role": "acceptance-control",
+      "source": "repository-example",
+      "note": "real gallery example 12 (cohort analysis)"
+    },
+    {
+      "id": "g116",
+      "case": "examples/gallery/15_paired_experiment_control_pairs.oxoflow",
+      "expected": "accept",
+      "codes": [],
+      "role": "acceptance-control",
+      "source": "repository-example",
+      "note": "real gallery example 15 (paired experiment/control)"
+    }
+  ]
+}

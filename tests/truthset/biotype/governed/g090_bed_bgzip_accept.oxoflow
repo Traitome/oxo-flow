@@ -1,0 +1,26 @@
+# G090 — bgzip BED with matching build on both sides
+# Both sides declare BED[compression=bgzip,reference_build=GRCh38]; the
+# compression and build requirements agree, so no TYPE diagnostic. BED
+# with bgzip is a common tabix-ready interval pipeline and is not a pilot
+# accept assertion.
+#
+# EXPECTED (authored 2026-11-27 from the published contract, before running):
+#   accept — no TYPE diagnostic.
+
+[workflow]
+name = "g090"
+
+[[rules]]
+name = "produce"
+output = ["peaks.bed.gz"]
+shell = "macs2 callpeak -t aln.bam -f BAM && bgzip peaks.bed"
+[rules.types]
+outputs = { default = "BED[compression=bgzip,reference_build=GRCh38]" }
+
+[[rules]]
+name = "consume"
+input = ["peaks.bed.gz"]
+output = ["merged.bed"]
+shell = "zcat peaks.bed.gz | bedtools merge -i - > merged.bed"
+[rules.types]
+inputs = { default = "BED[compression=bgzip,reference_build=GRCh38]" }

@@ -1,0 +1,26 @@
+# G036 — BAM alignment fed to a TSV consumer
+# A BAM producer feeds a consumer whose declared contract is TSV.
+# The published format enum makes them distinct formats; no coercion
+# arm applies, so the edge violates TYPE-001 (format incompatibility).
+# Distinct format pair not asserted by any pilot case.
+#
+# EXPECTED (authored 2026-11-27 from the published contract, before running):
+#   reject — TYPE-001.
+
+[workflow]
+name = "g036"
+
+[[rules]]
+name = "produce"
+output = ["aln.bam"]
+shell = "samtools sort -o aln.bam in.bam"
+[rules.types]
+outputs = { default = "BAM" }
+
+[[rules]]
+name = "consume"
+input = ["aln.bam"]
+output = ["result.dat"]
+shell = "samtools idxstats aln.bam > stats.tsv"
+[rules.types]
+inputs = { default = "TSV" }

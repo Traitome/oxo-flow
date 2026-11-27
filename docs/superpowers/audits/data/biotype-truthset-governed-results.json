@@ -1,0 +1,1541 @@
+{
+  "format": "oxo-flow.biotype-truthset-governed-results/v1",
+  "issue": 1396,
+  "campaign": "#1163 governed BioTypes truth set (held-out corpus)",
+  "generated_at": "2026-11-27T16:50:33Z",
+  "commit": "6fbf38c1441c966aee49aa96ba2a211cbf5bfb3f",
+  "engine_commit": "20ad630be42ec248e2e96c3729630d849e7c6539",
+  "binary": "/Users/wsx/Documents/GitHub/oxo-flow/.claude/worktrees/agent-a5361f7d77789467a/target/debug/oxo-flow",
+  "binary_sha256": "463d15e618e28d4e694bc3aab472fe53a11188266e8f3f61a344e3099a820b0a",
+  "engine_version": "oxo-flow 0.32.0",
+  "host": {
+    "hostname": "ShixiangWang-WorkSpacedeMacBook-Pro.local",
+    "platform": "macOS-27.2.1-arm64-arm-64bit-Mach-O",
+    "machine": "arm64",
+    "python": "3.13.9"
+  },
+  "manifest": "docs/superpowers/preregistration/prerun/C1-governed-2026-11-27.json",
+  "manifest_sha256": "cab5cac4990a5755a86ec7029cfb9a6ebea9be920230c1949ea0915f2c892ff3",
+  "cases": [
+    {
+      "case": "tests/truthset/biotype/governed/g001_bam_to_vcf_consumer.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-001"
+      ],
+      "actual_codes": [
+        "TYPE-001"
+      ],
+      "codes_correct": "yes",
+      "note": "BAM producer -> VCF consumer (format boundary)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g002_bam_to_fastq_consumer.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-001"
+      ],
+      "actual_codes": [
+        "TYPE-001"
+      ],
+      "codes_correct": "yes",
+      "note": "BAM producer -> FASTQ consumer (format boundary)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g003_fastq_to_bam_consumer.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-001"
+      ],
+      "actual_codes": [
+        "TYPE-001"
+      ],
+      "codes_correct": "yes",
+      "note": "FASTQ producer -> BAM consumer (format boundary)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g004_sam_to_vcf_consumer.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-001"
+      ],
+      "actual_codes": [
+        "TYPE-001"
+      ],
+      "codes_correct": "yes",
+      "note": "SAM producer -> VCF consumer (format boundary)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g005_sam_to_fastq_consumer.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-001"
+      ],
+      "actual_codes": [
+        "TYPE-001"
+      ],
+      "codes_correct": "yes",
+      "note": "SAM producer -> FASTQ consumer (format boundary)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g006_cram_to_vcf_consumer.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-001"
+      ],
+      "actual_codes": [
+        "TYPE-001"
+      ],
+      "codes_correct": "yes",
+      "note": "CRAM producer -> VCF consumer (format boundary)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g007_cram_to_fastq_consumer.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-001"
+      ],
+      "actual_codes": [
+        "TYPE-001"
+      ],
+      "codes_correct": "yes",
+      "note": "CRAM producer -> FASTQ consumer (format boundary)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g008_vcf_to_bed_consumer.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-001"
+      ],
+      "actual_codes": [
+        "TYPE-001"
+      ],
+      "codes_correct": "yes",
+      "note": "VCF producer -> BED consumer (format boundary)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g009_vcf_to_tsv_consumer.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-001"
+      ],
+      "actual_codes": [
+        "TYPE-001"
+      ],
+      "codes_correct": "yes",
+      "note": "VCF producer -> TSV consumer (format boundary)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g010_bed_to_vcf_consumer.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-001"
+      ],
+      "actual_codes": [
+        "TYPE-001"
+      ],
+      "codes_correct": "yes",
+      "note": "BED producer -> VCF consumer (format boundary)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g011_gtf_to_bed_consumer.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-001"
+      ],
+      "actual_codes": [
+        "TYPE-001"
+      ],
+      "codes_correct": "yes",
+      "note": "GTF producer -> BED consumer (format boundary)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g012_gtf_to_gff3_consumer.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-001"
+      ],
+      "actual_codes": [
+        "TYPE-001"
+      ],
+      "codes_correct": "yes",
+      "note": "GTF producer -> GFF3 consumer (format boundary)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g013_gff3_to_bed_consumer.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-001"
+      ],
+      "actual_codes": [
+        "TYPE-001"
+      ],
+      "codes_correct": "yes",
+      "note": "GFF3 producer -> BED consumer (format boundary)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g014_fasta_to_bam_consumer.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-001"
+      ],
+      "actual_codes": [
+        "TYPE-001"
+      ],
+      "codes_correct": "yes",
+      "note": "FASTA producer -> BAM consumer (format boundary)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g015_fasta_to_vcf_consumer.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-001"
+      ],
+      "actual_codes": [
+        "TYPE-001"
+      ],
+      "codes_correct": "yes",
+      "note": "FASTA producer -> VCF consumer (format boundary)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g016_h5ad_to_rds_consumer.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-001"
+      ],
+      "actual_codes": [
+        "TYPE-001"
+      ],
+      "codes_correct": "yes",
+      "note": "H5AD producer -> RDS consumer (format boundary)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g017_rds_to_h5ad_consumer.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-001"
+      ],
+      "actual_codes": [
+        "TYPE-001"
+      ],
+      "codes_correct": "yes",
+      "note": "RDS producer -> H5AD consumer (format boundary)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g018_parquet_to_tsv_consumer.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-001"
+      ],
+      "actual_codes": [
+        "TYPE-001"
+      ],
+      "codes_correct": "yes",
+      "note": "PARQUET producer -> TSV consumer (format boundary)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g019_tsv_to_parquet_consumer.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-001"
+      ],
+      "actual_codes": [
+        "TYPE-001"
+      ],
+      "codes_correct": "yes",
+      "note": "TSV producer -> PARQUET consumer (format boundary)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g020_rds_to_parquet_consumer.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-001"
+      ],
+      "actual_codes": [
+        "TYPE-001"
+      ],
+      "codes_correct": "yes",
+      "note": "RDS producer -> PARQUET consumer (format boundary)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g021_parquet_to_rds_consumer.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-001"
+      ],
+      "actual_codes": [
+        "TYPE-001"
+      ],
+      "codes_correct": "yes",
+      "note": "PARQUET producer -> RDS consumer (format boundary)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g022_h5ad_to_tsv_consumer.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-001"
+      ],
+      "actual_codes": [
+        "TYPE-001"
+      ],
+      "codes_correct": "yes",
+      "note": "H5AD producer -> TSV consumer (format boundary)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g023_tsv_to_h5ad_consumer.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-001"
+      ],
+      "actual_codes": [
+        "TYPE-001"
+      ],
+      "codes_correct": "yes",
+      "note": "TSV producer -> H5AD consumer (format boundary)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g024_gtf_to_parquet_consumer.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-001"
+      ],
+      "actual_codes": [
+        "TYPE-001"
+      ],
+      "codes_correct": "yes",
+      "note": "GTF producer -> PARQUET consumer (format boundary)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g025_bed_to_parquet_consumer.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-001"
+      ],
+      "actual_codes": [
+        "TYPE-001"
+      ],
+      "codes_correct": "yes",
+      "note": "BED producer -> PARQUET consumer (format boundary)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g026_bam_to_bed_consumer.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-001"
+      ],
+      "actual_codes": [
+        "TYPE-001"
+      ],
+      "codes_correct": "yes",
+      "note": "BAM producer -> BED consumer (format boundary)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g027_fastq_to_sam_consumer.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-001"
+      ],
+      "actual_codes": [
+        "TYPE-001"
+      ],
+      "codes_correct": "yes",
+      "note": "FASTQ producer -> SAM consumer (format boundary)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g028_sam_to_bed_consumer.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-001"
+      ],
+      "actual_codes": [
+        "TYPE-001"
+      ],
+      "codes_correct": "yes",
+      "note": "SAM producer -> BED consumer (format boundary)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g029_bcf_to_bed_consumer.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-001"
+      ],
+      "actual_codes": [
+        "TYPE-001"
+      ],
+      "codes_correct": "yes",
+      "note": "BCF producer -> BED consumer (format boundary)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g030_bcf_to_tsv_consumer.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-001"
+      ],
+      "actual_codes": [
+        "TYPE-001"
+      ],
+      "codes_correct": "yes",
+      "note": "BCF producer -> TSV consumer (format boundary)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g031_fasta_to_gtf_consumer.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-001"
+      ],
+      "actual_codes": [
+        "TYPE-001"
+      ],
+      "codes_correct": "yes",
+      "note": "FASTA producer -> GTF consumer (format boundary)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g032_fastq_to_vcf_consumer.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-001"
+      ],
+      "actual_codes": [
+        "TYPE-001"
+      ],
+      "codes_correct": "yes",
+      "note": "FASTQ producer -> VCF consumer (format boundary)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g033_vcf_to_gtf_consumer.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-001"
+      ],
+      "actual_codes": [
+        "TYPE-001"
+      ],
+      "codes_correct": "yes",
+      "note": "VCF producer -> GTF consumer (format boundary)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g034_gtf_to_fasta_consumer.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-001"
+      ],
+      "actual_codes": [
+        "TYPE-001"
+      ],
+      "codes_correct": "yes",
+      "note": "GTF producer -> FASTA consumer (format boundary)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g035_cram_to_sam_consumer.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-001"
+      ],
+      "actual_codes": [
+        "TYPE-001"
+      ],
+      "codes_correct": "yes",
+      "note": "CRAM producer -> SAM consumer (format boundary)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g036_bam_to_tsv_consumer.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-001"
+      ],
+      "actual_codes": [
+        "TYPE-001"
+      ],
+      "codes_correct": "yes",
+      "note": "BAM producer -> TSV consumer (format boundary)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g037_parquet_to_bed_consumer.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-001"
+      ],
+      "actual_codes": [
+        "TYPE-001"
+      ],
+      "codes_correct": "yes",
+      "note": "PARQUET producer -> BED consumer (format boundary)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g038_sam_queryname_to_coordinate.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-002"
+      ],
+      "actual_codes": [
+        "TYPE-002"
+      ],
+      "codes_correct": "yes",
+      "note": "SAM queryname -> coordinate consumer (sort boundary)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g039_sam_coordinate_to_queryname.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-002"
+      ],
+      "actual_codes": [
+        "TYPE-002"
+      ],
+      "codes_correct": "yes",
+      "note": "SAM coordinate -> queryname consumer (sort boundary)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g040_cram_queryname_to_coordinate.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-002"
+      ],
+      "actual_codes": [
+        "TYPE-002"
+      ],
+      "codes_correct": "yes",
+      "note": "CRAM queryname -> coordinate consumer (sort boundary)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g041_cram_coordinate_to_queryname.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-002"
+      ],
+      "actual_codes": [
+        "TYPE-002"
+      ],
+      "codes_correct": "yes",
+      "note": "CRAM coordinate -> queryname consumer (sort boundary)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g042_bam_unsorted_to_coordinate.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-002"
+      ],
+      "actual_codes": [
+        "TYPE-002"
+      ],
+      "codes_correct": "yes",
+      "note": "BAM unsorted -> coordinate consumer (sort boundary)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g043_cram_unsorted_to_coordinate.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-002"
+      ],
+      "actual_codes": [
+        "TYPE-002"
+      ],
+      "codes_correct": "yes",
+      "note": "CRAM unsorted -> coordinate consumer (sort boundary)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g044_sam_unsorted_to_queryname.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-002"
+      ],
+      "actual_codes": [
+        "TYPE-002"
+      ],
+      "codes_correct": "yes",
+      "note": "SAM unsorted -> queryname consumer (sort boundary)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g045_bam_unsorted_to_queryname.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-002"
+      ],
+      "actual_codes": [
+        "TYPE-002"
+      ],
+      "codes_correct": "yes",
+      "note": "BAM unsorted -> queryname consumer (sort boundary)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g046_bam_no_index_to_bai.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-003"
+      ],
+      "actual_codes": [
+        "TYPE-003"
+      ],
+      "codes_correct": "yes",
+      "note": "BAM[sort_order=coordinate] -> BAM[sort_order=coordinate,index=bai] (index boundary)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g047_bam_no_index_to_csi.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-003"
+      ],
+      "actual_codes": [
+        "TYPE-003"
+      ],
+      "codes_correct": "yes",
+      "note": "BAM[sort_order=coordinate] -> BAM[sort_order=coordinate,index=csi] (index boundary)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g048_bam_csi_to_bai.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-003"
+      ],
+      "actual_codes": [
+        "TYPE-003"
+      ],
+      "codes_correct": "yes",
+      "note": "BAM[sort_order=coordinate,index=csi] -> BAM[sort_order=coordinate,index=bai] (index boundary)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g049_vcf_no_index_to_tbi.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-003"
+      ],
+      "actual_codes": [
+        "TYPE-003"
+      ],
+      "codes_correct": "yes",
+      "note": "VCF -> VCF[index=tbi] (index boundary)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g050_vcf_tbi_to_csi.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-003"
+      ],
+      "actual_codes": [
+        "TYPE-003"
+      ],
+      "codes_correct": "yes",
+      "note": "VCF[index=tbi] -> VCF[index=csi] (index boundary)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g051_cram_no_index_to_crai.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-003"
+      ],
+      "actual_codes": [
+        "TYPE-003"
+      ],
+      "codes_correct": "yes",
+      "note": "CRAM[sort_order=coordinate] -> CRAM[sort_order=coordinate,index=crai] (index boundary)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g052_bgzip_vcf_no_index_to_tbi.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-003"
+      ],
+      "actual_codes": [
+        "TYPE-003"
+      ],
+      "codes_correct": "yes",
+      "note": "VCF[compression=bgzip] -> VCF[compression=bgzip,index=tbi] (index boundary)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g053_grcm38_to_grcm39_bam.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-004"
+      ],
+      "actual_codes": [
+        "TYPE-004"
+      ],
+      "codes_correct": "yes",
+      "note": "GRCm38 -> GRCm39 (BAM build boundary)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g054_dm6_to_dm3_bed.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-004"
+      ],
+      "actual_codes": [
+        "TYPE-004"
+      ],
+      "codes_correct": "yes",
+      "note": "dm6 -> dm3 (BED build boundary)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g055_t2t_to_grch38_bam.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-004"
+      ],
+      "actual_codes": [
+        "TYPE-004"
+      ],
+      "codes_correct": "yes",
+      "note": "T2T-CHM13 -> GRCh38 (BAM build boundary)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g056_grch37_to_grcm38_bed.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-004"
+      ],
+      "actual_codes": [
+        "TYPE-004"
+      ],
+      "codes_correct": "yes",
+      "note": "GRCh37 -> GRCm38 (BED build boundary)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g057_grcm38_to_grcm39_fasta.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-004"
+      ],
+      "actual_codes": [
+        "TYPE-004"
+      ],
+      "codes_correct": "yes",
+      "note": "GRCm38 -> GRCm39 (FASTA build boundary)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g058_grch38_to_grcm39_vcf.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-004"
+      ],
+      "actual_codes": [
+        "TYPE-004"
+      ],
+      "codes_correct": "yes",
+      "note": "GRCh38 -> GRCm39 (VCF build boundary)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g059_grch38_to_t2t_bam.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-004"
+      ],
+      "actual_codes": [
+        "TYPE-004"
+      ],
+      "codes_correct": "yes",
+      "note": "GRCh38 -> T2T-CHM13 (BAM build boundary)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g060_grcm39_to_grcm38_gtf.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-004"
+      ],
+      "actual_codes": [
+        "TYPE-004"
+      ],
+      "codes_correct": "yes",
+      "note": "GRCm39 -> GRCm38 (GTF build boundary)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g061_dm3_to_dm6_vcf.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-004"
+      ],
+      "actual_codes": [
+        "TYPE-004"
+      ],
+      "codes_correct": "yes",
+      "note": "dm3 -> dm6 (VCF build boundary)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g062_t2t_to_grcm39_fasta.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-004"
+      ],
+      "actual_codes": [
+        "TYPE-004"
+      ],
+      "codes_correct": "yes",
+      "note": "T2T-CHM13 -> GRCm39 (FASTA build boundary)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g063_grcm38_to_dm6_vcf.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-004"
+      ],
+      "actual_codes": [
+        "TYPE-004"
+      ],
+      "codes_correct": "yes",
+      "note": "GRCm38 -> dm6 (VCF build boundary)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g064_bam_no_rg_to_markdup.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-005"
+      ],
+      "actual_codes": [
+        "TYPE-005"
+      ],
+      "codes_correct": "yes",
+      "note": "no-@RG BAM -> consumer requiring ID,SM"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g065_bam_no_rg_to_named_strict.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-005"
+      ],
+      "actual_codes": [
+        "TYPE-005"
+      ],
+      "codes_correct": "yes",
+      "note": "no-@RG BAM -> named consumer requiring ID,SM,PL,LB"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g066_bam_no_rg_otherwise_satisfied.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-005"
+      ],
+      "actual_codes": [
+        "TYPE-005"
+      ],
+      "codes_correct": "yes",
+      "note": "sorted+indexed BAM without @RG -> consumer requiring @RG"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g067_plain_vcf_to_bgzip_consumer.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-006"
+      ],
+      "actual_codes": [
+        "TYPE-006"
+      ],
+      "codes_correct": "yes",
+      "note": "VCF -> VCF[compression=bgzip] (compression boundary)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g068_zstd_vcf_to_bgzip_consumer.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-006"
+      ],
+      "actual_codes": [
+        "TYPE-006"
+      ],
+      "codes_correct": "yes",
+      "note": "VCF[compression=zstd] -> VCF[compression=bgzip] (compression boundary)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g069_bgzip_vcf_to_zstd_consumer.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-006"
+      ],
+      "actual_codes": [
+        "TYPE-006"
+      ],
+      "codes_correct": "yes",
+      "note": "VCF[compression=bgzip] -> VCF[compression=zstd] (compression boundary)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g070_bam_to_zstd_consumer.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-006"
+      ],
+      "actual_codes": [
+        "TYPE-006"
+      ],
+      "codes_correct": "yes",
+      "note": "BAM -> BAM[compression=zstd] (compression boundary)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g071_cram_to_zstd_consumer.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-006"
+      ],
+      "actual_codes": [
+        "TYPE-006"
+      ],
+      "codes_correct": "yes",
+      "note": "CRAM -> CRAM[compression=zstd] (compression boundary)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g072_gzip_bed_to_bgzip_consumer.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-006"
+      ],
+      "actual_codes": [
+        "TYPE-006"
+      ],
+      "codes_correct": "yes",
+      "note": "BED[compression=gzip] -> BED[compression=bgzip] (compression boundary)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g073_gzip_gtf_to_bgzip_consumer.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-006"
+      ],
+      "actual_codes": [
+        "TYPE-006"
+      ],
+      "codes_correct": "yes",
+      "note": "GTF[compression=gzip] -> GTF[compression=bgzip] (compression boundary)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g074_gzip_fasta_to_bgzip_consumer.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-006"
+      ],
+      "actual_codes": [
+        "TYPE-006"
+      ],
+      "codes_correct": "yes",
+      "note": "FASTA[compression=gzip] -> FASTA[compression=bgzip] (compression boundary)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g075_zstd_tsv_to_gzip_consumer.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-006"
+      ],
+      "actual_codes": [
+        "TYPE-006"
+      ],
+      "codes_correct": "yes",
+      "note": "TSV[compression=zstd] -> TSV[compression=gzip] (compression boundary)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g076_plain_vcf_to_gvcf_consumer.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-007"
+      ],
+      "actual_codes": [
+        "TYPE-007"
+      ],
+      "codes_correct": "yes",
+      "note": "plain VCF -> gvcf alias consumer (missing variant_type)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g077_fastq_library_type_mismatch.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-007"
+      ],
+      "actual_codes": [
+        "TYPE-007"
+      ],
+      "codes_correct": "yes",
+      "note": "FASTQ library_type polyA -> riboZero consumer"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g078_fastq_strandedness_mismatch.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-007"
+      ],
+      "actual_codes": [
+        "TYPE-007"
+      ],
+      "codes_correct": "yes",
+      "note": "FASTQ strandedness unstranded -> reverse consumer"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g079_vcf_missing_somatic_attribute.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-007"
+      ],
+      "actual_codes": [
+        "TYPE-007"
+      ],
+      "codes_correct": "yes",
+      "note": "plain VCF -> consumer requiring variant_type=somatic (missing)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g080_bam_assay_mismatch.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-007"
+      ],
+      "actual_codes": [
+        "TYPE-007"
+      ],
+      "codes_correct": "yes",
+      "note": "BAM assay wes -> wgs consumer"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g081_transform_bed_to_gtf_consumer.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-001"
+      ],
+      "actual_codes": [
+        "TYPE-001"
+      ],
+      "codes_correct": "yes",
+      "note": "transform.* BED output -> GTF consumer (generated edge)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g082_include_bam_to_vcf_consumer.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-001"
+      ],
+      "actual_codes": [
+        "TYPE-001"
+      ],
+      "codes_correct": "yes",
+      "note": "include-contributed BAM -> VCF consumer (include boundary)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g083_include_queryname_to_coordinate.oxoflow",
+      "expected": "reject",
+      "actual": "reject",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-002"
+      ],
+      "actual_codes": [
+        "TYPE-002"
+      ],
+      "codes_correct": "yes",
+      "note": "include-contributed queryname BAM -> coordinate consumer"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g084_sam_accept.oxoflow",
+      "expected": "accept",
+      "actual": "accept",
+      "verdict_correct": "yes",
+      "expected_codes": [],
+      "actual_codes": [],
+      "codes_correct": "yes",
+      "note": "SAM -> SAM coordinate accept (new format accept)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g085_cram_accept.oxoflow",
+      "expected": "accept",
+      "actual": "accept",
+      "verdict_correct": "yes",
+      "expected_codes": [],
+      "actual_codes": [],
+      "codes_correct": "yes",
+      "note": "CRAM -> CRAM coordinate+crai+GRCm39 accept"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g086_bcf_accept.oxoflow",
+      "expected": "accept",
+      "actual": "accept",
+      "verdict_correct": "yes",
+      "expected_codes": [],
+      "actual_codes": [],
+      "codes_correct": "yes",
+      "note": "BCF -> BCF accept (new format accept)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g087_fasta_accept.oxoflow",
+      "expected": "accept",
+      "actual": "accept",
+      "verdict_correct": "yes",
+      "expected_codes": [],
+      "actual_codes": [],
+      "codes_correct": "yes",
+      "note": "FASTA -> FASTA fai+GRCh38 accept"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g088_bam_full_contract_accept.oxoflow",
+      "expected": "accept",
+      "actual": "accept",
+      "verdict_correct": "yes",
+      "expected_codes": [],
+      "actual_codes": [],
+      "codes_correct": "yes",
+      "note": "BAM coordinate+bai+GRCh38 both sides accept"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g089_vcf_csi_build_accept.oxoflow",
+      "expected": "accept",
+      "actual": "accept",
+      "verdict_correct": "yes",
+      "expected_codes": [],
+      "actual_codes": [],
+      "codes_correct": "yes",
+      "note": "VCF bgzip+csi+GRCh37 both sides accept"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g090_bed_bgzip_accept.oxoflow",
+      "expected": "accept",
+      "actual": "accept",
+      "verdict_correct": "yes",
+      "expected_codes": [],
+      "actual_codes": [],
+      "codes_correct": "yes",
+      "note": "BED bgzip+GRCh38 both sides accept"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g091_gtf_gzip_accept.oxoflow",
+      "expected": "accept",
+      "actual": "accept",
+      "verdict_correct": "yes",
+      "expected_codes": [],
+      "actual_codes": [],
+      "codes_correct": "yes",
+      "note": "GTF gzip+GRCh38 both sides accept"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g092_fastq_attribute_accept.oxoflow",
+      "expected": "accept",
+      "actual": "accept",
+      "verdict_correct": "yes",
+      "expected_codes": [],
+      "actual_codes": [],
+      "codes_correct": "yes",
+      "note": "FASTQ gzip+strandedness equal accept"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g093_tsv_gzip_accept.oxoflow",
+      "expected": "accept",
+      "actual": "accept",
+      "verdict_correct": "yes",
+      "expected_codes": [],
+      "actual_codes": [],
+      "codes_correct": "yes",
+      "note": "TSV gzip both sides accept"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g094_gff3_gzip_accept.oxoflow",
+      "expected": "accept",
+      "actual": "accept",
+      "verdict_correct": "yes",
+      "expected_codes": [],
+      "actual_codes": [],
+      "codes_correct": "yes",
+      "note": "GFF3 gzip both sides accept"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g095_cram_none_compression_accept.oxoflow",
+      "expected": "accept",
+      "actual": "accept",
+      "verdict_correct": "yes",
+      "expected_codes": [],
+      "actual_codes": [],
+      "codes_correct": "yes",
+      "note": "CRAM coordinate+crai+compression=none accept"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g096_typed_consumer_untyped_vcf_producer.oxoflow",
+      "expected": "accept",
+      "actual": "accept",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-008"
+      ],
+      "actual_codes": [
+        "TYPE-008"
+      ],
+      "codes_correct": "yes",
+      "note": "typed VCF consumer <- untyped producer (advisory TYPE-008)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g097_build_incomplete_gtf.oxoflow",
+      "expected": "accept",
+      "actual": "accept",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-009"
+      ],
+      "actual_codes": [
+        "TYPE-009"
+      ],
+      "codes_correct": "yes",
+      "note": "GTF no-build producer -> GRCh38 consumer (advisory TYPE-009)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g098_three_channel_unpairable.oxoflow",
+      "expected": "accept",
+      "actual": "accept",
+      "verdict_correct": "yes",
+      "expected_codes": [
+        "TYPE-010"
+      ],
+      "actual_codes": [
+        "TYPE-010"
+      ],
+      "codes_correct": "yes",
+      "note": "three-channel producer, non-matching consumer channels (advisory TYPE-010)"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g099_transform_accept.oxoflow",
+      "expected": "accept",
+      "actual": "accept",
+      "verdict_correct": "yes",
+      "expected_codes": [],
+      "actual_codes": [],
+      "codes_correct": "yes",
+      "note": "transform.* BED output -> BED consumer accept"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g100_include_accept.oxoflow",
+      "expected": "accept",
+      "actual": "accept",
+      "verdict_correct": "yes",
+      "expected_codes": [],
+      "actual_codes": [],
+      "codes_correct": "yes",
+      "note": "include-contributed GTF[GRCh38] -> matching consumer accept"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g101_untyped_chipseq.oxoflow",
+      "expected": "accept",
+      "actual": "accept",
+      "verdict_correct": "yes",
+      "expected_codes": [],
+      "actual_codes": [],
+      "codes_correct": "yes",
+      "note": "ChIP-seq: FASTQ -> BAM -> peaks -> BED"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g102_untyped_atacseq.oxoflow",
+      "expected": "accept",
+      "actual": "accept",
+      "verdict_correct": "yes",
+      "expected_codes": [],
+      "actual_codes": [],
+      "codes_correct": "yes",
+      "note": "ATAC-seq: FASTQ -> BAM -> peaks -> BED"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g103_untyped_assembly.oxoflow",
+      "expected": "accept",
+      "actual": "accept",
+      "verdict_correct": "yes",
+      "expected_codes": [],
+      "actual_codes": [],
+      "codes_correct": "yes",
+      "note": "Assembly: FASTQ -> corrected reads -> contigs FASTA"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g104_untyped_metagenomics.oxoflow",
+      "expected": "accept",
+      "actual": "accept",
+      "verdict_correct": "yes",
+      "expected_codes": [],
+      "actual_codes": [],
+      "codes_correct": "yes",
+      "note": "Metagenomics: FASTQ -> abundance TSV"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g105_untyped_proteomics.oxoflow",
+      "expected": "accept",
+      "actual": "accept",
+      "verdict_correct": "yes",
+      "expected_codes": [],
+      "actual_codes": [],
+      "codes_correct": "yes",
+      "note": "Proteomics: RAW -> peptide TSV"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g106_untyped_spatial.oxoflow",
+      "expected": "accept",
+      "actual": "accept",
+      "verdict_correct": "yes",
+      "expected_codes": [],
+      "actual_codes": [],
+      "codes_correct": "yes",
+      "note": "Spatial: FASTQ -> H5AD -> summary TSV"
+    },
+    {
+      "case": "tests/truthset/biotype/governed/g107_untyped_crispr.oxoflow",
+      "expected": "accept",
+      "actual": "accept",
+      "verdict_correct": "yes",
+      "expected_codes": [],
+      "actual_codes": [],
+      "codes_correct": "yes",
+      "note": "CRISPR screen: FASTQ -> BAM -> guide counts TSV"
+    },
+    {
+      "case": "examples/gallery/01_hello_world.oxoflow",
+      "expected": "accept",
+      "actual": "accept",
+      "verdict_correct": "yes",
+      "expected_codes": [],
+      "actual_codes": [],
+      "codes_correct": "yes",
+      "note": "real gallery example 01 (hello world)"
+    },
+    {
+      "case": "examples/gallery/02_file_pipeline.oxoflow",
+      "expected": "accept",
+      "actual": "accept",
+      "verdict_correct": "yes",
+      "expected_codes": [],
+      "actual_codes": [],
+      "codes_correct": "yes",
+      "note": "real gallery example 02 (file pipeline)"
+    },
+    {
+      "case": "examples/gallery/03_parallel_samples.oxoflow",
+      "expected": "accept",
+      "actual": "accept",
+      "verdict_correct": "yes",
+      "expected_codes": [],
+      "actual_codes": [],
+      "codes_correct": "yes",
+      "note": "real gallery example 03 (parallel samples)"
+    },
+    {
+      "case": "examples/gallery/04_scatter_gather.oxoflow",
+      "expected": "accept",
+      "actual": "accept",
+      "verdict_correct": "yes",
+      "expected_codes": [],
+      "actual_codes": [],
+      "codes_correct": "yes",
+      "note": "real gallery example 04 (scatter-gather)"
+    },
+    {
+      "case": "examples/gallery/05_conda_environments.oxoflow",
+      "expected": "accept",
+      "actual": "accept",
+      "verdict_correct": "yes",
+      "expected_codes": [],
+      "actual_codes": [],
+      "codes_correct": "yes",
+      "note": "real gallery example 05 (conda environments)"
+    },
+    {
+      "case": "examples/gallery/10_transform_operator.oxoflow",
+      "expected": "accept",
+      "actual": "accept",
+      "verdict_correct": "yes",
+      "expected_codes": [],
+      "actual_codes": [],
+      "codes_correct": "yes",
+      "note": "real gallery example 10 (transform operator)"
+    },
+    {
+      "case": "examples/gallery/11_conditional_workflow.oxoflow",
+      "expected": "accept",
+      "actual": "accept",
+      "verdict_correct": "yes",
+      "expected_codes": [],
+      "actual_codes": [],
+      "codes_correct": "yes",
+      "note": "real gallery example 11 (conditional workflow)"
+    },
+    {
+      "case": "examples/gallery/12_cohort_analysis.oxoflow",
+      "expected": "accept",
+      "actual": "accept",
+      "verdict_correct": "yes",
+      "expected_codes": [],
+      "actual_codes": [],
+      "codes_correct": "yes",
+      "note": "real gallery example 12 (cohort analysis)"
+    },
+    {
+      "case": "examples/gallery/15_paired_experiment_control_pairs.oxoflow",
+      "expected": "accept",
+      "actual": "accept",
+      "verdict_correct": "yes",
+      "expected_codes": [],
+      "actual_codes": [],
+      "codes_correct": "yes",
+      "note": "real gallery example 15 (paired experiment/control)"
+    }
+  ],
+  "confusion_matrix": {
+    "true_accept": 33,
+    "false_accept": 0,
+    "true_reject": 83,
+    "false_reject": 0
+  },
+  "codes_correct": 116,
+  "codes_fail": 0,
+  "cases_total": 116,
+  "non_verdicts": 0,
+  "primary": {
+    "definition": "FA / (FA + TR) over expected-reject cases",
+    "denominator": 83,
+    "false_accepts": 0,
+    "true_rejects": 83
+  }
+}
