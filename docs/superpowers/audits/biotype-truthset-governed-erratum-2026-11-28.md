@@ -206,6 +206,7 @@ report §11; it is not execution evidence and not biological truth.
 | Primary analysis script (v1, sealed) | `c5c0311b4f509f93eb4a8f1e40a1ff97bd9536065271d85d5e7263ea04739fbb` |
 | Primary analysis script (v2, hardened) | `0c431b21f7ca088f720c5fce176ac4bed7ccb9fddef9f88d894d09245ade2000` |
 | Primary runner (sealed, unchanged) | `e7a8e5fde464faebeedfff220ca75f730c2ddf752f52725027cebbbbffffd0ea` |
+| Mainline squash-merge stamp repair (2026-11-28) | governed results/decision and supplement stamps repointed from `6fbf38c1`/`0204c1e4` to the mainline squash commit `b771feb222ba58a5845e860bdd84034e9f096719`; the squash commit contains the identical sealed case tree, and the measured data, `engine_commit`, `binary_sha256`, and manifest binding are unchanged. See `stamp_note` in the three JSON artifacts. |
 | Binary SHA-256 (binding identity) | `463d15e618e28d4e694bc3aab472fe53a11188266e8f3f61a344e3099a820b0a` |
 
 ## 13. PR-05 adjudication checklist
