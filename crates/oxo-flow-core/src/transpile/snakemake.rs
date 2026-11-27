@@ -1684,7 +1684,14 @@ fn strip_comment(line: &str) -> &str {
 }
 
 fn unquote(value: &str) -> &str {
-    value.trim().trim_matches('"').trim_matches('\'').trim()
+    // A directive whose quoted value sits on the following line arrives with
+    // the list separator glued on (`"docker://image:tag",`). Stripping it
+    // before the quotes is load-bearing: otherwise the closing quote survives
+    // inside the value (`image:tag",`) and the generated workflow fails
+    // validation (E016 shell-unsafe `"`). Real-world Snakefiles end list items
+    // with a comma, so this is the common shape, not a corner case.
+    let value = value.trim().trim_end_matches(',').trim();
+    value.trim_matches('"').trim_matches('\'').trim()
 }
 
 #[cfg(test)]
@@ -1951,6 +1958,40 @@ rule quantify:
         assert_eq!(
             split_top_level_once(r#"r1="a/{x}_1.txt""#, '='),
             Some((r#"r1"#, r#""a/{x}_1.txt""#))
+        );
+    }
+
+    #[test]
+    fn multiline_directive_values_drop_the_list_separator() {
+        // Real-world shape (troycomi/snakemake-training 2_containers/
+        // Snakefile): the quoted value is on the line after the directive and
+        // ends with a list comma. Before the fix the quote survived inside the
+        // value and the emitted workflow failed validation with E016.
+        let source = r#"
+rule index_reference:
+    input:
+        "GENOME_PATH/genome.fna"
+    output:
+        "GENOME_PATH/genome.fna.fai"
+    log:
+        "logs/index_reference.log",
+    container:
+        "docker://biocontainers/samtools:v1.3_cv3",
+    shell:
+        "samtools faidx {input}"
+"#;
+        let toml = transpile_snakemake(source).expect("multi-line directives must transpile");
+        let config = WorkflowConfig::parse(&toml).expect("valid workflow");
+        let rule = &config.rules[0];
+        assert_eq!(
+            rule.environment.docker.as_deref(),
+            Some("biocontainers/samtools:v1.3_cv3"),
+            "container spec must not keep the trailing comma/quote: {toml}"
+        );
+        assert_eq!(
+            rule.log.as_deref(),
+            Some("logs/index_reference.log"),
+            "log path must not keep the trailing comma/quote: {toml}"
         );
     }
 

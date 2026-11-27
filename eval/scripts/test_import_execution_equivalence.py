@@ -67,6 +67,26 @@ class SourceRuntimeTests(unittest.TestCase):
         self.assertIsNone(binary)
         self.assertIsNone(template)
 
+    def test_entry_execution_source_overrides_the_extension_default(self):
+        # #1398: the SOURCE arm must honor the backend/container the fixture
+        # declares instead of a hardcoded -with-docker / --use-conda choice.
+        entry = {"execution": {
+            "source": ["snakemake", "-s", "{src}", "--use-singularity"],
+            "source_backend": "singularity",
+        }}
+        binary, template = runner.source_runtime("snakemake/x.smk", entry)
+        self.assertEqual(binary, "snakemake")
+        self.assertEqual(template, [
+            "snakemake", "-s", "{src}", "--use-singularity"])
+
+    def test_engine_binary_env_override_is_honored(self):
+        entry = {"execution": {"source": ["nextflow", "run", "{src}"]}}
+        with mock.patch.dict("os.environ",
+                             {"OXO_EXEC_NEXTFLOW_BIN": "/opt/nf/nextflow"}):
+            binary, template = runner.source_runtime("nextflow/x.nf", entry)
+        self.assertEqual(binary, "/opt/nf/nextflow")
+        self.assertEqual(template, ["/opt/nf/nextflow", "run", "{src}"])
+
 
 class RequiredBackendTests(unittest.TestCase):
     def test_union_over_rules(self):
@@ -91,6 +111,17 @@ class MissingReasonTests(unittest.TestCase):
     def test_modules_backend_always_reported_when_declared(self):
         reason = runner.missing_reason(None, {"modules"}, lambda n: True)
         self.assertIn("modules", reason)
+
+    def test_singularity_backend_probe_accepts_apptainer(self):
+        # #1398: a Snakemake source arm run with --use-singularity must be
+        # probed as singularity, not satisfied by docker alone.
+        have = lambda name: name == "apptainer"
+        self.assertIsNone(
+            runner.missing_reason("snakemake", {"singularity"}, have))
+        self.assertIn(
+            "singularity",
+            runner.missing_reason("snakemake", {"singularity"},
+                                  lambda n: n == "docker"))
 
 
 class ClassifyVerdictTests(unittest.TestCase):
@@ -185,7 +216,7 @@ class MeasureEndToEndStubTests(unittest.TestCase):
         path.write_text(body)
         path.chmod(0o755)
 
-    def _measure(self, src_content, imp_content):
+    def _measure(self, src_content, imp_content, record_sink=None):
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d)
             fx = tmp / "ROOT" / "tests" / "fixtures" / "import" / "nextflow"
@@ -204,7 +235,8 @@ class MeasureEndToEndStubTests(unittest.TestCase):
                 {".nf": ("nextflow", [str(src_stub), "run", "{src}"])},
             ):
                 return runner.measure("nextflow/x.nf", expect, str(oxo_stub),
-                                      str(tmp / "work"), lambda n: True, 30)
+                                      str(tmp / "work"), lambda n: True, 30,
+                                      record_sink)
 
     def test_identical_stub_output_is_matched(self):
         # Both arms exit 0 and emit the SAME out.txt (their seeds differ in name
@@ -230,6 +262,25 @@ class MeasureEndToEndStubTests(unittest.TestCase):
         verdict, reason = self._measure(src_content=None, imp_content=None)
         self.assertEqual(verdict, "NO_ARTIFACTS")
         self.assertIn("no artifacts", reason)
+
+    def test_records_capture_both_arms_and_artifact_hashes(self):
+        # #1398: raw evidence is a deliverable -- every executed fixture must
+        # leave its exact per-arm command, exit state and SHA-256 map.
+        records = []
+        verdict, _ = self._measure("same\n", "same\n", records)
+        self.assertEqual(verdict, "MATCHED")
+        self.assertEqual(len(records), 1)
+        rec = records[0]
+        self.assertEqual(rec["fixture"], "nextflow/x.nf")
+        self.assertEqual(rec["verdict"], "MATCHED")
+        self.assertTrue(rec["source"]["ran"])
+        self.assertTrue(rec["imported"]["ran"])
+        self.assertIn("run", rec["source"]["command"])
+        self.assertEqual(rec["imported"]["command"][1:3], ["run", "W.oxoflow"])
+        self.assertIn("out.txt", rec["source"]["artifacts"])
+        self.assertIn("out.txt", rec["imported"]["artifacts"])
+        self.assertEqual(rec["source"]["artifacts"]["out.txt"],
+                         rec["imported"]["artifacts"]["out.txt"])
 
 
 class StrictExitCodeTests(unittest.TestCase):
