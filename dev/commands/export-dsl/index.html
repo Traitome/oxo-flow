@@ -4592,9 +4592,11 @@ declaration order:</p>
 <li>Source input patterns with wildcards other than a single <code>{sample}</code>.</li>
 <li>Shell constructs the importer rejects or skips: non-shell-env <code>$</code>
   interpolations, indexed refs, <code>def</code> preludes, version blocks, <code>Channel.*</code>,
-  <code>{output}</code>-style placeholders, <code>"""</code>, and leading/trailing whitespace that
+  <code>{output}</code>-style placeholders, and leading/trailing whitespace that
   the importer's body trim would strip (a trailing newline on a multi-line
-  body is fine — it is what the importer itself serializes).</li>
+  body is fine — it is what the importer itself serializes). Literal
+  backslashes, dollars and quotes are escaped into the emitted Groovy string
+  and round-trip byte-identically.</li>
 <li><code>--format snakemake</code> (or any other target): the exporter covers Nextflow
   DSL2 only — it refuses rather than guessing. CWL/WDL export remains out
   of scope (see the roadmap).</li>
@@ -4602,11 +4604,14 @@ declaration order:</p>
 <h2 id="determinism-and-round-trip-fidelity">Determinism and round-trip fidelity<a class="headerlink" href="#determinism-and-round-trip-fidelity" title="Permanent link">#</a></h2>
 <p>Two exports of the same workflow are byte-identical (pinned by tests). The
 fixture-corpus round trip is measured in <code>tests/transpile_roundtrip.rs</code>: of
-the 25 <code>tests/fixtures/import/**</code> fixtures, 19 are rejected by the importer
-(no parsed model to export), the 3 accepted Nextflow fixtures export and
-re-import <strong>byte-identically</strong>, and the 3 accepted Snakemake fixtures are
-refused naming the constructs Snakemake import emits that Nextflow cannot
-carry back (<code>[wildcard_constraints]</code>, rule <code>benchmark</code>, rule <code>log</code>).</p>
+the 27 <code>tests/fixtures/import/**</code> fixtures, 19 are rejected by the importer
+(no parsed model to export), <strong>5</strong> accepted fixtures export and re-import
+<strong>byte-identically</strong> (the 4 accepted Nextflow fixtures plus the Snakemake
+fixture <code>training_faidx.ok.smk</code>, whose imported model carries none of the
+unexportable fields), and the 3 accepted Snakemake fixtures that declare
+<code>[wildcard_constraints]</code>, rule <code>benchmark</code>, or rule <code>log</code> are refused naming
+those constructs (Nextflow has no equivalent for what Snakemake import emits
+there).</p>
 <p><code>[types.*]</code> contracts and per-rule <code>types</code> are not emitted (Nextflow has no
 equivalent); the importer re-derives them from tool-name/IO inference on
 re-import, so machine-imported workflows carry the same contracts back. A

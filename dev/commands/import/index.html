@@ -2514,6 +2514,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#measured-execution-equivalence-real-world-corpus" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Measured execution equivalence (real-world corpus)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#examples" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4326,6 +4337,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#measured-execution-equivalence-real-world-corpus" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Measured execution equivalence (real-world corpus)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#examples" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4697,18 +4719,51 @@ through content inspection.</p>
 </tr>
 </tbody>
 </table>
+<h2 id="measured-execution-equivalence-real-world-corpus">Measured execution equivalence (real-world corpus)<a class="headerlink" href="#measured-execution-equivalence-real-world-corpus" title="Permanent link">#</a></h2>
+<p><code>scripts/import-execution-equivalence.sh</code> runs each supported fixture's
+SOURCE engine and the IMPORTED <code>.oxoflow</code> workflow on identical planted inputs
+and compares the complete produced-artifact path→SHA-256 map (planted inputs,
+workflow seeds, and engine metadata are excluded). When the imported workflow
+declares literal outputs, each must also be present in both arms, and a
+fixture whose <code>execution</code> block pins a container must import to that same
+container (scheme-insensitive); otherwise the fixture is SKIPPED. A fixture is
+MATCHED only when <strong>both</strong> arms genuinely execute and produce artifacts; a
+missing runtime, missing environment backend, or non-zero exit is SKIPPED with
+the reason — never MATCHED. Two executed arms that write nothing are an
+explicit NO_ARTIFACTS verdict.</p>
+<p>As of 2026-11-27, two real-world fixtures execute on both arms and match:</p>
+<ul>
+<li>an nf-core <code>samtools/faidx</code> module (upstream commit cited in the fixture),
+  run as Nextflow <code>-with-docker</code> versus imported; and</li>
+<li>a community Snakemake tutorial <code>index_reference</code> rule, run with
+  <code>--use-singularity</code> versus imported.</li>
+</ul>
+<p>Both arms used the pinned <code>htslib_samtools:1.25</code> image and produced a
+byte-identical <code>.fai</code> (SHA-256 <code>696683592f087bb9aa2bf8cb2b9bd85df1b482c809c3770d86c9450d629d6cfe</code>).
+Over the eight supported fixtures the measured tally was executed 2 /
+matched 2 / drifted 0 / skipped 6. The six skips: four name a missing backend
+(three conda/mamba, one HPC modules), one source fixture is not valid DSL2 for
+the installed Nextflow engine, and one (<code>samtools_sort.ok.nf</code>) is an imported
+arm whose wildcard expansion finds no planted BAM (its source arm exits 0
+without a declared artifact). No skip is counted as a match. See
+<a href="../../../superpowers/audits/import-execution-realworld-2026-11-27.md"><code>import-execution-realworld-2026-11-27.md</code></a>.</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># source vs imported on identical inputs (engine binaries must be on PATH)</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>scripts/import-execution-equivalence.sh<span class="w"> </span>--bin<span class="w"> </span>./target/debug/oxo-flow
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="c1"># falsifiable: exit non-zero only if an executed fixture drifted</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>scripts/import-execution-equivalence.sh<span class="w"> </span>--strict<span class="w"> </span>--bin<span class="w"> </span>./target/debug/oxo-flow
+</span></code></pre></div>
 <h2 id="examples">Examples<a class="headerlink" href="#examples" title="Permanent link">#</a></h2>
 <p>Transpile a Nextflow pipeline and print to stdout:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>oxo-flow<span class="w"> </span>import<span class="w"> </span>main.nf
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>oxo-flow<span class="w"> </span>import<span class="w"> </span>main.nf
 </span></code></pre></div>
 <p>Transpile a Snakemake pipeline to a file:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>oxo-flow<span class="w"> </span>import<span class="w"> </span>Snakefile<span class="w"> </span>-o<span class="w"> </span>workflow.oxoflow
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>oxo-flow<span class="w"> </span>import<span class="w"> </span>Snakefile<span class="w"> </span>-o<span class="w"> </span>workflow.oxoflow
 </span></code></pre></div>
 <p>Transpile with an explicit format:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>oxo-flow<span class="w"> </span>import<span class="w"> </span>custom_pipeline.txt<span class="w"> </span>--from<span class="w"> </span>nextflow<span class="w"> </span>-o<span class="w"> </span>pipeline.oxoflow
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>oxo-flow<span class="w"> </span>import<span class="w"> </span>custom_pipeline.txt<span class="w"> </span>--from<span class="w"> </span>nextflow<span class="w"> </span>-o<span class="w"> </span>pipeline.oxoflow
 </span></code></pre></div>
 <p>Emit a machine-readable translation verdict instead of raw TOML:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>oxo-flow<span class="w"> </span>import<span class="w"> </span>Snakefile<span class="w"> </span>--json
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>oxo-flow<span class="w"> </span>import<span class="w"> </span>Snakefile<span class="w"> </span>--json
 </span></code></pre></div>
 <h2 id="json-output">JSON output<a class="headerlink" href="#json-output" title="Permanent link">#</a></h2>
 <p><code>--json</code> emits one JSON document on stdout describing the translation, so CI and
@@ -4751,18 +4806,18 @@ document is still emitted.</p>
 </tr>
 </tbody>
 </table>
-<div class="language-json highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="p">{</span>
-</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span><span class="nt">"tool"</span><span class="p">:</span><span class="w"> </span><span class="s2">"oxo-flow import"</span><span class="p">,</span>
-</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span><span class="nt">"source"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Snakefile"</span><span class="p">,</span>
-</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">  </span><span class="nt">"format"</span><span class="p">:</span><span class="w"> </span><span class="s2">"snakemake"</span><span class="p">,</span>
-</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">  </span><span class="nt">"accepted"</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
-</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="w">  </span><span class="nt">"warnings"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
-</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="w">    </span><span class="p">{</span>
-</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="w">      </span><span class="nt">"message"</span><span class="p">:</span><span class="w"> </span><span class="s2">"line 7: `benchmark:` becomes a declared path, but oxo-flow does not auto-populate benchmark files — the rule's command must write it"</span>
-</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-6-10"><a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a><span class="w">  </span><span class="p">],</span>
-</span><span id="__span-6-11"><a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a><span class="w">  </span><span class="nt">"toml"</span><span class="p">:</span><span class="w"> </span><span class="s2">"[workflow]\nname = \"bwa_mem_pipeline\"\n..."</span>
-</span><span id="__span-6-12"><a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a><span class="p">}</span>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="p">{</span>
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">  </span><span class="nt">"tool"</span><span class="p">:</span><span class="w"> </span><span class="s2">"oxo-flow import"</span><span class="p">,</span>
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">  </span><span class="nt">"source"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Snakefile"</span><span class="p">,</span>
+</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="w">  </span><span class="nt">"format"</span><span class="p">:</span><span class="w"> </span><span class="s2">"snakemake"</span><span class="p">,</span>
+</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="w">  </span><span class="nt">"accepted"</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="w">  </span><span class="nt">"warnings"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="w">    </span><span class="p">{</span>
+</span><span id="__span-7-8"><a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="w">      </span><span class="nt">"message"</span><span class="p">:</span><span class="w"> </span><span class="s2">"line 7: `benchmark:` becomes a declared path, but oxo-flow does not auto-populate benchmark files — the rule's command must write it"</span>
+</span><span id="__span-7-9"><a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-7-10"><a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a><span class="w">  </span><span class="p">],</span>
+</span><span id="__span-7-11"><a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a><span class="w">  </span><span class="nt">"toml"</span><span class="p">:</span><span class="w"> </span><span class="s2">"[workflow]\nname = \"bwa_mem_pipeline\"\n..."</span>
+</span><span id="__span-7-12"><a id="__codelineno-7-12" name="__codelineno-7-12" href="#__codelineno-7-12"></a><span class="p">}</span>
 </span></code></pre></div>
 <blockquote>
 <p><strong>Next:</strong> <a href="../../how-to/migrate-from-nextflow-snakemake/">Migrating a whole pipeline from Nextflow or Snakemake</a></p>
