@@ -1,0 +1,27 @@
+# import-execution-equivalence corpus run
+# binary:       /home/ubuntu/oxo-1398/target/debug/oxo-flow
+# fixture root: /home/ubuntu/oxo-1398/tests/fixtures/import
+# date:         2026-11-27T15:24:48Z
+# (report-only; pass --strict to fail on drift for executed fixtures)
+
+# import-execution-equivalence run
+# fixtures are enumerated from import_equivalence_expectations.py
+
+RESULT	nextflow/nfcore_faidx.ok.nf	MATCHED	artifact sets agree
+RESULT	nextflow/nfcore_module.ok.nf	SKIPPED	source arm: exit 1: ERROR ~ Script compilation failed
+RESULT	nextflow/rnaseq.ok.nf	SKIPPED	no execution environment: missing conda
+RESULT	nextflow/samtools_sort.ok.nf	SKIPPED	imported arm: exit 1: Error: failed to expand wildcard rules
+RESULT	snakemake/expand.ok.smk	SKIPPED	no execution environment: missing modules (HPC modules)
+RESULT	snakemake/rnaseq.ok.smk	SKIPPED	no execution environment: missing conda
+RESULT	snakemake/rseqc_stat.ok.smk	SKIPPED	no execution environment: missing conda
+RESULT	snakemake/training_faidx.ok.smk	MATCHED	artifact sets agree
+
+EXECUTION-EQUIVALENCE TALLY (fixtures=8)
+  executed    : 2
+  skipped     : 6
+  matched     : 2
+  drifted     : 0
+  no_artifacts: 0
+
+{"EXECUTED": 2, "SKIPPED": 6, "MATCHED": 2, "DRIFTED": 0, "NO_ARTIFACTS": 0}
+RECORDS	/home/ubuntu/1398-work/strict-records.json

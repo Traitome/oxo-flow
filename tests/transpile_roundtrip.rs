@@ -13,10 +13,12 @@
 //!   declared-artifact equivalence: rules, DAG edges, declared I/O,
 //!   resources, environments all agree because the whole document does).
 //!
-//! Current truth table (25 fixtures):
+//! Current truth table (27 fixtures):
 //! - 19 rejected by the importer (out-of-subset constructs, each named)
-//! - 3 accepted Nextflow fixtures → exported, re-imported BYTE-IDENTICAL
-//! - 3 accepted Snakemake fixtures → export refused, construct named
+//! - 5 accepted fixtures -> exported, re-imported BYTE-IDENTICAL
+//!   (4 Nextflow + the Snakemake fixture whose imported model carries no
+//!   wildcard_constraints/benchmark/log)
+//! - 3 accepted Snakemake fixtures -> export refused, construct named
 //!   (`[wildcard_constraints]`, rule `benchmark`, rule `log` — Snakemake
 //!   import emits fields the Nextflow DSL cannot express back)
 
@@ -122,7 +124,7 @@ fn the_fixture_corpus_yields_the_documented_truth_table() {
     // The truth table, asserted with real counts. Adding a fixture or
     // changing the subset MUST update these numbers deliberately — the
     // counts are the measured claim.
-    assert_eq!(files.len(), 25, "fixture corpus size changed");
+    assert_eq!(files.len(), 27, "fixture corpus size changed");
     assert_eq!(
         rejected.len(),
         19,
@@ -131,7 +133,7 @@ fn the_fixture_corpus_yields_the_documented_truth_table() {
     );
     assert_eq!(
         round_tripped.len(),
-        3,
+        5,
         "byte-identical round trips: {:?}",
         round_tripped
     );
@@ -139,10 +141,16 @@ fn the_fixture_corpus_yields_the_documented_truth_table() {
         .iter()
         .map(|name| name.as_str())
         .collect::<Vec<_>>();
-    for name in ["nfcore_module.ok.nf", "rnaseq.ok.nf", "samtools_sort.ok.nf"] {
+    for name in [
+        "nfcore_faidx.ok.nf",
+        "nfcore_module.ok.nf",
+        "rnaseq.ok.nf",
+        "samtools_sort.ok.nf",
+        "training_faidx.ok.smk",
+    ] {
         assert!(
             round_trip_names.contains(&name),
-            "the Nextflow fixture {name} must round-trip byte-identically"
+            "the fixture {name} must round-trip byte-identically"
         );
     }
     assert_eq!(refused.len(), 3, "export-refused fixtures: {refused:?}");
