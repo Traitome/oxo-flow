@@ -3,10 +3,10 @@
 | Freeze record | Value |
 | :--- | :--- |
 | Artifact | PR-02 (Task 4.0 required artifact 2 of 6) |
-| Version | 1.0.1 |
+| Version | 1.0.2 |
 | Freeze status | FROZEN |
 | Freeze date | 2026-11-18 (original freeze; amendment 1 same date) |
-| Amendment | 1 (2026-11-18): review fixes D1–D5 and clarifications — see [`AMENDMENTS.md`](AMENDMENTS.md) entry 1 |
+| Amendment | 1 (2026-11-18): review fixes D1–D5 and clarifications; 2 (2026-11-27): #1163 confirmatory corpus size, pilot disjointness, expansion protocol, zero non-verdict limit — see [`AMENDMENTS.md`](AMENDMENTS.md) entries 1–2 |
 | Content binding | SHA-256 recorded in [`MANIFEST.sha256`](MANIFEST.sha256) |
 | Campaigns covered | #1163, #1164, #1165, #1166 |
 | Change control | Post-freeze edits only through [`AMENDMENTS.md`](AMENDMENTS.md) |
@@ -111,21 +111,56 @@ a result.
 - Cases that duplicate another case's contract assertion.
 - Cases whose rationale cannot be stated without reference to the checker
   output.
+- **Pilot-disjointness (amendment 2):** a case that re-asserts a contract
+  boundary already asserted by the excluded 54-case pilot set (the same
+  checker dimension with the same value pair, e.g. the identical
+  producer-format/consumer-format pair, the same build pair, or the same
+  sort-index/compression/attribute pair). The pilot is exposure, not
+  independent evidence. A multi-dimensional case asserts a conjunction of
+  fields; it is distinct when it adds a dimension no other case asserts,
+  and it is a duplicate when the only violated assertion is already
+  present elsewhere.
+- **Checker-derived verdicts:** a case whose expected verdict was derived
+  from the checker source, from a prior checker run, or from observed
+  checker behavior rather than the published contract.
 
-**Concrete numbers.** The truth-set size is **UNDECIDED** (owner:
-campaign lead; deadline: before data collection) and must be fixed in the
-pre-run manifest. Minimum coverage is fixed by the rule above, not by a
-count: every exercised `TYPE-*` code needs both a reject case and an
-accept-side contrast where such a contrast exists. The number of cases per
-code is **UNDECIDED** in the same amendment.
+**Concrete numbers (amendment 2, frozen).** The confirmatory truth-set
+size is **at least 73 expected-reject cases** in the primary analysis set
+(PR-06 §C1's `N_min`), plus **at least 30 expected-accept acceptance
+controls**. Coverage is fixed by the rule above:
+
+- every blocking code `TYPE-001`–`TYPE-007` has at least one
+  expected-reject case, and every such code with an available accept-side
+  contrast has one;
+- every advisory code `TYPE-008`/`TYPE-009`/`TYPE-010` has at least one
+  expected-accept case that declares the advisory code;
+- untyped acceptable workflows are present;
+- every non-`generic` `BioFormat` enum variant is driven;
+- at least one `transform.*` scatter/combine GENERATED typed edge and at
+  least one `[[include]]`-contributed typed edge are present, in both
+  verdict directions where an accept-side contrast exists.
+
+**Expansion protocol (amendment 2, frozen).** After the amendment the
+author expands the corpus beyond the 54-case pilot by writing new cases
+from the published contract only (the JSON Schema, the
+`workflow-format.md` biological-type section, the TYPE-001–010 catalogue,
+and published tool/format contracts). Each case header records the
+EXPECTED verdict, the expected `TYPE-*` code set, and a one-line rationale
+**before** the case is run. Each case is run once through the real
+`validate --json` surface (with `lint --json` read only for the advisory
+codes the admission gate drops). Case bodies are not edited after an
+outcome is seen. A surfaced checker defect is reported and fixed in a
+separate change with a regression test, never compensated by editing the
+corpus. The pilot's 54 cases are not reused in the confirmatory dataset.
 
 **Missing data.**
 
 - A case for which the binary cannot produce a verdict (crash, timeout,
   toolchain failure) is a **non-verdict**, excluded from the primary
-  denominator with its reason. If non-verdicts exceed **UNDECIDED**
-  percent (owner: campaign lead; deadline: before data collection) the
-  campaign is INVALID, not negative.
+  denominator with its reason. If non-verdicts exceed **0 percent** (any
+  non-verdict) the campaign is INVALID, not negative: the checker is
+  deterministic and static, so a non-verdict is an infrastructure or
+  checker defect rather than a sampling outcome.
 - Worst-case sensitivity: all non-verdicts are counted as false accepts.
   If that changes the PR-06 decision, the result is reported as
   threshold-fragile.

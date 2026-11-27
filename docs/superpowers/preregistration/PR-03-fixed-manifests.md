@@ -3,10 +3,10 @@
 | Freeze record | Value |
 | :--- | :--- |
 | Artifact | PR-03 (Task 4.0 required artifact 3 of 6) |
-| Version | 1.0.1 |
+| Version | 1.0.2 |
 | Freeze status | FROZEN (values marked TBD are deliberately open) |
 | Freeze date | 2026-11-18 (original freeze; amendment 1 same date) |
-| Amendment | 1 (2026-11-18): review fixes D1–D5 and clarifications — see [`AMENDMENTS.md`](AMENDMENTS.md) entry 1 |
+| Amendment | 1 (2026-11-18): review fixes D1–D5 and clarifications; 2 (2026-11-27): #1163 measurement host, budget, corpus size, and pre-run seal — see [`AMENDMENTS.md`](AMENDMENTS.md) entries 1–2 |
 | Content binding | SHA-256 recorded in [`MANIFEST.sha256`](MANIFEST.sha256) |
 | Campaigns covered | #1163, #1164, #1165, #1166 |
 | Change control | Post-freeze edits only through [`AMENDMENTS.md`](AMENDMENTS.md) |
@@ -53,9 +53,17 @@ without an amendment makes the campaign non-compliant.
 | Prompt | None — no generation call | FIXED |
 | Tool | `oxo-flow` CLI built from the frozen engine commit; `validate --json` is the verdict surface, with `lint --json` / `dry-run --json` recorded for context only and never substituted for `validate` | FIXED |
 | Seed | None — deterministic; a repeated run must be byte-identical, and any difference is an infrastructure failure that voids the case | FIXED |
-| Hardware | Any named host that runs the frozen binary; host identity, OS, and CPU recorded per run | TBD — owner: campaign lead; deadline: before data collection |
-| Dataset | Independently authored truth set; case bodies and expected verdicts committed and sealed by SHA-256; coverage spans `TYPE-001`–`TYPE-009` and untyped accept cases | Case content FIXED by PR-02 rules; size TBD — owner: campaign lead; deadline: before data collection |
-| Budget | Static-only: no execution, no provider calls. Wall-clock cap per case and total campaign cap | TBD — owner: campaign lead; deadline: before data collection |
+| Hardware | Single arm: the campaign lead's macOS arm64 workstation, host identity (`hostname`, `uname -srm`, CPU model, RAM), rustc version, and binary SHA-256 recorded in the pre-run manifest and the report. No cross-platform contrast is claimed | FIXED 2026-11-27 (amendment 2) |
+| Dataset | Independently authored truth set; case bodies and expected verdicts committed and sealed by SHA-256 in the pre-run manifest; at least 73 expected-reject cases plus at least 30 expected-accept acceptance controls; coverage spans `TYPE-001`–`TYPE-010`, every non-`generic` format, a `transform.*` generated edge, and an `[[include]]`-contributed edge; the 54-case pilot set is excluded as exposure | FIXED 2026-11-27 (amendment 2) |
+| Budget | Static-only: no execution, no provider calls, no network. Wall-clock cap: 60 s per case and 7200 s for the whole campaign | FIXED 2026-11-27 (amendment 2) |
+
+The pre-run manifest is
+`docs/superpowers/preregistration/prerun/C1-governed-2026-11-27.json`
+(plus its `.sha256` companion), committed before the first confirmatory
+run. It carries the §0 fields and the full per-case expected-verdict
+records; `case_manifest_sha256` is the canonical hash of its `cases`
+array, and the campaign runner reads the `cases` array as its EXPECT
+source so the sealed list and the executed list cannot drift.
 
 ## C2 — #1164 repair-campaign manifest
 

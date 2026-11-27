@@ -3,10 +3,10 @@
 | Freeze record | Value |
 | :--- | :--- |
 | Artifact | PR-01 (Task 4.0 required artifact 1 of 6) |
-| Version | 1.0.1 |
+| Version | 1.0.2 |
 | Freeze status | FROZEN |
 | Freeze date | 2026-11-18 (original freeze; amendment 1 same date) |
-| Amendment | 1 (2026-11-18): review fixes D1–D5 and clarifications — see [`AMENDMENTS.md`](AMENDMENTS.md) entry 1 |
+| Amendment | 1 (2026-11-18): review fixes D1–D5 and clarifications; 2 (2026-11-27): `τ_FA = 0.05`, held-out confirmatory corpus, `N_min = 73`, zero non-verdict limit for #1163 — see [`AMENDMENTS.md`](AMENDMENTS.md) entries 1–2 |
 | Content binding | SHA-256 recorded in [`MANIFEST.sha256`](MANIFEST.sha256) |
 | Campaigns covered | #1163, #1164, #1165, #1166 |
 | Change control | Post-freeze edits only through [`AMENDMENTS.md`](AMENDMENTS.md) |
@@ -132,6 +132,17 @@ tables are descriptive; no per-cell significance claim is made. Because
 the checker is deterministic, repeated execution of the same case is a
 consistency check, not replication: any disagreement between two runs of
 the same binary and case is an infrastructure failure and voids that case.
+
+**Confirmatory corpus and minimum sample (amendment 2, frozen
+2026-11-27).** The threshold is `τ_FA = 0.05` (PR-06 §C1). The
+confirmatory analysis set is the held-out governed corpus of
+**N_min = 73 expected-reject cases**, plus at least 30 expected-accept
+acceptance controls, authored after the amendment from the published
+contract and disjoint from the 54-case pilot. The pilot remains
+**exploratory/exposure** under the C1 pilot firewall in PR-06 §C1; it is
+reported separately and never pooled. Fewer than 73 expected-reject cases
+is INVALID with sub-reason `minimum_sample_not_reached`
+(UNDERPOWERED). Zero non-verdicts are permitted (PR-02 §C1).
 
 **What the result can and cannot support.** A pass supports the checker
 only on the frozen truth set and its declared coverage. It does not
@@ -288,7 +299,7 @@ pre-declared minimum artifact count and 100% agreement.
 
 | Campaign | Primary endpoint | Direction | Decision threshold |
 | :--- | :--- | :--- | :--- |
-| #1163 | False-accept proportion on expected-reject cases | lower is better | PR-06 §C1 (τ value UNDECIDED; owner: campaign lead + independent reviewer; deadline: before data collection) |
+| #1163 | False-accept proportion on expected-reject cases | lower is better | PR-06 §C1: `τ_FA = 0.05` (frozen 2026-11-27, amendment 2); `N_min = 73` expected-reject cases |
 | #1164 | Full-loop verified-repair proportion, recovery-eligible cases | higher is better | PR-06 §C2 (τ value UNDECIDED; owner: campaign lead + independent reviewer; deadline: before data collection) |
 | #1165 | Strict declared-output equivalence proportion | higher is better | PR-06 §C3 (τ value UNDECIDED; owner: campaign lead + independent reviewer; deadline: before data collection) |
 | #1166 | Architecture-stable artifact proportion | higher is better | PR-06 §C4 (per-class minimum count and τ UNDECIDED; owner: campaign lead + independent reviewer; deadline: before data collection) |
