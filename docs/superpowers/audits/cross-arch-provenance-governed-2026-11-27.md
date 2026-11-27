@@ -105,7 +105,7 @@ unchanged from the freeze-time manifest.
 
 The hardened analysis re-derives the same **POSITIVE** result on the committed
 evidence; its output is the current `crossarch-results.json` (SHA-256
-`20ac4e720acc1cac521a25a16e2cd4047a64c16aa1cf058e8739dbcce4cdbc47`).
+`5dd4ce2813a8059a319983437932a63552f23bfbfe549f850cc5b75fcd988407`).
 
 ### 2.4 Pre-data harness revision
 
@@ -166,7 +166,9 @@ git show -s --format='%H %cI' dd5dcd44ee91a2c93bfd24c29f189d8de32e87d5
 # Harness-revision / engine commit used by both arms:
 git show -s --format='%H %cI' 56b109c17b95e4c610a874aaf63fc0ae583a57a6
 
-# Two-host campaign (from the freeze checkout on the arm64 host):
+# Two-host campaign (from the 56b109c1 harness-revision checkout on the arm64
+# host; the dd5dcd44 parameter-freeze commit is an ancestor, and the
+# orchestrator's local-HEAD check requires the run commit):
 bash scripts/cross-arch-provenance-governed.sh \
   docs/superpowers/audits/data/crossarch-1397 \
   --repo-root "$PWD" \
@@ -179,6 +181,8 @@ bash scripts/cross-arch-provenance-governed.sh \
 # and then:
 #   python3 -I scripts/cross-arch-provenance-governed-analyze.py \
 #     --corpus scripts/cross-arch-provenance-governed-corpus.json \
+#     --preregistration docs/superpowers/audits/data/crossarch-1397/preregistration.json \
+#     --repo-root "$PWD" \
 #     --arm-a <local arm> --arm-b <remote arm> \
 #     --expected-commit 56b109c17b95e4c610a874aaf63fc0ae583a57a6 \
 #     --out <outroot>/crossarch-results.json
@@ -192,7 +196,7 @@ bash scripts/cross-arch-provenance-governed.sh \
 | `uname` | Darwin 27.2.0, `root:xnu-13432.41.4~25/RELEASE_ARM64_T8142 arm64` | Linux 6.8.0-137-generic, `x86_64` |
 | CPU | Apple M5 (`host-supplement.txt`, captured post-run) | Intel Xeon Platinum 8255C (`host-supplement.txt`, captured post-run; the run's `identity.txt` `cpu-model` field is `unknown` because its Linux awk probe printed nothing) |
 | nproc | 10 | 4 |
-| execution | native aarch64 silicon; Docker Desktop 4.94.0 native `linux/arm64` VM; no qemu; Docker server 29.8.2 (`host-supplement.txt`) | native x86_64; Docker server 29.7.2 (`host-supplement.txt`) |
+| execution | native aarch64 silicon; Docker Desktop 4.94.0 (241994) native `linux/arm64` VM (`host-supplement.txt`); no qemu; Docker server 29.8.2 (`host-supplement.txt`) | native x86_64; Docker server 29.7.2 (`host-supplement.txt`) |
 | oxo-flow | 0.32.0 | 0.32.0 |
 | binary SHA-256 | `9ce0065a42e60afe17dcb3308a9e430813301ea8e01bbf2964a75d14719236d6` | `aef9eecc49a09d177bcdbe102f309f64891935f2f18858fd441193c009b0cefd` |
 | engine commit (`workflow_git_sha`) | `56b109c17b95e4c610a874aaf63fc0ae583a57a6` | `56b109c17b95e4c610a874aaf63fc0ae583a57a6` |
@@ -436,7 +440,7 @@ all bioinformatics tools or hardware.
 The raw per-artifact digests are the `artifacts.sha256` files in each arm
 directory; the checkpoints retain the engine-recorded values; the analysis
 script cross-checks the two before deciding. The governed results JSON has
-SHA-256 `20ac4e720acc1cac521a25a16e2cd4047a64c16aa1cf058e8739dbcce4cdbc47`;
+SHA-256 `5dd4ce2813a8059a319983437932a63552f23bfbfe549f850cc5b75fcd988407`;
 the orchestrator log has SHA-256
 `79f9e26befa195acf75b6c2f639d93cf7f608d7497c05f8d0a47725a4ed47849`.
 

@@ -28,6 +28,8 @@
       "host_supplement": {
         "captured-utc": "2026-11-27T17:25:45Z",
         "cpu-model": "Apple M5",
+        "docker-desktop": "Docker Desktop 4.94.0 (241994)",
+        "docker-desktop-source": "`docker version` Server platform line, captured post-run during independent review; the inventory lines above were captured 2026-11-27T17:25:45Z",
         "docker-server": "29.8.2 aarch64 Docker Desktop",
         "docker-version": "Docker version 29.8.2, build 7fc2dff",
         "host-arch": "arm64",
