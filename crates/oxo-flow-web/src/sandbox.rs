@@ -958,7 +958,11 @@ mod linux {
 
     #[cfg(test)]
     mod tests {
-        use super::super::parse_path_list;
+        // This module is nested inside the Linux-only `linux` module, so
+        // `super::*` is that module; the outer sandbox items need an
+        // explicit `super::super` import (a macOS-only `cargo clippy` cannot
+        // see this code — it is cfg'd out there).
+        use super::super::{SANDBOX_MODE_ENV, parse_path_list, utf8_value};
         use super::*;
 
         #[test]
