@@ -594,8 +594,9 @@ fn translate_shell(rule: &Rule, name: &str, inputs: &[String]) -> Result<String>
 
     // Constructs the importer skips or rejects outright — in the authored
     // body or after translation (identical line shapes): `def` preludes are
-    // stripped, version blocks are skipped, `Channel.*` is rejected, and
-    // `"""` would terminate the emitted script body early.
+    // stripped, version blocks are skipped, and `Channel.*` is rejected.
+    // (`"""` is no longer a refusal: literal quotes are escaped by
+    // `encode_shell_literal`, so they cannot terminate the script body.)
     for (offset, line) in translated.lines().enumerate() {
         let trimmed = line.trim_start();
         if trimmed.starts_with("def ") {
@@ -618,12 +619,6 @@ fn translate_shell(rule: &Rule, name: &str, inputs: &[String]) -> Result<String>
         return Err(export_error(format!(
             "rule '{name}' shell references `Channel.*` — the importer hard-errors on it; \
              resolve the channel in the workflow wiring or hand-port the rule"
-        )));
-    }
-    if translated.contains("\"\"\"") {
-        return Err(export_error(format!(
-            "rule '{name}' shell contains a triple-double-quote — it would terminate the \
-             emitted Nextflow script body; hand-port the rule"
         )));
     }
     Ok(translated)
@@ -1136,7 +1131,7 @@ threads = 1
 name = "esc"
 input = ["data/{sample}.txt"]
 output = ["{sample}.out"]
-shell = "printf 'a\\tb' {input} > {sample}.out && echo $HOME >> {sample}.out"
+shell = "printf 'a\\tb' {input} > {sample}.out && echo $HOME >> {sample}.out && echo '\"\"\"' >> {sample}.out"
 
 "#;
         let exported = export_toml(toml);
