@@ -182,7 +182,7 @@ EXPECTED = {
         "edges": [],
         "rule_specs": {
             "samtools_faidx": {
-                "threads": 1, "memory": "6G", "time_limit": "4h",
+                "threads": 1, "memory": "2G", "time_limit": "4h",
                 # upstream declares both container and conda; Nextflow runs the
                 # container, so only the container is emitted.
                 "environment": {"docker": "community.wave.seqera.io/library/htslib_samtools:1.25--704fb80d75745bd4"},

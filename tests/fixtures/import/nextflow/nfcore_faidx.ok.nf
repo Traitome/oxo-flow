@@ -15,7 +15,9 @@
 //      module-local conda `environment.yml` reference is materialized to the
 //      literal spec it contains.
 //   4. Resources are materialized from the nf-core `process_single` label
-//      default (base.config: cpus 1, memory 6.GB, time 4h).
+//      default (base.config: cpus 1, memory 6.GB, time 4h), with memory lowered
+//      to 2 GB so the task fits the 3 GiB qualification host (Nextflow refuses
+//      to schedule a 6 GB task against ~3.6 GB available).
 //   5. `get_sizes_command` is dropped because `get_sizes` is not available in
 //      the wrapper.
 //   6. A `workflow { }` call is added because the upstream file is a module
@@ -31,7 +33,7 @@ process SAMTOOLS_FAIDX {
     container "community.wave.seqera.io/library/htslib_samtools:1.25--704fb80d75745bd4"
 
     cpus 1
-    memory '6 GB'
+    memory '2 GB'
     time '4h'
 
     input:
