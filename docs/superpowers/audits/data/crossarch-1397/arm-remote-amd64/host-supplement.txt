@@ -1,0 +1,14 @@
+# Supplementary host inventory for the #1397/#1166 governed campaign.
+# Captured 2026-11-27T17:25:45Z, after the campaign, for independent-review
+# remediation. This file is NOT part of the sealed run-time identity; the
+# sealed identity is identity.txt. It records the CPU and Docker version that
+# the run-time identity probe did not capture (identity.txt says cpu-model:
+# unknown because its Linux awk probe printed nothing).
+hostname:      VM-4-4-ubuntu
+host-uname:    Linux VM-4-4-ubuntu 6.8.0-137-generic #137-Ubuntu SMP PREEMPT_DYNAMIC Fri Jul 17 20:28:23 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux
+host-arch:     x86_64
+cpu-model:     Intel(R) Xeon(R) Platinum 8255C CPU @ 2.50GHz
+nproc:         4
+docker-version: Docker version 29.7.2, build a7dcaa6
+docker-server:  29.7.2 x86_64 Ubuntu 24.04.4 LTS
+captured-utc:  2026-11-27T17:25:45Z

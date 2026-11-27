@@ -1,0 +1,104 @@
+campaign: 1397
+started-utc: 2026-11-27T16:59:18Z
+local-commit: 834dc183ddab1e1a9562bf65aa4da1d09f1e32ec
+remote-commit: 834dc183ddab1e1a9562bf65aa4da1d09f1e32ec
+local-platform: linux/arm64
+remote-platform: linux/amd64
+remote-host: tx-ubuntu
+corpus: /Users/wsx/Documents/GitHub/oxo-flow/.claude/worktrees/agent-a4811d73744c25b76/scripts/cross-arch-provenance-governed-corpus.json
+corpus-sha256: 33a7531882f266dc067ba705b91863eacb709dee36bc00c2720aa0e6aba20bfa
+building local oxo-flow from 834dc183ddab1e1a9562bf65aa4da1d09f1e32ec
+building remote oxo-flow from 834dc183ddab1e1a9562bf65aa4da1d09f1e32ec
+pre-staging local image (python@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b) for linux/arm64
+pre-staging remote image (python@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b) for linux/amd64
+running local arm (linux/arm64) -> /Users/wsx/Documents/GitHub/oxo-flow/.claude/worktrees/agent-a4811d73744c25b76/docs/superpowers/audits/data/crossarch-1397/arm-local-arm64
+OK cross-arch-provenance-governed-a on linux/arm64: 13 declared outputs re-hashed
+OK cross-arch-provenance-governed-b on linux/arm64: 12 declared outputs re-hashed
+OK arm linux/arm64: all workflows re-verified; evidence in /Users/wsx/Documents/GitHub/oxo-flow/.claude/worktrees/agent-a4811d73744c25b76/docs/superpowers/audits/data/crossarch-1397/arm-local-arm64
+running remote arm (linux/amd64) on tx-ubuntu -> /home/ubuntu/crossarch-1397-raw
+OK cross-arch-provenance-governed-a on linux/amd64: 13 declared outputs re-hashed
+OK cross-arch-provenance-governed-b on linux/amd64: 12 declared outputs re-hashed
+OK arm linux/amd64: all workflows re-verified; evidence in /home/ubuntu/crossarch-1397-raw
+copied remote evidence to /Users/wsx/Documents/GitHub/oxo-flow/.claude/worktrees/agent-a4811d73744c25b76/docs/superpowers/audits/data/crossarch-1397/arm-remote-amd64
+category: INVALID
+primary: 0/24 identical
+INVALID ARM_EVIDENCE_MISSING: arm-local-arm64/crossarch-governed-a checkpoint: [Errno 2] No such file or directory: '/Users/wsx/Documents/GitHub/oxo-flow/.claude/worktrees/agent-a4811d73744c25b76/docs/superpowers/audits/data/crossarch-1397/arm-local-arm64/crossarch-governed-a.checkpoint.json'
+INVALID ARM_EVIDENCE_MISSING: arm-local-arm64/crossarch-governed-a verify: [Errno 2] No such file or directory: '/Users/wsx/Documents/GitHub/oxo-flow/.claude/worktrees/agent-a4811d73744c25b76/docs/superpowers/audits/data/crossarch-1397/arm-local-arm64/crossarch-governed-a.verify.json'
+INVALID ARM_EVIDENCE_MISSING: arm-local-arm64/crossarch-governed-a independent hashes: [Errno 2] No such file or directory: '/Users/wsx/Documents/GitHub/oxo-flow/.claude/worktrees/agent-a4811d73744c25b76/docs/superpowers/audits/data/crossarch-1397/arm-local-arm64/crossarch-governed-a.artifacts.sha256'
+INVALID ARM_EVIDENCE_MISSING: arm-local-arm64/crossarch-governed-b checkpoint: [Errno 2] No such file or directory: '/Users/wsx/Documents/GitHub/oxo-flow/.claude/worktrees/agent-a4811d73744c25b76/docs/superpowers/audits/data/crossarch-1397/arm-local-arm64/crossarch-governed-b.checkpoint.json'
+INVALID ARM_EVIDENCE_MISSING: arm-local-arm64/crossarch-governed-b verify: [Errno 2] No such file or directory: '/Users/wsx/Documents/GitHub/oxo-flow/.claude/worktrees/agent-a4811d73744c25b76/docs/superpowers/audits/data/crossarch-1397/arm-local-arm64/crossarch-governed-b.verify.json'
+INVALID ARM_EVIDENCE_MISSING: arm-local-arm64/crossarch-governed-b independent hashes: [Errno 2] No such file or directory: '/Users/wsx/Documents/GitHub/oxo-flow/.claude/worktrees/agent-a4811d73744c25b76/docs/superpowers/audits/data/crossarch-1397/arm-local-arm64/crossarch-governed-b.artifacts.sha256'
+INVALID ARM_EVIDENCE_MISSING: arm-remote-amd64/crossarch-governed-a checkpoint: [Errno 2] No such file or directory: '/Users/wsx/Documents/GitHub/oxo-flow/.claude/worktrees/agent-a4811d73744c25b76/docs/superpowers/audits/data/crossarch-1397/arm-remote-amd64/crossarch-governed-a.checkpoint.json'
+INVALID ARM_EVIDENCE_MISSING: arm-remote-amd64/crossarch-governed-a verify: [Errno 2] No such file or directory: '/Users/wsx/Documents/GitHub/oxo-flow/.claude/worktrees/agent-a4811d73744c25b76/docs/superpowers/audits/data/crossarch-1397/arm-remote-amd64/crossarch-governed-a.verify.json'
+INVALID ARM_EVIDENCE_MISSING: arm-remote-amd64/crossarch-governed-a independent hashes: [Errno 2] No such file or directory: '/Users/wsx/Documents/GitHub/oxo-flow/.claude/worktrees/agent-a4811d73744c25b76/docs/superpowers/audits/data/crossarch-1397/arm-remote-amd64/crossarch-governed-a.artifacts.sha256'
+INVALID ARM_EVIDENCE_MISSING: arm-remote-amd64/crossarch-governed-b checkpoint: [Errno 2] No such file or directory: '/Users/wsx/Documents/GitHub/oxo-flow/.claude/worktrees/agent-a4811d73744c25b76/docs/superpowers/audits/data/crossarch-1397/arm-remote-amd64/crossarch-governed-b.checkpoint.json'
+INVALID ARM_EVIDENCE_MISSING: arm-remote-amd64/crossarch-governed-b verify: [Errno 2] No such file or directory: '/Users/wsx/Documents/GitHub/oxo-flow/.claude/worktrees/agent-a4811d73744c25b76/docs/superpowers/audits/data/crossarch-1397/arm-remote-amd64/crossarch-governed-b.verify.json'
+INVALID ARM_EVIDENCE_MISSING: arm-remote-amd64/crossarch-governed-b independent hashes: [Errno 2] No such file or directory: '/Users/wsx/Documents/GitHub/oxo-flow/.claude/worktrees/agent-a4811d73744c25b76/docs/superpowers/audits/data/crossarch-1397/arm-remote-amd64/crossarch-governed-b.artifacts.sha256'
+INVALID ENGINE_COMMIT_MISMATCH: arm_a/crossarch-governed-a workflow_git_sha=None, expected='834dc183ddab1e1a9562bf65aa4da1d09f1e32ec'
+INVALID WORKFLOW_TREE_DIRTY: arm_a/crossarch-governed-a workflow_git_dirty=None (must be false)
+INVALID WORKFLOW_CONTENT_MISSING: arm_a/crossarch-governed-a has no workflow_content_hash
+INVALID ENGINE_COMMIT_MISMATCH: arm_b/crossarch-governed-a workflow_git_sha=None, expected='834dc183ddab1e1a9562bf65aa4da1d09f1e32ec'
+INVALID WORKFLOW_TREE_DIRTY: arm_b/crossarch-governed-a workflow_git_dirty=None (must be false)
+INVALID WORKFLOW_CONTENT_MISSING: arm_b/crossarch-governed-a has no workflow_content_hash
+INVALID PROVENANCE_VERIFY_MISMATCH: arm_a/crossarch-governed-a verify mismatched=None missing=None
+INVALID PROVENANCE_VERIFY_MISMATCH: arm_b/crossarch-governed-a verify mismatched=None missing=None
+INVALID ENGINE_COMMIT_MISMATCH: arm_a/crossarch-governed-b workflow_git_sha=None, expected='834dc183ddab1e1a9562bf65aa4da1d09f1e32ec'
+INVALID WORKFLOW_TREE_DIRTY: arm_a/crossarch-governed-b workflow_git_dirty=None (must be false)
+INVALID WORKFLOW_CONTENT_MISSING: arm_a/crossarch-governed-b has no workflow_content_hash
+INVALID ENGINE_COMMIT_MISMATCH: arm_b/crossarch-governed-b workflow_git_sha=None, expected='834dc183ddab1e1a9562bf65aa4da1d09f1e32ec'
+INVALID WORKFLOW_TREE_DIRTY: arm_b/crossarch-governed-b workflow_git_dirty=None (must be false)
+INVALID WORKFLOW_CONTENT_MISSING: arm_b/crossarch-governed-b has no workflow_content_hash
+INVALID PROVENANCE_VERIFY_MISMATCH: arm_a/crossarch-governed-b verify mismatched=None missing=None
+INVALID PROVENANCE_VERIFY_MISMATCH: arm_b/crossarch-governed-b verify mismatched=None missing=None
+INVALID MISSING_ARTIFACT: arm_a missing primary artifact crossarch-governed-a/data/alphabet.txt
+INVALID MISSING_ARTIFACT: arm_a missing primary artifact crossarch-governed-a/data/bytes.bin
+INVALID MISSING_ARTIFACT: arm_a missing primary artifact crossarch-governed-a/data/bytes.bin.gz
+INVALID MISSING_ARTIFACT: arm_a missing primary artifact crossarch-governed-a/data/mask.bin
+INVALID MISSING_ARTIFACT: arm_a missing primary artifact crossarch-governed-a/data/notes.txt
+INVALID MISSING_ARTIFACT: arm_a missing primary artifact crossarch-governed-a/data/pattern.bin
+INVALID MISSING_ARTIFACT: arm_a missing primary artifact crossarch-governed-a/data/pattern.bin.gz
+INVALID MISSING_ARTIFACT: arm_a missing primary artifact crossarch-governed-a/data/payload.txt
+INVALID MISSING_ARTIFACT: arm_a missing primary artifact crossarch-governed-a/data/payload.txt.gz
+INVALID MISSING_ARTIFACT: arm_a missing primary artifact crossarch-governed-a/dedup.txt
+INVALID MISSING_ARTIFACT: arm_a missing primary artifact crossarch-governed-a/sorted.txt
+INVALID MISSING_ARTIFACT: arm_a missing primary artifact crossarch-governed-a/summary.txt
+INVALID MISSING_ARTIFACT: arm_a missing primary artifact crossarch-governed-b/bigint.txt
+INVALID MISSING_ARTIFACT: arm_a missing primary artifact crossarch-governed-b/checksums.txt
+INVALID MISSING_ARTIFACT: arm_a missing primary artifact crossarch-governed-b/data.json
+INVALID MISSING_ARTIFACT: arm_a missing primary artifact crossarch-governed-b/digests.tsv
+INVALID MISSING_ARTIFACT: arm_a missing primary artifact crossarch-governed-b/factorial.txt
+INVALID MISSING_ARTIFACT: arm_a missing primary artifact crossarch-governed-b/float.txt
+INVALID MISSING_ARTIFACT: arm_a missing primary artifact crossarch-governed-b/float_fsum.csv
+INVALID MISSING_ARTIFACT: arm_a missing primary artifact crossarch-governed-b/float_series.txt
+INVALID MISSING_ARTIFACT: arm_a missing primary artifact crossarch-governed-b/manifest.sha256
+INVALID MISSING_ARTIFACT: arm_a missing primary artifact crossarch-governed-b/matrix.json
+INVALID MISSING_ARTIFACT: arm_a missing primary artifact crossarch-governed-b/primes.txt
+INVALID MISSING_ARTIFACT: arm_a missing primary artifact crossarch-governed-b/summary.json
+INVALID NEGATIVE_CONTROL_MISSING: arm_a missing negative control crossarch-governed-a/control/os_arch.txt
+INVALID MISSING_ARTIFACT: arm_b missing primary artifact crossarch-governed-a/data/alphabet.txt
+INVALID MISSING_ARTIFACT: arm_b missing primary artifact crossarch-governed-a/data/bytes.bin
+INVALID MISSING_ARTIFACT: arm_b missing primary artifact crossarch-governed-a/data/bytes.bin.gz
+INVALID MISSING_ARTIFACT: arm_b missing primary artifact crossarch-governed-a/data/mask.bin
+INVALID MISSING_ARTIFACT: arm_b missing primary artifact crossarch-governed-a/data/notes.txt
+INVALID MISSING_ARTIFACT: arm_b missing primary artifact crossarch-governed-a/data/pattern.bin
+INVALID MISSING_ARTIFACT: arm_b missing primary artifact crossarch-governed-a/data/pattern.bin.gz
+INVALID MISSING_ARTIFACT: arm_b missing primary artifact crossarch-governed-a/data/payload.txt
+INVALID MISSING_ARTIFACT: arm_b missing primary artifact crossarch-governed-a/data/payload.txt.gz
+INVALID MISSING_ARTIFACT: arm_b missing primary artifact crossarch-governed-a/dedup.txt
+INVALID MISSING_ARTIFACT: arm_b missing primary artifact crossarch-governed-a/sorted.txt
+INVALID MISSING_ARTIFACT: arm_b missing primary artifact crossarch-governed-a/summary.txt
+INVALID MISSING_ARTIFACT: arm_b missing primary artifact crossarch-governed-b/bigint.txt
+INVALID MISSING_ARTIFACT: arm_b missing primary artifact crossarch-governed-b/checksums.txt
+INVALID MISSING_ARTIFACT: arm_b missing primary artifact crossarch-governed-b/data.json
+INVALID MISSING_ARTIFACT: arm_b missing primary artifact crossarch-governed-b/digests.tsv
+INVALID MISSING_ARTIFACT: arm_b missing primary artifact crossarch-governed-b/factorial.txt
+INVALID MISSING_ARTIFACT: arm_b missing primary artifact crossarch-governed-b/float.txt
+INVALID MISSING_ARTIFACT: arm_b missing primary artifact crossarch-governed-b/float_fsum.csv
+INVALID MISSING_ARTIFACT: arm_b missing primary artifact crossarch-governed-b/float_series.txt
+INVALID MISSING_ARTIFACT: arm_b missing primary artifact crossarch-governed-b/manifest.sha256
+INVALID MISSING_ARTIFACT: arm_b missing primary artifact crossarch-governed-b/matrix.json
+INVALID MISSING_ARTIFACT: arm_b missing primary artifact crossarch-governed-b/primes.txt
+INVALID MISSING_ARTIFACT: arm_b missing primary artifact crossarch-governed-b/summary.json
+INVALID NEGATIVE_CONTROL_MISSING: arm_b missing negative control crossarch-governed-a/control/os_arch.txt
+The campaign is INVALID under the pre-registered #1166 validity conditions (ARM_EVIDENCE_MISSING, ENGINE_COMMIT_MISMATCH, MISSING_ARTIFACT, NEGATIVE_CONTROL_MISSING, PROVENANCE_VERIFY_MISMATCH, WORKFLOW_CONTENT_MISSING, WORKFLOW_TREE_DIRTY). No endpoint estimate is presented as the campaign result; see the validity reasons and flow table.
+finished-utc: 2026-11-27T16:59:39Z

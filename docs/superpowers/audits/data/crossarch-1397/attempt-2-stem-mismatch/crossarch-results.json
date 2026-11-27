@@ -1,0 +1,950 @@
+{
+  "arms": {
+    "arm_a": {
+      "container": {
+        "container-arch": "aarch64",
+        "gzip": "gzip 1.13",
+        "image-arch": "arm64",
+        "image-id": "sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+        "image-src": "python@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+        "libc": "ldd (Debian GLIBC 2.41-12+deb13u4) 2.41",
+        "manifest-list-digest": "sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+        "platform": "linux/arm64",
+        "python3": "Python 3.12.16",
+        "sha256sum": "sha256sum (GNU coreutils) 9.7",
+        "sort": "sort (GNU coreutils) 9.7",
+        "staged-tag": "crossarch1397:pin",
+        "staging": "pre-staged"
+      },
+      "dir": "/Users/wsx/Documents/GitHub/oxo-flow/.claude/worktrees/agent-a4811d73744c25b76/docs/superpowers/audits/data/crossarch-1397/arm-local-arm64",
+      "identity": {
+        "binary-sha256": "9ce0065a42e60afe17dcb3308a9e430813301ea8e01bbf2964a75d14719236d6",
+        "cpu-model": "Apple M5",
+        "date-utc": "2026-11-27T16:59:27Z",
+        "engine-commit": "834dc183ddab1e1a9562bf65aa4da1d09f1e32ec",
+        "engine-dirty": "0",
+        "host-arch": "arm64",
+        "host-uname": "Darwin ShixiangWang-WorkSpacedeMacBook-Pro.local 27.2.0 Darwin Kernel Version 27.2.0: Wed Oct 14 23:48:06 PDT 2026; root:xnu-13432.41.4~25/RELEASE_ARM64_T8142 arm64",
+        "hostname": "ShixiangWang-WorkSpacedeMacBook-Pro.local",
+        "kernel": "27.2.0",
+        "nproc": "10",
+        "os-release": "Darwin",
+        "oxo-flow": "oxo-flow 0.32.0",
+        "passthru": "DOCKER_DEFAULT_PLATFORM",
+        "platform": "linux/arm64"
+      },
+      "label": "local",
+      "workflows": {
+        "crossarch-governed-a": {
+          "completed_rules": [],
+          "failed_rules": [],
+          "verify": {
+            "matched": null,
+            "mismatched": null,
+            "missing": null
+          },
+          "workflow_content_hash": null,
+          "workflow_git_dirty": null,
+          "workflow_git_sha": null
+        },
+        "crossarch-governed-b": {
+          "completed_rules": [],
+          "failed_rules": [],
+          "verify": {
+            "matched": null,
+            "mismatched": null,
+            "missing": null
+          },
+          "workflow_content_hash": null,
+          "workflow_git_dirty": null,
+          "workflow_git_sha": null
+        }
+      }
+    },
+    "arm_b": {
+      "container": {
+        "container-arch": "x86_64",
+        "gzip": "gzip 1.13",
+        "image-arch": "amd64",
+        "image-id": "sha256:78976a69c067520ef8be34cde307ef9f6fea6dcefa50edb57039773d241ca0db",
+        "image-src": "python@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+        "libc": "ldd (Debian GLIBC 2.41-12+deb13u4) 2.41",
+        "manifest-list-digest": "sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+        "platform": "linux/amd64",
+        "python3": "Python 3.12.16",
+        "sha256sum": "sha256sum (GNU coreutils) 9.7",
+        "sort": "sort (GNU coreutils) 9.7",
+        "staged-tag": "crossarch1397:pin",
+        "staging": "pre-staged"
+      },
+      "dir": "/Users/wsx/Documents/GitHub/oxo-flow/.claude/worktrees/agent-a4811d73744c25b76/docs/superpowers/audits/data/crossarch-1397/arm-remote-amd64",
+      "identity": {
+        "binary-sha256": "aef9eecc49a09d177bcdbe102f309f64891935f2f18858fd441193c009b0cefd",
+        "cpu-model": "unknown",
+        "date-utc": "2026-11-27T16:59:31Z",
+        "engine-commit": "834dc183ddab1e1a9562bf65aa4da1d09f1e32ec",
+        "engine-dirty": "0",
+        "host-arch": "x86_64",
+        "host-uname": "Linux VM-4-4-ubuntu 6.8.0-137-generic #137-Ubuntu SMP PREEMPT_DYNAMIC Fri Jul 17 20:28:23 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux",
+        "hostname": "VM-4-4-ubuntu",
+        "kernel": "6.8.0-137-generic",
+        "nproc": "4",
+        "os-release": "Linux",
+        "oxo-flow": "oxo-flow 0.32.0",
+        "passthru": "DOCKER_DEFAULT_PLATFORM",
+        "platform": "linux/amd64"
+      },
+      "label": "remote",
+      "workflows": {
+        "crossarch-governed-a": {
+          "completed_rules": [],
+          "failed_rules": [],
+          "verify": {
+            "matched": null,
+            "mismatched": null,
+            "missing": null
+          },
+          "workflow_content_hash": null,
+          "workflow_git_dirty": null,
+          "workflow_git_sha": null
+        },
+        "crossarch-governed-b": {
+          "completed_rules": [],
+          "failed_rules": [],
+          "verify": {
+            "matched": null,
+            "mismatched": null,
+            "missing": null
+          },
+          "workflow_content_hash": null,
+          "workflow_git_dirty": null,
+          "workflow_git_sha": null
+        }
+      }
+    }
+  },
+  "artifacts": [
+    {
+      "arm_a_sha256": null,
+      "arm_b_sha256": null,
+      "artifact": "crossarch-governed-a/data/payload.txt",
+      "class": "pure-text",
+      "identical": false
+    },
+    {
+      "arm_a_sha256": null,
+      "arm_b_sha256": null,
+      "artifact": "crossarch-governed-a/data/alphabet.txt",
+      "class": "pure-text",
+      "identical": false
+    },
+    {
+      "arm_a_sha256": null,
+      "arm_b_sha256": null,
+      "artifact": "crossarch-governed-a/data/notes.txt",
+      "class": "pure-text",
+      "identical": false
+    },
+    {
+      "arm_a_sha256": null,
+      "arm_b_sha256": null,
+      "artifact": "crossarch-governed-a/data/bytes.bin",
+      "class": "raw-binary",
+      "identical": false
+    },
+    {
+      "arm_a_sha256": null,
+      "arm_b_sha256": null,
+      "artifact": "crossarch-governed-a/data/pattern.bin",
+      "class": "raw-binary",
+      "identical": false
+    },
+    {
+      "arm_a_sha256": null,
+      "arm_b_sha256": null,
+      "artifact": "crossarch-governed-a/data/mask.bin",
+      "class": "raw-binary",
+      "identical": false
+    },
+    {
+      "arm_a_sha256": null,
+      "arm_b_sha256": null,
+      "artifact": "crossarch-governed-a/summary.txt",
+      "class": "derived-text",
+      "identical": false
+    },
+    {
+      "arm_a_sha256": null,
+      "arm_b_sha256": null,
+      "artifact": "crossarch-governed-a/sorted.txt",
+      "class": "derived-text",
+      "identical": false
+    },
+    {
+      "arm_a_sha256": null,
+      "arm_b_sha256": null,
+      "artifact": "crossarch-governed-a/dedup.txt",
+      "class": "derived-text",
+      "identical": false
+    },
+    {
+      "arm_a_sha256": null,
+      "arm_b_sha256": null,
+      "artifact": "crossarch-governed-a/data/payload.txt.gz",
+      "class": "byte-exact-compressed",
+      "identical": false
+    },
+    {
+      "arm_a_sha256": null,
+      "arm_b_sha256": null,
+      "artifact": "crossarch-governed-a/data/bytes.bin.gz",
+      "class": "byte-exact-compressed",
+      "identical": false
+    },
+    {
+      "arm_a_sha256": null,
+      "arm_b_sha256": null,
+      "artifact": "crossarch-governed-a/data/pattern.bin.gz",
+      "class": "byte-exact-compressed",
+      "identical": false
+    },
+    {
+      "arm_a_sha256": null,
+      "arm_b_sha256": null,
+      "artifact": "crossarch-governed-b/manifest.sha256",
+      "class": "checksum-manifest",
+      "identical": false
+    },
+    {
+      "arm_a_sha256": null,
+      "arm_b_sha256": null,
+      "artifact": "crossarch-governed-b/digests.tsv",
+      "class": "checksum-manifest",
+      "identical": false
+    },
+    {
+      "arm_a_sha256": null,
+      "arm_b_sha256": null,
+      "artifact": "crossarch-governed-b/checksums.txt",
+      "class": "checksum-manifest",
+      "identical": false
+    },
+    {
+      "arm_a_sha256": null,
+      "arm_b_sha256": null,
+      "artifact": "crossarch-governed-b/float.txt",
+      "class": "ieee754-float",
+      "identical": false
+    },
+    {
+      "arm_a_sha256": null,
+      "arm_b_sha256": null,
+      "artifact": "crossarch-governed-b/float_series.txt",
+      "class": "ieee754-float",
+      "identical": false
+    },
+    {
+      "arm_a_sha256": null,
+      "arm_b_sha256": null,
+      "artifact": "crossarch-governed-b/float_fsum.csv",
+      "class": "ieee754-float",
+      "identical": false
+    },
+    {
+      "arm_a_sha256": null,
+      "arm_b_sha256": null,
+      "artifact": "crossarch-governed-b/factorial.txt",
+      "class": "integer-arithmetic",
+      "identical": false
+    },
+    {
+      "arm_a_sha256": null,
+      "arm_b_sha256": null,
+      "artifact": "crossarch-governed-b/primes.txt",
+      "class": "integer-arithmetic",
+      "identical": false
+    },
+    {
+      "arm_a_sha256": null,
+      "arm_b_sha256": null,
+      "artifact": "crossarch-governed-b/bigint.txt",
+      "class": "integer-arithmetic",
+      "identical": false
+    },
+    {
+      "arm_a_sha256": null,
+      "arm_b_sha256": null,
+      "artifact": "crossarch-governed-b/data.json",
+      "class": "json-structured",
+      "identical": false
+    },
+    {
+      "arm_a_sha256": null,
+      "arm_b_sha256": null,
+      "artifact": "crossarch-governed-b/summary.json",
+      "class": "json-structured",
+      "identical": false
+    },
+    {
+      "arm_a_sha256": null,
+      "arm_b_sha256": null,
+      "artifact": "crossarch-governed-b/matrix.json",
+      "class": "json-structured",
+      "identical": false
+    }
+  ],
+  "campaign": "1166",
+  "classes": {
+    "byte-exact-compressed": {
+      "architecture_stable": false,
+      "artifacts": [
+        {
+          "arm_a_sha256": null,
+          "arm_b_sha256": null,
+          "artifact": "crossarch-governed-a/data/payload.txt.gz",
+          "class": "byte-exact-compressed",
+          "identical": false
+        },
+        {
+          "arm_a_sha256": null,
+          "arm_b_sha256": null,
+          "artifact": "crossarch-governed-a/data/bytes.bin.gz",
+          "class": "byte-exact-compressed",
+          "identical": false
+        },
+        {
+          "arm_a_sha256": null,
+          "arm_b_sha256": null,
+          "artifact": "crossarch-governed-a/data/pattern.bin.gz",
+          "class": "byte-exact-compressed",
+          "identical": false
+        }
+      ],
+      "eligible": true,
+      "identical": 0,
+      "total": 3
+    },
+    "checksum-manifest": {
+      "architecture_stable": false,
+      "artifacts": [
+        {
+          "arm_a_sha256": null,
+          "arm_b_sha256": null,
+          "artifact": "crossarch-governed-b/manifest.sha256",
+          "class": "checksum-manifest",
+          "identical": false
+        },
+        {
+          "arm_a_sha256": null,
+          "arm_b_sha256": null,
+          "artifact": "crossarch-governed-b/digests.tsv",
+          "class": "checksum-manifest",
+          "identical": false
+        },
+        {
+          "arm_a_sha256": null,
+          "arm_b_sha256": null,
+          "artifact": "crossarch-governed-b/checksums.txt",
+          "class": "checksum-manifest",
+          "identical": false
+        }
+      ],
+      "eligible": true,
+      "identical": 0,
+      "total": 3
+    },
+    "derived-text": {
+      "architecture_stable": false,
+      "artifacts": [
+        {
+          "arm_a_sha256": null,
+          "arm_b_sha256": null,
+          "artifact": "crossarch-governed-a/summary.txt",
+          "class": "derived-text",
+          "identical": false
+        },
+        {
+          "arm_a_sha256": null,
+          "arm_b_sha256": null,
+          "artifact": "crossarch-governed-a/sorted.txt",
+          "class": "derived-text",
+          "identical": false
+        },
+        {
+          "arm_a_sha256": null,
+          "arm_b_sha256": null,
+          "artifact": "crossarch-governed-a/dedup.txt",
+          "class": "derived-text",
+          "identical": false
+        }
+      ],
+      "eligible": true,
+      "identical": 0,
+      "total": 3
+    },
+    "ieee754-float": {
+      "architecture_stable": false,
+      "artifacts": [
+        {
+          "arm_a_sha256": null,
+          "arm_b_sha256": null,
+          "artifact": "crossarch-governed-b/float.txt",
+          "class": "ieee754-float",
+          "identical": false
+        },
+        {
+          "arm_a_sha256": null,
+          "arm_b_sha256": null,
+          "artifact": "crossarch-governed-b/float_series.txt",
+          "class": "ieee754-float",
+          "identical": false
+        },
+        {
+          "arm_a_sha256": null,
+          "arm_b_sha256": null,
+          "artifact": "crossarch-governed-b/float_fsum.csv",
+          "class": "ieee754-float",
+          "identical": false
+        }
+      ],
+      "eligible": true,
+      "identical": 0,
+      "total": 3
+    },
+    "integer-arithmetic": {
+      "architecture_stable": false,
+      "artifacts": [
+        {
+          "arm_a_sha256": null,
+          "arm_b_sha256": null,
+          "artifact": "crossarch-governed-b/factorial.txt",
+          "class": "integer-arithmetic",
+          "identical": false
+        },
+        {
+          "arm_a_sha256": null,
+          "arm_b_sha256": null,
+          "artifact": "crossarch-governed-b/primes.txt",
+          "class": "integer-arithmetic",
+          "identical": false
+        },
+        {
+          "arm_a_sha256": null,
+          "arm_b_sha256": null,
+          "artifact": "crossarch-governed-b/bigint.txt",
+          "class": "integer-arithmetic",
+          "identical": false
+        }
+      ],
+      "eligible": true,
+      "identical": 0,
+      "total": 3
+    },
+    "json-structured": {
+      "architecture_stable": false,
+      "artifacts": [
+        {
+          "arm_a_sha256": null,
+          "arm_b_sha256": null,
+          "artifact": "crossarch-governed-b/data.json",
+          "class": "json-structured",
+          "identical": false
+        },
+        {
+          "arm_a_sha256": null,
+          "arm_b_sha256": null,
+          "artifact": "crossarch-governed-b/summary.json",
+          "class": "json-structured",
+          "identical": false
+        },
+        {
+          "arm_a_sha256": null,
+          "arm_b_sha256": null,
+          "artifact": "crossarch-governed-b/matrix.json",
+          "class": "json-structured",
+          "identical": false
+        }
+      ],
+      "eligible": true,
+      "identical": 0,
+      "total": 3
+    },
+    "pure-text": {
+      "architecture_stable": false,
+      "artifacts": [
+        {
+          "arm_a_sha256": null,
+          "arm_b_sha256": null,
+          "artifact": "crossarch-governed-a/data/payload.txt",
+          "class": "pure-text",
+          "identical": false
+        },
+        {
+          "arm_a_sha256": null,
+          "arm_b_sha256": null,
+          "artifact": "crossarch-governed-a/data/alphabet.txt",
+          "class": "pure-text",
+          "identical": false
+        },
+        {
+          "arm_a_sha256": null,
+          "arm_b_sha256": null,
+          "artifact": "crossarch-governed-a/data/notes.txt",
+          "class": "pure-text",
+          "identical": false
+        }
+      ],
+      "eligible": true,
+      "identical": 0,
+      "total": 3
+    },
+    "raw-binary": {
+      "architecture_stable": false,
+      "artifacts": [
+        {
+          "arm_a_sha256": null,
+          "arm_b_sha256": null,
+          "artifact": "crossarch-governed-a/data/bytes.bin",
+          "class": "raw-binary",
+          "identical": false
+        },
+        {
+          "arm_a_sha256": null,
+          "arm_b_sha256": null,
+          "artifact": "crossarch-governed-a/data/pattern.bin",
+          "class": "raw-binary",
+          "identical": false
+        },
+        {
+          "arm_a_sha256": null,
+          "arm_b_sha256": null,
+          "artifact": "crossarch-governed-a/data/mask.bin",
+          "class": "raw-binary",
+          "identical": false
+        }
+      ],
+      "eligible": true,
+      "identical": 0,
+      "total": 3
+    }
+  },
+  "corpus_path": "/Users/wsx/Documents/GitHub/oxo-flow/.claude/worktrees/agent-a4811d73744c25b76/scripts/cross-arch-provenance-governed-corpus.json",
+  "corpus_sha256": "33a7531882f266dc067ba705b91863eacb709dee36bc00c2720aa0e6aba20bfa",
+  "decision": {
+    "category": "INVALID",
+    "detail": "PR-06 section C4 ordered rule, frozen amendment 2",
+    "negative_precedence": true,
+    "rule_step": "step 1: validity condition failed",
+    "unstable_classes": [
+      "pure-text",
+      "raw-binary",
+      "derived-text",
+      "byte-exact-compressed",
+      "checksum-manifest",
+      "ieee754-float",
+      "integer-arithmetic",
+      "json-structured"
+    ]
+  },
+  "expected_engine_commit": "834dc183ddab1e1a9562bf65aa4da1d09f1e32ec",
+  "flow_table": {
+    "excluded_negative_controls": 1,
+    "included_primary_artifacts": 24,
+    "missing_primary_artifacts": [
+      "crossarch-governed-a/data/alphabet.txt",
+      "crossarch-governed-a/data/bytes.bin",
+      "crossarch-governed-a/data/bytes.bin.gz",
+      "crossarch-governed-a/data/mask.bin",
+      "crossarch-governed-a/data/notes.txt",
+      "crossarch-governed-a/data/pattern.bin",
+      "crossarch-governed-a/data/pattern.bin.gz",
+      "crossarch-governed-a/data/payload.txt",
+      "crossarch-governed-a/data/payload.txt.gz",
+      "crossarch-governed-a/dedup.txt",
+      "crossarch-governed-a/sorted.txt",
+      "crossarch-governed-a/summary.txt",
+      "crossarch-governed-b/bigint.txt",
+      "crossarch-governed-b/checksums.txt",
+      "crossarch-governed-b/data.json",
+      "crossarch-governed-b/digests.tsv",
+      "crossarch-governed-b/factorial.txt",
+      "crossarch-governed-b/float.txt",
+      "crossarch-governed-b/float_fsum.csv",
+      "crossarch-governed-b/float_series.txt",
+      "crossarch-governed-b/manifest.sha256",
+      "crossarch-governed-b/matrix.json",
+      "crossarch-governed-b/primes.txt",
+      "crossarch-governed-b/summary.json"
+    ]
+  },
+  "interval": {
+    "alpha": 0.05,
+    "interval_category": null,
+    "lower": null,
+    "method": "Clopper-Pearson exact two-sided 95%",
+    "point_estimate": 0.0,
+    "tau_ARCH": 0.8,
+    "upper": null
+  },
+  "issue": "1397",
+  "negative_control": [
+    {
+      "arm_a_sha256": null,
+      "arm_b_sha256": null,
+      "artifact": "crossarch-governed-a/control/os_arch.txt",
+      "differs": false
+    }
+  ],
+  "primary_endpoint": {
+    "differing": 24,
+    "differing_set": [
+      "crossarch-governed-a/data/payload.txt",
+      "crossarch-governed-a/data/alphabet.txt",
+      "crossarch-governed-a/data/notes.txt",
+      "crossarch-governed-a/data/bytes.bin",
+      "crossarch-governed-a/data/pattern.bin",
+      "crossarch-governed-a/data/mask.bin",
+      "crossarch-governed-a/summary.txt",
+      "crossarch-governed-a/sorted.txt",
+      "crossarch-governed-a/dedup.txt",
+      "crossarch-governed-a/data/payload.txt.gz",
+      "crossarch-governed-a/data/bytes.bin.gz",
+      "crossarch-governed-a/data/pattern.bin.gz",
+      "crossarch-governed-b/manifest.sha256",
+      "crossarch-governed-b/digests.tsv",
+      "crossarch-governed-b/checksums.txt",
+      "crossarch-governed-b/float.txt",
+      "crossarch-governed-b/float_series.txt",
+      "crossarch-governed-b/float_fsum.csv",
+      "crossarch-governed-b/factorial.txt",
+      "crossarch-governed-b/primes.txt",
+      "crossarch-governed-b/bigint.txt",
+      "crossarch-governed-b/data.json",
+      "crossarch-governed-b/summary.json",
+      "crossarch-governed-b/matrix.json"
+    ],
+    "direction": "higher is better",
+    "identical": 0,
+    "name": "architecture-stable artifact proportion",
+    "proportion": 0.0,
+    "total": 24
+  },
+  "statement": "The campaign is INVALID under the pre-registered #1166 validity conditions (ARM_EVIDENCE_MISSING, ENGINE_COMMIT_MISMATCH, MISSING_ARTIFACT, NEGATIVE_CONTROL_MISSING, PROVENANCE_VERIFY_MISMATCH, WORKFLOW_CONTENT_MISSING, WORKFLOW_TREE_DIRTY). No endpoint estimate is presented as the campaign result; see the validity reasons and flow table.",
+  "validity": {
+    "reasons": [
+      {
+        "code": "ARM_EVIDENCE_MISSING",
+        "detail": "arm-local-arm64/crossarch-governed-a checkpoint: [Errno 2] No such file or directory: '/Users/wsx/Documents/GitHub/oxo-flow/.claude/worktrees/agent-a4811d73744c25b76/docs/superpowers/audits/data/crossarch-1397/arm-local-arm64/crossarch-governed-a.checkpoint.json'"
+      },
+      {
+        "code": "ARM_EVIDENCE_MISSING",
+        "detail": "arm-local-arm64/crossarch-governed-a verify: [Errno 2] No such file or directory: '/Users/wsx/Documents/GitHub/oxo-flow/.claude/worktrees/agent-a4811d73744c25b76/docs/superpowers/audits/data/crossarch-1397/arm-local-arm64/crossarch-governed-a.verify.json'"
+      },
+      {
+        "code": "ARM_EVIDENCE_MISSING",
+        "detail": "arm-local-arm64/crossarch-governed-a independent hashes: [Errno 2] No such file or directory: '/Users/wsx/Documents/GitHub/oxo-flow/.claude/worktrees/agent-a4811d73744c25b76/docs/superpowers/audits/data/crossarch-1397/arm-local-arm64/crossarch-governed-a.artifacts.sha256'"
+      },
+      {
+        "code": "ARM_EVIDENCE_MISSING",
+        "detail": "arm-local-arm64/crossarch-governed-b checkpoint: [Errno 2] No such file or directory: '/Users/wsx/Documents/GitHub/oxo-flow/.claude/worktrees/agent-a4811d73744c25b76/docs/superpowers/audits/data/crossarch-1397/arm-local-arm64/crossarch-governed-b.checkpoint.json'"
+      },
+      {
+        "code": "ARM_EVIDENCE_MISSING",
+        "detail": "arm-local-arm64/crossarch-governed-b verify: [Errno 2] No such file or directory: '/Users/wsx/Documents/GitHub/oxo-flow/.claude/worktrees/agent-a4811d73744c25b76/docs/superpowers/audits/data/crossarch-1397/arm-local-arm64/crossarch-governed-b.verify.json'"
+      },
+      {
+        "code": "ARM_EVIDENCE_MISSING",
+        "detail": "arm-local-arm64/crossarch-governed-b independent hashes: [Errno 2] No such file or directory: '/Users/wsx/Documents/GitHub/oxo-flow/.claude/worktrees/agent-a4811d73744c25b76/docs/superpowers/audits/data/crossarch-1397/arm-local-arm64/crossarch-governed-b.artifacts.sha256'"
+      },
+      {
+        "code": "ARM_EVIDENCE_MISSING",
+        "detail": "arm-remote-amd64/crossarch-governed-a checkpoint: [Errno 2] No such file or directory: '/Users/wsx/Documents/GitHub/oxo-flow/.claude/worktrees/agent-a4811d73744c25b76/docs/superpowers/audits/data/crossarch-1397/arm-remote-amd64/crossarch-governed-a.checkpoint.json'"
+      },
+      {
+        "code": "ARM_EVIDENCE_MISSING",
+        "detail": "arm-remote-amd64/crossarch-governed-a verify: [Errno 2] No such file or directory: '/Users/wsx/Documents/GitHub/oxo-flow/.claude/worktrees/agent-a4811d73744c25b76/docs/superpowers/audits/data/crossarch-1397/arm-remote-amd64/crossarch-governed-a.verify.json'"
+      },
+      {
+        "code": "ARM_EVIDENCE_MISSING",
+        "detail": "arm-remote-amd64/crossarch-governed-a independent hashes: [Errno 2] No such file or directory: '/Users/wsx/Documents/GitHub/oxo-flow/.claude/worktrees/agent-a4811d73744c25b76/docs/superpowers/audits/data/crossarch-1397/arm-remote-amd64/crossarch-governed-a.artifacts.sha256'"
+      },
+      {
+        "code": "ARM_EVIDENCE_MISSING",
+        "detail": "arm-remote-amd64/crossarch-governed-b checkpoint: [Errno 2] No such file or directory: '/Users/wsx/Documents/GitHub/oxo-flow/.claude/worktrees/agent-a4811d73744c25b76/docs/superpowers/audits/data/crossarch-1397/arm-remote-amd64/crossarch-governed-b.checkpoint.json'"
+      },
+      {
+        "code": "ARM_EVIDENCE_MISSING",
+        "detail": "arm-remote-amd64/crossarch-governed-b verify: [Errno 2] No such file or directory: '/Users/wsx/Documents/GitHub/oxo-flow/.claude/worktrees/agent-a4811d73744c25b76/docs/superpowers/audits/data/crossarch-1397/arm-remote-amd64/crossarch-governed-b.verify.json'"
+      },
+      {
+        "code": "ARM_EVIDENCE_MISSING",
+        "detail": "arm-remote-amd64/crossarch-governed-b independent hashes: [Errno 2] No such file or directory: '/Users/wsx/Documents/GitHub/oxo-flow/.claude/worktrees/agent-a4811d73744c25b76/docs/superpowers/audits/data/crossarch-1397/arm-remote-amd64/crossarch-governed-b.artifacts.sha256'"
+      },
+      {
+        "code": "ENGINE_COMMIT_MISMATCH",
+        "detail": "arm_a/crossarch-governed-a workflow_git_sha=None, expected='834dc183ddab1e1a9562bf65aa4da1d09f1e32ec'"
+      },
+      {
+        "code": "WORKFLOW_TREE_DIRTY",
+        "detail": "arm_a/crossarch-governed-a workflow_git_dirty=None (must be false)"
+      },
+      {
+        "code": "WORKFLOW_CONTENT_MISSING",
+        "detail": "arm_a/crossarch-governed-a has no workflow_content_hash"
+      },
+      {
+        "code": "ENGINE_COMMIT_MISMATCH",
+        "detail": "arm_b/crossarch-governed-a workflow_git_sha=None, expected='834dc183ddab1e1a9562bf65aa4da1d09f1e32ec'"
+      },
+      {
+        "code": "WORKFLOW_TREE_DIRTY",
+        "detail": "arm_b/crossarch-governed-a workflow_git_dirty=None (must be false)"
+      },
+      {
+        "code": "WORKFLOW_CONTENT_MISSING",
+        "detail": "arm_b/crossarch-governed-a has no workflow_content_hash"
+      },
+      {
+        "code": "PROVENANCE_VERIFY_MISMATCH",
+        "detail": "arm_a/crossarch-governed-a verify mismatched=None missing=None"
+      },
+      {
+        "code": "PROVENANCE_VERIFY_MISMATCH",
+        "detail": "arm_b/crossarch-governed-a verify mismatched=None missing=None"
+      },
+      {
+        "code": "ENGINE_COMMIT_MISMATCH",
+        "detail": "arm_a/crossarch-governed-b workflow_git_sha=None, expected='834dc183ddab1e1a9562bf65aa4da1d09f1e32ec'"
+      },
+      {
+        "code": "WORKFLOW_TREE_DIRTY",
+        "detail": "arm_a/crossarch-governed-b workflow_git_dirty=None (must be false)"
+      },
+      {
+        "code": "WORKFLOW_CONTENT_MISSING",
+        "detail": "arm_a/crossarch-governed-b has no workflow_content_hash"
+      },
+      {
+        "code": "ENGINE_COMMIT_MISMATCH",
+        "detail": "arm_b/crossarch-governed-b workflow_git_sha=None, expected='834dc183ddab1e1a9562bf65aa4da1d09f1e32ec'"
+      },
+      {
+        "code": "WORKFLOW_TREE_DIRTY",
+        "detail": "arm_b/crossarch-governed-b workflow_git_dirty=None (must be false)"
+      },
+      {
+        "code": "WORKFLOW_CONTENT_MISSING",
+        "detail": "arm_b/crossarch-governed-b has no workflow_content_hash"
+      },
+      {
+        "code": "PROVENANCE_VERIFY_MISMATCH",
+        "detail": "arm_a/crossarch-governed-b verify mismatched=None missing=None"
+      },
+      {
+        "code": "PROVENANCE_VERIFY_MISMATCH",
+        "detail": "arm_b/crossarch-governed-b verify mismatched=None missing=None"
+      },
+      {
+        "code": "MISSING_ARTIFACT",
+        "detail": "arm_a missing primary artifact crossarch-governed-a/data/alphabet.txt"
+      },
+      {
+        "code": "MISSING_ARTIFACT",
+        "detail": "arm_a missing primary artifact crossarch-governed-a/data/bytes.bin"
+      },
+      {
+        "code": "MISSING_ARTIFACT",
+        "detail": "arm_a missing primary artifact crossarch-governed-a/data/bytes.bin.gz"
+      },
+      {
+        "code": "MISSING_ARTIFACT",
+        "detail": "arm_a missing primary artifact crossarch-governed-a/data/mask.bin"
+      },
+      {
+        "code": "MISSING_ARTIFACT",
+        "detail": "arm_a missing primary artifact crossarch-governed-a/data/notes.txt"
+      },
+      {
+        "code": "MISSING_ARTIFACT",
+        "detail": "arm_a missing primary artifact crossarch-governed-a/data/pattern.bin"
+      },
+      {
+        "code": "MISSING_ARTIFACT",
+        "detail": "arm_a missing primary artifact crossarch-governed-a/data/pattern.bin.gz"
+      },
+      {
+        "code": "MISSING_ARTIFACT",
+        "detail": "arm_a missing primary artifact crossarch-governed-a/data/payload.txt"
+      },
+      {
+        "code": "MISSING_ARTIFACT",
+        "detail": "arm_a missing primary artifact crossarch-governed-a/data/payload.txt.gz"
+      },
+      {
+        "code": "MISSING_ARTIFACT",
+        "detail": "arm_a missing primary artifact crossarch-governed-a/dedup.txt"
+      },
+      {
+        "code": "MISSING_ARTIFACT",
+        "detail": "arm_a missing primary artifact crossarch-governed-a/sorted.txt"
+      },
+      {
+        "code": "MISSING_ARTIFACT",
+        "detail": "arm_a missing primary artifact crossarch-governed-a/summary.txt"
+      },
+      {
+        "code": "MISSING_ARTIFACT",
+        "detail": "arm_a missing primary artifact crossarch-governed-b/bigint.txt"
+      },
+      {
+        "code": "MISSING_ARTIFACT",
+        "detail": "arm_a missing primary artifact crossarch-governed-b/checksums.txt"
+      },
+      {
+        "code": "MISSING_ARTIFACT",
+        "detail": "arm_a missing primary artifact crossarch-governed-b/data.json"
+      },
+      {
+        "code": "MISSING_ARTIFACT",
+        "detail": "arm_a missing primary artifact crossarch-governed-b/digests.tsv"
+      },
+      {
+        "code": "MISSING_ARTIFACT",
+        "detail": "arm_a missing primary artifact crossarch-governed-b/factorial.txt"
+      },
+      {
+        "code": "MISSING_ARTIFACT",
+        "detail": "arm_a missing primary artifact crossarch-governed-b/float.txt"
+      },
+      {
+        "code": "MISSING_ARTIFACT",
+        "detail": "arm_a missing primary artifact crossarch-governed-b/float_fsum.csv"
+      },
+      {
+        "code": "MISSING_ARTIFACT",
+        "detail": "arm_a missing primary artifact crossarch-governed-b/float_series.txt"
+      },
+      {
+        "code": "MISSING_ARTIFACT",
+        "detail": "arm_a missing primary artifact crossarch-governed-b/manifest.sha256"
+      },
+      {
+        "code": "MISSING_ARTIFACT",
+        "detail": "arm_a missing primary artifact crossarch-governed-b/matrix.json"
+      },
+      {
+        "code": "MISSING_ARTIFACT",
+        "detail": "arm_a missing primary artifact crossarch-governed-b/primes.txt"
+      },
+      {
+        "code": "MISSING_ARTIFACT",
+        "detail": "arm_a missing primary artifact crossarch-governed-b/summary.json"
+      },
+      {
+        "code": "NEGATIVE_CONTROL_MISSING",
+        "detail": "arm_a missing negative control crossarch-governed-a/control/os_arch.txt"
+      },
+      {
+        "code": "MISSING_ARTIFACT",
+        "detail": "arm_b missing primary artifact crossarch-governed-a/data/alphabet.txt"
+      },
+      {
+        "code": "MISSING_ARTIFACT",
+        "detail": "arm_b missing primary artifact crossarch-governed-a/data/bytes.bin"
+      },
+      {
+        "code": "MISSING_ARTIFACT",
+        "detail": "arm_b missing primary artifact crossarch-governed-a/data/bytes.bin.gz"
+      },
+      {
+        "code": "MISSING_ARTIFACT",
+        "detail": "arm_b missing primary artifact crossarch-governed-a/data/mask.bin"
+      },
+      {
+        "code": "MISSING_ARTIFACT",
+        "detail": "arm_b missing primary artifact crossarch-governed-a/data/notes.txt"
+      },
+      {
+        "code": "MISSING_ARTIFACT",
+        "detail": "arm_b missing primary artifact crossarch-governed-a/data/pattern.bin"
+      },
+      {
+        "code": "MISSING_ARTIFACT",
+        "detail": "arm_b missing primary artifact crossarch-governed-a/data/pattern.bin.gz"
+      },
+      {
+        "code": "MISSING_ARTIFACT",
+        "detail": "arm_b missing primary artifact crossarch-governed-a/data/payload.txt"
+      },
+      {
+        "code": "MISSING_ARTIFACT",
+        "detail": "arm_b missing primary artifact crossarch-governed-a/data/payload.txt.gz"
+      },
+      {
+        "code": "MISSING_ARTIFACT",
+        "detail": "arm_b missing primary artifact crossarch-governed-a/dedup.txt"
+      },
+      {
+        "code": "MISSING_ARTIFACT",
+        "detail": "arm_b missing primary artifact crossarch-governed-a/sorted.txt"
+      },
+      {
+        "code": "MISSING_ARTIFACT",
+        "detail": "arm_b missing primary artifact crossarch-governed-a/summary.txt"
+      },
+      {
+        "code": "MISSING_ARTIFACT",
+        "detail": "arm_b missing primary artifact crossarch-governed-b/bigint.txt"
+      },
+      {
+        "code": "MISSING_ARTIFACT",
+        "detail": "arm_b missing primary artifact crossarch-governed-b/checksums.txt"
+      },
+      {
+        "code": "MISSING_ARTIFACT",
+        "detail": "arm_b missing primary artifact crossarch-governed-b/data.json"
+      },
+      {
+        "code": "MISSING_ARTIFACT",
+        "detail": "arm_b missing primary artifact crossarch-governed-b/digests.tsv"
+      },
+      {
+        "code": "MISSING_ARTIFACT",
+        "detail": "arm_b missing primary artifact crossarch-governed-b/factorial.txt"
+      },
+      {
+        "code": "MISSING_ARTIFACT",
+        "detail": "arm_b missing primary artifact crossarch-governed-b/float.txt"
+      },
+      {
+        "code": "MISSING_ARTIFACT",
+        "detail": "arm_b missing primary artifact crossarch-governed-b/float_fsum.csv"
+      },
+      {
+        "code": "MISSING_ARTIFACT",
+        "detail": "arm_b missing primary artifact crossarch-governed-b/float_series.txt"
+      },
+      {
+        "code": "MISSING_ARTIFACT",
+        "detail": "arm_b missing primary artifact crossarch-governed-b/manifest.sha256"
+      },
+      {
+        "code": "MISSING_ARTIFACT",
+        "detail": "arm_b missing primary artifact crossarch-governed-b/matrix.json"
+      },
+      {
+        "code": "MISSING_ARTIFACT",
+        "detail": "arm_b missing primary artifact crossarch-governed-b/primes.txt"
+      },
+      {
+        "code": "MISSING_ARTIFACT",
+        "detail": "arm_b missing primary artifact crossarch-governed-b/summary.json"
+      },
+      {
+        "code": "NEGATIVE_CONTROL_MISSING",
+        "detail": "arm_b missing negative control crossarch-governed-a/control/os_arch.txt"
+      }
+    ],
+    "valid": false
+  }
+}

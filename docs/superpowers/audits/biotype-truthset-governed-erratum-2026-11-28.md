@@ -197,7 +197,8 @@ report §11; it is not execution evidence and not biological truth.
 | Amendment 4 commit | `ef42c6599a90861962484c96ce6ec9ede4bc94b6` |
 | Amendment 5 commit (PR-04 caveat) | `00677a9be84c2ddf4ff0ba832d159f55e75af9f3` |
 | v1.0.3 `MANIFEST.sha256` (amendment 4) | `1d3069043f53bdf13386b248392ba63ef35b296e46b65b764fac251d2e4b4ec9` |
-| v1.0.3 `MANIFEST.sha256` (amendment 5, current) | `e3863f53fe0245b191a8215279623a8756f0b472e3a096e7f91ea3042f97eb8e` |
+| v1.0.3 `MANIFEST.sha256` (amendment 5; superseded by the merged 1.0.4 manifest) | `e3863f53fe0245b191a8215279623a8756f0b472e3a096e7f91ea3042f97eb8e` |
+| Merged 1.0.4 `MANIFEST.sha256` (current, #1163 + #1166 governance) | `7e3984771249522314d360a617132609c741daae96b8d11cd1f2e8615121bbfe` |
 | Supplement corpus + runner commit | `742a684b81be06a2a3c723f9b7dbfb7afbae1769` |
 | Supplement seal commit | `0204c1e44ea167b4598be8a27d6b67be13fea207` |
 | Supplement manifest SHA-256 | `757891a479948bb2c6933ee61ce3df96a233b8240bf92a4862ad25309e552fc3` |
@@ -206,6 +207,7 @@ report §11; it is not execution evidence and not biological truth.
 | Primary analysis script (v1, sealed) | `c5c0311b4f509f93eb4a8f1e40a1ff97bd9536065271d85d5e7263ea04739fbb` |
 | Primary analysis script (v2, hardened) | `0c431b21f7ca088f720c5fce176ac4bed7ccb9fddef9f88d894d09245ade2000` |
 | Primary runner (sealed, unchanged) | `e7a8e5fde464faebeedfff220ca75f730c2ddf752f52725027cebbbbffffd0ea` |
+| Mainline squash-merge stamp repair (2026-11-28) | governed results/decision and supplement stamps repointed from `6fbf38c1`/`0204c1e4` to the mainline squash commit `b771feb222ba58a5845e860bdd84034e9f096719`; the squash commit contains the identical sealed case tree, and the measured data, `engine_commit`, `binary_sha256`, and manifest binding are unchanged. See `stamp_note` in the three JSON artifacts. |
 | Binary SHA-256 (binding identity) | `463d15e618e28d4e694bc3aab472fe53a11188266e8f3f61a344e3099a820b0a` |
 
 ## 13. PR-05 adjudication checklist

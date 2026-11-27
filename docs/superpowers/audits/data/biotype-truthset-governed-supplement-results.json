@@ -4,7 +4,7 @@
   "campaign": "#1163 post-hoc governed supplement (descriptive; not confirmatory)",
   "role": "post-hoc descriptive acceptance controls; never in the FA denominator",
   "generated_at": "2026-11-27T17:21:59Z",
-  "commit": "0204c1e44ea167b4598be8a27d6b67be13fea207",
+  "commit": "b771feb222ba58a5845e860bdd84034e9f096719",
   "binary": "/Users/wsx/Documents/GitHub/oxo-flow/.claude/worktrees/agent-a5361f7d77789467a/target/debug/oxo-flow",
   "binary_sha256": "463d15e618e28d4e694bc3aab472fe53a11188266e8f3f61a344e3099a820b0a",
   "engine_version": "oxo-flow 0.32.0",
@@ -101,5 +101,6 @@
     "non_verdicts": 0,
     "codes_correct": 7,
     "codes_fail": 0
-  }
+  },
+  "stamp_note": "Mainline squash-merge stamp repair 2026-11-28: the #1396 PR was squash-merged as b771feb2; this stamp points at the mainline squash commit, which contains the identical sealed case tree. The original PR-branch run commit was 0204c1e44ea167b4598be8a27d6b67be13fea207; measured data, engine_commit, binary_sha256, and manifest binding are unchanged."
 }

@@ -1,0 +1,101 @@
+{
+  "command": "provenance",
+  "verify": {
+    "checkpoint": "/home/ubuntu/crossarch-1397-raw/cross-arch-provenance-governed-b.checkpoint.json",
+    "cleaned": 0,
+    "cluster_images": {},
+    "entries": [
+      {
+        "actual": "sha256:f37bc9fc6aea0616f9a29eae674d2f338303bae5b7e945402e7ef4b96d2be4c9",
+        "expected": "sha256:f37bc9fc6aea0616f9a29eae674d2f338303bae5b7e945402e7ef4b96d2be4c9",
+        "file": "bigint.txt",
+        "status": "matched"
+      },
+      {
+        "actual": "sha256:bd9115c27eba63ea00e2aa6c8cfaa4ecb201c8d39139f65953d6b239eb7bddc6",
+        "expected": "sha256:bd9115c27eba63ea00e2aa6c8cfaa4ecb201c8d39139f65953d6b239eb7bddc6",
+        "file": "checksums.txt",
+        "status": "matched"
+      },
+      {
+        "actual": "sha256:1a71d62870e6fcbe16d3627157a13efe702c0daf722c9736f402cdace64cbd9d",
+        "expected": "sha256:1a71d62870e6fcbe16d3627157a13efe702c0daf722c9736f402cdace64cbd9d",
+        "file": "data.json",
+        "status": "matched"
+      },
+      {
+        "actual": "sha256:16db5c58f158af791b00d823662d4d9c08529e7028aaf27b937a35db4dce1ee2",
+        "expected": "sha256:16db5c58f158af791b00d823662d4d9c08529e7028aaf27b937a35db4dce1ee2",
+        "file": "digests.tsv",
+        "status": "matched"
+      },
+      {
+        "actual": "sha256:dca230c95c8aa7362ef2ee4de386ab3bc5306a146068a6971bc9bd0c5b27a9b0",
+        "expected": "sha256:dca230c95c8aa7362ef2ee4de386ab3bc5306a146068a6971bc9bd0c5b27a9b0",
+        "file": "factorial.txt",
+        "status": "matched"
+      },
+      {
+        "actual": "sha256:71d665e59199296a7ad04a87a6dec9a1e796263eb29384bb179f65f932423dd6",
+        "expected": "sha256:71d665e59199296a7ad04a87a6dec9a1e796263eb29384bb179f65f932423dd6",
+        "file": "float.txt",
+        "status": "matched"
+      },
+      {
+        "actual": "sha256:f49e8e422da86bdf1dba1b4ac9e66dc5b911ef0b9c6f9962d79b53056898ebaa",
+        "expected": "sha256:f49e8e422da86bdf1dba1b4ac9e66dc5b911ef0b9c6f9962d79b53056898ebaa",
+        "file": "float_fsum.csv",
+        "status": "matched"
+      },
+      {
+        "actual": "sha256:9633031545425a1574fd1952b8f4dd36ad75a135aaa2baa8e6d4a0e1c7d54ee3",
+        "expected": "sha256:9633031545425a1574fd1952b8f4dd36ad75a135aaa2baa8e6d4a0e1c7d54ee3",
+        "file": "float_series.txt",
+        "status": "matched"
+      },
+      {
+        "actual": "sha256:06a1fffa11a94b58b0702f75eb12c154a0f54d0c5659f47f53fc8bd2cfd8ff01",
+        "expected": "sha256:06a1fffa11a94b58b0702f75eb12c154a0f54d0c5659f47f53fc8bd2cfd8ff01",
+        "file": "manifest.sha256",
+        "status": "matched"
+      },
+      {
+        "actual": "sha256:ef1fe569b7215a3517f7a444cbfe4c5079533d742ad998f40245e2800f2f0873",
+        "expected": "sha256:ef1fe569b7215a3517f7a444cbfe4c5079533d742ad998f40245e2800f2f0873",
+        "file": "matrix.json",
+        "status": "matched"
+      },
+      {
+        "actual": "sha256:80eb224ba892fac76623089f2b5d4921466627afd5d5aae207573c4ca2ddd61a",
+        "expected": "sha256:80eb224ba892fac76623089f2b5d4921466627afd5d5aae207573c4ca2ddd61a",
+        "file": "primes.txt",
+        "status": "matched"
+      },
+      {
+        "actual": "sha256:bad1cbcd3a5d48ad9dc851bfe161504cc036f7e53b3da6681b3dfcefc0ddd156",
+        "expected": "sha256:bad1cbcd3a5d48ad9dc851bfe161504cc036f7e53b3da6681b3dfcefc0ddd156",
+        "file": "summary.json",
+        "status": "matched"
+      }
+    ],
+    "env_lock_identity": {
+      "checksums": "docker|python@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+      "floats": "docker|python@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+      "integers": "docker|python@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+      "structured": "docker|python@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b"
+    },
+    "matched": 12,
+    "metadata_digest": null,
+    "mismatched": 0,
+    "missing": 0,
+    "workflow_content_check": {
+      "actual": "sha256:8e6d1cf56939df49e2e760cf68249a85e32e53569b3bc9dd50043dc0fcaa8048",
+      "recorded": "sha256:8e6d1cf56939df49e2e760cf68249a85e32e53569b3bc9dd50043dc0fcaa8048",
+      "status": "matched"
+    },
+    "workflow_content_hash": "sha256:8e6d1cf56939df49e2e760cf68249a85e32e53569b3bc9dd50043dc0fcaa8048",
+    "workflow_git_dirty": false,
+    "workflow_git_sha": "834dc183ddab1e1a9562bf65aa4da1d09f1e32ec",
+    "workflow_resolved_hash": "sha256:0ab4db830dad16fb09f5cdce948eed270cb147ab0b52e1edf9bd0a1df26b7a40"
+  }
+}

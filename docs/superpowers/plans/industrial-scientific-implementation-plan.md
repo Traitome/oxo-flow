@@ -573,18 +573,33 @@ Current CLI simulation baseline (seeded fault-injection campaign, Round 2 with t
 **Current state (governance layer created, gate not passed)**: the six
 artifacts are frozen under
 [`docs/superpowers/preregistration/`](../preregistration/README.md)
-(`PR-01`–`PR-06`, version 1.0.1 — amendment 1, content hashes in
+(`PR-01`–`PR-06`, version 1.0.4 — amendments 1–10: amendments 1–5 are the
+#1163 series, amendment 6 is the #1166 campaign-parameter freeze, and
+amendments 7–10 are #1166 harness/status/tooling), content hashes in
 `preregistration/MANIFEST.sha256`), covering the confirmatory campaigns
 #1163, #1164, #1165, and #1166. Independent reviewer sign-off in PR-05 is
-PENDING, so the maturity stays **Planned / blocked**: signing, the per-campaign
-pre-run manifests, the sealed case sets, and the sealed analysis scripts are
-all still required before a campaign may collect confirmatory data. #1164
-already carries a ten-case pilot measured before the freeze (3/10 applied,
-3/10 verified, 3/3 of the structurally recovery-eligible class); that pilot
-is disclosed in PR-01/PR-06 and is not confirmatory — a held-out re-run is
-required. No other campaign has collected confirmatory data. Commit
-binding: `62d9161b2992` (v1.0.0 freeze commit) and `0a18b07afb54`
-(v1.0.1 amendment-1 commit); verify with
+PENDING, so the maturity stays **Planned / blocked** for publication. #1163
+now has a sealed pre-run manifest, case set, and analysis script, and one
+governed campaign (0/83 false accepts, exact 95% upper bound 4.3471% ≤
+`τ_FA = 0.05`, POSITIVE; see
+[`../audits/biotype-truth-set-governed-2026-11-27.md`](../audits/biotype-truth-set-governed-2026-11-27.md)).
+#1166 now has a committed pre-run/final-run manifest, a sealed corpus and
+analysis script, and one governed campaign measured with PR-05 sign-off
+PENDING (24/24 declared artifacts SHA-256 identical across native x86_64
+and native aarch64; category POSITIVE under the frozen rule — see
+[`../audits/cross-arch-provenance-governed-2026-11-27.md`](../audits/cross-arch-provenance-governed-2026-11-27.md)).
+The remaining campaigns (#1164/#1165) still require their per-campaign
+pre-run manifests, sealed case sets, and sealed analysis scripts before
+collecting confirmatory data. #1164 already carries a ten-case pilot
+measured before the freeze (3/10 applied, 3/10 verified, 3/3 of the
+structurally recovery-eligible class); that pilot is disclosed in
+PR-01/PR-06 and is not confirmatory — a held-out re-run is required. #1165
+has collected no confirmatory data. Commit bindings: `62d9161b2992`
+(v1.0.0 freeze commit), `0a18b07afb54` (v1.0.1 amendment-1 commit),
+`89c4127d` (v1.0.2 #1163 `τ_FA` freeze), `ef42c659`/`00677a9b` (v1.0.3
+#1163 erratum and PR-04 caveat), `6fbf38c1`/`365e563a` (governed #1163
+seal/results), `dd5dcd44` (v1.0.4 #1166 amendment-6 parameter freeze), and
+`56b109c1` (engine/harness commit used by the #1166 arms); verify with
 `shasum -a 256 -c docs/superpowers/preregistration/MANIFEST.sha256`.
 
 ### Task 4.1: Multi-Omics Ablation & Fault-Injection Benchmark (`eval/frontier/`)

@@ -3,7 +3,7 @@
   "issue": 1396,
   "campaign": "#1163 governed BioTypes truth set (held-out corpus)",
   "generated_at": "2026-11-27T16:50:33Z",
-  "commit": "6fbf38c1441c966aee49aa96ba2a211cbf5bfb3f",
+  "commit": "b771feb222ba58a5845e860bdd84034e9f096719",
   "engine_commit": "20ad630be42ec248e2e96c3729630d849e7c6539",
   "binary": "/Users/wsx/Documents/GitHub/oxo-flow/.claude/worktrees/agent-a5361f7d77789467a/target/debug/oxo-flow",
   "binary_sha256": "463d15e618e28d4e694bc3aab472fe53a11188266e8f3f61a344e3099a820b0a",
@@ -1537,5 +1537,6 @@
     "denominator": 83,
     "false_accepts": 0,
     "true_rejects": 83
-  }
+  },
+  "stamp_note": "Mainline squash-merge stamp repair 2026-11-28: the #1396 PR was squash-merged as b771feb2; this stamp points at the mainline squash commit, which contains the identical sealed case tree. The original PR-branch run commit was 6fbf38c1441c966aee49aa96ba2a211cbf5bfb3f; measured data, engine_commit, binary_sha256, and manifest binding are unchanged."
 }

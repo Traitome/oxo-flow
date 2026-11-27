@@ -3,8 +3,8 @@
   "issue": 1396,
   "campaign": "#1163 governed BioTypes truth set (held-out corpus)",
   "results_file": "docs/superpowers/audits/data/biotype-truthset-governed-results.json",
-  "results_sha256": "d7e38fed85c37806467ca63f4e447b46302b612147b4219fcf2739a7c5858de4",
-  "results_commit": "6fbf38c1441c966aee49aa96ba2a211cbf5bfb3f",
+  "results_sha256": "404e5d59fed8ac40beb174609edaa3b432833cbbaaad6e8c704ddb3259a3e57f",
+  "results_commit": "b771feb222ba58a5845e860bdd84034e9f096719",
   "binary_sha256": "463d15e618e28d4e694bc3aab472fe53a11188266e8f3f61a344e3099a820b0a",
   "confusion_matrix": {
     "true_accept": 33,
@@ -35,5 +35,6 @@
     "decision_rule": "INVALID first (N<N_min -> UNDERPOWERED, or any non-verdict); POSITIVE iff U<=tau; NEGATIVE iff L>tau; else INCONCLUSIVE"
   },
   "worst_case_sensitivity": null,
-  "statement": "On the frozen held-out truth set of 83 expected-reject cases, the BioTypes checker false-accepted 0 of 83 expected-reject cases (0.0000%, exact 95% CI [0.0000%, 4.3471%]), within the pre-registered bound tau_FA = 0.05. This validates the checker on this set; it does not establish biological truth or coverage outside the listed dimensions."
+  "statement": "On the frozen held-out truth set of 83 expected-reject cases, the BioTypes checker false-accepted 0 of 83 expected-reject cases (0.0000%, exact 95% CI [0.0000%, 4.3471%]), within the pre-registered bound tau_FA = 0.05. This validates the checker on this set; it does not establish biological truth or coverage outside the listed dimensions.",
+  "stamp_note": "Mainline squash-merge stamp repair 2026-11-28: results_commit is the mainline squash commit b771feb2 (identical sealed case tree); the original PR-branch run commit was 6fbf38c1441c966aee49aa96ba2a211cbf5bfb3f. results_sha256 binds the repointed results JSON; measured values are unchanged."
 }

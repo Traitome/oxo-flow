@@ -411,8 +411,10 @@ and is unaffected here.
   `c5c0311b…9fbb`; hardened v2 `0c431b21…2000` reproduces the decision
   byte-identically).
 - Results: `docs/superpowers/audits/data/biotype-truthset-governed-results.json`
-  (`commit` = `6fbf38c1`, the tree the run executed on; `engine_commit` =
-  `20ad630b`, the tree the binary was built from).
+  (`commit` = `b771feb2`, the mainline squash commit the 2026-11-28 stamp
+  repair repointed the field to; the run executed on the identical sealed
+  case tree at the original PR-branch commit `6fbf38c1` — see erratum §12;
+  `engine_commit` = `20ad630b`, the tree the binary was built from).
 - Decision: `docs/superpowers/audits/data/biotype-truthset-governed-decision.json`.
 - Determinism evidence:
   `docs/superpowers/audits/data/biotype-truthset-governed-repeat-check.txt`.

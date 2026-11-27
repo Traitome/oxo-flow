@@ -1,0 +1,818 @@
+{
+  "arms": {
+    "arm_a": {
+      "container": {
+        "container-arch": "aarch64",
+        "gzip": "gzip 1.13",
+        "image-arch": "arm64",
+        "image-id": "sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+        "image-src": "python@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+        "libc": "ldd (Debian GLIBC 2.41-12+deb13u4) 2.41",
+        "manifest-list-digest": "sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+        "platform": "linux/arm64",
+        "python3": "Python 3.12.16",
+        "sha256sum": "sha256sum (GNU coreutils) 9.7",
+        "sort": "sort (GNU coreutils) 9.7",
+        "staged-tag": "crossarch1397:pin",
+        "staging": "pre-staged"
+      },
+      "container_supplement": {
+        "captured-utc": "2026-11-27T17:25:45Z",
+        "image-src": "python@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+        "manifest-list-digest": "sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+        "platform": "linux/arm64",
+        "wc": "wc (GNU coreutils) 9.7"
+      },
+      "dir": "/Users/wsx/Documents/GitHub/oxo-flow/.claude/worktrees/agent-a4811d73744c25b76/docs/superpowers/audits/data/crossarch-1397/arm-local-arm64",
+      "host_arch": "aarch64",
+      "host_supplement": {
+        "captured-utc": "2026-11-27T17:25:45Z",
+        "cpu-model": "Apple M5",
+        "docker-desktop": "Docker Desktop 4.94.0 (241994)",
+        "docker-desktop-source": "`docker version` Server platform line, captured post-run during independent review; the inventory lines above were captured 2026-11-27T17:25:45Z",
+        "docker-server": "29.8.2 aarch64 Docker Desktop",
+        "docker-version": "Docker version 29.8.2, build 7fc2dff",
+        "host-arch": "arm64",
+        "host-uname": "Darwin ShixiangWang-WorkSpacedeMacBook-Pro.local 27.2.0 Darwin Kernel Version 27.2.0: Wed Oct 14 23:48:06 PDT 2026; root:xnu-13432.41.4~25/RELEASE_ARM64_T8142 arm64",
+        "hostname": "ShixiangWang-WorkSpacedeMacBook-Pro.local",
+        "nproc": "10"
+      },
+      "identity": {
+        "binary-sha256": "9ce0065a42e60afe17dcb3308a9e430813301ea8e01bbf2964a75d14719236d6",
+        "cpu-model": "Apple M5",
+        "date-utc": "2026-11-27T17:01:06Z",
+        "engine-commit": "56b109c17b95e4c610a874aaf63fc0ae583a57a6",
+        "engine-dirty": "0",
+        "host-arch": "arm64",
+        "host-uname": "Darwin ShixiangWang-WorkSpacedeMacBook-Pro.local 27.2.0 Darwin Kernel Version 27.2.0: Wed Oct 14 23:48:06 PDT 2026; root:xnu-13432.41.4~25/RELEASE_ARM64_T8142 arm64",
+        "hostname": "ShixiangWang-WorkSpacedeMacBook-Pro.local",
+        "kernel": "27.2.0",
+        "nproc": "10",
+        "os-release": "Darwin",
+        "oxo-flow": "oxo-flow 0.32.0",
+        "passthru": "DOCKER_DEFAULT_PLATFORM",
+        "platform": "linux/arm64"
+      },
+      "label": "local",
+      "tools": {
+        "gzip": {
+          "source": "container.txt",
+          "value": "gzip 1.13"
+        },
+        "libc": {
+          "source": "container.txt",
+          "value": "ldd (Debian GLIBC 2.41-12+deb13u4) 2.41"
+        },
+        "python3": {
+          "source": "container.txt",
+          "value": "Python 3.12.16"
+        },
+        "sha256sum": {
+          "source": "container.txt",
+          "value": "sha256sum (GNU coreutils) 9.7"
+        },
+        "sort": {
+          "source": "container.txt",
+          "value": "sort (GNU coreutils) 9.7"
+        },
+        "wc": {
+          "source": "container-supplement.txt",
+          "value": "wc (GNU coreutils) 9.7"
+        }
+      },
+      "workflows": {
+        "crossarch-governed-a": {
+          "completed_rules": [
+            "derive",
+            "prepare"
+          ],
+          "failed_rules": [],
+          "verify": {
+            "matched": 13,
+            "mismatched": 0,
+            "missing": 0
+          },
+          "workflow_content_hash": "sha256:8daa37215b0a5871253094d23cbe32035d21737c9a5fa097f63bbd5587e12847",
+          "workflow_git_dirty": false,
+          "workflow_git_sha": "56b109c17b95e4c610a874aaf63fc0ae583a57a6"
+        },
+        "crossarch-governed-b": {
+          "completed_rules": [
+            "checksums",
+            "floats",
+            "integers",
+            "structured"
+          ],
+          "failed_rules": [],
+          "verify": {
+            "matched": 12,
+            "mismatched": 0,
+            "missing": 0
+          },
+          "workflow_content_hash": "sha256:8e6d1cf56939df49e2e760cf68249a85e32e53569b3bc9dd50043dc0fcaa8048",
+          "workflow_git_dirty": false,
+          "workflow_git_sha": "56b109c17b95e4c610a874aaf63fc0ae583a57a6"
+        }
+      }
+    },
+    "arm_b": {
+      "container": {
+        "container-arch": "x86_64",
+        "gzip": "gzip 1.13",
+        "image-arch": "amd64",
+        "image-id": "sha256:78976a69c067520ef8be34cde307ef9f6fea6dcefa50edb57039773d241ca0db",
+        "image-src": "python@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+        "libc": "ldd (Debian GLIBC 2.41-12+deb13u4) 2.41",
+        "manifest-list-digest": "sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+        "platform": "linux/amd64",
+        "python3": "Python 3.12.16",
+        "sha256sum": "sha256sum (GNU coreutils) 9.7",
+        "sort": "sort (GNU coreutils) 9.7",
+        "staged-tag": "crossarch1397:pin",
+        "staging": "pre-staged"
+      },
+      "container_supplement": {
+        "captured-utc": "2026-11-27T17:25:45Z",
+        "image-src": "python@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+        "manifest-list-digest": "sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+        "platform": "linux/amd64",
+        "wc": "wc (GNU coreutils) 9.7"
+      },
+      "dir": "/Users/wsx/Documents/GitHub/oxo-flow/.claude/worktrees/agent-a4811d73744c25b76/docs/superpowers/audits/data/crossarch-1397/arm-remote-amd64",
+      "host_arch": "x86_64",
+      "host_supplement": {
+        "captured-utc": "2026-11-27T17:25:45Z",
+        "cpu-model": "Intel(R) Xeon(R) Platinum 8255C CPU @ 2.50GHz",
+        "docker-server": "29.7.2 x86_64 Ubuntu 24.04.4 LTS",
+        "docker-version": "Docker version 29.7.2, build a7dcaa6",
+        "host-arch": "x86_64",
+        "host-uname": "Linux VM-4-4-ubuntu 6.8.0-137-generic #137-Ubuntu SMP PREEMPT_DYNAMIC Fri Jul 17 20:28:23 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux",
+        "hostname": "VM-4-4-ubuntu",
+        "nproc": "4"
+      },
+      "identity": {
+        "binary-sha256": "aef9eecc49a09d177bcdbe102f309f64891935f2f18858fd441193c009b0cefd",
+        "cpu-model": "unknown",
+        "date-utc": "2026-11-27T17:01:11Z",
+        "engine-commit": "56b109c17b95e4c610a874aaf63fc0ae583a57a6",
+        "engine-dirty": "0",
+        "host-arch": "x86_64",
+        "host-uname": "Linux VM-4-4-ubuntu 6.8.0-137-generic #137-Ubuntu SMP PREEMPT_DYNAMIC Fri Jul 17 20:28:23 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux",
+        "hostname": "VM-4-4-ubuntu",
+        "kernel": "6.8.0-137-generic",
+        "nproc": "4",
+        "os-release": "Linux",
+        "oxo-flow": "oxo-flow 0.32.0",
+        "passthru": "DOCKER_DEFAULT_PLATFORM",
+        "platform": "linux/amd64"
+      },
+      "label": "remote",
+      "tools": {
+        "gzip": {
+          "source": "container.txt",
+          "value": "gzip 1.13"
+        },
+        "libc": {
+          "source": "container.txt",
+          "value": "ldd (Debian GLIBC 2.41-12+deb13u4) 2.41"
+        },
+        "python3": {
+          "source": "container.txt",
+          "value": "Python 3.12.16"
+        },
+        "sha256sum": {
+          "source": "container.txt",
+          "value": "sha256sum (GNU coreutils) 9.7"
+        },
+        "sort": {
+          "source": "container.txt",
+          "value": "sort (GNU coreutils) 9.7"
+        },
+        "wc": {
+          "source": "container-supplement.txt",
+          "value": "wc (GNU coreutils) 9.7"
+        }
+      },
+      "workflows": {
+        "crossarch-governed-a": {
+          "completed_rules": [
+            "derive",
+            "prepare"
+          ],
+          "failed_rules": [],
+          "verify": {
+            "matched": 13,
+            "mismatched": 0,
+            "missing": 0
+          },
+          "workflow_content_hash": "sha256:8daa37215b0a5871253094d23cbe32035d21737c9a5fa097f63bbd5587e12847",
+          "workflow_git_dirty": false,
+          "workflow_git_sha": "56b109c17b95e4c610a874aaf63fc0ae583a57a6"
+        },
+        "crossarch-governed-b": {
+          "completed_rules": [
+            "checksums",
+            "floats",
+            "integers",
+            "structured"
+          ],
+          "failed_rules": [],
+          "verify": {
+            "matched": 12,
+            "mismatched": 0,
+            "missing": 0
+          },
+          "workflow_content_hash": "sha256:8e6d1cf56939df49e2e760cf68249a85e32e53569b3bc9dd50043dc0fcaa8048",
+          "workflow_git_dirty": false,
+          "workflow_git_sha": "56b109c17b95e4c610a874aaf63fc0ae583a57a6"
+        }
+      }
+    }
+  },
+  "artifacts": [
+    {
+      "arm_a_sha256": "c3d522d442fe9b8e08ea1cc225886a96b7c6f2520e3ed49ce616912e8de61440",
+      "arm_b_sha256": "c3d522d442fe9b8e08ea1cc225886a96b7c6f2520e3ed49ce616912e8de61440",
+      "artifact": "crossarch-governed-a/data/payload.txt",
+      "class": "pure-text",
+      "identical": true
+    },
+    {
+      "arm_a_sha256": "9e593b90f6fd0ef5636102094a488600be03a4913ea6e08836a5c924401b66c7",
+      "arm_b_sha256": "9e593b90f6fd0ef5636102094a488600be03a4913ea6e08836a5c924401b66c7",
+      "artifact": "crossarch-governed-a/data/alphabet.txt",
+      "class": "pure-text",
+      "identical": true
+    },
+    {
+      "arm_a_sha256": "64c9a93dcb7c3a6da918cbf728e3a2ae6745760625e132b99eea6047cb0e5800",
+      "arm_b_sha256": "64c9a93dcb7c3a6da918cbf728e3a2ae6745760625e132b99eea6047cb0e5800",
+      "artifact": "crossarch-governed-a/data/notes.txt",
+      "class": "pure-text",
+      "identical": true
+    },
+    {
+      "arm_a_sha256": "103066039ffcce85ebb793b744cae7e0017cd660c2bb6dff327ecbfe55212f75",
+      "arm_b_sha256": "103066039ffcce85ebb793b744cae7e0017cd660c2bb6dff327ecbfe55212f75",
+      "artifact": "crossarch-governed-a/data/bytes.bin",
+      "class": "raw-binary",
+      "identical": true
+    },
+    {
+      "arm_a_sha256": "0dd21bd42470a439e676fa1e6e4706bb7909712910d854e229671a51a26a3941",
+      "arm_b_sha256": "0dd21bd42470a439e676fa1e6e4706bb7909712910d854e229671a51a26a3941",
+      "artifact": "crossarch-governed-a/data/pattern.bin",
+      "class": "raw-binary",
+      "identical": true
+    },
+    {
+      "arm_a_sha256": "9c478d59f2a43f86656e4a15b12fbfa14d0f9026bfba48f92e0b5a9e620d1a15",
+      "arm_b_sha256": "9c478d59f2a43f86656e4a15b12fbfa14d0f9026bfba48f92e0b5a9e620d1a15",
+      "artifact": "crossarch-governed-a/data/mask.bin",
+      "class": "raw-binary",
+      "identical": true
+    },
+    {
+      "arm_a_sha256": "83d625670eed3424f9db4e517856744778dba9c5d40155cb84152fcd4d4d398a",
+      "arm_b_sha256": "83d625670eed3424f9db4e517856744778dba9c5d40155cb84152fcd4d4d398a",
+      "artifact": "crossarch-governed-a/summary.txt",
+      "class": "derived-text",
+      "identical": true
+    },
+    {
+      "arm_a_sha256": "aa7d83943d7ebf9dfb0f0d0e0ad57a231efadf5fcf481935cb85eec3b9fbe80c",
+      "arm_b_sha256": "aa7d83943d7ebf9dfb0f0d0e0ad57a231efadf5fcf481935cb85eec3b9fbe80c",
+      "artifact": "crossarch-governed-a/sorted.txt",
+      "class": "derived-text",
+      "identical": true
+    },
+    {
+      "arm_a_sha256": "9932a2cc85d679f070afd979ccd9640daf4c46c9bd99e579d9a0e012b7e40f94",
+      "arm_b_sha256": "9932a2cc85d679f070afd979ccd9640daf4c46c9bd99e579d9a0e012b7e40f94",
+      "artifact": "crossarch-governed-a/dedup.txt",
+      "class": "derived-text",
+      "identical": true
+    },
+    {
+      "arm_a_sha256": "4f8c577971a39ab66656127c2e228a35afad3cf185facfba1cf669f9d96e68ff",
+      "arm_b_sha256": "4f8c577971a39ab66656127c2e228a35afad3cf185facfba1cf669f9d96e68ff",
+      "artifact": "crossarch-governed-a/data/payload.txt.gz",
+      "class": "byte-exact-compressed",
+      "identical": true
+    },
+    {
+      "arm_a_sha256": "62de65398cfb8c3a523eeb8707ae1b65c5318003328d08d408db5f996ab1b536",
+      "arm_b_sha256": "62de65398cfb8c3a523eeb8707ae1b65c5318003328d08d408db5f996ab1b536",
+      "artifact": "crossarch-governed-a/data/bytes.bin.gz",
+      "class": "byte-exact-compressed",
+      "identical": true
+    },
+    {
+      "arm_a_sha256": "ff3c7d2f916148f28ec0bef862c8969f777b749b3c99a3083f11de4a4b20a397",
+      "arm_b_sha256": "ff3c7d2f916148f28ec0bef862c8969f777b749b3c99a3083f11de4a4b20a397",
+      "artifact": "crossarch-governed-a/data/pattern.bin.gz",
+      "class": "byte-exact-compressed",
+      "identical": true
+    },
+    {
+      "arm_a_sha256": "06a1fffa11a94b58b0702f75eb12c154a0f54d0c5659f47f53fc8bd2cfd8ff01",
+      "arm_b_sha256": "06a1fffa11a94b58b0702f75eb12c154a0f54d0c5659f47f53fc8bd2cfd8ff01",
+      "artifact": "crossarch-governed-b/manifest.sha256",
+      "class": "checksum-manifest",
+      "identical": true
+    },
+    {
+      "arm_a_sha256": "16db5c58f158af791b00d823662d4d9c08529e7028aaf27b937a35db4dce1ee2",
+      "arm_b_sha256": "16db5c58f158af791b00d823662d4d9c08529e7028aaf27b937a35db4dce1ee2",
+      "artifact": "crossarch-governed-b/digests.tsv",
+      "class": "checksum-manifest",
+      "identical": true
+    },
+    {
+      "arm_a_sha256": "bd9115c27eba63ea00e2aa6c8cfaa4ecb201c8d39139f65953d6b239eb7bddc6",
+      "arm_b_sha256": "bd9115c27eba63ea00e2aa6c8cfaa4ecb201c8d39139f65953d6b239eb7bddc6",
+      "artifact": "crossarch-governed-b/checksums.txt",
+      "class": "checksum-manifest",
+      "identical": true
+    },
+    {
+      "arm_a_sha256": "71d665e59199296a7ad04a87a6dec9a1e796263eb29384bb179f65f932423dd6",
+      "arm_b_sha256": "71d665e59199296a7ad04a87a6dec9a1e796263eb29384bb179f65f932423dd6",
+      "artifact": "crossarch-governed-b/float.txt",
+      "class": "ieee754-float",
+      "identical": true
+    },
+    {
+      "arm_a_sha256": "9633031545425a1574fd1952b8f4dd36ad75a135aaa2baa8e6d4a0e1c7d54ee3",
+      "arm_b_sha256": "9633031545425a1574fd1952b8f4dd36ad75a135aaa2baa8e6d4a0e1c7d54ee3",
+      "artifact": "crossarch-governed-b/float_series.txt",
+      "class": "ieee754-float",
+      "identical": true
+    },
+    {
+      "arm_a_sha256": "f49e8e422da86bdf1dba1b4ac9e66dc5b911ef0b9c6f9962d79b53056898ebaa",
+      "arm_b_sha256": "f49e8e422da86bdf1dba1b4ac9e66dc5b911ef0b9c6f9962d79b53056898ebaa",
+      "artifact": "crossarch-governed-b/float_fsum.csv",
+      "class": "ieee754-float",
+      "identical": true
+    },
+    {
+      "arm_a_sha256": "dca230c95c8aa7362ef2ee4de386ab3bc5306a146068a6971bc9bd0c5b27a9b0",
+      "arm_b_sha256": "dca230c95c8aa7362ef2ee4de386ab3bc5306a146068a6971bc9bd0c5b27a9b0",
+      "artifact": "crossarch-governed-b/factorial.txt",
+      "class": "integer-arithmetic",
+      "identical": true
+    },
+    {
+      "arm_a_sha256": "80eb224ba892fac76623089f2b5d4921466627afd5d5aae207573c4ca2ddd61a",
+      "arm_b_sha256": "80eb224ba892fac76623089f2b5d4921466627afd5d5aae207573c4ca2ddd61a",
+      "artifact": "crossarch-governed-b/primes.txt",
+      "class": "integer-arithmetic",
+      "identical": true
+    },
+    {
+      "arm_a_sha256": "f37bc9fc6aea0616f9a29eae674d2f338303bae5b7e945402e7ef4b96d2be4c9",
+      "arm_b_sha256": "f37bc9fc6aea0616f9a29eae674d2f338303bae5b7e945402e7ef4b96d2be4c9",
+      "artifact": "crossarch-governed-b/bigint.txt",
+      "class": "integer-arithmetic",
+      "identical": true
+    },
+    {
+      "arm_a_sha256": "1a71d62870e6fcbe16d3627157a13efe702c0daf722c9736f402cdace64cbd9d",
+      "arm_b_sha256": "1a71d62870e6fcbe16d3627157a13efe702c0daf722c9736f402cdace64cbd9d",
+      "artifact": "crossarch-governed-b/data.json",
+      "class": "json-structured",
+      "identical": true
+    },
+    {
+      "arm_a_sha256": "bad1cbcd3a5d48ad9dc851bfe161504cc036f7e53b3da6681b3dfcefc0ddd156",
+      "arm_b_sha256": "bad1cbcd3a5d48ad9dc851bfe161504cc036f7e53b3da6681b3dfcefc0ddd156",
+      "artifact": "crossarch-governed-b/summary.json",
+      "class": "json-structured",
+      "identical": true
+    },
+    {
+      "arm_a_sha256": "ef1fe569b7215a3517f7a444cbfe4c5079533d742ad998f40245e2800f2f0873",
+      "arm_b_sha256": "ef1fe569b7215a3517f7a444cbfe4c5079533d742ad998f40245e2800f2f0873",
+      "artifact": "crossarch-governed-b/matrix.json",
+      "class": "json-structured",
+      "identical": true
+    }
+  ],
+  "campaign": "1166",
+  "classes": {
+    "byte-exact-compressed": {
+      "architecture_stable": true,
+      "artifacts": [
+        {
+          "arm_a_sha256": "4f8c577971a39ab66656127c2e228a35afad3cf185facfba1cf669f9d96e68ff",
+          "arm_b_sha256": "4f8c577971a39ab66656127c2e228a35afad3cf185facfba1cf669f9d96e68ff",
+          "artifact": "crossarch-governed-a/data/payload.txt.gz",
+          "class": "byte-exact-compressed",
+          "identical": true
+        },
+        {
+          "arm_a_sha256": "62de65398cfb8c3a523eeb8707ae1b65c5318003328d08d408db5f996ab1b536",
+          "arm_b_sha256": "62de65398cfb8c3a523eeb8707ae1b65c5318003328d08d408db5f996ab1b536",
+          "artifact": "crossarch-governed-a/data/bytes.bin.gz",
+          "class": "byte-exact-compressed",
+          "identical": true
+        },
+        {
+          "arm_a_sha256": "ff3c7d2f916148f28ec0bef862c8969f777b749b3c99a3083f11de4a4b20a397",
+          "arm_b_sha256": "ff3c7d2f916148f28ec0bef862c8969f777b749b3c99a3083f11de4a4b20a397",
+          "artifact": "crossarch-governed-a/data/pattern.bin.gz",
+          "class": "byte-exact-compressed",
+          "identical": true
+        }
+      ],
+      "eligible": true,
+      "identical": 3,
+      "total": 3
+    },
+    "checksum-manifest": {
+      "architecture_stable": true,
+      "artifacts": [
+        {
+          "arm_a_sha256": "06a1fffa11a94b58b0702f75eb12c154a0f54d0c5659f47f53fc8bd2cfd8ff01",
+          "arm_b_sha256": "06a1fffa11a94b58b0702f75eb12c154a0f54d0c5659f47f53fc8bd2cfd8ff01",
+          "artifact": "crossarch-governed-b/manifest.sha256",
+          "class": "checksum-manifest",
+          "identical": true
+        },
+        {
+          "arm_a_sha256": "16db5c58f158af791b00d823662d4d9c08529e7028aaf27b937a35db4dce1ee2",
+          "arm_b_sha256": "16db5c58f158af791b00d823662d4d9c08529e7028aaf27b937a35db4dce1ee2",
+          "artifact": "crossarch-governed-b/digests.tsv",
+          "class": "checksum-manifest",
+          "identical": true
+        },
+        {
+          "arm_a_sha256": "bd9115c27eba63ea00e2aa6c8cfaa4ecb201c8d39139f65953d6b239eb7bddc6",
+          "arm_b_sha256": "bd9115c27eba63ea00e2aa6c8cfaa4ecb201c8d39139f65953d6b239eb7bddc6",
+          "artifact": "crossarch-governed-b/checksums.txt",
+          "class": "checksum-manifest",
+          "identical": true
+        }
+      ],
+      "eligible": true,
+      "identical": 3,
+      "total": 3
+    },
+    "derived-text": {
+      "architecture_stable": true,
+      "artifacts": [
+        {
+          "arm_a_sha256": "83d625670eed3424f9db4e517856744778dba9c5d40155cb84152fcd4d4d398a",
+          "arm_b_sha256": "83d625670eed3424f9db4e517856744778dba9c5d40155cb84152fcd4d4d398a",
+          "artifact": "crossarch-governed-a/summary.txt",
+          "class": "derived-text",
+          "identical": true
+        },
+        {
+          "arm_a_sha256": "aa7d83943d7ebf9dfb0f0d0e0ad57a231efadf5fcf481935cb85eec3b9fbe80c",
+          "arm_b_sha256": "aa7d83943d7ebf9dfb0f0d0e0ad57a231efadf5fcf481935cb85eec3b9fbe80c",
+          "artifact": "crossarch-governed-a/sorted.txt",
+          "class": "derived-text",
+          "identical": true
+        },
+        {
+          "arm_a_sha256": "9932a2cc85d679f070afd979ccd9640daf4c46c9bd99e579d9a0e012b7e40f94",
+          "arm_b_sha256": "9932a2cc85d679f070afd979ccd9640daf4c46c9bd99e579d9a0e012b7e40f94",
+          "artifact": "crossarch-governed-a/dedup.txt",
+          "class": "derived-text",
+          "identical": true
+        }
+      ],
+      "eligible": true,
+      "identical": 3,
+      "total": 3
+    },
+    "ieee754-float": {
+      "architecture_stable": true,
+      "artifacts": [
+        {
+          "arm_a_sha256": "71d665e59199296a7ad04a87a6dec9a1e796263eb29384bb179f65f932423dd6",
+          "arm_b_sha256": "71d665e59199296a7ad04a87a6dec9a1e796263eb29384bb179f65f932423dd6",
+          "artifact": "crossarch-governed-b/float.txt",
+          "class": "ieee754-float",
+          "identical": true
+        },
+        {
+          "arm_a_sha256": "9633031545425a1574fd1952b8f4dd36ad75a135aaa2baa8e6d4a0e1c7d54ee3",
+          "arm_b_sha256": "9633031545425a1574fd1952b8f4dd36ad75a135aaa2baa8e6d4a0e1c7d54ee3",
+          "artifact": "crossarch-governed-b/float_series.txt",
+          "class": "ieee754-float",
+          "identical": true
+        },
+        {
+          "arm_a_sha256": "f49e8e422da86bdf1dba1b4ac9e66dc5b911ef0b9c6f9962d79b53056898ebaa",
+          "arm_b_sha256": "f49e8e422da86bdf1dba1b4ac9e66dc5b911ef0b9c6f9962d79b53056898ebaa",
+          "artifact": "crossarch-governed-b/float_fsum.csv",
+          "class": "ieee754-float",
+          "identical": true
+        }
+      ],
+      "eligible": true,
+      "identical": 3,
+      "total": 3
+    },
+    "integer-arithmetic": {
+      "architecture_stable": true,
+      "artifacts": [
+        {
+          "arm_a_sha256": "dca230c95c8aa7362ef2ee4de386ab3bc5306a146068a6971bc9bd0c5b27a9b0",
+          "arm_b_sha256": "dca230c95c8aa7362ef2ee4de386ab3bc5306a146068a6971bc9bd0c5b27a9b0",
+          "artifact": "crossarch-governed-b/factorial.txt",
+          "class": "integer-arithmetic",
+          "identical": true
+        },
+        {
+          "arm_a_sha256": "80eb224ba892fac76623089f2b5d4921466627afd5d5aae207573c4ca2ddd61a",
+          "arm_b_sha256": "80eb224ba892fac76623089f2b5d4921466627afd5d5aae207573c4ca2ddd61a",
+          "artifact": "crossarch-governed-b/primes.txt",
+          "class": "integer-arithmetic",
+          "identical": true
+        },
+        {
+          "arm_a_sha256": "f37bc9fc6aea0616f9a29eae674d2f338303bae5b7e945402e7ef4b96d2be4c9",
+          "arm_b_sha256": "f37bc9fc6aea0616f9a29eae674d2f338303bae5b7e945402e7ef4b96d2be4c9",
+          "artifact": "crossarch-governed-b/bigint.txt",
+          "class": "integer-arithmetic",
+          "identical": true
+        }
+      ],
+      "eligible": true,
+      "identical": 3,
+      "total": 3
+    },
+    "json-structured": {
+      "architecture_stable": true,
+      "artifacts": [
+        {
+          "arm_a_sha256": "1a71d62870e6fcbe16d3627157a13efe702c0daf722c9736f402cdace64cbd9d",
+          "arm_b_sha256": "1a71d62870e6fcbe16d3627157a13efe702c0daf722c9736f402cdace64cbd9d",
+          "artifact": "crossarch-governed-b/data.json",
+          "class": "json-structured",
+          "identical": true
+        },
+        {
+          "arm_a_sha256": "bad1cbcd3a5d48ad9dc851bfe161504cc036f7e53b3da6681b3dfcefc0ddd156",
+          "arm_b_sha256": "bad1cbcd3a5d48ad9dc851bfe161504cc036f7e53b3da6681b3dfcefc0ddd156",
+          "artifact": "crossarch-governed-b/summary.json",
+          "class": "json-structured",
+          "identical": true
+        },
+        {
+          "arm_a_sha256": "ef1fe569b7215a3517f7a444cbfe4c5079533d742ad998f40245e2800f2f0873",
+          "arm_b_sha256": "ef1fe569b7215a3517f7a444cbfe4c5079533d742ad998f40245e2800f2f0873",
+          "artifact": "crossarch-governed-b/matrix.json",
+          "class": "json-structured",
+          "identical": true
+        }
+      ],
+      "eligible": true,
+      "identical": 3,
+      "total": 3
+    },
+    "pure-text": {
+      "architecture_stable": true,
+      "artifacts": [
+        {
+          "arm_a_sha256": "c3d522d442fe9b8e08ea1cc225886a96b7c6f2520e3ed49ce616912e8de61440",
+          "arm_b_sha256": "c3d522d442fe9b8e08ea1cc225886a96b7c6f2520e3ed49ce616912e8de61440",
+          "artifact": "crossarch-governed-a/data/payload.txt",
+          "class": "pure-text",
+          "identical": true
+        },
+        {
+          "arm_a_sha256": "9e593b90f6fd0ef5636102094a488600be03a4913ea6e08836a5c924401b66c7",
+          "arm_b_sha256": "9e593b90f6fd0ef5636102094a488600be03a4913ea6e08836a5c924401b66c7",
+          "artifact": "crossarch-governed-a/data/alphabet.txt",
+          "class": "pure-text",
+          "identical": true
+        },
+        {
+          "arm_a_sha256": "64c9a93dcb7c3a6da918cbf728e3a2ae6745760625e132b99eea6047cb0e5800",
+          "arm_b_sha256": "64c9a93dcb7c3a6da918cbf728e3a2ae6745760625e132b99eea6047cb0e5800",
+          "artifact": "crossarch-governed-a/data/notes.txt",
+          "class": "pure-text",
+          "identical": true
+        }
+      ],
+      "eligible": true,
+      "identical": 3,
+      "total": 3
+    },
+    "raw-binary": {
+      "architecture_stable": true,
+      "artifacts": [
+        {
+          "arm_a_sha256": "103066039ffcce85ebb793b744cae7e0017cd660c2bb6dff327ecbfe55212f75",
+          "arm_b_sha256": "103066039ffcce85ebb793b744cae7e0017cd660c2bb6dff327ecbfe55212f75",
+          "artifact": "crossarch-governed-a/data/bytes.bin",
+          "class": "raw-binary",
+          "identical": true
+        },
+        {
+          "arm_a_sha256": "0dd21bd42470a439e676fa1e6e4706bb7909712910d854e229671a51a26a3941",
+          "arm_b_sha256": "0dd21bd42470a439e676fa1e6e4706bb7909712910d854e229671a51a26a3941",
+          "artifact": "crossarch-governed-a/data/pattern.bin",
+          "class": "raw-binary",
+          "identical": true
+        },
+        {
+          "arm_a_sha256": "9c478d59f2a43f86656e4a15b12fbfa14d0f9026bfba48f92e0b5a9e620d1a15",
+          "arm_b_sha256": "9c478d59f2a43f86656e4a15b12fbfa14d0f9026bfba48f92e0b5a9e620d1a15",
+          "artifact": "crossarch-governed-a/data/mask.bin",
+          "class": "raw-binary",
+          "identical": true
+        }
+      ],
+      "eligible": true,
+      "identical": 3,
+      "total": 3
+    }
+  },
+  "corpus_path": "scripts/cross-arch-provenance-governed-corpus.json",
+  "corpus_sha256": "33a7531882f266dc067ba705b91863eacb709dee36bc00c2720aa0e6aba20bfa",
+  "decision": {
+    "category": "POSITIVE",
+    "detail": "PR-06 section C4 ordered rule, frozen amendment 2",
+    "negative_precedence": false,
+    "rule_step": "step 3: interval partition",
+    "unstable_classes": []
+  },
+  "env_lock_identity": [
+    {
+      "arm_a_digest": "5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+      "arm_a_raw": "docker|crossarch1397@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+      "arm_b_digest": "5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+      "arm_b_raw": "docker|python@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+      "normalized_equal": true,
+      "rule": "derive",
+      "workflow": "crossarch-governed-a"
+    },
+    {
+      "arm_a_digest": "5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+      "arm_a_raw": "docker|crossarch1397@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+      "arm_b_digest": "5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+      "arm_b_raw": "docker|python@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+      "normalized_equal": true,
+      "rule": "prepare",
+      "workflow": "crossarch-governed-a"
+    },
+    {
+      "arm_a_digest": "5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+      "arm_a_raw": "docker|crossarch1397@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+      "arm_b_digest": "5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+      "arm_b_raw": "docker|python@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+      "normalized_equal": true,
+      "rule": "checksums",
+      "workflow": "crossarch-governed-b"
+    },
+    {
+      "arm_a_digest": "5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+      "arm_a_raw": "docker|crossarch1397@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+      "arm_b_digest": "5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+      "arm_b_raw": "docker|python@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+      "normalized_equal": true,
+      "rule": "floats",
+      "workflow": "crossarch-governed-b"
+    },
+    {
+      "arm_a_digest": "5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+      "arm_a_raw": "docker|crossarch1397@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+      "arm_b_digest": "5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+      "arm_b_raw": "docker|python@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+      "normalized_equal": true,
+      "rule": "integers",
+      "workflow": "crossarch-governed-b"
+    },
+    {
+      "arm_a_digest": "5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+      "arm_a_raw": "docker|crossarch1397@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+      "arm_b_digest": "5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+      "arm_b_raw": "docker|python@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
+      "normalized_equal": true,
+      "rule": "structured",
+      "workflow": "crossarch-governed-b"
+    }
+  ],
+  "expected_engine_commit": "56b109c17b95e4c610a874aaf63fc0ae583a57a6",
+  "flow_table": {
+    "artifact_scope": "checkpoint-declared outputs only; workflow B's scratch_*.bin/txt are intentionally undeclared internals and are not artifacts (PR-02 \u00a7C4)",
+    "excluded_negative_controls": 1,
+    "included_primary_artifacts": 24,
+    "missing_primary_artifacts": []
+  },
+  "interval": {
+    "alpha": 0.05,
+    "interval_category": "POSITIVE",
+    "lower": 0.8575264022774753,
+    "method": "Clopper-Pearson exact two-sided 95%",
+    "point_estimate": 1.0,
+    "tau_ARCH": 0.8,
+    "upper": 1.0
+  },
+  "issue": "1397",
+  "manifest": {
+    "final_run_manifest": {
+      "commit": "56b109c17b95e4c610a874aaf63fc0ae583a57a6",
+      "commit_time_utc": "2026-11-27T17:00:43Z",
+      "note": "Final-run manifest: committed after attempt-2 and before the final analyzable run at 17:01:00Z. Same scientific hashes as the freeze manifest; only harness hashes and status text changed.",
+      "sha256": "770ae8f2769f112cd308249ea94882dee2b8c6e7a7e383550d790c229c2a75bf"
+    },
+    "freeze_manifest": {
+      "commit": "dd5dcd44ee91a2c93bfd24c29f189d8de32e87d5",
+      "commit_time_utc": "2026-11-27T16:52:56Z",
+      "note": "Parameter-freeze manifest: the #1166 thresholds/corpus were fixed and no campaign run existed. Its scientific hashes equal the final-run manifest.",
+      "sha256": "0eaca24be6d00f5ab369f1fb6769131bfeed336107128e76b26ccb6c4ff63908"
+    },
+    "governance": {
+      "amendment": "6 (2026-11-28; merged as 1.0.4)",
+      "amendment_log_entries": [
+        6,
+        7,
+        8,
+        9,
+        10
+      ],
+      "final_run_manifest_sha256": "770ae8f2769f112cd308249ea94882dee2b8c6e7a7e383550d790c229c2a75bf",
+      "freeze_manifest_sha256": "0eaca24be6d00f5ab369f1fb6769131bfeed336107128e76b26ccb6c4ff63908",
+      "manifest_file": "docs/superpowers/preregistration/MANIFEST.sha256",
+      "manifest_sha256": "7e3984771249522314d360a617132609c741daae96b8d11cd1f2e8615121bbfe",
+      "merge_note": "The #1166 amendment 6 was merged with the #1163 1.0.3 governance text into the 1.0.4 manifest. The branch freeze-time manifest 0eaca24b and final-run manifest 770ae8f2 remain historical records computed against the pre-merge branch manifest b077.",
+      "pr06_c4_section": "docs/superpowers/preregistration/PR-06-publication-decision-rule.md#c4--1166-cross-architecture-reproduction",
+      "pr06_version": "1.0.2",
+      "preregistration_readme": "docs/superpowers/preregistration/README.md",
+      "publication_gate": "PR-05 C4 independent reviewer sign-off is PENDING. Per PR-05, no result may be described as pre-registered or confirmatory until that row is completed. The governed category is computed under the frozen rule and reported with this limitation; it is not a publication-ready confirmatory result."
+    },
+    "post_run_hardening": {
+      "analysis_script_sha256": "e31bc0e0443ec4789381341833755b3aaaaefc8c60810bbe3ff8f3ea81785df8",
+      "arm_script_sha256": "8647a0c303f1208c05a2985f9623a56ab8bb1086f3c4088dfcb2949faa298ce3",
+      "captured_utc": "2026-11-27T17:25:45Z",
+      "orchestrator_sha256": "634dd6a7722de1d72ce36e3eef42f5958b5f83b797891f2e1a6d03a3812a796d",
+      "reason": "Independent review of PR #1444 found unmechanized validity checks and record-integrity wording. Post-run hardening: the analysis now asserts the sealed corpus/workflow/PR-06/MANIFEST hashes, host-arch versus container-arch, the wc tool version, image identity, and normalized env-lock digests; the arm script reads the image block from the corpus and records wc/docker/CPU; the orchestrator documents remote/local cleanup. Scientific thresholds, corpus, and observed hashes are unchanged.",
+      "review": "https://github.com/Traitome/oxo-flow/pull/1444",
+      "test_sha256": "6441be427ab612b9f18571a419f8669a00ff1e90a885e628da93e8b13f712137"
+    },
+    "timeline": [
+      {
+        "event": "parameter freeze commit dd5dcd44; freeze manifest 0eaca24b",
+        "utc": "2026-11-27T16:52:56Z"
+      },
+      {
+        "event": "attempt-1 starts; Docker Desktop crashes on docker rmi during staging; no workflow artifact exists",
+        "utc": "2026-11-27T16:56:36Z"
+      },
+      {
+        "event": "pre-run staging harness commit 834dc183 (CROSSARCH_STAGE=0 pre-staged path)",
+        "utc": "2026-11-27T16:59:01Z"
+      },
+      {
+        "event": "attempt-2 complete two-arm run; evidence-stem defect; checkpoints/outputs exist but are NOT analyzed as the campaign result (preserved under attempt-2-stem-mismatch)",
+        "utc": "2026-11-27T16:59:18Z"
+      },
+      {
+        "event": "pre-analysis / pre-final-run stem-fix commit 56b109c1; final-run manifest 770ae8f2",
+        "utc": "2026-11-27T17:00:43Z"
+      },
+      {
+        "event": "final analyzable run starts",
+        "utc": "2026-11-27T17:01:00Z"
+      },
+      {
+        "event": "final run ends; 24/24 artifacts identical",
+        "utc": "2026-11-27T17:01:19Z"
+      },
+      {
+        "event": "post-run supplementary host/container inventory captured for independent-review remediation",
+        "utc": "2026-11-27T17:25:45Z"
+      }
+    ]
+  },
+  "manifest_checked": true,
+  "negative_control": [
+    {
+      "arm_a_sha256": "5121ae59314a84da7b4d9587374398f1afa2000b243b3e54f491adefaac54f92",
+      "arm_b_sha256": "aaf631698ae5160ceb04a97681a14887fdcab47cd6e0f163c87485b3b1340b62",
+      "artifact": "crossarch-governed-a/control/os_arch.txt",
+      "differs": true
+    }
+  ],
+  "primary_endpoint": {
+    "differing": 0,
+    "differing_set": [],
+    "direction": "higher is better",
+    "identical": 24,
+    "name": "architecture-stable artifact proportion",
+    "proportion": 1.0,
+    "total": 24
+  },
+  "statement": "On the frozen 2-workflow corpus of 24 declared artifacts with identical container digest sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b and matching environment locks, all 24 artifacts were SHA-256 identical across native x86_64 and native aarch64 (100.0%, exact 95% CI [85.75%, 100.00%]), meeting the pre-registered tau_ARCH = 0.80. The claim is limited to these 2 workflows, these tool versions, and these 8 artifact classes; it does not establish bitwise reproducibility for arbitrary tools or workflows.",
+  "validity": {
+    "reasons": [],
+    "valid": true
+  }
+}
