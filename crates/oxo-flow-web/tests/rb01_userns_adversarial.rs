@@ -216,6 +216,18 @@ fn parse_results(run_dir: &std::path::Path) -> std::collections::HashMap<String,
         .collect()
 }
 
+/// Print the recorded probes in a deterministic order so a `--nocapture`
+/// run produces self-contained evidence (the run workdir is temporary and
+/// is not part of the shipped tree).
+fn print_probe_summary(label: &str, results: &std::collections::HashMap<String, String>) {
+    let mut keys: Vec<&String> = results.keys().collect();
+    keys.sort();
+    eprintln!("RB01U {label} probe results:");
+    for key in keys {
+        eprintln!("RB01U   {key}: {}", results[key]);
+    }
+}
+
 fn assert_probe(
     results: &std::collections::HashMap<String, String>,
     probe: &str,
@@ -452,6 +464,7 @@ shell = "echo rb01u-probe"
     let control_dir =
         oxo_flow_web::workspace::get_run_directory(A_ID, &control_id).expect("run dir");
     let control = parse_results(&control_dir);
+    print_probe_summary("CONTROL", &control);
     assert_probe(&control, "workdir-write", "pass", &control_dir);
     assert_eq!(
         control.get("uid").map(String::as_str),
@@ -490,6 +503,7 @@ shell = "echo rb01u-probe"
     let isolated_dir =
         oxo_flow_web::workspace::get_run_directory(A_ID, &isolated_id).expect("run dir");
     let isolated = parse_results(&isolated_dir);
+    print_probe_summary("ISOLATED", &isolated);
 
     assert_probe(&isolated, "workdir-write", "pass", &isolated_dir);
     assert_probe(&isolated, "uid", "0", &isolated_dir);
@@ -525,9 +539,10 @@ shell = "echo rb01u-probe"
     let (status, body) = post_run(&app, A_TOKEN, PROBE_WORKFLOW).await;
     assert_eq!(status, StatusCode::OK, "exit-code run accepted: {body}");
     let exit_id = body["run_id"].as_str().expect("run_id").to_string();
+    let exit_status = wait_terminal(&exit_id, 30).await;
+    eprintln!("RB01U exit-code run: status={exit_status} (CLI exit 7 through unshare)");
     assert_eq!(
-        wait_terminal(&exit_id, 30).await,
-        "failed",
+        exit_status, "failed",
         "the CLI's status must reach the web executor through unshare"
     );
     // SAFETY: the exit-code run is terminal; no further run needs the knob.
@@ -539,8 +554,13 @@ shell = "echo rb01u-probe"
     assert_eq!(body["status"], "cancelled");
     let b_status = wait_terminal(&b_id, 30).await;
     assert_eq!(b_status, "cancelled");
+    let survivor_gone = wait_process_gone(&marker, 15);
+    eprintln!(
+        "RB01U cancel: run={b_id} status={b_status} tenant_b_host_pid={b_pid} \
+         marker={marker} namespace_has_no_survivor={survivor_gone}"
+    );
     assert!(
-        wait_process_gone(&marker, 15),
+        survivor_gone,
         "a process inside tenant B's namespace survived cancel (SIGTERM → SIGKILL): \
          the supervisor's group kill must tear down the whole namespace"
     );
