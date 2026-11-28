@@ -31,7 +31,7 @@
     "wc_note": "The sealed run-time container.txt omitted wc; the post-run container-supplement.txt records `wc (GNU coreutils) 9.7` on both arms from the same pinned digest, and the analysis compares it."
   },
   "files": {
-    "docs/superpowers/preregistration/MANIFEST.sha256": "8fb8d77439b1c7079aea75933b4433da70c8181d48261299fc7f04898a4c9e8d",
+    "docs/superpowers/preregistration/MANIFEST.sha256": "7f27300563fcf2baaa82e07a9c68b67b3b757f44493917d6e9b6568b5c11d108",
     "docs/superpowers/preregistration/PR-06-publication-decision-rule.md": "94a29848281d55d4970de5c3929189a68389df5b05a3b414e2fd2d093993c5b8",
     "eval/scripts/test_crossarch_governed.py": "7667609c436e2a349a5deed5b83637dd5e854400a7b060f3c16a3fc60a036df7",
     "scripts/cross-arch-provenance-arm.sh": "ceee31e545c02a1f44b47ebe0957154641609bd28a78bc646236d480905b955a",
@@ -41,7 +41,7 @@
     "scripts/cross-arch-provenance-governed-corpus.json": "33a7531882f266dc067ba705b91863eacb709dee36bc00c2720aa0e6aba20bfa",
     "scripts/cross-arch-provenance-governed.sh": "fc5f29c80d9678cdac415c83be37e7cfdb5f3769a10ca836c6d62da1ecc3c35a"
   },
-  "files_note": "The `files` map is the executed/final-run seal at commit 56b109c1 for the corpus, workflow, harness, and analysis-script entries. Its two governance-file entries are post-merge values, not executed-time bytes: `PR-06-publication-decision-rule.md` = 94a29848... and `MANIFEST.sha256` = 8fb8d774... are the governance files the analysis binds on disk (the executed-time PR-06 was e3e098c5... at v1.0.2; the pre-merge branch manifest was b07721b8...; the merged 1.0.4 manifest was 7e398477..., superseded by the PR-05-only amendment-11 manifest 8fb8d774...). See `governance.merge_note`. Post-run hardened script hashes are in `post_run_hardening`; the scientific corpus/workflow hashes are unchanged.",
+  "files_note": "The `files` map is the executed/final-run seal at commit 56b109c1 for the corpus, workflow, harness, and analysis-script entries. Its two governance-file entries are post-merge values, not executed-time bytes: `PR-06-publication-decision-rule.md` = 94a29848... and `MANIFEST.sha256` = 7f273005... are the governance files the analysis binds on disk (the executed-time PR-06 was e3e098c5... at v1.0.2; the pre-merge branch manifest was b07721b8...; the merged 1.0.4 manifest was 7e398477..., superseded by the PR-05-only amendment-11 manifest 7f273005...). See `governance.merge_note`. Post-run hardened script hashes are in `post_run_hardening`; the scientific corpus/workflow hashes are unchanged.",
   "final_run_manifest": {
     "commit": "56b109c17b95e4c610a874aaf63fc0ae583a57a6",
     "commit_time_utc": "2026-11-27T17:00:43Z",
@@ -69,13 +69,13 @@
     "final_run_manifest_sha256": "770ae8f2769f112cd308249ea94882dee2b8c6e7a7e383550d790c229c2a75bf",
     "freeze_manifest_sha256": "0eaca24be6d00f5ab369f1fb6769131bfeed336107128e76b26ccb6c4ff63908",
     "manifest_file": "docs/superpowers/preregistration/MANIFEST.sha256",
-    "manifest_sha256": "8fb8d77439b1c7079aea75933b4433da70c8181d48261299fc7f04898a4c9e8d",
-    "merge_note": "The #1166 amendment 6 was merged with the #1163 1.0.3 governance text into the 1.0.4 manifest (7e398477...). Amendment 11 (PR-05 v1.1.0, pre-sign-off data status) then recomputed the manifest to 1.0.5 (8fb8d774...) with PR-01–PR-04 and PR-06 byte-identical and only PR-05 changed; this file's `governance.manifest_sha256` is rebound to 1.0.5 so the analysis binds the current governance text. The branch freeze-time manifest 0eaca24b and final-run manifest 770ae8f2 remain historical records computed against the pre-merge branch manifest b077; the executed scientific seal (corpus, workflows, analysis/harness scripts) is unchanged.",
+    "manifest_sha256": "7f27300563fcf2baaa82e07a9c68b67b3b757f44493917d6e9b6568b5c11d108",
+    "merge_note": "The #1166 amendment 6 was merged with the #1163 1.0.3 governance text into the 1.0.4 manifest (7e398477...). Amendment 11 (PR-05 v1.1.0, pre-sign-off data status) then recomputed the manifest to 1.0.5 (7f273005...) with PR-01–PR-04 and PR-06 byte-identical and only PR-05 changed; this file's `governance.manifest_sha256` is rebound to 1.0.5 so the analysis binds the current governance text. The branch freeze-time manifest 0eaca24b and final-run manifest 770ae8f2 remain historical records computed against the pre-merge branch manifest b077; the executed scientific seal (corpus, workflows, analysis/harness scripts) is unchanged.",
     "pr06_c4_section": "docs/superpowers/preregistration/PR-06-publication-decision-rule.md#c4--1166-cross-architecture-reproduction",
     "pr06_version": "1.0.2",
     "pr06_version_note": "`pr06_version` is the PR-06 version whose C4 rule was frozen for this campaign (1.0.2, amendment 2). The merged PR-06 file is 1.0.4; its C4 rule text is unchanged (the merge only renumbered the amendment reference from 2 to 6). The `files` PR-06 entry keeps the merged 1.0.4 hash (unchanged in 1.0.5), and `governance.manifest_sha256` is rebound to the 1.0.5 manifest whose PR-01–PR-04/PR-06 hashes are identical.",
     "preregistration_readme": "docs/superpowers/preregistration/README.md",
-    "publication_gate": "PR-05 C4 independent reviewer sign-off is PENDING. Per PR-05 §2 (amendment 11), this campaign is a governed pre-sign-off measurement; no result may be described as pre-registered (unqualified) or confirmatory until that row is completed. Promotion to confirmatory requires the completed C4 row and a §2.3 disposition; it is not automatic, and sign-off may instead invalidate the data."
+    "publication_gate": "PR-05 C4 independent reviewer sign-off is PENDING. Per PR-05 §2 (amendment 11), this campaign is a governed pre-sign-off measurement; no result may be described as pre-registered (unqualified) or confirmatory until that row records an approving disposition. Promotion to confirmatory requires an approving C4 disposition under §2.3; it is not automatic, and sign-off may instead invalidate the data."
   },
   "harness_revision": {
     "commit": "834dc183ddab1e1a9562bf65aa4da1d09f1e32ec",

@@ -6,8 +6,8 @@
 > sign-off still PENDING.** This is not a confirmatory result and not
 > publication-ready. Under PR-05 §2 (amendment 11) a result collected
 > under the frozen pre-registration before sign-off is a governed
-> pre-sign-off measurement: promotion to confirmatory requires the
-> completed C1 row, is not automatic, and sign-off may instead invalidate
+> pre-sign-off measurement: promotion to confirmatory requires an approving
+> C1 disposition, is not automatic, and sign-off may instead invalidate
 > the data. The frozen pre-registration
 > (PR-06 amendment 2, 2026-11-27) fixed `τ_FA = 0.05` and `N_min = 73`
 > **before** any expected-reject case was authored or run. On the sealed
@@ -454,8 +454,8 @@ and is unaffected here.
   still incomplete. Task 4.0 and ledger Gate 3 remain unpassed; Gate 3
   additionally requires independent biological validation, matched
   same-host comparisons, and reproduction on an independent environment.
-  Promotion of this pre-sign-off measurement to confirmatory requires the
-  completed C1 row and a §2.3 disposition (PR-05 amendment 11).
+  Promotion of this pre-sign-off measurement to confirmatory requires an
+  approving C1 disposition under §2.3 (PR-05 amendment 11).
 - **Single arm** (macOS arm64, rustc 1.98.0). No cross-platform or
   cross-version contrast is claimed.
 - **Author independence.** The corpus was authored by the maintainer's

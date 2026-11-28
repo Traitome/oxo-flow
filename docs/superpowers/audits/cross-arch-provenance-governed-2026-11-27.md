@@ -11,8 +11,8 @@
 > PR-05 C4 independent reviewer sign-off remains **PENDING**; per PR-05 §2
 > (amendment 11) this result is a **governed pre-sign-off measurement**
 > under the frozen rule — not a confirmatory result and not
-> publication-ready. Promotion to confirmatory requires the completed C4
-> row; it is not automatic and sign-off may instead invalidate the data.
+> publication-ready. Promotion to confirmatory requires an approving C4
+> disposition; it is not automatic and sign-off may instead invalidate the data.
 
 ## 1. Question
 
@@ -37,8 +37,8 @@ environment is the same and only the CPU architecture differs.
 | Parameter-freeze timestamp | 2026-11-28T00:52:56+08:00 (`2026-11-27T16:52:56Z`) |
 | Freeze-time manifest SHA-256 | `0eaca24be6d00f5ab369f1fb6769131bfeed336107128e76b26ccb6c4ff63908` |
 | Final-run manifest SHA-256 | `770ae8f2769f112cd308249ea94882dee2b8c6e7a7e383550d790c229c2a75bf` (commit `56b109c17b95e4c610a874aaf63fc0ae583a57a6`, 2026-11-27T17:00:43Z) |
-| Current committed manifest SHA-256 | `4108b75eb0a4bf5f8271cc5b245280fac99a65c9076bf6b66fa4aa186222298a` (post-merge revision of the post-run hardened manifest; it keeps the executed scientific hashes, the merged 1.0.4 governance entries, and the amendment-11 rebinding to the PR-05-only 1.0.5 manifest — see `governance.merge_note`; the previous post-merge revision was `739e5f07…`, the pre-merge hardening revision `4f11b490…`) |
-| `MANIFEST.sha256` | `8fb8d77439b1c7079aea75933b4433da70c8181d48261299fc7f04898a4c9e8d` (merged 1.0.5: PR-01–PR-04/PR-06 byte-identical to 1.0.4, PR-05 v1.1.0; the merged 1.0.4 manifest was `7e398477…`, the pre-merge #1166 branch manifest `b07721b8…`) |
+| Current committed manifest SHA-256 | `de907e76ef3ffbe794fa6314af30c1306fb88c9ea1bd523baee68f924bd92bd5` (post-merge revision of the post-run hardened manifest; it keeps the executed scientific hashes, the merged 1.0.4 governance entries, and the amendment-11 rebinding to the PR-05-only 1.0.5 manifest — see `governance.merge_note`; the previous post-merge revision was `739e5f07…`, the pre-merge hardening revision `4f11b490…`) |
+| `MANIFEST.sha256` | `7f27300563fcf2baaa82e07a9c68b67b3b757f44493917d6e9b6568b5c11d108` (merged 1.0.5: PR-01–PR-04/PR-06 byte-identical to 1.0.4, PR-05 v1.1.0; the merged 1.0.4 manifest was `7e398477…`, the pre-merge #1166 branch manifest `b07721b8…`) |
 | Pre-run/final-run manifest | `docs/superpowers/audits/data/crossarch-1397/preregistration.json` |
 
 The amendment log entry 6 records the value changes and that **no outcome
@@ -63,7 +63,7 @@ revision (amendment log entry 10), which adds sealed-hash/host-arch/tool/
 env-lock checks without changing the scientific values or the observed
 hashes, further rebound by governance-only
 amendment 11: PR-05 v1.1.0 recomputed `MANIFEST.sha256` to 1.0.5
-(`8fb8d774…`) with PR-01–PR-04 and PR-06 byte-identical, so
+(`7f273005…`) with PR-01–PR-04 and PR-06 byte-identical, so
 `governance.manifest_sha256` now names 1.0.5 while the executed scientific
 seal and the freeze/final-run hashes are unchanged. The committed run-time
 analysis output (`docs/superpowers/audits/data/crossarch-1397/crossarch-results.json`)
@@ -114,7 +114,7 @@ carry those executed-time values. Its two governance-file entries were updated
 at merge time to the merged 1.0.4 files and rebound by amendment 11 to the
 current 1.0.5 files the analysis binds on disk —
 `PR-06` = `94a29848…` (unchanged; the executed-time PR-06 was `e3e098c5…`,
-v1.0.2, the campaign rule version) and `MANIFEST.sha256` = `8fb8d774…`
+v1.0.2, the campaign rule version) and `MANIFEST.sha256` = `7f273005…`
 (1.0.5; the merged 1.0.4 value was `7e398477…`, the pre-merge branch
 manifest `b07721b8…`); `governance.merge_note` records this. The
 post-run hardened analysis/arm/orchestrator/test hashes are in
@@ -412,7 +412,7 @@ and they are excluded from the provenance denominator.
 - **No independent reviewer sign-off.** PR-05 C4 remains PENDING. Per PR-05
   §2 (amendment 11), this is a governed pre-sign-off measurement under the
   frozen rule, not a confirmatory result and not publication-ready; promotion
-  to confirmatory requires the completed C4 row. No independent replication
+  to confirmatory requires an approving C4 disposition. No independent replication
   or external review exists.
 - **No third architecture.** RISC-V and other architectures are out of scope.
 - **Only the `docker` backend.** `system`, `singularity`, `conda`, `pixi`,
@@ -438,9 +438,9 @@ and they are excluded from the provenance denominator.
   but was not analyzed as the campaign result; both the interrupted staging
   attempt and attempt-2 are preserved and disclosed. The current file is the
   post-merge revision of the post-run review-hardened manifest
-  (`4108b75e…`; previous post-merge revision `739e5f07…`), rebinding
+  (`de907e76…`; previous post-merge revision `739e5f07…`), rebinding
   `governance.manifest_sha256` to the PR-05-only 1.0.5 manifest
-  (`8fb8d774…`; the merged 1.0.4 value was `7e398477…`). Its governance-file
+  (`7f273005…`; the merged 1.0.4 value was `7e398477…`). Its governance-file
   entries are the current hashes; PR-01–PR-04/PR-06 are byte-identical to
   1.0.4.
 - **Native-execution assertion.** The hardened analysis requires each arm's
@@ -458,11 +458,11 @@ all bioinformatics tools or hardware.
 
 - Final-run / review-hardened manifest: `docs/superpowers/audits/data/crossarch-1397/preregistration.json`
   (freeze-time `0eaca24b…`, final-run `770ae8f2…`, current post-merge revision
-  `4108b75e…` — previous post-merge revision `739e5f07…`, pre-merge post-run
+  `de907e76…` — previous post-merge revision `739e5f07…`, pre-merge post-run
   hardening revision `4f11b490…`).
   The freeze/final-run manifests are pre-merge branch records computed against
   `b07721b8…`; the merged governance text is now the 1.0.5 manifest
-  `8fb8d774…` (the merged 1.0.4 value was `7e398477…`).
+  `7f273005…` (the merged 1.0.4 value was `7e398477…`).
 - Frozen corpus: `scripts/cross-arch-provenance-governed-corpus.json`,
   `scripts/cross-arch-provenance-governed-a.oxoflow`,
   `scripts/cross-arch-provenance-governed-b.oxoflow`.

@@ -154,8 +154,9 @@ deadlines and records `elapsed_secs` (0.7 s) in its result file.
   erratum and supplement, and the stale "No campaign was run … no empirical
   result" sentence is corrected to a freeze-time statement.
 - `industrial-scientific-audit-ledger.md` WF-04: the long historical
-  narrative is banner-marked as historical; the status cell already carries
-  the governed POSITIVE result.
+  narrative is banner-marked as historical; the status cell carries the
+  governed pre-sign-off measurement (POSITIVE (pre-sign-off); not
+  confirmatory; PR-05 C1 sign-off pending).
 
 ## 8. LOW — `g049`/`g052` header claim superseded (fixed by note, no body edit)
 
@@ -201,7 +202,7 @@ report §11; it is not execution evidence and not biological truth.
 | Amendment 5 commit (PR-04 caveat) | `00677a9be84c2ddf4ff0ba832d159f55e75af9f3` |
 | v1.0.3 `MANIFEST.sha256` (amendment 4) | `1d3069043f53bdf13386b248392ba63ef35b296e46b65b764fac251d2e4b4ec9` |
 | v1.0.3 `MANIFEST.sha256` (amendment 5; superseded by the merged 1.0.4 manifest) | `e3863f53fe0245b191a8215279623a8756f0b472e3a096e7f91ea3042f97eb8e` |
-| v1.0.5 `MANIFEST.sha256` (current; PR-05-only amendment 11 — the merged 1.0.4 was `7e398477…`) | `8fb8d77439b1c7079aea75933b4433da70c8181d48261299fc7f04898a4c9e8d` |
+| v1.0.5 `MANIFEST.sha256` (current; PR-05-only amendment 11 — the merged 1.0.4 was `7e398477…`) | `7f27300563fcf2baaa82e07a9c68b67b3b757f44493917d6e9b6568b5c11d108` |
 | Supplement corpus + runner commit | `742a684b81be06a2a3c723f9b7dbfb7afbae1769` |
 | Supplement seal commit | `0204c1e44ea167b4598be8a27d6b67be13fea207` |
 | Supplement manifest SHA-256 | `757891a479948bb2c6933ee61ce3df96a233b8240bf92a4862ad25309e552fc3` |

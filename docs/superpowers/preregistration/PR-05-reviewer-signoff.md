@@ -16,16 +16,16 @@ required field, not a completed one. The value `PENDING` means the field
 is empty; it is not a placeholder for a name that was agreed informally.
 No campaign may present data as confirmatory, and no result may be
 described as a pre-registered result (unqualified) or used for a
-publication claim, until the corresponding row is completed and recorded
-under the amendment procedure in §5.
+publication claim, until the corresponding row is completed with an
+approving disposition and recorded under §5.
 
 Data collected under a frozen pre-registration **before** the corresponding
-row is completed is **not** confirmatory and does not become confirmatory
-automatically. §2 defines that status — "governed pre-sign-off data
-collection" / "governed pre-sign-off measurement" — its claim vocabulary,
-and how a completed sign-off adjudicates it. The no-publication-before-
-sign-off rule is unchanged: pre-sign-off status is a disclosure category,
-never a publication authorization.
+row records an approving disposition is **not** confirmatory and does not
+become confirmatory automatically. §2 defines that status — "governed
+pre-sign-off data collection" / "governed pre-sign-off measurement" — its
+claim vocabulary, and how a completed sign-off disposition adjudicates it.
+The no-publication-before-sign-off rule is unchanged: pre-sign-off status
+is a disclosure category, never a publication authorization.
 
 ## 1. Required reviewer qualifications
 
@@ -77,13 +77,19 @@ text, with all of:
    campaign's frozen seal);
 3. the analysis script sealed before the run, used unmodified for the
    reported analysis; a disclosed post-outcome hardening that reproduces
-   the committed decision byte-identically (as for #1163) does not
-   invalidate the collection;
-4. no completed PR-05 sign-off row for that campaign.
+   the same reported category on the same endpoint, denominator, and
+   interval (as recorded for #1163 and #1166) does not invalidate the
+   collection;
+4. no PR-05 row disposing of the campaign as promoted (an `APPROVE`
+   disposition, or `APPROVE WITH CONDITIONS` after every condition is
+   closed and recorded, §2.3).
 
 Its reported status is **governed pre-sign-off measurement**. It is not a
-pilot and not exploratory merely because it precedes sign-off; it is
-protocol-compliant data whose governance disposition is undecided.
+pilot and not exploratory merely because it precedes sign-off; it is data
+collected under the frozen protocol whose compliance and governance
+disposition are decided at sign-off. A row that invalidates the data
+(§2.3) removes it from both categories: it is reported only as
+invalidated/exploratory.
 
 Data that do not meet all four conditions are not pre-sign-off data: a
 pilot measured before the freeze (#1164), a set measured while a threshold
@@ -92,8 +98,12 @@ authored after the primary outcome are pilot/exploratory/exposure and
 keep that label.
 
 **Confirmatory result.** A result becomes confirmatory only when the
-corresponding PR-05 sign-off row is completed and recorded under §5, and
-only for the manifest hash that sign-off names. Completion changes:
+corresponding PR-05 sign-off row is completed **with an `APPROVE`
+disposition** — or with `APPROVE WITH CONDITIONS` after every condition
+has been closed and recorded under §5 — and only for the manifest hash
+that sign-off names. A row completed with `REJECT`, `FREEZE CHAIN NOT
+DEMONSTRABLE`, or open conditions does not create a confirmatory result.
+The approving completion changes:
 
 1. **The row.** Every field in §4 is filled: reviewer identity, role,
    independence declaration, competence declaration, outcome-access
@@ -117,10 +127,11 @@ only for the manifest hash that sign-off names. Completion changes:
    are not recomputed: promotion changes governance status, not data.
 
 **No automatic promotion.** Pre-sign-off data remain pre-sign-off
-indefinitely if no row is completed. Elapsed time, repetition, a different
-campaign's sign-off, or internal citation never promote them. They may be
-invalidated by sign-off (§2.3), and they must not be described as
-confirmatory in the meantime.
+indefinitely if no approving row is completed. Elapsed time, repetition, a
+different campaign's sign-off, or internal citation never promote them. A
+completed row with a non-approving disposition does not promote them
+either. They may be invalidated by sign-off (§2.3), and they must not be
+described as confirmatory in the meantime.
 
 ### 2.2 Claim vocabulary
 
@@ -131,7 +142,8 @@ external communication.
 | Status | Permitted | Forbidden |
 | :--- | :--- | :--- |
 | Governed pre-sign-off measurement (§2.1) | "governed pre-sign-off measurement"; "governed decision under the frozen rule (pre-sign-off)"; a decision category **with the qualifier**, e.g. "POSITIVE (pre-sign-off)"; "collected under pre-registration <version>, pre-sign-off"; "not confirmatory"; "not publication-ready" | "confirmatory" or "confirmatory data/result/evidence" (unqualified); "pre-registered result" or "pre-registered finding" unqualified; "publication-ready"; "validated result"; "proven"; any publication, press, or venue claim |
-| Confirmatory (signed row, named manifest) | "confirmatory result (PR-05-signed <date>, manifest <hash>)"; "pre-registered result" within the signed scope; publication claims within the signed scope | "confirmatory" beyond the signed scope; any confirmatory claim after a scope-changing amendment; an independence claim the record does not state |
+| Conditionally held (`APPROVE WITH CONDITIONS`, conditions open) | "governed pre-sign-off measurement (conditionally held; conditions N open)"; "pre-sign-off approval with conditions"; "not confirmatory"; "not publication-ready" | "confirmatory"; "approved" (unqualified); "publication-ready"; every confirmatory phrase in the row below |
+| Confirmatory (**approving** signed row, conditions closed) | "confirmatory result (PR-05-signed <date>, manifest <hash>)"; "pre-registered result" within the signed scope; publication claims within the signed scope | "confirmatory" beyond the signed scope; any confirmatory claim from a `REJECT` or `FREEZE CHAIN NOT DEMONSTRABLE` row or from a conditionally held row; any confirmatory claim after a scope-changing amendment; an independence claim the record does not state |
 | Pilot / exploratory / exposure | "pilot", "exploratory", "exposure", "descriptive", "operational measurement" | every pre-sign-off and confirmatory phrase above; pre-sign-off status requires a frozen pre-registration |
 
 "Confirmatory" may appear in governance text only to define the status or
@@ -146,7 +158,7 @@ The reviewer records one disposition for each campaign:
 | Disposition | Effect on the pre-sign-off data |
 | :--- | :--- |
 | `APPROVE` | The data may be promoted to confirmatory as of the sign-off date, for the signed manifest hash, after the relabeling in §2.1(5). |
-| `APPROVE WITH CONDITIONS` | The data stay pre-sign-off until every condition is closed by a pre-data amendment. A condition that changes analysis content (endpoint, denominator, threshold, case set, or analysis script) voids promotion; a held-out re-run is required. |
+| `APPROVE WITH CONDITIONS` | The data stay pre-sign-off until every condition is closed and recorded by an amendment that changes no analysis content. A condition that changes analysis content (endpoint, denominator, threshold, case set, or analysis script) voids promotion; a held-out re-run is required. |
 | `REJECT` | The data are invalidated for the affected endpoint. They may be reported only as invalidated/exploratory; a held-out re-run is required. |
 | `FREEZE CHAIN NOT DEMONSTRABLE` | The data are invalid for the affected endpoint because the four conditions in §2.1 cannot be demonstrated. No promotion is permitted. |
 
@@ -186,7 +198,8 @@ PR-05 sign-off remains mandatory before publication. Pre-sign-off status:
 
 The original prohibition stands: no result may be presented as
 confirmatory, or as a pre-registered result unqualified, until the
-corresponding row is completed and recorded under §5.
+corresponding row is completed with an approving disposition and recorded
+under §5.
 
 ### 2.6 Relation to the other frozen artifacts
 
@@ -196,8 +209,9 @@ collected for a campaign intended to support a confirmatory claim, with
 the analysis frozen before the run. This amendment changes none of those
 artifacts (their hashes are unchanged) and none of their analysis content.
 Read under this section, such data are governed pre-sign-off data until
-the corresponding PR-05 row is completed, and the phrases authorize
-neither a confirmatory label nor a publication claim before then. Where a
+the corresponding PR-05 row records an approving disposition, and the
+phrases authorize neither a confirmatory label nor a publication claim
+before then. Where a
 frozen artifact says a result cannot be presented as a pre-registered
 confirmatory result until a condition is met, that prohibition is
 preserved.
@@ -206,7 +220,8 @@ preserved.
 
 The reviewer completes every item and records the evidence path. A single
 `REJECT` blocks the campaign; `APPROVE WITH CONDITIONS` blocks until the
-conditions are recorded as a pre-data amendment.
+conditions are closed and recorded by an amendment that changes no
+analysis content.
 
 | # | Check | Evidence expected |
 | :--- | :--- | :--- |
@@ -312,17 +327,20 @@ Each campaign needs its own completed row. All fields are mandatory.
    recomputed with the signed PR-05 and the amendment entry records both
    the pre-signature hash reviewed and the recomputed manifest (§2.1).
 4. A conditional approval lists each condition as a numbered item and
-   names the artifact section that must change. Conditions are closed by a
-   pre-data amendment; the campaign stays blocked until then, and any
-   condition that changes analysis content voids promotion of pre-sign-off
-   data (§2.3).
-5. The act of signing is what creates a confirmatory result; a reviewer
-   cannot have seen this campaign's confirmatory outcome before signing
-   it. A later reviewer of a campaign whose data were already promoted
-   declares `CONFIRMATORY SEEN`. A reviewer who has seen this campaign's
-   pre-sign-off data declares `PRE-SIGN-OFF DATA SEEN` and adjudicates it
-   under §2.3; that is not a `POST-OUTCOME REVIEW` and does not by itself
-   make the data exploratory.
+   names the artifact section that must change. Conditions are closed and
+   recorded by an amendment that changes no analysis content; the campaign
+   stays blocked until then, and any condition that changes analysis
+   content voids promotion of pre-sign-off data (§2.3).
+5. The act of signing with an `APPROVE` disposition — or with
+   `APPROVE WITH CONDITIONS` once every condition is closed and recorded
+   — is what creates a confirmatory result; a row completed with `REJECT`,
+   `FREEZE CHAIN NOT DEMONSTRABLE`, or open conditions creates none. A
+   reviewer cannot have seen this campaign's confirmatory outcome before
+   signing it. A later reviewer of a campaign whose data were already
+   promoted declares `CONFIRMATORY SEEN`. A reviewer who has seen this
+   campaign's pre-sign-off data declares `PRE-SIGN-OFF DATA SEEN` and
+   adjudicates it under §2.3; that is not a `POST-OUTCOME REVIEW` and does
+   not by itself make the data exploratory.
 
 ## 6. Gate effect
 

@@ -445,6 +445,12 @@
         {
           "path": "docs/superpowers/audits/industrial-scientific-audit-ledger.md",
           "contains": ["governed pre-sign-off data", "POSITIVE (pre-sign-off)"]
+        },
+        {
+          "path": "docs/superpowers/audits/industrial-scientific-audit-ledger.md",
+          "row_starts_with": "| WF-04 |",
+          "row_contains": ["governed pre-sign-off measurement", "POSITIVE (pre-sign-off)", "not confirmatory"],
+          "row_not_contains": ["governed 83-case expected-reject truth set **POSITIVE**"]
         }
       ]
     }

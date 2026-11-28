@@ -573,7 +573,7 @@ Current CLI simulation baseline (seeded fault-injection campaign, Round 2 with t
 **Current state (governance layer created, gate not passed)**: the six
 artifacts are frozen under
 [`docs/superpowers/preregistration/`](../preregistration/README.md)
-(`PR-01`–`PR-06`, version 1.0.5 — amendments 1–10: amendments 1–5 are the
+(`PR-01`–`PR-06`, version 1.0.5 — amendments 1–11: amendments 1–5 are the
 #1163 series, amendment 6 is the #1166 campaign-parameter freeze,
 amendments 7–10 are #1166 harness/status/tooling, and amendment 11 defines
 the governed pre-sign-off data status and makes PR-05 v1.1.0), content hashes in
@@ -598,7 +598,7 @@ structurally recovery-eligible class); that pilot is disclosed in
 PR-01/PR-06 and is not confirmatory — a held-out re-run is required. #1165
 has collected no pre-sign-off data. Per PR-05 §2 (amendment 11), neither
 the #1163 nor the #1166 result is confirmatory or publication-ready;
-promotion requires the respective PR-05 row. Commit bindings: `62d9161b2992`
+promotion requires an approving disposition on the respective PR-05 row. Commit bindings: `62d9161b2992`
 (v1.0.0 freeze commit), `0a18b07afb54` (v1.0.1 amendment-1 commit),
 `89c4127d` (v1.0.2 #1163 `τ_FA` freeze), `ef42c659`/`00677a9b` (v1.0.3
 #1163 erratum and PR-04 caveat), `6fbf38c1`/`365e563a` (governed #1163
