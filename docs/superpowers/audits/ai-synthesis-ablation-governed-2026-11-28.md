@@ -10,9 +10,12 @@ No independent reviewer sign-off exists; this is not the governed
 
 - **Issue:** [#1395](https://github.com/Traitome/oxo-flow/issues/1395)
 - **Pre-registration:** [`eval/frontier/GOVERNED_CAMPAIGN_PRE_REGISTRATION_2026-11-28.md`](../../../eval/frontier/GOVERNED_CAMPAIGN_PRE_REGISTRATION_2026-11-28.md),
-  commit `471f38cc`
-- **Harness commit:** `f4b6c979` (`eval/frontier/run_eval.py` SHA-256
-  `289e6ec956353ab0d1fc313343039f1e4f828a3a833156893a327f2ec16be8df`)
+  commit `8fea3b00` (original pre-rebase freeze hash `471f38cc`, recorded
+  in the campaign note; the rebase onto main `0b960ce9` changed only the
+  commit identity, not the file bytes)
+- **Harness commit:** `c12557dc` (`eval/frontier/run_eval.py` SHA-256
+  `289e6ec956353ab0d1fc313343039f1e4f828a3a833156893a327f2ec16be8df`;
+  original pre-rebase harness hash `f4b6c979`)
 - **Analysis script:** `eval/frontier/statistical_report.py` SHA-256
   `e0471ee640cfc45d0d4074fdf600e8b193543d22d5f3ebe5693568933835594a`
   (the harness-commit version; exact McNemar + Holm primary, Edwards +
@@ -103,8 +106,8 @@ gate-passing workflow that uses the correct Bismark/Bowtie2 backend.
 | :--- | :--- |
 | Date | 2026-11-28 (Asia/Shanghai); campaign UTC window 2026-11-27T16:49:49Z → 2026-11-28T00:12:47Z |
 | Issue | #1395 |
-| Pre-registration commit | `471f38cc` |
-| Harness commit | `f4b6c9793bf2f7c5932facef549efef2997baab6` |
+| Pre-registration commit | `8fea3b00` (original pre-rebase `471f38cc`) |
+| Harness commit | `c12557dc4c0b8c665a4c76330fb0b0e0318a69f3` (original pre-rebase `f4b6c9793bf2f7c5932facef549efef2997baab6`) |
 | Intent fixture | `eval/frontier/intents.json`, SHA-256 `76136532e308464bed29827e001b6d894840c5d2e7bdd8925f24361bde75bd51` |
 | Binary | `target/debug/oxo-flow` (built from base `e7170492`), SHA-256 `989740b6362e41e1c6aeb5925d555c0be69a9e52b335f982039fd13214c76b8e` |
 | Provider | operator `~/.oxo-flow/ai_config.json`: `provider = openai`, OpenAI-compatible endpoint (host/URL/key not committed) |
@@ -140,13 +143,22 @@ the primary dataset. It verified that Arm A receives content, Arms B/C
 execute and archive sessions, and Arm C's argv carries
 `--ai-contract-feedback`. The pilot was not used in any number below.
 
+**Rebase note.** The campaign ran on the pre-rebase branch. PR #1447 was
+rebased onto main `0b960ce9`; only commit identities changed, not file
+bytes. The campaign note's `471f38cc` is the original pre-registration
+hash (now `8fea3b00`); the harness is now `c12557dc` (original
+`f4b6c979`). The content hashes in `results.json`
+(`harness_sha256`, `intents_sha256`, `binary_sha256`) are unaffected.
+
 ### 2.1 Analysis-plan note: exact McNemar primary
 
 The pre-registration (§7 of
 [`GOVERNED_CAMPAIGN_PRE_REGISTRATION_2026-11-28.md`](../../../eval/frontier/GOVERNED_CAMPAIGN_PRE_REGISTRATION_2026-11-28.md))
-and the frozen analysis instrument at harness commit `f4b6c979` both
+and the frozen analysis instrument at harness commit `c12557dc`
+(original pre-rebase `f4b6c979`) both
 name the **exact two-sided McNemar test with Holm correction** as the
-primary. An intermediate revision (`c7f0990b`, made after data
+primary. An intermediate revision (original hash `c7f0990b`, rebased as
+`5e9700f8`; made after data
 collection ended at 2026-11-28T00:12:47Z) relabeled the
 continuity-corrected Edwards chi-square as the "frozen primary"; the
 independent review identified that relabel as a post-data analysis

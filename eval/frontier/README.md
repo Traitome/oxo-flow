@@ -82,9 +82,10 @@ file. `statistical_report.py` reports the pre-registered primary
 Edwards chi-square, plus a seed-clustered intent-level sensitivity table.
 
 > Analysis-plan note (2026-11-28): the pre-registration and the frozen
-> harness commit `f4b6c979` both use exact McNemar + Holm as PRIMARY;
-> Edwards + Holm is the sensitivity. An intermediate revision
-> (`c7f0990b`) relabeled Edwards as primary after data collection; the
+> harness commit `c12557dc` (original pre-rebase `f4b6c979`) both use
+> exact McNemar + Holm as PRIMARY; Edwards + Holm is the sensitivity. An
+> intermediate revision (original hash `c7f0990b`, rebased as
+> `5e9700f8`) relabeled Edwards as primary after data collection; the
 > independent review identified that as a post-data change and it is
 > withdrawn. Both are reported for every contrast.
 
