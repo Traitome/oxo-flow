@@ -1,0 +1,9 @@
+# Non-vacuity and cached-no-op control
+# generated_utc=2026-11-28T09:21:29Z
+# fresh_markers/fresh_outputs prove the workload executed in a clean dir;
+# second_same_dir_markers shows whether the engine reuses prior work;
+# the negative-control column shows the timed guard rejected that rerun.
+# engine | fresh_markers | fresh_outputs | second_same_dir_markers | guard_on_cached_rerun
+oxo-flow | 10 rule_started | 10 outputs | 0 rule_started | rejected (exit != 0)
+snakemake | 11 Finished job | 10 outputs | 0 Finished job (noop_marker=1) | rejected (exit != 0)
+nextflow | 10 Submitted process | 10 outputs | 10 Submitted process | n/a (re-executes without -resume)
