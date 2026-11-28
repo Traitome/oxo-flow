@@ -45,7 +45,9 @@ hash that was actually signed.
 11 and use "confirmatory" in the pre-amendment sense of "data collected
 under a frozen pre-registration whose analysis was fixed before the run".
 Amendment 11 reclassifies that status as **governed pre-sign-off
-measurement** until the corresponding PR-05 row is completed. The
+measurement** until the corresponding PR-05 row records an approving
+disposition; a non-approving or conditionally held row does not promote
+the data. The
 historical entries are retained verbatim except for a marked relabel
 annotation in entry 3; none asserts a completed sign-off, and amendment 11
 changes no analysis, endpoint, threshold, denominator, corpus, seal, or
