@@ -213,7 +213,7 @@ backend, tool, and raw fields — never a synthetic zero.
 | Field | local | SLURM (`sacct`) | PBS (`qstat -x`) | SGE (`qacct`) | LSF (`bacct`) | SLURM fallback (`scontrol`) | k8s / AWS / GCP / Tencent |
 |---|---|---|---|---|---|---|---|
 | wall / elapsed | sampled | `ElapsedRaw`/`Elapsed` | `resources_used.walltime` | `ru_wallclock` | — | — | — |
-| CPU seconds | sampled (rule process + threads) | `TotalCPU` (max over step rows) | `resources_used.cput` | `cpu` | — | — | — |
+| CPU seconds | sampled (rule process subtree) | `TotalCPU` (max over step rows) | `resources_used.cput` | `cpu` | — | — | — |
 | peak RSS bytes | sampled subtree | `MaxRSS` (max over step rows) | `resources_used.mem` | `ru_maxrss` | — | — | — |
 | I/O bytes | Linux `/proc/<pid>/io` | `AveDiskRead`/`AveDiskWrite` | — | — | — | — | — |
 | scheduler wait | — | `Submit`→`Start` | — | — | — | — | — |

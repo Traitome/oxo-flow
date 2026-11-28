@@ -1534,8 +1534,9 @@ fn resolve_ledger_format(explicit: Option<&str>, output: Option<&Path>) -> Resul
     }
 }
 
-/// Raw scheduler totals from an sacct-style CSV export: one merged batch row
-/// per executed rule (step rows are skipped by the shared merge), summed into
+/// Raw scheduler totals from an sacct-style CSV export: one merged record per
+/// executed rule (each job's allocation/`.batch`/step rows aggregated, and a
+/// retried rule's latest attempt selected, by the shared merge), summed into
 /// the same shape the ledger uses.
 ///
 /// This is an INDEPENDENT observation — the checkpoint's numbers came from
@@ -1692,9 +1693,10 @@ fn format_secs(secs: f64) -> String {
 /// Parse an sacct-style CSV into accounting rows.
 ///
 /// Column detection is header-based and case-insensitive (jobname, state,
-/// elapsed, cputime, maxrss; jobid optional — used only to prefer the batch
-/// row over step rows when a JobName repeats). A missing required column is
-/// a hard error: silently dropping a column would fake a complete table.
+/// elapsed, cputime, maxrss; jobid optional — used to group a job's
+/// allocation/`.batch`/step rows into one submission and to select a retried
+/// rule's latest attempt). A missing required column is a hard error:
+/// silently dropping a column would fake a complete table.
 fn parse_acct_csv(path: &Path) -> Result<Vec<AcctRow>> {
     let mut reader = csv::ReaderBuilder::new()
         .flexible(true)
@@ -1746,9 +1748,20 @@ fn parse_acct_csv(path: &Path) -> Result<Vec<AcctRow>> {
     Ok(rows)
 }
 
-/// Merge sacct rows with the workflow's rules: one row per workflow rule
-/// that has a record, sorted by rule name, preferring the batch row (JobID
-/// without a step separator — `.` or `_`) over step rows.
+/// Merge sacct rows into one accounting record per workflow rule, sorted by
+/// rule name.
+///
+/// A job is several rows — the allocation row (bare job id), `.batch`,
+/// `.extern`, and one per step — and the columns are split across them:
+/// `MaxRSS`/`TotalCPU` are populated on the step rows while the allocation
+/// row carries elapsed/state. A retried rule adds a second submission with
+/// the same `JobName`. This merge therefore works per SUBMISSION and picks
+/// the LATEST attempt (issue #1445 L1): the checkpoint's ledger describes
+/// the latest attempt, so reconciling a retried rule against an earlier job
+/// would compare the wrong run. Scheduler ids are allocated monotonically,
+/// so the highest numeric base id wins (compared numerically — `100` beats
+/// `99`); when any base id is non-numeric the last submission in file order
+/// wins (sacct emits in job-id order).
 fn merge_acct_rows(rows: Vec<AcctRow>, rule_names: &[String]) -> Vec<AcctRow> {
     let mut by_name: HashMap<String, Vec<AcctRow>> = HashMap::new();
     for row in rows {
@@ -1758,16 +1771,106 @@ fn merge_acct_rows(rows: Vec<AcctRow>, rule_names: &[String]) -> Vec<AcctRow> {
     names.sort_unstable();
     let mut merged: Vec<AcctRow> = Vec::new();
     for name in names {
-        let Some(mut candidates) = by_name.remove(&name) else {
+        let Some(rows) = by_name.remove(&name) else {
             continue; // no accounting record for this rule — omitted
         };
-        // Stable sort: batch rows (JobID without a step separator — dot or
-        // underscore — in it) first, file order kept; array-task IDs like
-        // `12345_0` sort as step rows, matching sacct's own view.
-        candidates.sort_by_key(|r| r.jobid.contains(['.', '_']));
-        merged.push(candidates.into_iter().next().expect("non-empty group"));
+        if let Some(attempt) = select_latest_attempt(rows) {
+            merged.push(attempt);
+        }
     }
     merged
+}
+
+/// Base scheduler job id: a step row's `.batch`/`.extern`/`.N` suffix and an
+/// array element's `_N` suffix are removed. `12345`, `12345.batch`,
+/// `12345.extern`, `12345.0`, and `12345_1` all name submission `12345`.
+fn base_job_id(jobid: &str) -> &str {
+    let end = jobid.find(['.', '_']).unwrap_or(jobid.len());
+    &jobid[..end]
+}
+
+/// Group one rule's rows by scheduler submission and merge the latest one.
+///
+/// A blank JobID cell names no submission; when the export also carries real
+/// ids, the unattributable rows are ignored rather than folded into another
+/// attempt. Without any JobID the rows form a single attempt and every row
+/// is aggregated.
+fn select_latest_attempt(rows: Vec<AcctRow>) -> Option<AcctRow> {
+    let mut groups: Vec<(String, Vec<AcctRow>)> = Vec::new();
+    let mut index: HashMap<String, usize> = HashMap::new();
+    for row in rows {
+        let base = base_job_id(&row.jobid).to_string();
+        match index.get(&base) {
+            Some(&i) => groups[i].1.push(row),
+            None => {
+                index.insert(base.clone(), groups.len());
+                groups.push((base, vec![row]));
+            }
+        }
+    }
+    if groups.iter().any(|(base, _)| !base.is_empty()) {
+        groups.retain(|(base, _)| !base.is_empty());
+    }
+    let all_numeric = groups.iter().all(|(base, _)| base.parse::<u64>().is_ok());
+    let chosen = if all_numeric {
+        groups
+            .iter()
+            .enumerate()
+            .max_by_key(|(_, (base, _))| base.parse::<u64>().unwrap_or(0))
+            .map(|(i, _)| i)
+    } else {
+        // File order is the only ordering a non-numeric id space offers;
+        // sacct emits in job-id order, so the last group is the latest.
+        groups.len().checked_sub(1)
+    }?;
+    let (base, rows) = groups.swap_remove(chosen);
+    Some(merge_attempt(&base, &rows))
+}
+
+/// Merge one submission's rows into a single record.
+///
+/// Aggregates like the scheduler adapter's `parse_sacct`: `MaxRSS` and
+/// `TotalCPU` are populated on step rows only, so the job's figures are the
+/// MAX over every row (never a sum — the allocation and `.batch` rows
+/// describe the same work); the allocation row supplies state and elapsed
+/// time. When no allocation row exists (a bare step/array export) elapsed
+/// falls back to the max reported value rather than a fabricated zero, and
+/// every metric stays `None` when no row reported it.
+fn merge_attempt(base: &str, rows: &[AcctRow]) -> AcctRow {
+    // With no JobID at all (`base` empty) there is no allocation row — every
+    // row is just an observation, so state/elapsed fall back below.
+    let allocation = (!base.is_empty())
+        .then(|| rows.iter().find(|row| row.jobid == base))
+        .flatten();
+    let state = allocation
+        .map(|row| row.state.as_str())
+        .filter(|state| !state.is_empty())
+        .or_else(|| {
+            rows.iter()
+                .map(|row| row.state.as_str())
+                .find(|state| !state.is_empty())
+        })
+        .unwrap_or_default()
+        .to_string();
+    let elapsed_secs = allocation.and_then(|row| row.elapsed_secs).or_else(|| {
+        rows.iter()
+            .filter_map(|row| row.elapsed_secs)
+            .reduce(f64::max)
+    });
+    let cpu_secs = rows.iter().filter_map(|row| row.cpu_secs).reduce(f64::max);
+    let max_rss_mb = rows.iter().filter_map(|row| row.max_rss_mb).max();
+    AcctRow {
+        rule: rows[0].rule.clone(),
+        jobid: if allocation.is_some() {
+            base.to_string()
+        } else {
+            rows[0].jobid.clone()
+        },
+        state,
+        elapsed_secs,
+        cpu_secs,
+        max_rss_mb,
+    }
 }
 
 /// Build the "Resource Accounting" report section from merged sacct rows:
@@ -2416,5 +2519,207 @@ mod tests {
         assert_eq!(parse_maxrss_to_mb(""), None);
         assert_eq!(parse_maxrss_to_mb("12X"), None);
         assert_eq!(parse_maxrss_to_mb("abc"), None);
+    }
+
+    /// Issue #1445 L1: a sacct export lists several rows per job (the
+    /// allocation, `.batch`, `.extern`, and step rows) and — for a retried
+    /// rule — several job ids under one JobName. The merge must aggregate
+    /// like the scheduler adapter (`parse_sacct`): max `MaxRSS`/`TotalCPU`
+    /// over every row of ONE attempt (those columns are populated on step
+    /// rows only), the allocation row for elapsed/state, and the latest
+    /// attempt (highest numeric job id) selected.
+    #[test]
+    fn acct_merge_aggregates_rows_and_selects_the_latest_attempt() {
+        let dir = tempfile::tempdir().unwrap();
+        let csv = dir.path().join("sacct.csv");
+        std::fs::write(
+            &csv,
+            "JobID,JobName,State,Elapsed,CPUTime,MaxRSS\n\
+             101,align,FAILED,00:00:10,,\n\
+             101.batch,align,FAILED,00:00:10,00:00:08,100M\n\
+             102,align,COMPLETED,00:01:00,,\n\
+             102.batch,align,COMPLETED,00:01:00,,\n\
+             102.0,align,COMPLETED,00:01:00,00:04:00,700M\n",
+        )
+        .unwrap();
+
+        let rows = super::parse_acct_csv(&csv).unwrap();
+        let merged = super::merge_acct_rows(rows, &["align".to_string()]);
+        assert_eq!(merged.len(), 1);
+        let row = &merged[0];
+        assert_eq!(
+            row.jobid, "102",
+            "the checkpoint describes the latest attempt; the highest job id is it"
+        );
+        assert_eq!(row.state, "COMPLETED");
+        assert_eq!(
+            row.elapsed_secs,
+            Some(60.0),
+            "allocation row carries elapsed"
+        );
+        assert_eq!(
+            row.cpu_secs,
+            Some(240.0),
+            "TotalCPU is populated on step rows; take the max over the attempt's rows"
+        );
+        assert_eq!(
+            row.max_rss_mb,
+            Some(700),
+            "MaxRSS is populated on step rows; take the max over the attempt's rows"
+        );
+    }
+
+    /// Issue #1445 L1 review: the grouping boundaries the merge implements
+    /// must be pinned — non-numeric job ids (file-order fallback), a blank
+    /// JobID alongside real ids (ignored), array elements sharing a base id
+    /// (one record, max over rows), and an export with no JobID at all
+    /// (single attempt, max over rows).
+    #[test]
+    fn acct_merge_handles_non_numeric_blank_and_array_ids() {
+        let dir = tempfile::tempdir().unwrap();
+        let csv = dir.path().join("sacct.csv");
+        std::fs::write(
+            &csv,
+            "JobID,JobName,State,Elapsed,CPUTime,MaxRSS\n\
+             jobA,nonnum,FAILED,00:00:01,00:00:01,10M\n\
+             jobB,nonnum,COMPLETED,00:00:09,00:00:09,90M\n\
+             ,blank,COMPLETED,00:00:30,00:00:30,999M\n\
+             777,blank,COMPLETED,00:00:02,00:00:02,20M\n\
+             12345_0,array,COMPLETED,00:01:00,00:01:00,100M\n\
+             12345_1,array,COMPLETED,00:03:00,00:03:00,300M\n\
+             ,nojobid,COMPLETED,00:00:04,00:00:04,5M\n\
+             ,nojobid,COMPLETED,00:00:06,00:00:06,50M\n",
+        )
+        .unwrap();
+
+        let rows = super::parse_acct_csv(&csv).unwrap();
+        let names = ["array", "blank", "nojobid", "nonnum"];
+        let merged = super::merge_acct_rows(rows, &names.map(str::to_string));
+        assert_eq!(merged.len(), names.len(), "one record per rule");
+        let by_rule = |name: &str| {
+            merged
+                .iter()
+                .find(|row| row.rule == name)
+                .unwrap_or_else(|| panic!("no record for {name}"))
+        };
+
+        // Non-numeric ids: no numeric ordering exists, so the last
+        // submission in file order is the latest.
+        let nonnum = by_rule("nonnum");
+        assert_eq!(nonnum.jobid, "jobB");
+        assert_eq!(nonnum.state, "COMPLETED");
+        assert_eq!(nonnum.elapsed_secs, Some(9.0));
+        assert_eq!(nonnum.max_rss_mb, Some(90));
+
+        // A blank JobID cell names no submission; with real ids present it
+        // is ignored rather than merged into another attempt.
+        let blank = by_rule("blank");
+        assert_eq!(blank.jobid, "777");
+        assert_eq!(blank.max_rss_mb, Some(20));
+        assert_eq!(blank.elapsed_secs, Some(2.0));
+
+        // Array elements share their base id: one submission, no allocation
+        // row, so state/elapsed fall back to the rows themselves and every
+        // metric is the max over rows.
+        let array = by_rule("array");
+        assert_eq!(array.jobid, "12345_0");
+        assert_eq!(array.state, "COMPLETED");
+        assert_eq!(array.elapsed_secs, Some(180.0));
+        assert_eq!(array.cpu_secs, Some(180.0));
+        assert_eq!(array.max_rss_mb, Some(300));
+
+        // Without any JobID every row belongs to the single attempt.
+        let nojobid = by_rule("nojobid");
+        assert_eq!(nojobid.jobid, "");
+        assert_eq!(nojobid.elapsed_secs, Some(6.0));
+        assert_eq!(nojobid.cpu_secs, Some(6.0));
+        assert_eq!(nojobid.max_rss_mb, Some(50));
+    }
+
+    /// Issue #1445 L1: with the batch/allocation `MaxRSS` cells empty (the
+    /// typical export), the pre-fix merge reported no memory at all and
+    /// reconciliation silently skipped `max_rss_bytes`. The step row's
+    /// figure must reach the raw side so memory IS compared.
+    #[test]
+    fn acct_reconciliation_compares_memory_reported_only_on_step_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let csv = dir.path().join("sacct.csv");
+        std::fs::write(
+            &csv,
+            "JobID,JobName,State,Elapsed,CPUTime,MaxRSS\n\
+             101,align,COMPLETED,00:01:00,,\n\
+             101.batch,align,COMPLETED,00:01:00,,\n\
+             101.0,align,COMPLETED,00:01:00,00:04:00,500M\n",
+        )
+        .unwrap();
+
+        let started = chrono::Utc::now() - chrono::Duration::seconds(60);
+        let mut cp = oxo_flow_core::executor::CheckpointState::new();
+        cp.mark_completed(
+            "align",
+            oxo_flow_core::executor::checkpoint::BenchmarkRecord {
+                rule: "align".to_string(),
+                wall_time_secs: 60.0,
+                max_memory_mb: None,
+                memory_limit_mb: None,
+                cpu_seconds: Some(240.0),
+                retries: 0,
+                recorded_as: None,
+            },
+        );
+        cp.rule_runs.insert(
+            "align".to_string(),
+            oxo_flow_core::executor::checkpoint::RuleRunRecord {
+                exit_code: Some(0),
+                started_at: Some(started),
+                finished_at: Some(started + chrono::Duration::seconds(60)),
+                command: None,
+                stderr_tail: None,
+                stdout_tail: None,
+                caption: None,
+                status: Some("success".to_string()),
+                skip_reason: None,
+                signal: None,
+            },
+        );
+        cp.resource_usage.insert(
+            "align".to_string(),
+            oxo_flow_core::resource_ledger::ResourceUsage {
+                max_rss_bytes: Some(500 * 1024 * 1024),
+                cpu_seconds: Some(240.0),
+                source: Some(super::ResourceSource {
+                    backend: "slurm".to_string(),
+                    tool: "sacct".to_string(),
+                    ..super::ResourceSource::default()
+                }),
+                ..Default::default()
+            },
+        );
+
+        let executed = super::executed_rule_names(&cp);
+        let raw = super::load_raw_accounting_totals(&csv, &executed).unwrap();
+        let ledger = super::build_resource_ledger(&cp, None, None, Some(&raw));
+        let reconciliation = ledger.run.reconciliation.expect("raw side present");
+        assert!(
+            reconciliation
+                .compared_metrics
+                .iter()
+                .any(|m| m == "max_rss_bytes"),
+            "memory must be compared, not skipped: {:?}",
+            reconciliation.skipped_metrics
+        );
+        assert!(
+            !reconciliation
+                .skipped_metrics
+                .iter()
+                .any(|m| m.starts_with("max_rss_bytes")),
+            "memory reconciliation must not be skipped: {:?}",
+            reconciliation.skipped_metrics
+        );
+        assert!(
+            ledger.run.conflicts.is_empty(),
+            "the two sides agree: {:?}",
+            ledger.run.conflicts
+        );
     }
 }

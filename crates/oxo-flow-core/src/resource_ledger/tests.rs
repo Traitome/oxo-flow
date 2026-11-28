@@ -428,6 +428,267 @@ fn failed_attempt_after_synthetic_completion_counts_as_execution() {
     );
 }
 
+/// Issue #1445 L1: a terminal attempt that recorded no measurements — the
+/// CLI's pre-spawn/staging/security failure path builds
+/// `JobRecord { resources: None }` — must replace the rule's
+/// `resource_usage` entry instead of leaving the previous attempt's values
+/// in place. Before the fix the ledger reported the earlier successful
+/// attempt's CPU/RSS/source as this failed attempt's, and cost accrual
+/// priced them.
+#[test]
+fn pre_spawn_failure_replaces_previous_attempt_usage() {
+    let mut cp = CheckpointState::new();
+    // Earlier invocation: a successful local attempt with measured
+    // resources (CPU, peak RSS, I/O, local source).
+    cp.mark_completed(
+        "align",
+        BenchmarkRecord {
+            cpu_seconds: Some(42.0),
+            max_memory_mb: Some(2048),
+            ..benchmark("align", 30.0)
+        },
+    );
+    let started = Utc.with_ymd_and_hms(2026, 11, 25, 10, 0, 0).unwrap();
+    cp.rule_runs.insert(
+        "align".to_string(),
+        RuleRunRecord {
+            exit_code: Some(0),
+            started_at: Some(started),
+            finished_at: Some(started + chrono::Duration::seconds(30)),
+            command: Some("bwa mem ...".to_string()),
+            stderr_tail: None,
+            stdout_tail: None,
+            caption: None,
+            status: Some("success".to_string()),
+            skip_reason: None,
+            signal: None,
+        },
+    );
+    cp.resource_usage.insert(
+        "align".to_string(),
+        ResourceUsage {
+            max_rss_bytes: Some(2 * 1024 * 1024 * 1024),
+            cpu_seconds: Some(42.0),
+            io_read_bytes: Some(1_000_000),
+            io_write_bytes: Some(2_000_000),
+            source: Some(ResourceSource {
+                backend: "local".to_string(),
+                tool: "sysinfo".to_string(),
+                ..ResourceSource::default()
+            }),
+            ..ResourceUsage::default()
+        },
+    );
+
+    // A new invocation starts: all preserved work is marked as not executed.
+    cp.begin_execution_pass();
+    assert!(cp.skipped_attempts.contains_key("align"));
+
+    // The re-execution dies BEFORE spawning (staging/security/placeholder
+    // gate): `task.rs` records a terminal FAILED record with no resources.
+    let record = crate::executor::JobRecord {
+        resources: None,
+        rule: "align".to_string(),
+        status: crate::executor::JobStatus::Failed,
+        enqueued_at: None,
+        started_at: None,
+        finished_at: None,
+        exit_code: Some(-1),
+        stdout: None,
+        stderr: Some("Shell command blocked: dangerous pattern".to_string()),
+        command: None,
+        retries: 0,
+        skip_reason: None,
+        max_rss_mb: None,
+        cpu_seconds: None,
+        caption: None,
+        signal: None,
+    };
+    cp.record_run(
+        &record,
+        crate::executor::checkpoint::DEFAULT_OUTPUT_TAIL_BYTES,
+    );
+    cp.mark_failed("align");
+
+    let ledger = build_resource_ledger(&cp, None, None, None);
+    let rule = ledger
+        .rules
+        .iter()
+        .find(|r| r.rule == "align")
+        .expect("the failed rule stays in the ledger");
+    assert_eq!(rule.status, "failed");
+    assert_eq!(
+        rule.cpu_seconds, None,
+        "the earlier attempt's CPU must not describe this attempt"
+    );
+    assert_eq!(
+        rule.max_rss_bytes, None,
+        "the earlier attempt's peak RSS must not describe this attempt"
+    );
+    assert_eq!(rule.io_read_bytes, None);
+    assert_eq!(rule.io_write_bytes, None);
+    assert_eq!(
+        rule.source.backend, "unknown",
+        "no source may be inherited from the earlier attempt"
+    );
+    assert!(
+        rule.source
+            .note
+            .as_deref()
+            .unwrap_or_default()
+            .contains("earlier"),
+        "the source note must explain the absent measurements: {:?}",
+        rule.source.note
+    );
+    assert_eq!(ledger.run.totals.cpu_seconds, None);
+    assert!(!ledger.run.totals.cpu_seconds_complete);
+
+    // Cost accrual must not inherit the stale measurement either: the
+    // configured CPU rate's input is unknown for this executed rule, so the
+    // total is `None` (never zero and never the stale 42 s) and the rule is
+    // named in `unknown_rules`.
+    let budget = CostBudget {
+        amount: 10.0,
+        currency: "USD".to_string(),
+        cpu_second_rate: Some(0.001),
+        gb_second_rate: None,
+        on_unknown: None,
+    };
+    let ledger = ledger.with_cost_budget(Some(&budget));
+    let accrual = ledger.cost_accrual.expect("budget present");
+    assert_eq!(
+        accrual.accrued, None,
+        "a pre-spawn failure's missing CPU must leave accrual unknown"
+    );
+    assert!(
+        accrual.unknown_rules.contains(&"align".to_string()),
+        "the rule whose measurement is unknown must be named: {:?}",
+        accrual.unknown_rules
+    );
+}
+
+/// Issue #1445 L1 review (HIGH): a rule that executed and was measured in
+/// THIS invocation can still be flipped to FAILED afterwards by the CLI's
+/// post-completion bookkeeping — `scheduler_loop::record_processing_failure`
+/// records a failed `JobRecord { resources: None }` when checkpoint re-entry
+/// or output_pattern discovery fails. That record must NOT discard the
+/// measurement this invocation already recorded; only a record for an
+/// attempt preserved from an EARLIER invocation may replace the entry with
+/// unknown.
+#[test]
+fn same_invocation_bookkeeping_failure_keeps_measured_usage() {
+    let mut cp = CheckpointState::new();
+    // A fresh invocation with nothing preserved from an earlier run.
+    cp.begin_execution_pass();
+
+    // The executor measured the rule and the CLI recorded its success.
+    let started = Utc.with_ymd_and_hms(2026, 11, 28, 10, 0, 0).unwrap();
+    let measured = ResourceUsage {
+        max_rss_bytes: Some(512 * 1024 * 1024),
+        cpu_seconds: Some(12.5),
+        io_read_bytes: Some(7),
+        io_write_bytes: Some(9),
+        source: Some(ResourceSource {
+            backend: "local".to_string(),
+            tool: "sysinfo".to_string(),
+            ..ResourceSource::default()
+        }),
+        ..ResourceUsage::default()
+    };
+    let success = crate::executor::JobRecord {
+        resources: Some(measured.clone()),
+        rule: "align".to_string(),
+        status: crate::executor::JobStatus::Success,
+        enqueued_at: None,
+        started_at: Some(started),
+        finished_at: Some(started + chrono::Duration::seconds(10)),
+        exit_code: Some(0),
+        stdout: None,
+        stderr: None,
+        command: Some("bwa mem ...".to_string()),
+        retries: 0,
+        skip_reason: None,
+        max_rss_mb: Some(512),
+        cpu_seconds: Some(12.5),
+        caption: None,
+        signal: None,
+    };
+    cp.record_run(
+        &success,
+        crate::executor::checkpoint::DEFAULT_OUTPUT_TAIL_BYTES,
+    );
+    cp.mark_completed(
+        "align",
+        BenchmarkRecord {
+            cpu_seconds: Some(12.5),
+            max_memory_mb: Some(512),
+            ..benchmark("align", 10.0)
+        },
+    );
+
+    // Post-completion processing fails in the SAME invocation: checkpoint
+    // re-entry / output_pattern discovery records a terminal failure with
+    // no measurements of its own.
+    let failure = crate::executor::JobRecord {
+        resources: None,
+        rule: "align".to_string(),
+        status: crate::executor::JobStatus::Failed,
+        enqueued_at: None,
+        started_at: None,
+        finished_at: None,
+        exit_code: Some(1),
+        stdout: None,
+        stderr: None,
+        command: None,
+        retries: 0,
+        skip_reason: Some("re-entry manifest: unreadable".to_string()),
+        max_rss_mb: None,
+        cpu_seconds: None,
+        caption: None,
+        signal: None,
+    };
+    cp.record_run(
+        &failure,
+        crate::executor::checkpoint::DEFAULT_OUTPUT_TAIL_BYTES,
+    );
+    cp.mark_failed("align");
+
+    let ledger = build_resource_ledger(&cp, None, None, None);
+    let rule = ledger
+        .rules
+        .iter()
+        .find(|r| r.rule == "align")
+        .expect("the failed rule stays in the ledger");
+    assert_eq!(rule.status, "failed");
+    assert_eq!(
+        rule.cpu_seconds,
+        Some(12.5),
+        "the CPU measured in THIS invocation must survive a later bookkeeping failure"
+    );
+    assert_eq!(rule.max_rss_bytes, Some(512 * 1024 * 1024));
+    assert_eq!(rule.io_read_bytes, Some(7));
+    assert_eq!(rule.io_write_bytes, Some(9));
+    assert_eq!(rule.source.tool, "sysinfo");
+    assert_eq!(ledger.run.totals.cpu_seconds, Some(12.5));
+
+    // Cost accrual keeps pricing the measured work (the CPU rate's input is
+    // known), rather than degrading to unknown on a phantom missing metric.
+    let budget = CostBudget {
+        amount: 10.0,
+        currency: "USD".to_string(),
+        cpu_second_rate: Some(0.001),
+        gb_second_rate: None,
+        on_unknown: None,
+    };
+    let accrual = ledger
+        .with_cost_budget(Some(&budget))
+        .cost_accrual
+        .expect("budget present");
+    assert_eq!(accrual.cpu_seconds, 12.5);
+    assert_eq!(accrual.accrued, Some(0.0125));
+    assert!(accrual.unknown_rules.is_empty());
+}
+
 /// Legacy preservation (task-7c I-1): checkpoints whose `rule_runs` records
 /// predate status tracking keep the documented benchmark-based rendering.
 #[test]

@@ -295,9 +295,9 @@ pub struct JobRecord {
     /// (`None` when no child was spawned; issue #67 §4).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_rss_mb: Option<u64>,
-    /// Sampled CPU time of the rule's process in seconds (all its
-    /// threads; child processes are not accumulated; `None` when the
-    /// sampler never observed the child; issue #83 P1-13).
+    /// Sampled CPU time of the rule's process subtree in seconds (its own
+    /// process, its threads, and its child processes; `None` when the
+    /// sampler never observed the subtree; issue #83 P1-13, issue #1445 L1).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cpu_seconds: Option<f64>,
     /// The rule's resolved report caption (inline text or the content of

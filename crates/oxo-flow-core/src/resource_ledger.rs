@@ -150,10 +150,14 @@ pub struct ResourceUsage {
     /// MB figure on the cluster path.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_rss_bytes: Option<u64>,
-    /// Total CPU seconds across the rule's threads/cores when the source
-    /// measured it. Duplicated from the success-path benchmark so a rule
-    /// whose attempt FAILED or was cancelled still contributes the CPU it
-    /// actually burned (it has no benchmark record to carry it).
+    /// Total CPU seconds across the rule's process subtree — each process's
+    /// time already covers its own threads, and child processes are
+    /// included — when the source measured it. The local sampler
+    /// accumulates cumulative CPU-time deltas over the subtree (issue #1445
+    /// L1); scheduler adapters report the job's own aggregate. Duplicated
+    /// from the success-path benchmark so a rule whose attempt FAILED or was
+    /// cancelled still contributes the CPU it actually burned (it has no
+    /// benchmark record to carry it).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cpu_seconds: Option<f64>,
     /// Bytes read from disk across the rule's processes, when the source
@@ -179,9 +183,14 @@ pub struct ResourceUsage {
 }
 
 impl ResourceUsage {
-    /// A usage bundle that records only the source — used when the source
-    /// proves the backend identity but reported no measurements (cloud
-    /// backends without an accounting API, an interrupted job).
+    /// A usage bundle that records only the source and no measurements.
+    ///
+    /// Used when only provenance is known: a backend that proves its identity
+    /// but reports no usage numbers (a cloud control plane without an
+    /// accounting API, an interrupted job), or an attempt that ended without
+    /// any measurement — including a failure before spawning — where an
+    /// explicit "nothing was measured" record is more honest than silently
+    /// keeping an earlier attempt's numbers or omitting the entry.
     pub fn source_only(source: ResourceSource) -> Self {
         Self {
             source: Some(source),

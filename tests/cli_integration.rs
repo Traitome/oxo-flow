@@ -2333,6 +2333,117 @@ fn cli_report_resource_ledger_reconciles_raw_accounting() {
     );
 }
 
+/// Issue #1445 L1: a re-execution that dies BEFORE spawning must replace —
+/// never inherit — the rule's recorded resources. Before the fix the ledger
+/// reported the previous successful attempt's CPU/RSS/source for the failed
+/// attempt, and cost accrual priced them.
+///
+/// The failure is purely environmental (a declared output's parent path is
+/// replaced by a regular file, so the executor's pre-spawn `create_dir_all`
+/// fails). The workflow text is unchanged, so no rule invalidation hides the
+/// stale record — `--rerun` re-executes the rule against its preserved
+/// checkpoint entry, the exact re-execution path the audit found broken.
+#[test]
+fn cli_pre_spawn_failure_clears_previous_attempt_resource_usage() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("reentry.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"reentry\"\nversion = \"1.0.0\"\n\n\
+         [resource_budget]\n\
+         max_cost = { amount = 10.0, currency = \"USD\", cpu_second_rate = 0.001 }\n\n\
+         [[rules]]\nname = \"hello\"\noutput = [\"out/sub/result.txt\"]\n\
+         shell = \"mkdir -p out/sub && sleep 1 && echo hi > out/sub/result.txt\"\n",
+    )
+    .unwrap();
+
+    // First invocation: a measured local execution.
+    let first = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        first.status.success(),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+
+    // The output parent now exists as a REGULAR FILE: `out/sub` cannot be
+    // created, so the re-execution fails before the rule's shell starts —
+    // `task.rs` records the failure with `resources: None`.
+    fs::remove_dir_all(dir.path().join("out")).unwrap();
+    fs::write(dir.path().join("out"), b"not a directory").unwrap();
+    let second = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap(), "--rerun"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        !second.status.success(),
+        "the blocked output directory must fail the run: {}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+
+    let out = oxo_flow_cmd_without_rust_log()
+        .args([
+            "report",
+            wf.to_str().unwrap(),
+            "--resource-ledger",
+            "-f",
+            "json",
+            "-o",
+            "-",
+        ])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let parsed: serde_json::Value = serde_json::from_str(&String::from_utf8_lossy(&out.stdout))
+        .expect("stdout must be pure JSON");
+    let hello = parsed["rules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["rule"] == "hello")
+        .expect("the failed rule stays in the ledger");
+    assert_eq!(hello["status"], "failed");
+    assert!(
+        hello.get("cpu_seconds").is_none(),
+        "the earlier attempt's CPU leaked into the failed attempt: {hello}"
+    );
+    assert!(
+        hello.get("max_rss_bytes").is_none(),
+        "the earlier attempt's RSS leaked into the failed attempt: {hello}"
+    );
+    assert!(
+        hello.get("io_read_bytes").is_none() && hello.get("io_write_bytes").is_none(),
+        "the earlier attempt's I/O leaked into the failed attempt: {hello}"
+    );
+    assert_eq!(
+        hello["source"]["backend"], "unknown",
+        "no source may be inherited from the earlier attempt: {hello}"
+    );
+    assert!(
+        parsed["cost_accrual"]["accrued"].is_null(),
+        "missing measurements must make accrual unknown, never price the stale attempt: {}",
+        parsed["cost_accrual"]
+    );
+    assert!(
+        parsed["cost_accrual"]["unknown_rules"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r == "hello"),
+        "the unmeasured rule must be named: {}",
+        parsed["cost_accrual"]
+    );
+}
+
 #[test]
 fn cli_report_md_format() {
     let dir = tempfile::tempdir().unwrap();
@@ -10941,11 +11052,13 @@ fn cli_report_acct_without_jobid_column() {
     );
 }
 
-/// When a JobName repeats, the batch row (JobID without a `.`/`_` step
-/// separator) wins even if the step row appears first in the file; array-task
-/// IDs like `12345_0` count as step rows.
+/// Issue #1445 L1: array elements and the allocation row of one submission
+/// merge into a single record — elapsed/state from the allocation row, and
+/// `CPUTime`/`MaxRSS` as the MAX over every row (the step/array values
+/// exceed the allocation row's here, so a first-row or batch-preference
+/// merge cannot pass this).
 #[test]
-fn cli_report_acct_array_task_prefers_batch_row() {
+fn cli_report_acct_array_rows_merge_with_max_over_rows() {
     let dir = tempfile::tempdir().unwrap();
     let wf = write_workflow(
         dir.path(),
@@ -10955,7 +11068,8 @@ fn cli_report_acct_array_task_prefers_batch_row() {
     fs::write(
         &csv,
         "JobID,JobName,State,Elapsed,CPUTime,MaxRSS\n\
-         12345_0,align,RUNNING,00:01:00,00:01:00,1M\n\
+         12345_0,align,COMPLETED,00:01:00,00:01:00,1M\n\
+         12345_1,align,COMPLETED,00:03:00,00:05:00,4M\n\
          12345,align,COMPLETED,00:02:30,00:02:00,2048K\n",
     )
     .unwrap();
@@ -10977,9 +11091,11 @@ fn cli_report_acct_array_task_prefers_batch_row() {
         .iter()
         .find(|s| s["id"] == "resource-accounting")
         .unwrap_or_else(|| panic!("no resource-accounting section in report"));
+    // Elapsed/state from the allocation row (150 s, COMPLETED); CPU from
+    // the 5-minute array step; RSS from the 4 MiB array step.
     assert_eq!(
         section["content"]["rows"],
-        serde_json::json!([["align", "COMPLETED", "150", "120", "2"]])
+        serde_json::json!([["align", "COMPLETED", "150", "300", "4"]])
     );
 }
 

@@ -807,9 +807,10 @@ Limits worth knowing before comparing numbers:
   <sacct.csv>` (JSON only — CSV has no reconciliation columns, so
   `-f csv` + `--acct` fails closed as a usage error) reduces the CSV to the rules that executed in this run (a
   whole-account `sacct -a` export's unrelated jobs are ignored and counted
-  in the source note), sums the remaining batch rows into
-  `run.scheduler_totals`, and names that raw side's own provenance in
-  `run.scheduler_source`. Disagreements beyond 5 % (1 s / 1 MiB floor) are
+  in the source note), aggregates each remaining rule's latest submission
+  (its allocation/`.batch`/step rows are merged and a retried rule's highest
+  numeric job id wins), sums them into `run.scheduler_totals`, and names
+  that raw side's own provenance in `run.scheduler_source`. Disagreements beyond 5 % (1 s / 1 MiB floor) are
   listed under `run.conflicts`, naming both numbers and both sources;
   `run.reconciliation` records which metrics were compared and which were
   skipped (and why). A CSV that does not cover every executed rule is
