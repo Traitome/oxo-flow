@@ -5531,8 +5531,17 @@ undeclared dependency drift.</p>
 section: a <code>Rule / State / Elapsed / CPU Time / Max RSS (MB)</code> table plus
 import provenance and an honest coverage note listing rules without a
 record. Column detection is header-based and case-insensitive; <code>JobName</code>,
-<code>State</code>, <code>Elapsed</code>, <code>CPUTime</code> and <code>MaxRSS</code> are required (<code>JobID</code> optional,
-used to prefer the batch row over step rows). <code>Elapsed</code>/<code>CPUTime</code> accept
+<code>State</code>, <code>Elapsed</code>, <code>CPUTime</code> and <code>MaxRSS</code> are required. <code>JobID</code> is
+optional; when present, rows are grouped into scheduler submissions (the
+allocation row plus its <code>.batch</code>/<code>.extern</code>/step rows) and the latest
+attempt of a retried rule is used — highest numeric id wins, compared
+numerically, because scheduler ids are allocated monotonically. Within a
+submission, <code>MaxRSS</code> and <code>CPUTime</code> are the maximum over every row (SLURM
+records them on step rows, not on the allocation row), while <code>Elapsed</code> and
+<code>State</code> come from the allocation row. Array elements share their base job
+id (<code>12345_1</code> belongs to <code>12345</code>), so an export that reports them under one
+submission is aggregated into one record — the maximum across elements, not
+a sum. <code>Elapsed</code>/<code>CPUTime</code> accept
 <code>MM:SS</code>, <code>HH:MM:SS</code> or <code>[D-]HH:MM:SS</code> (with optional fractional seconds);
 <code>MaxRSS</code> uses the same grammar as the scheduler adapters (one shared
 <code>oxo_flow_core::backend::cluster::parse_rss_bytes</code> parser): <code>K</code>/<code>KB</code>,
@@ -5692,7 +5701,17 @@ timed-out re-execution renders its own recorded start/finish duration and its
 <code>resource_usage</code> (CPU, peak RSS, I/O, source), and counts in
 <code>rules_executed</code> / the <code>--acct</code> executed set even if an earlier invocation
 left a synthetic marker. An old success's wall/CPU never describes the
-failed attempt, and the run totals sum only the current attempt.</p>
+failed attempt, and the run totals sum only the current attempt. A terminal
+attempt that recorded <strong>no</strong> measurement and whose entry belongs to an
+earlier invocation — a re-execution that failed before spawning
+(output-directory creation, environment setup, the security gate) — replaces
+that entry with an explicit unknown/source-only record: its CPU, memory, and
+I/O are absent with a source note, never the earlier attempt's numbers, and a
+<code>cpu_second_rate</code>/<code>gb_second_rate</code> budget treats that metric as unknown
+rather than pricing the stale value. A measurement the current invocation
+already recorded is kept even when a later bookkeeping step (checkpoint
+re-entry, <code>output_pattern</code> discovery) fails the rule: the work really was
+performed and observed in this run.</p>
 <p>No supported backend reports GPU-seconds, user/system CPU split, a
 control-plane peak-memory metric, or a price, so <code>gpu_seconds</code>,
 <code>user_seconds</code>, <code>system_seconds</code>, <code>peak_memory_bytes</code>, and the per-rule
@@ -5756,7 +5775,7 @@ every executed rule.</p>
 <tr>
 <td>local</td>
 <td><code>sysinfo</code> + Linux <code>/proc/&lt;pid&gt;/io</code></td>
-<td>wall time, CPU seconds, peak RSS bytes (sampled subtree), I/O bytes on Linux (every 200 ms tick, including successful attempts)</td>
+<td>wall time, CPU seconds and peak RSS bytes (sampled over the rule's process subtree), I/O bytes on Linux (every 200 ms tick, including successful attempts)</td>
 <td>scheduler wait, nodes, cores, GPU; I/O off Linux; kernel writeback may under-count <code>write_bytes</code></td>
 </tr>
 <tr>
@@ -5819,9 +5838,10 @@ export (<code>sacct -a</code>) may contain unrelated jobs, which are ignored rat
 than allowed to inflate the raw side. The note reports them as job names <strong>not matched to an
 executed rule</strong> (not "not executed": a site may truncate job names, or array
 elements may share one base name), with the count and up to five names in
-<code>run.scheduler_source.note</code>. The remaining merged batch rows are summed into
-<code>run.scheduler_totals</code> (same shape as <code>run.totals</code>) and compared with the
-checkpoint's per-rule sums.</p>
+<code>run.scheduler_source.note</code>. The remaining merged records (one per
+executed rule, its latest attempt aggregated over the job's rows) are
+summed into <code>run.scheduler_totals</code> (same shape as <code>run.totals</code>) and
+compared with the checkpoint's per-rule sums.</p>
 <p>The raw side always carries its own provenance in
 <code>run.scheduler_source</code> (backend, tool, version/note/raw fields), present
 exactly when <code>run.scheduler_totals</code> is. <code>run.reconciliation</code> records what the
@@ -5867,9 +5887,12 @@ lists any partially reported metrics in <code>incomplete_metrics</code> (the sam
 information as the JSON <code>*_complete</code> flags).</p>
 <h3 id="benchmarks-cpu-column">Benchmarks CPU column<a class="headerlink" href="#benchmarks-cpu-column" title="Permanent link">#</a></h3>
 <p>On <strong>local</strong> runs the <strong>Benchmarks</strong> table's CPU column shows <strong>sampled</strong>
-CPU seconds: the executor's sampler reads each rule process's CPU time (all
-its threads) at 200 ms ticks — child processes are not accumulated. Peak
-memory is sampled the same way.</p>
+CPU seconds: the executor's sampler sums the cumulative CPU time of every
+process in the rule's subtree at 200 ms ticks — the rule's own process (its
+threads are already included in that process's time), plus its child
+processes (the shell's real work is usually the child). Peak memory is
+sampled the same way over the same subtree; a process is counted once, its
+threads are not summed separately.</p>
 <p>On <strong>cluster</strong> runs both columns come from the scheduler's accounting store
 instead, read once as each job settles, and cover every step of the job.</p>
 <p><code>-</code> means neither source reported a number: very short local rules the

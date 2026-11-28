@@ -4805,11 +4805,12 @@ surfaces its Scan Notes.</p>
 source ran the rule, and the two differ:</p>
 <ul>
 <li><strong>Local runs</strong> report <strong>sampled</strong> CPU seconds — the executor's sampler
-  reads each rule process's CPU time (all its threads) at 200 ms ticks;
-  child processes are not accumulated. Peak memory is sampled peak RSS over
-  the same ticks. These are measurements of a live process, not scheduler
-  allocations, so they are documented — here and in the <code>report</code> command
-  reference — as sampled rather than exact.</li>
+  sums the cumulative CPU time of every process in the rule's subtree (the
+  process's own time already covers all its threads; child processes are
+  included) at 200 ms ticks. Peak memory is sampled peak RSS over the same
+  subtree, each process counted once. These are measurements of live
+  processes, not scheduler allocations, so they are documented — here and in
+  the <code>report</code> command reference — as sampled rather than exact.</li>
 <li><strong>Cluster runs</strong> report what the scheduler's own accounting store
   recorded (<code>sacct</code>/<code>qstat -x -f</code>/<code>qacct</code>/<code>bacct</code>), read once as each job
   settles.

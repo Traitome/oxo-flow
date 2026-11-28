@@ -5745,9 +5745,10 @@ number in the ledger can be traced back to a raw field.</p>
   &lt;sacct.csv&gt;</code> (JSON only — CSV has no reconciliation columns, so
   <code>-f csv</code> + <code>--acct</code> fails closed as a usage error) reduces the CSV to the rules that executed in this run (a
   whole-account <code>sacct -a</code> export's unrelated jobs are ignored and counted
-  in the source note), sums the remaining batch rows into
-  <code>run.scheduler_totals</code>, and names that raw side's own provenance in
-  <code>run.scheduler_source</code>. Disagreements beyond 5 % (1 s / 1 MiB floor) are
+  in the source note), aggregates each remaining rule's latest submission
+  (its allocation/<code>.batch</code>/step rows are merged and a retried rule's highest
+  numeric job id wins), sums them into <code>run.scheduler_totals</code>, and names
+  that raw side's own provenance in <code>run.scheduler_source</code>. Disagreements beyond 5 % (1 s / 1 MiB floor) are
   listed under <code>run.conflicts</code>, naming both numbers and both sources;
   <code>run.reconciliation</code> records which metrics were compared and which were
   skipped (and why). A CSV that does not cover every executed rule is
