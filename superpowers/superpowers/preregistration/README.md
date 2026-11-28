@@ -1,19 +1,21 @@
 # Pre-Registration and Evidence Governance — Task 4.0
 
-**Status: artifacts frozen at version 1.0.4 (amendments 1–10; amendment 6 is
-the #1166 parameter freeze); independent sign-off PENDING. #1163 and #1166
-have collected governed confirmatory data (under amendments 2 and 6
+**Status: artifacts frozen at version 1.0.5 (amendments 1–11; amendment 6 is
+the #1166 parameter freeze; amendment 11 defines the governed pre-sign-off
+data status and makes PR-05 v1.1.0); independent sign-off PENDING. #1163 and
+#1166 have collected governed pre-sign-off data (under amendments 2 and 6
 respectively; #1163's erratum/PR-04 caveat are amendments 4–5); #1164 and
-#1165 have collected no confirmatory data under this protocol.** Task 4.0 is
+#1165 have collected no pre-sign-off data under this protocol.** Task 4.0 is
 not passed, and ledger Gate 3 remains unpassed. Artifact creation is not gate
-passage; neither governed result is publication-ready until PR-05 sign-off.
+passage; neither governed pre-sign-off measurement is publication-ready or
+confirmatory until PR-05 sign-off (amendment 11; PR-05 §2).
 
 This directory is the governance layer required by
 [`docs/superpowers/plans/industrial-scientific-implementation-plan.md`](../plans/industrial-scientific-implementation-plan.md)
 Task 4.0 ("Freeze the confirmatory analysis before examining confirmatory
 outcomes"). It covers the four empirical campaigns filed in the same wave:
 
-| Campaign | Issue | Primary endpoint | Confirmatory data status at freeze |
+| Campaign | Issue | Primary endpoint | Data status at freeze |
 | :--- | :--- | :--- | :--- |
 | BioTypes broad truth-set validation | [#1163](https://github.com/Traitome/oxo-flow/issues/1163) | False-accept proportion on expected-reject cases | None collected |
 | Applied-repair verified by successful reruns | [#1164](https://github.com/Traitome/oxo-flow/issues/1164) | Full-loop verified-repair proportion, recovery-eligible cases | **Pilot already observed (3/10 applied, 3/10 verified, 3/3 recovery-eligible)** — pilot only, not confirmatory |
@@ -83,15 +85,16 @@ Any change after the freeze commit requires a dated entry in
 | Artifact / section | Exact document and section |
 | Change | Old value or text → new value or text |
 | Reason | Why the frozen text cannot stand |
-| Outcome exposure | Whether any confirmatory outcome was examined before the change |
-| Effect on status | Confirmatory / exploratory / invalid for the affected endpoint |
+| Outcome exposure | Whether any campaign outcome was examined before the change |
+| Effect on status | Pre-sign-off / conditionally held / confirmatory / exploratory / invalid for the affected endpoint |
 | Approver | Named role that approved the amendment |
 
 Rules:
 
 1. A pre-data amendment may fill a TBD/UNDECIDED value or correct a
-   protocol defect. It keeps the campaign confirmatory only if no
-   confirmatory outcome was seen.
+   protocol defect. It keeps the campaign eligible for a confirmatory
+   claim only if no outcome of the affected campaign had been seen when
+   the amendment was made.
 2. A post-outcome amendment makes the affected endpoint **exploratory**.
    It must be reported as such; it cannot be presented as pre-registered.
 3. An amendment that changes a primary endpoint, its direction, its
@@ -109,6 +112,14 @@ Rules:
    the only permitted post-freeze edit that does not change analysis
    content, and it still follows the recompute rule in item 4.
 
+**Interpretation (amendment 11).** Rules 1–2 govern amendments that change
+analysis content in PR-01–PR-04 or PR-06. A PR-05-only amendment that
+defines or reports data status, without touching an endpoint, threshold,
+direction, denominator, corpus, seal, or analysis script, does not make an
+endpoint exploratory; the affected campaigns keep their governed
+pre-sign-off status. This is the same treatment as the reporting-only
+entries 4, 5, 9, and 10, and it is how amendment 11 is classified.
+
 ### 2.4 Timestamps and prose dates
 
 Task 4.0 requires the freeze to be provable, so the header freeze record
@@ -123,23 +134,23 @@ not. It must be updated only by amendment.
 
 | Item | Status |
 | :--- | :--- |
-| PR-01 through PR-06 written | Yes, version 1.0.4 (amendments 1–10), frozen; PR-05 remains 1.0.1 with sign-off PENDING |
-| Manifest hashes recorded | Yes; verify with `shasum -a 256 -c MANIFEST.sha256`. Current manifest `7e3984771249522314d360a617132609c741daae96b8d11cd1f2e8615121bbfe`; the v1.0.0–v1.0.3 and pre-merge #1166 branch manifest hashes are retained in `AMENDMENTS.md` §2.1. |
+| PR-01 through PR-06 written | Yes, version 1.0.5 (amendments 1–11), frozen; PR-05 is 1.1.0 with sign-off PENDING |
+| Manifest hashes recorded | Yes; verify with `shasum -a 256 -c MANIFEST.sha256`. Current manifest `7f27300563fcf2baaa82e07a9c68b67b3b757f44493917d6e9b6568b5c11d108`; the v1.0.0–v1.0.4 and pre-merge #1166 branch manifest hashes are retained in `AMENDMENTS.md` §2.1. |
 | Independent reviewer sign-off (#1163) | PENDING |
 | Independent reviewer sign-off (#1164) | PENDING |
 | Independent reviewer sign-off (#1165) | PENDING |
 | Independent reviewer sign-off (#1166) | PENDING |
-| #1163 confirmatory data | **Collected 2026-11-27 under amendment 2; erratum 2026-11-28 (amendments 4–5).** Sealed 116-case corpus: 83 expected-reject + 24 post-freeze authored controls + 9 pre-existing gallery controls whose accept outcome was already known (disclosed exposure). Result: 0/83 false accepts, exact 95% upper bound 4.3471% ≤ `τ_FA = 0.05`, POSITIVE ([report](../audits/biotype-truth-set-governed-2026-11-27.md); [erratum](../audits/biotype-truthset-governed-erratum-2026-11-28.md)). The ≥30 control floor is met by the 33 sealed controls but not by the held-out authored subset (24); PR-05 adjudicates. A separately sealed post-hoc supplement adds acceptance controls, including the missing `TYPE-005` contrast (descriptive only; not in the FA denominator). Independent reanalysis and PR-05 sign-off remain PENDING; the earlier 54-case set is exploratory/exposure. |
-| #1164 confirmatory data | None; a ten-case pilot was measured on 2026-11-18 **before this freeze** (3/10 applied, 3/10 verified, 3/3 recovery-eligible). It is pilot evidence and cannot be cited as pre-registered or confirmatory. A held-out re-run is required. |
-| #1165 confirmatory data | None collected |
-| #1166 confirmatory data | One governed campaign measured 2026-11-28: 24/24 declared artifacts SHA-256 identical (100%, exact 95% CI [85.75%, 100%]), all 8 classes architecture-stable, the `uname -m` negative control differed (`aarch64` vs `x86_64`), category POSITIVE under the frozen rule. PR-05 C4 sign-off remains PENDING. Evidence: [`cross-arch-provenance-governed-2026-11-27.md`](../audits/cross-arch-provenance-governed-2026-11-27.md). |
-| Task 4.0 gate | **Not passed** — PR-05 sign-off is outstanding; #1163 and #1166 have their pre-run manifests, case seals, and analysis-script hashes, but the #1164/#1165 pre-run manifests/case seals and all reviewer signatures remain outstanding. #1163 also has a post-result control-provenance erratum and a separately sealed post-hoc supplement. |
+| #1163 governed pre-sign-off data | **Collected 2026-11-27 under amendment 2; erratum 2026-11-28 (amendments 4–5); reclassified as pre-sign-off by amendment 11.** Sealed 116-case corpus: 83 expected-reject + 24 post-freeze authored controls + 9 pre-existing gallery controls whose accept outcome was already known (disclosed exposure). Result: 0/83 false accepts, exact 95% upper bound 4.3471% ≤ `τ_FA = 0.05`, **POSITIVE (pre-sign-off)** ([report](../audits/biotype-truth-set-governed-2026-11-27.md); [erratum](../audits/biotype-truthset-governed-erratum-2026-11-28.md)). The ≥30 control floor is met by the 33 sealed controls but not by the held-out authored subset (24); PR-05 adjudicates. A separately sealed post-hoc supplement adds acceptance controls, including the missing `TYPE-005` contrast (descriptive only; not in the FA denominator). The result is not confirmatory and not publication-ready; independent reanalysis and PR-05 C1 sign-off remain PENDING, and promotion to confirmatory requires an approving C1 disposition (PR-05 §2.3). The earlier 54-case set is exploratory/exposure. |
+| #1164 data status | None; a ten-case pilot was measured on 2026-11-18 **before this freeze** (3/10 applied, 3/10 verified, 3/3 recovery-eligible). It is pilot evidence and cannot be cited as pre-registered or confirmatory. A held-out re-run is required; it is not governed pre-sign-off data (PR-05 §2.1). |
+| #1165 data status | None collected |
+| #1166 governed pre-sign-off data | One governed campaign measured 2026-11-28, reclassified as pre-sign-off by amendment 11: 24/24 declared artifacts SHA-256 identical (100%, exact 95% CI [85.75%, 100%]), all 8 classes architecture-stable, the `uname -m` negative control differed (`aarch64` vs `x86_64`), category **POSITIVE (pre-sign-off)** under the frozen rule. The result is not confirmatory and not publication-ready; PR-05 C4 sign-off remains PENDING, and promotion to confirmatory requires an approving C4 disposition (PR-05 §2.3). Evidence: [`cross-arch-provenance-governed-2026-11-27.md`](../audits/cross-arch-provenance-governed-2026-11-27.md). |
+| Task 4.0 gate | **Not passed** — PR-05 sign-off is outstanding; #1163 and #1166 have their pre-run manifests, case seals, and analysis-script hashes, and their results are governed pre-sign-off measurements, but the #1164/#1165 pre-run manifests/case seals and all reviewer signatures remain outstanding. #1163 also has a post-result control-provenance erratum and a separately sealed post-hoc supplement. |
 | Ledger Gate 3 (Scientific Validity) | **Not passed** |
 
 This directory was frozen before any campaign ran and claims no empirical
-result of its own. The #1163 governed campaign result, its control-provenance
-erratum, and its post-hoc supplement are recorded in the status table above
-and in the linked report/erratum (2026-11-28).
+result of its own. The #1163 governed pre-sign-off measurement, its
+control-provenance erratum, and its post-hoc supplement are recorded in
+the status table above and in the linked report/erratum (2026-11-28).
 
 ## 4. Cross-references
 
@@ -161,6 +172,11 @@ and in the linked report/erratum (2026-11-28).
 - It does not make a campaign pre-registered until the pre-run manifest
   and case seals exist and PR-05 is signed.
 - It does not turn a pilot into confirmatory evidence (#1164).
+- It does not promote governed pre-sign-off data to confirmatory; only an
+  approving PR-05 disposition can, and sign-off may instead invalidate the
+  data (PR-05 §2.3).
+- It does not cover the AI-synthesis ablation (#1395/#1412), which is not
+  a PR-06 campaign (PR-05 §2.4).
 - It does not pass Gate 3, which additionally requires matched three-arm
   ablation data, direct same-host Nextflow/Snakemake comparisons,
   independent biological validation, false-positive/negative analysis for
