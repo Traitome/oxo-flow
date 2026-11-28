@@ -541,17 +541,19 @@ is confounded by the outage, and the per-protocol completed subset is
 null with a large cost. It also does not replicate the prior
 non-governed negative result's mechanism. The measured product facts
 are: (a) the feedback loop is active in completed C runs; (b) it costs
-roughly 2× the tokens and 1.8× the wall time on matched cells; (c) no
-detectable success benefit on this model/intent subset; (d) the harness
-and CLI do not classify provider transport errors separately from
-generation failures; (e) the serial arm-major order allowed a provider
-outage to wipe out an entire arm's tail.
+roughly 1.9× input / 2.5× output tokens and 1.8× the wall time on
+matched cells; (c) no detectable success benefit on this model/intent
+subset; (d) the harness does not classify provider transport errors
+separately from generation failures (the CLI stderr and session archive
+carry the cause, but `results.json` records only `template exited 1`);
+(e) the serial arm-major order allowed a provider outage to wipe out an
+entire arm's tail.
 
 **Optimization targets (follow-up work, not changes made here):**
 
-1. Classify provider transport/timeout/auth failures separately from
-   `template exited 1` in the harness and CLI output; retry/backoff at
-   the campaign level with a recorded attempt ledger.
+1. Surface the CLI/session provider transport cause in the harness's
+   `error` field instead of the generic `template exited 1`, and add
+   campaign-level retry/backoff with an attempt ledger.
 2. Interleave or randomize arm/seed order so a provider outage cannot
    correlate with one arm.
 3. Add the E017 `container` → `docker`/`singularity` suggestion and
