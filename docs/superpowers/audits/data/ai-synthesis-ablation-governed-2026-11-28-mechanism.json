@@ -879,62 +879,195 @@
       ]
     }
   },
+  "generator": "eval/frontier/mechanism_analysis.py",
   "outage": {
     "arm": "full-contract",
-    "contiguous_tail": true,
     "first_failure_start": "2026-11-28T00:04:48.835486Z",
     "last_failure_start": "2026-11-28T00:12:39.285557Z",
     "last_success_start": "2026-11-27T23:59:46.138729Z",
     "note": "All C cells after the last success failed at the transport layer; every failure lasted ~7.1 s with zero input/output tokens.",
     "transport_failures": 59
   },
-  "per_protocol_intents_included": [
-    "chipseq-macs2",
-    "cnv-cnvkit",
-    "germline-gatk",
-    "germline-variant",
-    "qc-fastp-multiqc",
-    "qc-fastq-screen",
-    "qc-fastqc",
-    "qc-nanoq",
-    "rnaseq-de-deseq2",
-    "rnaseq-hisat2",
-    "rnaseq-salmon",
-    "rnaseq-star",
-    "scrna-starsolo",
-    "somatic-mutect2",
-    "somatic-tumor-normal",
-    "trim-cutadapt",
-    "variant-annotate"
-  ],
   "per_protocol_matched": {
-    "b_only_pass": 0,
-    "b_success": 47,
-    "c_only_pass": 1,
-    "c_success": 48,
-    "edwards_chi2": 0.0,
-    "edwards_p": 1.0,
-    "exact_p": 1.0,
-    "intents": [
-      "chipseq-macs2",
-      "cnv-cnvkit",
-      "germline-gatk",
-      "germline-variant",
-      "qc-fastp-multiqc",
-      "qc-fastq-screen",
-      "qc-fastqc",
-      "qc-nanoq",
-      "rnaseq-de-deseq2",
-      "rnaseq-hisat2",
-      "rnaseq-salmon",
-      "rnaseq-star",
-      "scrna-starsolo",
-      "somatic-mutect2",
-      "somatic-tumor-normal",
-      "trim-cutadapt",
-      "variant-annotate"
-    ],
-    "n_cells": 48
+    "gate": {
+      "b_only_pass": 0,
+      "b_success": 47,
+      "c_only_pass": 1,
+      "c_success": 48,
+      "edwards_chi2": 0.0,
+      "edwards_p": 1.0,
+      "exact_p": 1.0,
+      "intents": [
+        "chipseq-macs2",
+        "cnv-cnvkit",
+        "germline-gatk",
+        "germline-variant",
+        "qc-fastp-multiqc",
+        "qc-fastq-screen",
+        "qc-fastqc",
+        "qc-nanoq",
+        "rnaseq-de-deseq2",
+        "rnaseq-hisat2",
+        "rnaseq-salmon",
+        "rnaseq-star",
+        "scrna-starsolo",
+        "somatic-mutect2",
+        "somatic-tumor-normal",
+        "trim-cutadapt",
+        "variant-annotate"
+      ],
+      "n_cells": 48
+    },
+    "session": {
+      "b_only_pass": 9,
+      "b_success": 48,
+      "c_only_pass": 0,
+      "c_success": 39,
+      "edwards_chi2": 7.1111,
+      "edwards_p": 0.007660850568687632,
+      "exact_p": 0.00390625,
+      "intents": [
+        "chipseq-macs2",
+        "cnv-cnvkit",
+        "germline-gatk",
+        "germline-variant",
+        "qc-fastp-multiqc",
+        "qc-fastq-screen",
+        "qc-fastqc",
+        "qc-nanoq",
+        "rnaseq-de-deseq2",
+        "rnaseq-hisat2",
+        "rnaseq-salmon",
+        "rnaseq-star",
+        "scrna-starsolo",
+        "somatic-mutect2",
+        "somatic-tumor-normal",
+        "trim-cutadapt",
+        "variant-annotate"
+      ],
+      "n_cells": 48
+    }
+  },
+  "session_outcomes": {
+    "full-contract": {
+      "all": {
+        "Failed": 69,
+        "Success": 39
+      },
+      "gate_success_session_failed": [
+        {
+          "cli_budget_warning": true,
+          "intent_id": "rnaseq-salmon",
+          "seed": 2,
+          "session_error": "exceeded max rounds (10) without valid output",
+          "session_messages": 36,
+          "session_outcome": "Failed",
+          "session_tool_calls": 21
+        },
+        {
+          "cli_budget_warning": true,
+          "intent_id": "scrna-starsolo",
+          "seed": 3,
+          "session_error": "exceeded max rounds (10) without valid output",
+          "session_messages": 44,
+          "session_outcome": "Failed",
+          "session_tool_calls": 30
+        },
+        {
+          "cli_budget_warning": true,
+          "intent_id": "germline-variant",
+          "seed": 2,
+          "session_error": "exceeded max rounds (10) without valid output",
+          "session_messages": 39,
+          "session_outcome": "Failed",
+          "session_tool_calls": 24
+        },
+        {
+          "cli_budget_warning": true,
+          "intent_id": "germline-variant",
+          "seed": 3,
+          "session_error": "exceeded max rounds (10) without valid output",
+          "session_messages": 37,
+          "session_outcome": "Failed",
+          "session_tool_calls": 21
+        },
+        {
+          "cli_budget_warning": true,
+          "intent_id": "germline-gatk",
+          "seed": 3,
+          "session_error": "exceeded max rounds (10) without valid output",
+          "session_messages": 34,
+          "session_outcome": "Failed",
+          "session_tool_calls": 17
+        },
+        {
+          "cli_budget_warning": true,
+          "intent_id": "somatic-tumor-normal",
+          "seed": 1,
+          "session_error": "exceeded max rounds (10) without valid output",
+          "session_messages": 33,
+          "session_outcome": "Failed",
+          "session_tool_calls": 18
+        },
+        {
+          "cli_budget_warning": true,
+          "intent_id": "somatic-tumor-normal",
+          "seed": 2,
+          "session_error": "exceeded max rounds (10) without valid output",
+          "session_messages": 35,
+          "session_outcome": "Failed",
+          "session_tool_calls": 20
+        },
+        {
+          "cli_budget_warning": true,
+          "intent_id": "somatic-tumor-normal",
+          "seed": 3,
+          "session_error": "exceeded max rounds (10) without valid output",
+          "session_messages": 43,
+          "session_outcome": "Failed",
+          "session_tool_calls": 29
+        },
+        {
+          "cli_budget_warning": true,
+          "intent_id": "cnv-cnvkit",
+          "seed": 1,
+          "session_error": "exceeded max rounds (10) without valid output",
+          "session_messages": 37,
+          "session_outcome": "Failed",
+          "session_tool_calls": 23
+        },
+        {
+          "cli_budget_warning": true,
+          "intent_id": "chipseq-macs2",
+          "seed": 1,
+          "session_error": "provider error: AI request failed after 3 attempts: error sending request for url (<provider-endpoint>",
+          "session_messages": 29,
+          "session_outcome": "Failed",
+          "session_tool_calls": 19
+        }
+      ],
+      "gate_successes": {
+        "Failed": 10,
+        "Success": 39
+      }
+    },
+    "syntax-only": {
+      "all": {
+        "Failed": 9,
+        "Success": 99
+      },
+      "gate_success_session_failed": [],
+      "gate_successes": {
+        "Success": 92
+      }
+    },
+    "unconstrained": {
+      "all": {
+        "NO_SESSION": 108
+      },
+      "gate_success_session_failed": [],
+      "gate_successes": {}
+    }
   },
   "success_cost": {
     "full-contract": {

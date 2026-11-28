@@ -77,34 +77,40 @@ Each engine run writes `argv.json`, and `results.json` records the
 provider kind, requested and reported model (an endpoint alias that
 routes to a different backend model is visible, never substituted), the
 per-run argv, and content hashes of the binary, harness, and intent
-file. `statistical_report.py` reports the frozen instrument's primary
-(continuity-corrected McNemar + Holm) and, as a sensitivity, the exact
-two-sided McNemar test, plus a seed-clustered intent-level sensitivity
-table.
+file. `statistical_report.py` reports the pre-registered primary
+(exact McNemar + Holm) and, as a sensitivity, the continuity-corrected
+Edwards chi-square, plus a seed-clustered intent-level sensitivity table.
 
-> Correction (2026-11-28): the frozen instrument's PRIMARY significance
-> path is the continuity-corrected chi-square (Edwards) with Holm; the
-> exact two-sided McNemar test is the #1395 SENSITIVITY. The renderer
-> labels them accordingly. The pre-registration text named exact as
-> primary; both are reported for every contrast.
+> Analysis-plan note (2026-11-28): the pre-registration and the frozen
+> harness commit `f4b6c979` both use exact McNemar + Holm as PRIMARY;
+> Edwards + Holm is the sensitivity. An intermediate revision
+> (`c7f0990b`) relabeled Edwards as primary after data collection; the
+> independent review identified that as a post-data change and it is
+> withdrawn. Both are reported for every contrast.
 
 ### Governed execution (2026-11-28, issue #1395)
 
 The first pre-registered three-seed execution (36 intents × 3 arms ×
 3 seeds = 324 cells) is reported in
 [`docs/superpowers/audits/ai-synthesis-ablation-governed-2026-11-28.md`](../../docs/superpowers/audits/ai-synthesis-ablation-governed-2026-11-28.md).
-Two operational lessons are pinned there:
+Three operational lessons are pinned there:
 
 - The C arm lost 59/108 cells to one contiguous provider transport
   outage. The harness records only `error: "template exited 1"`; the real
   `error sending request` cause is in `session.json` / `cli.log`. Until
   the harness classifies provider transport failures separately, treat
   an exit 1 as opaque and inspect the session archive.
+- Gate success is not loop completion. Ten of C's 49 gate successes
+  ended with a failed AI session: 9 exhausted the correction-round budget
+  after advisory D003/D004 reference/binary warnings were fed back as
+  hard failures, and 1 ended in a transport error after producing the
+  workflow. The gate-level per-protocol subset is null (B 47/48 vs
+  C 48/48, p = 1.0); the session-level subset is C 39/48 vs B 48/48
+  (exact p = 0.0039).
 - Because the arms ran in serial arm-major blocks, the outage correlated
   with the C block. The intention-to-treat B > C result is therefore
-  **not** a contract-feedback effect: the per-protocol matched subset is
-  null (B 47/48 vs C 48/48). Prefer interleaved or randomized run orders
-  for any future campaign.
+  **not** a contract-feedback effect. Prefer interleaved or randomized
+  run orders for any future campaign.
 
 The intent set (`intents.json`) spans 12 domains across three complexity
 tiers (5 easy / 14 medium / 17 hard), plus three deliberately

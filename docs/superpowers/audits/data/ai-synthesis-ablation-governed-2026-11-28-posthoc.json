@@ -1,5 +1,6 @@
 {
   "campaign": "20261128-004949",
+  "generator": "eval/frontier/posthoc_analysis.py",
   "subsets": {
     "all36": {
       "comparisons": {

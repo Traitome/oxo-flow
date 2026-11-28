@@ -3,11 +3,11 @@
 > Supplied for the governed campaign as an independent per-intent audit.
 > It is **post-hoc** relative to the frozen pre-registration (which did
 > not include an intent-validity gate). The per-intent verdict list is
-> authoritative; its header count says 17 SOUND while the list contains
-> 18 (15 specified SOUND + 3 vague SOUND), as the requester anticipated.
-> Reproduced verbatim otherwise.
+> authoritative; it contains 18 SOUND (15 specified + 3 vague), even
+> though the supplied summary header said 17. Reproduced verbatim
+> otherwise, with the count line corrected to the list.
 
-Verdict counts: 17 SOUND (incl. 3 vague), 10 AMBIGUOUS, 6 GATE-UNFAIR, 1 FLAWED, 1 DUPLICATE.
+Verdict counts: 18 SOUND (incl. 3 vague), 10 AMBIGUOUS, 6 GATE-UNFAIR, 1 FLAWED, 1 DUPLICATE.
 
 ## Systemic finding
 The benchmark's "success" = three deterministic gates + a raw lowercased substring fidelity check (`run_eval.py:508-529`). The gates certify engine-acceptable structure; they do not judge tool choice, flags, method, or biological correctness. `lint` is not run with `--strict`, so all warnings pass; SCI checks never fail `dry-run`. Any claim that a gate-passing workflow is "scientifically correct" is unsupported. Strongest counterexample: `wgbs-bismark` (below).

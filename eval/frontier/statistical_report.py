@@ -9,9 +9,8 @@ fixture output is explicitly non-inferential.
 Metrics:
 1. pass@k estimation (unbiased combinatorial estimator, Chen et al. (HumanEval)).
 2. Empirical bootstrap 95% confidence intervals (percentile bootstrap).
-3. McNemar's paired test: the continuity-corrected chi-square with Holm
-   correction is the frozen instrument's primary inference; the exact
-   two-sided binomial test is reported as a sensitivity (#1395).
+3. McNemar's paired test: the exact two-sided binomial test (pre-registered
+   primary, #1395) alongside the historical continuity-corrected chi-square.
 4. Token expenditure, cache hit ratios, and amortized computational costs.
 
 Comparison Arms (pre-registered matched ablation, plan:109-111):
@@ -168,10 +167,9 @@ def mcnemar_test(arm1_passes: List[bool], arm2_passes: List[bool]) -> Dict[str, 
 def mcnemar_exact(arm1_passes: List[bool], arm2_passes: List[bool]) -> Dict[str, Any]:
     """Exact two-sided McNemar test (binomial sign test, p=0.5).
 
-    Reported as the #1395 sensitivity analysis: with few discordant pairs
-    the asymptotic chi-square can be anti-conservative. The frozen
-    instrument's primary significance path remains ``mcnemar_test``
-    (Edwards continuity correction) with Holm correction.
+    The governed campaign pre-registers this exact test (#1395): with few
+    discordant pairs the asymptotic chi-square p-value is not trustworthy.
+    ``mcnemar_test`` above is retained for continuity with earlier reports.
     """
     assert len(arm1_passes) == len(arm2_passes), "Arm sample lengths must match"
     a = b = c = d = 0
@@ -425,10 +423,9 @@ def analyze_arms(dataset: Dict[str, Any], bootstrap_rounds: int = 2000) -> Dict[
         "arm_c_vs_arm_a": mcnemar_test(passes_a, passes_c),
     }
 
-    # Exact McNemar is the #1395 sensitivity: with a small discordant count
-    # the asymptotic approximation can be anti-conservative. Both are
-    # reported; the frozen instrument's primary significance is the
-    # continuity-corrected chi-square family below.
+    # Exact McNemar is the pre-registered primary (#1395): the discordant
+    # count is small, so the asymptotic approximation is not trustworthy.
+    # Both are reported; only the exact family drives the significance column.
     exact_passes = {
         "arm_b_vs_arm_a": (passes_a, passes_b),
         "arm_c_vs_arm_b": (passes_b, passes_c),
@@ -549,14 +546,13 @@ def render_markdown_report(report: Dict[str, Any]) -> str:
         "## 2. Paired Hypothesis Testing",
         "",
         "McNemar's test is applied only after exact cell matching across all arms.",
-        "The continuity-corrected chi-square with Holm correction is the frozen",
-        "instrument's PRIMARY inference. The exact two-sided binomial test is",
-        "reported as a SENSITIVITY because the discordant count can be small; it",
-        "does not replace the primary. The significance column judges the Holm",
-        "step-down adjusted primary value over the 3-contrast family so the",
-        "family-wise error rate stays at alpha=0.05; raw values are shown alongside.",
+        "The exact two-sided test is the pre-registered primary (#1395); with few",
+        "discordant pairs the asymptotic chi-square is not trustworthy and is kept",
+        "only for continuity. The significance column judges the Holm step-down",
+        "adjusted EXACT p-value over the 3-contrast family (raw values shown",
+        "alongside) so the family-wise error rate stays at alpha=0.05.",
         "",
-        "| Contrast | Discordant (b/c) | $\\chi^2$ (df=1) | $\\chi^2$ $p$ | Holm $\\chi^2$ $p$ (primary) | Exact $p$ (sensitivity) | Exact Holm $p$ (sensitivity) | Significant (primary Holm, $\\alpha=0.05$) |",
+        "| Contrast | Discordant (b/c) | Exact two-tailed $p$ | Holm exact $p$ | $\\chi^2$ (df=1) | $\\chi^2$ $p$ | Holm $\\chi^2$ $p$ | Significant (exact Holm, $\\alpha=0.05$) |",
         "| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |",
     ])
 
@@ -572,10 +568,10 @@ def render_markdown_report(report: Dict[str, Any]) -> str:
         exact_holm_str = (
             f"{exact_holm:.4e}" if exact_holm < 0.001 else f"{exact_holm:.4f}"
         )
-        sig_str = "**YES** (primary Holm p < 0.05)" if res["significant"] else "NO"
+        sig_str = "**YES** (exact Holm p < 0.05)" if res["significant_exact"] else "NO"
         md.append(
-            f"| **{label}** | {res['b']} / {res['c']} | {res['chi2']} | {p_str} | "
-            f"{holm_str} | {exact_str} | {exact_holm_str} | {sig_str} |"
+            f"| **{label}** | {res['b']} / {res['c']} | {exact_str} | "
+            f"{exact_holm_str} | {res['chi2']} | {p_str} | {holm_str} | {sig_str} |"
         )
 
     sensitivity = report.get("intent_level_sensitivity") or {}
@@ -587,9 +583,8 @@ def render_markdown_report(report: Dict[str, Any]) -> str:
             "Descriptive sensitivity only: each intent is collapsed to one binary",
             "outcome across its seeds and the exact test is repeated with N = number",
             "of intents. `all` = passed every seed, `any` = passed at least one,",
-            "`majority` = passed more than half. The cell-level primary test above",
-            "(continuity-corrected chi-square + Holm) remains the frozen primary;",
-            "the exact test is the sensitivity.",
+            "`majority` = passed more than half. The cell-level exact test above",
+            "remains the pre-registered primary.",
             "",
             "| Rule | A vs B (b/c, exact p) | B vs C (b/c, exact p) | A vs C (b/c, exact p) |",
             "| :--- | :---: | :---: | :---: |",
