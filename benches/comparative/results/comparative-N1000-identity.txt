@@ -1,0 +1,31 @@
+# Comparative benchmark identity
+generated_utc=2026-11-28T09:24:20Z
+host_label=tx-ubuntu
+kernel=Linux 6.8.0-137-generic
+arch=x86_64
+cpu_model=Intel(R) Xeon(R) Platinum 8255C CPU @ 2.50GHz
+nproc=4
+memory_total=3.6 GiB
+git_commit=4d5399d58e49be150dc281af6242bca3dbecf509
+git_dirty_files=8
+oxo_version=oxo-flow 0.32.0
+oxo_sha256=b7464e089d434ae06afbf9f422077d8e1bbe0dee9dd257267e8607653644574b
+hyperfine_version=hyperfine 1.18.0
+python_version=Python 3.12.3
+nextflow_status=skipped(not requested)
+snakemake_status=skipped(not requested)
+N_rules=1000
+warmup=1
+min_runs=5
+engines_requested=oxo-flow,oxo-flow-dry-run
+workflow_sha256=059bfd08e91f4fbbf2953266d2dbb710eb8488a98f1def8af92c98bf447b5dee
+nextflow_definition_sha256=6d6a6ff1cf434f6428d9cf052a631faf87dc20e4a5d809d8c902be466864d2f6
+nextflow_generator_sha256=aa8e9e9e02b2624bb7b83958d90fbb79f0c42220a67d1f4e92d35f27ec4afa56
+nextflow_process_sha256=8db520d470dff9f07a70d8f505f99395e28ee48f43f45f1563df7181b0c953d9
+snakemake_definition_sha256=35ffac1a04148e4feadca5a75a901a87b4edb6685a1d85d8dcc441e5f741a14b
+drivers_sha256=3bb931984e439a7a539073bdf2a62ff60e15283721aba0ce654e59fff30b3298
+result_json=comparative-N1000.json
+proof_file=comparative-N1000-proof.txt
+commands (cwd = benchmark sandbox):
+  oxo-flow real:  ./drivers/oxo_run.sh 1000
+  oxo-flow dry:   ./drivers/oxo_dry_run.sh 1000

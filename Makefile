@@ -234,8 +234,10 @@ bench-macro:
 	python3 benches/macro/suite.py --oxo-flow target/debug/oxo-flow --output benches/macro/results
 
 ## Run comparative benchmarks against Nextflow/Snakemake (requires tools).
+## Build the release CLI first: cargo build --release -p oxo-flow-cli
 bench-compare:
-	./benches/comparative/run_comparison.sh
+	./benches/comparative/run_comparison.sh 10 target/release/oxo-flow
+	./benches/comparative/run_comparison.sh 100 target/release/oxo-flow
 
 ## Build the frontend SPA from source.
 frontend-build:

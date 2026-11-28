@@ -25,6 +25,8 @@ rule all:
         f"step_{COUNT - 1}_output.txt"
 
 rule step_0:
+    input:
+        "input.txt"
     output:
         "step_0_output.txt"
     shell:
