@@ -1,6 +1,6 @@
 use crate::error::{OxoFlowError, Result};
 use crate::executor::JobRecord;
-use crate::resource_ledger::ResourceUsage;
+use crate::resource_ledger::{ResourceSource, ResourceUsage};
 use crate::rule::{FilePatterns, Rule};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -446,11 +446,12 @@ pub struct BenchmarkRecord {
     /// detection.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub memory_limit_mb: Option<u64>,
-    /// CPU time in seconds — sampled from the rule's own process by the
-    /// local executor (all its threads; child processes are not
-    /// accumulated; issue #83 P1-13), reported by the accounting store on
-    /// the cluster path, where it DOES span every step of the job. `None`
-    /// for legacy checkpoints and whenever the source did not report it.
+    /// CPU time in seconds — sampled over the rule's process subtree (its
+    /// own process, its threads, and its child processes) by the local
+    /// executor (issue #83 P1-13, issue #1445 L1), reported by the
+    /// accounting store on the cluster path, where it DOES span every step
+    /// of the job. `None` for legacy checkpoints and whenever the source did
+    /// not report it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cpu_seconds: Option<f64>,
     /// Number of retry attempts before success (0 = first attempt succeeded).
@@ -1651,18 +1652,36 @@ impl CheckpointState {
     /// corresponding `mark_completed`/`mark_failed`. `tail_bytes` bounds
     /// each excerpt (see [`DEFAULT_OUTPUT_TAIL_BYTES`]).
     ///
-    /// Also persists the run's normalized resource measurements (issue
-    /// #1371) into `resource_usage` when the record carries any — the one
-    /// collection point both the local executor and the cluster driver flow
-    /// through, so a failed rule's CPU/I-O/wait/source survive even though
-    /// it has no benchmark record — and maintains the skip marker: a skip
-    /// attempt marks the rule, any real attempt clears the marker.
+    /// Also persists the attempt's normalized resource measurements (issue
+    /// #1371) into `resource_usage` — the one collection point both the
+    /// local executor and the cluster driver flow through, so a failed
+    /// rule's CPU/I-O/wait/source survive even though it has no benchmark
+    /// record — and maintains the skip marker: a skip attempt marks the
+    /// rule, any real attempt clears the marker.
+    ///
+    /// Every TERMINAL attempt owns `resource_usage` (issue #1445 L1). A
+    /// terminal record with no measurements (the CLI's pre-spawn/staging/
+    /// security failure path builds `JobRecord { resources: None }`) replaces
+    /// the entry with an explicit unknown/source-only record instead of
+    /// leaving an earlier attempt's values behind: the ledger reported the
+    /// previous attempt's CPU/RSS/source as this attempt's, and cost accrual
+    /// priced them. Unknown is never zero — and never a stale number either.
     pub fn record_run(&mut self, record: &JobRecord, tail_bytes: usize) {
         match record.status {
-            crate::executor::JobStatus::Skipped => self.record_skipped_attempt(
-                &record.rule,
-                record.skip_reason.as_deref().unwrap_or("skipped"),
-            ),
+            crate::executor::JobStatus::Skipped => {
+                self.record_skipped_attempt(
+                    &record.rule,
+                    record.skip_reason.as_deref().unwrap_or("skipped"),
+                );
+                // A skip is not an attempt: a measurement the record carries
+                // is still persisted, but an earlier attempt's entry stays
+                // for history — the ledger's skip marker suppresses it for
+                // this run.
+                if let Some(usage) = &record.resources {
+                    self.resource_usage
+                        .insert(record.rule.clone(), usage.clone());
+                }
+            }
             // Only a TERMINAL attempt proves this invocation executed the
             // rule. The cluster path persists a `Running` placeholder at
             // submit time; clearing the marker there would let a crashed
@@ -1672,12 +1691,23 @@ impl CheckpointState {
             | crate::executor::JobStatus::Cancelled
             | crate::executor::JobStatus::TimedOut => {
                 self.skipped_attempts.remove(&record.rule);
+                let usage = record.resources.clone().unwrap_or_else(|| {
+                    ResourceUsage::source_only(ResourceSource::unknown(
+                        "the latest attempt ended without a resource measurement (it failed \
+                         before spawning, or no sampler/accounting store observed it); \
+                         measurements from an earlier attempt are not this attempt's",
+                    ))
+                });
+                self.resource_usage.insert(record.rule.clone(), usage);
             }
-            crate::executor::JobStatus::Pending | crate::executor::JobStatus::Running => {}
-        }
-        if let Some(usage) = &record.resources {
-            self.resource_usage
-                .insert(record.rule.clone(), usage.clone());
+            crate::executor::JobStatus::Pending | crate::executor::JobStatus::Running => {
+                // Submit-time placeholders carry no measurement; a live
+                // observation the record does carry is persisted.
+                if let Some(usage) = &record.resources {
+                    self.resource_usage
+                        .insert(record.rule.clone(), usage.clone());
+                }
+            }
         }
         self.rule_runs.insert(
             record.rule.clone(),

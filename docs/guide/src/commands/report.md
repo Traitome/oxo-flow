@@ -414,8 +414,17 @@ undeclared dependency drift.
 section: a `Rule / State / Elapsed / CPU Time / Max RSS (MB)` table plus
 import provenance and an honest coverage note listing rules without a
 record. Column detection is header-based and case-insensitive; `JobName`,
-`State`, `Elapsed`, `CPUTime` and `MaxRSS` are required (`JobID` optional,
-used to prefer the batch row over step rows). `Elapsed`/`CPUTime` accept
+`State`, `Elapsed`, `CPUTime` and `MaxRSS` are required. `JobID` is
+optional; when present, rows are grouped into scheduler submissions (the
+allocation row plus its `.batch`/`.extern`/step rows) and the latest
+attempt of a retried rule is used — highest numeric id wins, compared
+numerically, because scheduler ids are allocated monotonically. Within a
+submission, `MaxRSS` and `CPUTime` are the maximum over every row (SLURM
+records them on step rows, not on the allocation row), while `Elapsed` and
+`State` come from the allocation row. Array elements share their base job
+id (`12345_1` belongs to `12345`), so an export that reports them under one
+submission is aggregated into one record — the maximum across elements, not
+a sum. `Elapsed`/`CPUTime` accept
 `MM:SS`, `HH:MM:SS` or `[D-]HH:MM:SS` (with optional fractional seconds);
 `MaxRSS` uses the same grammar as the scheduler adapters (one shared
 `oxo_flow_core::backend::cluster::parse_rss_bytes` parser): `K`/`KB`,
@@ -590,7 +599,13 @@ timed-out re-execution renders its own recorded start/finish duration and its
 `resource_usage` (CPU, peak RSS, I/O, source), and counts in
 `rules_executed` / the `--acct` executed set even if an earlier invocation
 left a synthetic marker. An old success's wall/CPU never describes the
-failed attempt, and the run totals sum only the current attempt.
+failed attempt, and the run totals sum only the current attempt. A terminal
+re-execution that recorded **no** measurement — it failed before spawning
+(output-directory creation, environment setup, the security gate) — replaces
+the rule's resource record with an explicit unknown/source-only entry: its
+CPU, memory, and I/O are absent with a source note, never the earlier
+attempt's numbers, and a `cpu_second_rate`/`gb_second_rate` budget treats
+that metric as unknown rather than pricing the stale value.
 
 No supported backend reports GPU-seconds, user/system CPU split, a
 control-plane peak-memory metric, or a price, so `gpu_seconds`,
@@ -653,7 +668,7 @@ every executed rule.
 
 | Backend | Tool | Fields reported | Unknown by design |
 |---|---|---|---|
-| local | `sysinfo` + Linux `/proc/<pid>/io` | wall time, CPU seconds, peak RSS bytes (sampled subtree), I/O bytes on Linux (every 200 ms tick, including successful attempts) | scheduler wait, nodes, cores, GPU; I/O off Linux; kernel writeback may under-count `write_bytes` |
+| local | `sysinfo` + Linux `/proc/<pid>/io` | wall time, CPU seconds and peak RSS bytes (sampled over the rule's process subtree), I/O bytes on Linux (every 200 ms tick, including successful attempts) | scheduler wait, nodes, cores, GPU; I/O off Linux; kernel writeback may under-count `write_bytes` |
 | SLURM | `sacct` | `ElapsedRaw`/`Elapsed`, `MaxRSS`, `TotalCPU`, `Submit`→`Start` wait, `AllocCPUS`, `NNodes`, `AveDiskRead`/`AveDiskWrite` | fields the store omits (each stays absent) |
 | PBS | `qstat -x` | `resources_used.walltime`, `.mem`, `.cput` | scheduler wait, I/O, allocation |
 | SGE | `qacct` | `ru_wallclock`, `ru_maxrss`, `cpu` | scheduler wait, I/O, allocation |
@@ -685,9 +700,10 @@ export (`sacct -a`) may contain unrelated jobs, which are ignored rather
 than allowed to inflate the raw side. The note reports them as job names **not matched to an
 executed rule** (not "not executed": a site may truncate job names, or array
 elements may share one base name), with the count and up to five names in
-`run.scheduler_source.note`. The remaining merged batch rows are summed into
-`run.scheduler_totals` (same shape as `run.totals`) and compared with the
-checkpoint's per-rule sums.
+`run.scheduler_source.note`. The remaining merged records (one per
+executed rule, its latest attempt aggregated over the job's rows) are
+summed into `run.scheduler_totals` (same shape as `run.totals`) and
+compared with the checkpoint's per-rule sums.
 
 The raw side always carries its own provenance in
 `run.scheduler_source` (backend, tool, version/note/raw fields), present
@@ -743,9 +759,10 @@ information as the JSON `*_complete` flags).
 ### Benchmarks CPU column
 
 On **local** runs the **Benchmarks** table's CPU column shows **sampled**
-CPU seconds: the executor's sampler reads each rule process's CPU time (all
-its threads) at 200 ms ticks — child processes are not accumulated. Peak
-memory is sampled the same way.
+CPU seconds: the executor's sampler sums the cumulative CPU time of every
+process in the rule's subtree at 200 ms ticks — the rule's own process, its
+threads, and its child processes (the shell's real work is usually the
+child). Peak memory is sampled the same way over the same subtree.
 
 On **cluster** runs both columns come from the scheduler's accounting store
 instead, read once as each job settles, and cover every step of the job.

@@ -150,10 +150,13 @@ pub struct ResourceUsage {
     /// MB figure on the cluster path.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_rss_bytes: Option<u64>,
-    /// Total CPU seconds across the rule's threads/cores when the source
-    /// measured it. Duplicated from the success-path benchmark so a rule
-    /// whose attempt FAILED or was cancelled still contributes the CPU it
-    /// actually burned (it has no benchmark record to carry it).
+    /// Total CPU seconds across the rule's process subtree — its own
+    /// process, its threads, and its child processes — when the source
+    /// measured it. The local sampler accumulates cumulative CPU-time
+    /// deltas over the subtree (issue #1445 L1); scheduler adapters report
+    /// the job's own aggregate. Duplicated from the success-path benchmark
+    /// so a rule whose attempt FAILED or was cancelled still contributes
+    /// the CPU it actually burned (it has no benchmark record to carry it).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cpu_seconds: Option<f64>,
     /// Bytes read from disk across the rule's processes, when the source
