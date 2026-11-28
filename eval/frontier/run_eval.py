@@ -44,16 +44,23 @@ Usage
         --models deepseek-chat --out results/pilot2
 
 Credentials are read from the environment (ANTHROPIC_BASE_URL /
-ANTHROPIC_AUTH_TOKEN / ANTHROPIC_MODEL) or, as a fallback, from the
-dedicated ~/.oxo-flow/ai_config.json (never from shell rc files; values
-are never printed).
+ANTHROPIC_AUTH_TOKEN / ANTHROPIC_MODEL), from the dedicated
+~/.oxo-flow/ai_config.json, or from a pinned source with --creds-from
+(auto|env|config; never from shell rc files; values are never printed).
+A campaign that must not spend an ambient agent token pins
+--creds-from config. Arm A speaks the Anthropic Messages protocol for a
+claude provider and an OpenAI-compatible chat-completions protocol for
+openai/deepseek/ollama; --arm-a-protocol can pin either explicitly. The
+bare Arm A prompt itself is unchanged by the protocol switch.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -77,9 +84,6 @@ PRICE_PER_MTOK = {
     "*": (0.28, 1.10),
 }
 
-CFG_PATH = Path.home() / ".oxo-flow" / "ai_config.json"
-CREDS_KEYS = ("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL")
-
 NAIVE_SYSTEM = """You are a bioinformatics pipeline expert. Generate valid .oxoflow TOML configurations.
 
 Intent: {intent}
@@ -93,39 +97,106 @@ Rules:
 6. Specify conda environment for each rule when possible
 7. Include resource hints (threads, memory) in [resources] section"""
 
+CFG_PATH = Path.home() / ".oxo-flow" / "ai_config.json"
+ANTHROPIC_CREDS_KEYS = ("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL")
 
-def load_credentials() -> dict[str, str]:
-    """ANTHROPIC_* from the environment, falling back to ~/.oxo-flow/ai_config.json.
+# Provider kinds the harness can drive on both generation paths. `claude`
+# speaks the Anthropic Messages protocol; the other three expose an
+# OpenAI-compatible chat-completions endpoint (DeepSeek natively, Ollama via
+# its /v1 bridge).
+PROVIDER_KINDS = ("claude", "openai", "deepseek", "ollama")
 
-    No shell-rc harvesting (#948 P3-12): sourcing a user's dotfile from an
-    eval script pulls every exported secret into the process. The fallback
-    reads only the dedicated oxo-flow config file, whose `api_key` /
-    `api_url` / `model` fields mirror the CLI's own fallback chain
-    (eval/scripts/common.py resolve_provider).
-    """
-    creds = {k: os.environ.get(k, "") for k in CREDS_KEYS}
-    if all(creds.values()):
-        return creds
-    if CFG_PATH.exists():
-        try:
-            cfg = json.loads(CFG_PATH.read_text())
-        except json.JSONDecodeError:
-            cfg = {}
-        if not isinstance(cfg, dict):
-            cfg = {}
-        alias = {"ANTHROPIC_AUTH_TOKEN": "api_key",
-                 "ANTHROPIC_BASE_URL": "api_url",
-                 "ANTHROPIC_MODEL": "model"}
-        for env_key, cfg_key in alias.items():
-            if not creds.get(env_key):
-                # `or ""` collapses JSON null/empty to ""; .strip() treats
-                # blank as absent, matching resolve_provider's semantics.
-                creds[env_key] = str(cfg.get(cfg_key) or "").strip()
-    missing = [k for k in CREDS_KEYS if not creds.get(k)]
+# Ambient provider credentials that must never leak into a campaign child
+# process (issue #1395): a host can export an unrelated coding agent's own
+# token, and a campaign must spend only the resolved oxo-flow provider.
+AMBIENT_CREDENTIAL_VARS = (
+    "ANTHROPIC_AUTH_TOKEN",
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_BASE_URL",
+    "ANTHROPIC_MODEL",
+    "CLAUDE_API_KEY",
+    "OPENAI_API_KEY",
+    "OPENAI_BASE_URL",
+    "OPENAI_MODEL",
+    "DEEPSEEK_API_KEY",
+    "DEEPSEEK_BASE_URL",
+    "OLLAMA_HOST",
+    "OLLAMA_MODEL",
+    "OXO_FLOW_AI_API_KEY",
+    "OXO_FLOW_AI_API_URL",
+    "OXO_FLOW_AI_MODEL",
+)
+
+
+def _credentials_from_env() -> dict[str, str]:
+    """The legacy ANTHROPIC_* environment tier (Claude Messages protocol)."""
+    missing = [k for k in ANTHROPIC_CREDS_KEYS if not os.environ.get(k)]
     if missing:
-        sys.exit(f"missing credentials: {', '.join(missing)} "
-                 f"(env or {CFG_PATH})")
+        sys.exit(f"missing credentials: {', '.join(missing)} (env or {CFG_PATH})")
+    return {
+        "provider": "claude",
+        "api_key": os.environ["ANTHROPIC_AUTH_TOKEN"],
+        "api_url": os.environ["ANTHROPIC_BASE_URL"],
+        "model": os.environ["ANTHROPIC_MODEL"],
+    }
+
+
+def _credentials_from_config() -> dict[str, str]:
+    """The operator's persisted oxo-flow provider (~/.oxo-flow/ai_config.json).
+
+    This is the same file the CLI resolves when no provider env tier is set;
+    it is authoritative for a campaign that must not spend the host shell's
+    unrelated credentials. Values are never printed.
+    """
+    if not CFG_PATH.exists():
+        sys.exit(f"missing credentials: {CFG_PATH} does not exist")
+    try:
+        cfg = json.loads(CFG_PATH.read_text())
+    except json.JSONDecodeError as exc:
+        sys.exit(f"cannot parse {CFG_PATH}: {exc}")
+    if not isinstance(cfg, dict):
+        sys.exit(f"cannot use {CFG_PATH}: expected a JSON object")
+    provider = str(cfg.get("provider") or "").strip().lower()
+    if provider not in PROVIDER_KINDS:
+        sys.exit(
+            f"{CFG_PATH}: provider {provider!r} is not one of "
+            f"{', '.join(PROVIDER_KINDS)}"
+        )
+    creds = {
+        "provider": provider,
+        "api_key": str(cfg.get("api_key") or "").strip(),
+        "api_url": str(cfg.get("api_url") or "").strip(),
+        "model": str(cfg.get("model") or "").strip(),
+    }
+    missing = [key for key in ("api_key", "api_url", "model") if not creds[key]]
+    if missing:
+        sys.exit(f"{CFG_PATH}: missing {', '.join(missing)}")
     return creds
+
+
+def load_credentials(source: str = "auto") -> dict[str, str]:
+    """Resolve provider identity, endpoint, and model.
+
+    ``source``:
+      - ``env`` — the legacy ANTHROPIC_* environment tier.
+      - ``config`` — the operator's persisted oxo-flow provider. A governed
+        campaign uses this so an ambient agent token cannot be spent.
+      - ``auto`` — env first, then config (the historical precedence).
+
+    Returns ``{provider, api_key, api_url, model}``. No shell-rc harvesting
+    (#948 P3-12): sourcing a user's dotfile from an eval script pulls every
+    exported secret into the process.
+    """
+    if source == "env":
+        return _credentials_from_env()
+    if source == "config":
+        return _credentials_from_config()
+    if source != "auto":
+        sys.exit(f"unknown credential source: {source}")
+    try:
+        return _credentials_from_env()
+    except SystemExit:
+        return _credentials_from_config()
 
 
 def find_binary() -> str:
@@ -165,7 +236,7 @@ def anthropic_chat(creds: dict, model: str, system: str, user: str,
     providers behind an Anthropic-compatible endpoint may still vary (#948
     P3-12 — only the *judging* is deterministic, never the sampling).
     """
-    base = creds["ANTHROPIC_BASE_URL"].rstrip("/")
+    base = creds["api_url"].rstrip("/")
     body: dict = {
         "model": model,
         "max_tokens": max_tokens,
@@ -180,8 +251,8 @@ def anthropic_chat(creds: dict, model: str, system: str, user: str,
         headers={
             "content-type": "application/json",
             "anthropic-version": "2023-06-01",
-            "x-api-key": creds["ANTHROPIC_AUTH_TOKEN"],
-            "authorization": f"Bearer {creds['ANTHROPIC_AUTH_TOKEN']}",
+            "x-api-key": creds["api_key"],
+            "authorization": f"Bearer {creds['api_key']}",
         },
     )
     try:
@@ -189,67 +260,201 @@ def anthropic_chat(creds: dict, model: str, system: str, user: str,
             data = json.load(resp)
     except Exception as e:  # noqa: BLE001 — report any transport/API error verbatim
         return None, {}, str(e)[:500]
+    if not isinstance(data, dict):
+        return None, {}, "unexpected response shape (not a JSON object)"
     if data.get("type") == "error":
         return None, {}, data.get("error", {}).get("message", "unknown API error")[:500]
     text = "".join(b.get("text", "") for b in data.get("content", [])
                    if b.get("type") == "text")
     usage_in = data.get("usage", {}).get("input_tokens", 0)
     usage_out = data.get("usage", {}).get("output_tokens", 0)
-    return text or None, {"input": usage_in, "output": usage_out}, None
+    return text or None, {
+        "input": usage_in,
+        "output": usage_out,
+        # The endpoint may route an alias to a different backend model; the
+        # reported identity is evidence, never a substitution.
+        "reported_model": data.get("model"),
+    }, None
+
+
+def openai_chat_url(api_url: str) -> str:
+    """Resolve an OpenAI-compatible chat-completions URL.
+
+    Mirrors ``OpenAiBackend::new_labeled`` (crates/oxo-flow-ai/src/provider.rs):
+    a full ``/chat/completions`` URL passes through, a base containing
+    ``/v1`` appends the suffix, any other versioned base (GLM's ``/v4``)
+    appends the suffix as-is, and an unversioned base gains ``/v1`` first.
+    """
+    url = api_url.strip().rstrip("/")
+    if "/chat/completions" in url:
+        return url
+    if "/v1" in url or re.search(r"/v\d", url):
+        return f"{url}/chat/completions"
+    return f"{url}/v1/chat/completions"
+
+
+def openai_chat(creds: dict, model: str, system: str, user: str,
+                max_tokens: int, timeout: float,
+                temperature: float | None = 0.0) -> tuple[str | None, dict, str | None]:
+    """One OpenAI-compatible chat-completions call. Returns (text, usage, error).
+
+    This is the same wire protocol the CLI's OpenAI backend uses, so Arm A's
+    bare prompt runs against the same model identity as Arms B/C when the
+    operator's provider is OpenAI-compatible. The prompt is unchanged.
+    """
+    body = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+        "max_tokens": max_tokens,
+    }
+    if temperature is not None:
+        body["temperature"] = temperature
+    req = urllib.request.Request(
+        openai_chat_url(creds["api_url"]),
+        data=json.dumps(body).encode(),
+        method="POST",
+        headers={
+            "content-type": "application/json",
+            "authorization": f"Bearer {creds['api_key']}",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.load(resp)
+    except Exception as e:  # noqa: BLE001 — report any transport/API error verbatim
+        return None, {}, str(e)[:500]
+    if not isinstance(data, dict):
+        return None, {}, "unexpected response shape (not a JSON object)"
+    if data.get("error"):
+        error = data["error"]
+        message = error.get("message") if isinstance(error, dict) else error
+        return None, {}, str(message or "unknown API error")[:500]
+    choices = data.get("choices") or []
+    message = choices[0].get("message", {}) if choices else {}
+    text = message.get("content")
+    usage = data.get("usage") or {}
+    return text if isinstance(text, str) and text else None, {
+        "input": usage.get("prompt_tokens", 0),
+        "output": usage.get("completion_tokens", 0),
+        "reported_model": data.get("model"),
+    }, None
+
+
+def resolve_arm_a_protocol(requested: str, provider: str) -> str:
+    """Pick Arm A's wire protocol; ``auto`` follows the resolved provider."""
+    if requested != "auto":
+        return requested
+    return "anthropic" if provider == "claude" else "openai"
+
+
+def build_child_env(creds: dict) -> dict[str, str]:
+    """Environment for ``template --ai``, pinned to the resolved provider.
+
+    Every ambient provider credential is scrubbed first: the host may export
+    an unrelated coding agent's token, and a campaign must spend only the
+    resolved oxo-flow provider (issue #1395). The generic OXO_FLOW_AI_* trio
+    is honored by every provider kind, so one mapping covers claude, openai,
+    deepseek, and ollama.
+    """
+    env = {key: value for key, value in os.environ.items()
+           if key not in AMBIENT_CREDENTIAL_VARS}
+    env["OXO_FLOW_AI_PROVIDER"] = creds["provider"]
+    env["OXO_FLOW_AI_API_KEY"] = creds["api_key"]
+    env["OXO_FLOW_AI_API_URL"] = creds["api_url"]
+    env["OXO_FLOW_AI_MODEL"] = creds["model"]
+    return env
 
 
 ARMS = ("unconstrained", "syntax-only", "full-contract")
 
 
+def template_command(variant: str, intent: str, run_dir: Path, binary: str,
+                     args) -> list[str]:
+    """Engine argv for Arms B/C. Arm C adds the contract-feedback toggle.
+
+    Kept as one helper so the Arm B / Arm C distinction is testable and
+    cannot silently drift: the ONLY difference is the
+    ``--ai-contract-feedback`` flag.
+    """
+    cmd = [binary, "template", "--ai", intent, "-o", f"{run_dir}/",
+           "--no-color"]
+    if args.max_retries is not None:
+        cmd += ["--ai-max-retries", str(args.max_retries)]
+    if args.profile != "compact":
+        cmd += ["--ai-team-profile", args.profile]
+    if args.attempts != 1:
+        cmd += ["--ai-attempts", str(args.attempts)]
+    # The ONLY difference between Arm B and Arm C: whether the engine's
+    # generation validator runs the BioTypes / scientific-preflight /
+    # deep-check contract feedback loop (--ai-contract-feedback). Arm B
+    # omits it (syntax + structural feedback only); Arm C enables it.
+    if variant == "full-contract":
+        cmd += ["--ai-contract-feedback"]
+    return cmd
+
+
 def run_generation(variant: str, intent: str, model: str, run_dir: Path,
                    creds: dict, binary: str, args) -> dict:
     """Generate a workflow. Returns usage/meta dict; writes workflow.oxoflow."""
-    meta: dict = {"generated": False, "input_tokens": 0, "output_tokens": 0,
-                  "tool_calls": None, "rounds": None, "error": None}
+    meta: dict = {
+        "generated": False, "input_tokens": 0, "output_tokens": 0,
+        "tool_calls": None, "rounds": None, "error": None,
+        "provider": creds["provider"], "protocol": None,
+        "requested_model": model, "reported_model": None,
+        "generation_path": None, "generation_command": None,
+        "contract_feedback": None,
+    }
     started = time.time()
     meta["wall_s"] = None
 
     if variant == "unconstrained":
-        text, usage, err = anthropic_chat(
+        protocol = resolve_arm_a_protocol(args.arm_a_protocol, creds["provider"])
+        chat = anthropic_chat if protocol == "anthropic" else openai_chat
+        text, usage, err = chat(
             creds, model, NAIVE_SYSTEM.format(intent=intent),
             f"## User Request\nGenerate a .oxoflow pipeline for: {intent}\n\n"
             "## Task\nGenerate the optimized .oxoflow TOML configuration now. "
             "Output inside ```toml fences.",
             max_tokens=8192, timeout=args.timeout,
         )
+        meta["protocol"] = protocol
+        meta["generation_path"] = "direct"
+        meta["reported_model"] = usage.get("reported_model")
         meta["input_tokens"] = usage.get("input", 0)
         meta["output_tokens"] = usage.get("output", 0)
         if err:
             meta["error"] = err
+            meta["wall_s"] = round(time.time() - started, 1)
             return meta
         toml = extract_toml(text or "")
         if not toml:
             meta["error"] = "no TOML found in response"
+            meta["wall_s"] = round(time.time() - started, 1)
             return meta
         (run_dir / "workflow.oxoflow").write_text(toml)
         meta["generated"] = True
 
     elif variant in ("syntax-only", "full-contract"):
-        env = dict(os.environ)
-        env["OXO_FLOW_AI_PROVIDER"] = "claude"
-        env["ANTHROPIC_MODEL"] = model
+        env = build_child_env(creds)
         sessions = Path.home() / ".oxo-flow/ai_sessions"
         before = {p.name: p.stat().st_mtime for p in sessions.glob("*-template-*.json")} \
             if sessions.exists() else {}
-        cmd = [binary, "template", "--ai", intent, "-o", f"{run_dir}/",
-               "--no-color"]
-        if args.max_retries is not None:
-            cmd += ["--ai-max-retries", str(args.max_retries)]
-        if args.profile != "compact":
-            cmd += ["--ai-team-profile", args.profile]
-        if args.attempts != 1:
-            cmd += ["--ai-attempts", str(args.attempts)]
-        # The ONLY difference between Arm B and Arm C: whether the engine's
-        # generation validator runs the BioTypes / scientific-preflight /
-        # deep-check contract feedback loop (--ai-contract-feedback). Arm B
-        # omits it (syntax + structural feedback only); Arm C enables it.
-        if variant == "full-contract":
-            cmd += ["--ai-contract-feedback"]
+        cmd = template_command(variant, intent, run_dir, binary, args)
+        meta["protocol"] = "engine"
+        meta["generation_path"] = "engine"
+        meta["generation_command"] = cmd
+        meta["contract_feedback"] = variant == "full-contract"
+        # The argv is direct evidence that Arm C ran the contract-feedback
+        # path and Arm B did not; it carries no credentials.
+        (run_dir / "argv.json").write_text(json.dumps({
+            "argv": cmd,
+            "provider": creds["provider"],
+            "requested_model": model,
+            "contract_feedback": meta["contract_feedback"],
+        }, indent=2))
         try:
             proc = subprocess.run(cmd, cwd=run_dir, env=env, timeout=args.timeout,
                                   capture_output=True, text=True)
@@ -258,6 +463,7 @@ def run_generation(variant: str, intent: str, model: str, run_dir: Path,
                 meta["error"] = f"template exited {proc.returncode}"
         except subprocess.TimeoutExpired:
             meta["error"] = "generation timed out"
+            meta["wall_s"] = round(time.time() - started, 1)
             return meta
         # Token accounting: ALL template sessions created by this run
         # (multi-attempt runs archive one session per attempt — the spend
@@ -284,6 +490,12 @@ def run_generation(variant: str, intent: str, model: str, run_dir: Path,
                 meta["output_tokens"] = tout
                 meta["tool_calls"] = tools
                 meta["sessions"] = len(new)
+                try:
+                    snap_json = json.loads(snap.read_text())
+                    meta["reported_model"] = snap_json.get("model") or None
+                    meta["session_provider"] = snap_json.get("provider") or None
+                except json.JSONDecodeError:
+                    pass
         # rglob: a relative -o target resolved inside a relative run_dir can
         # nest the artifact one level deeper — find it wherever it landed.
         wf = sorted(run_dir.rglob("*.oxoflow"))
@@ -403,6 +615,25 @@ def aggregate_report(runs: list[dict], profile: str, stamp: str, binary: str) ->
     return "\n".join(lines)
 
 
+def sha256_file(path: Path) -> str | None:
+    """Content hash for the campaign manifest (binary, harness, intents)."""
+    try:
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1 << 20), b""):
+                digest.update(chunk)
+        return f"sha256:{digest.hexdigest()}"
+    except OSError:
+        return None
+
+
+BUDGET_ENV_VARS = (
+    "OXO_FLOW_AI_TIMEOUT_SECS",
+    "OXO_FLOW_AI_MAX_TOKENS",
+    "OXO_FLOW_AI_CONTEXT_TOKENS",
+)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--intents", default=str(Path(__file__).parent / "intents.json"))
@@ -412,7 +643,20 @@ def main() -> None:
                          "without calling any provider (reuses the campaign "
                          "aggregation; nothing else runs)")
     ap.add_argument("--variants", default="unconstrained,syntax-only,full-contract")
-    ap.add_argument("--models", default="", help="comma list; default: env ANTHROPIC_MODEL")
+    ap.add_argument("--models", default="",
+                    help="comma list; default: the resolved provider's model")
+    ap.add_argument("--creds-from", default="auto", choices=["auto", "env", "config"],
+                    help="credential source: env (ANTHROPIC_*), config "
+                         "(~/.oxo-flow/ai_config.json), or auto (env first, "
+                         "then config). A governed campaign pins `config` so "
+                         "an ambient agent token cannot be spent (#1395)")
+    ap.add_argument("--arm-a-protocol", default="auto",
+                    choices=["auto", "anthropic", "openai"],
+                    help="wire protocol for the bare Arm A prompt: auto follows "
+                         "the resolved provider (claude -> anthropic, else an "
+                         "OpenAI-compatible chat-completions path)")
+    ap.add_argument("--campaign-note", default="",
+                    help="free-text label recorded in results.json (no secrets)")
     ap.add_argument("--filter", default="", help="comma list of intent ids to include")
     ap.add_argument("--max-retries", type=int, default=None,
                     help="override the CLI tool-loop budget (--ai-max-retries); "
@@ -449,11 +693,12 @@ def main() -> None:
         print(f"report rebuilt: {dst}")
         return
 
-    creds = load_credentials()
+    creds = load_credentials(args.creds_from)
     binary = args.binary or find_binary()
     if not (Path(binary).is_file() or shutil.which(binary)):
         sys.exit(f"--binary {binary} does not exist")
-    default_model = creds["ANTHROPIC_MODEL"]
+    binary_path = Path(binary) if Path(binary).is_file() else Path(shutil.which(binary))
+    default_model = creds["model"]
     models = [m for m in args.models.split(",") if m] or [default_model]
     variants = [v for v in args.variants.split(",") if v]
     unknown = [v for v in variants if v not in ARMS]
@@ -461,12 +706,14 @@ def main() -> None:
         sys.exit(f"unknown variant(s): {', '.join(unknown)} "
                  f"(expected one of {', '.join(ARMS)})")
 
-    intents = json.loads(Path(args.intents).read_text())["intents"]
+    intents_path = Path(args.intents)
+    intents = json.loads(intents_path.read_text())["intents"]
     if args.filter:
         keep = {x.strip() for x in args.filter.split(",")}
         intents = [i for i in intents if i["id"] in keep]
 
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    started_at = datetime.now(timezone.utc).isoformat()
     out_dir = Path(args.out).resolve() if args.out \
         else Path(__file__).resolve().parent / "results" / stamp
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -543,7 +790,19 @@ def main() -> None:
     (out_dir / "results.json").write_text(json.dumps({
         "stamp": stamp,
         "generated_at": datetime.now(timezone.utc).isoformat(),
+        "started_at": started_at,
+        "finished_at": datetime.now(timezone.utc).isoformat(),
+        "campaign_note": args.campaign_note,
+        "creds_source": args.creds_from,
+        "provider": creds["provider"],
+        "arm_a_protocol": resolve_arm_a_protocol(args.arm_a_protocol,
+                                                 creds["provider"]),
         "binary": binary,
+        "binary_sha256": sha256_file(binary_path),
+        "harness_sha256": sha256_file(Path(__file__).resolve()),
+        "intents_sha256": sha256_file(intents_path),
+        "budget_env": {key: os.environ[key] for key in BUDGET_ENV_VARS
+                       if os.environ.get(key)},
         "default_model": default_model,
         "max_retries": args.max_retries,
         "seeds": args.seeds,
