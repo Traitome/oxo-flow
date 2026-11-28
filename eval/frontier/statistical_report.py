@@ -9,7 +9,8 @@ fixture output is explicitly non-inferential.
 Metrics:
 1. pass@k estimation (unbiased combinatorial estimator, Chen et al. (HumanEval)).
 2. Empirical bootstrap 95% confidence intervals (percentile bootstrap).
-3. McNemar's paired test with continuity correction & two-tailed p-values.
+3. McNemar's paired test: the exact two-sided binomial test (pre-registered
+   primary, #1395) alongside the historical continuity-corrected chi-square.
 4. Token expenditure, cache hit ratios, and amortized computational costs.
 
 Comparison Arms (pre-registered matched ablation, plan:109-111):
@@ -163,22 +164,66 @@ def mcnemar_test(arm1_passes: List[bool], arm2_passes: List[bool]) -> Dict[str, 
     }
 
 
-def holm_adjust_p_values(comparisons: Dict[str, Dict[str, Any]]) -> None:
+def mcnemar_exact(arm1_passes: List[bool], arm2_passes: List[bool]) -> Dict[str, Any]:
+    """Exact two-sided McNemar test (binomial sign test, p=0.5).
+
+    The governed campaign pre-registers this exact test (#1395): with few
+    discordant pairs the asymptotic chi-square p-value is not trustworthy.
+    ``mcnemar_test`` above is retained for continuity with earlier reports.
+    """
+    assert len(arm1_passes) == len(arm2_passes), "Arm sample lengths must match"
+    a = b = c = d = 0
+    for p1, p2 in zip(arm1_passes, arm2_passes):
+        if p1 and p2:
+            a += 1
+        elif not p1 and p2:
+            b += 1
+        elif p1 and not p2:
+            c += 1
+        else:
+            d += 1
+
+    discordant = b + c
+    if discordant == 0:
+        p_value = 1.0
+    else:
+        # Two-sided exact p: 2 * P(X <= min(b, c) | n = b + c, p = 0.5),
+        # capped at 1 (the doubled tail can exceed it when b == c).
+        tail = sum(math.comb(discordant, i)
+                   for i in range(min(b, c) + 1)) / (2.0 ** discordant)
+        p_value = min(1.0, 2.0 * tail)
+
+    return {
+        "a": a,
+        "b": b,
+        "c": c,
+        "d": d,
+        "discordant": discordant,
+        "p_value_exact": p_value,
+    }
+
+
+def holm_adjust_p_values(comparisons: Dict[str, Dict[str, Any]],
+                         p_key: str = "p_value",
+                         out_key: str = "p_value_holm",
+                         significance_key: str = "significant") -> None:
     """Adds Holm step-down adjusted p-values to a fixed family of tests.
 
-    Mutates each comparison in place with ``p_value_holm`` (monotone step-down
-    over raw p-values) and flips ``significant`` to judge the adjusted value —
-    the significance column then controls the family-wise error rate, not the
-    per-test rate.
+    Mutates each comparison in place with ``out_key`` (monotone step-down
+    over the chosen raw p-values) and, when ``significance_key`` is not
+    None, judges the adjusted value into that key. The defaults preserve
+    the historical chi-square behavior; the exact-test family passes
+    ``p_key="p_value_exact"`` and its own output/significance keys.
     """
     m = len(comparisons)
-    ordered = sorted(comparisons.items(), key=lambda kv: kv[1]["p_value"])
+    ordered = sorted(comparisons.items(), key=lambda kv: kv[1][p_key])
     running_max = 0.0
     for rank, (_name, res) in enumerate(ordered):
-        adjusted = min(1.0, (m - rank) * res["p_value"])
+        adjusted = min(1.0, (m - rank) * res[p_key])
         running_max = max(running_max, adjusted)  # enforce monotonicity
-        res["p_value_holm"] = round(running_max, 6)
-        res["significant"] = res["p_value_holm"] < 0.05
+        res[out_key] = round(running_max, 6)
+        if significance_key is not None:
+            res[significance_key] = res[out_key] < 0.05
 
 
 def generate_synthetic_benchmark_dataset(n_intents: int = 36) -> Dict[str, Any]:
@@ -378,10 +423,26 @@ def analyze_arms(dataset: Dict[str, Any], bootstrap_rounds: int = 2000) -> Dict[
         "arm_c_vs_arm_a": mcnemar_test(passes_a, passes_c),
     }
 
+    # Exact McNemar is the pre-registered primary (#1395): the discordant
+    # count is small, so the asymptotic approximation is not trustworthy.
+    # Both are reported; only the exact family drives the significance column.
+    exact_passes = {
+        "arm_b_vs_arm_a": (passes_a, passes_b),
+        "arm_c_vs_arm_b": (passes_b, passes_c),
+        "arm_c_vs_arm_a": (passes_a, passes_c),
+    }
+    for name, (first, second) in exact_passes.items():
+        exact = mcnemar_exact(first, second)
+        comparisons[name]["p_value_exact"] = exact["p_value_exact"]
+        comparisons[name]["discordant"] = exact["discordant"]
+
     # Holm step-down correction over the fixed 3-contrast family: three
     # correlated McNemar tests at alpha=0.05 inflate the family-wise error
     # rate up to ~3x without it. Raw p-values are kept alongside.
     holm_adjust_p_values(comparisons)
+    holm_adjust_p_values(comparisons, p_key="p_value_exact",
+                         out_key="p_value_holm_exact",
+                         significance_key="significant_exact")
 
     return {
         "evidence_mode": dataset["evidence_mode"],
@@ -391,7 +452,48 @@ def analyze_arms(dataset: Dict[str, Any], bootstrap_rounds: int = 2000) -> Dict[
         "interpretation": dataset.get("interpretation"),
         "metrics": metrics,
         "comparisons": comparisons,
+        "intent_level_sensitivity": intent_level_sensitivity(dataset),
     }
+
+
+def intent_level_sensitivity(dataset: Dict[str, Any]) -> Dict[str, Any]:
+    """Seed-clustered sensitivity analysis at the intent level.
+
+    The cell-level McNemar treats ``(intent, seed)`` cells as exchangeable,
+    which understates variance when seeds of the same intent are correlated.
+    This collapses each intent to one binary outcome under three fixed rules
+    and repeats the exact test with N = number of intents:
+
+    - ``all``      — passed in every seed (stringent)
+    - ``any``      — passed in at least one seed (lenient)
+    - ``majority`` — passed in more than half of the seeds
+
+    Descriptive sensitivity only; the cell-level exact test remains the
+    pre-registered primary.
+    """
+    grouped: Dict[Tuple[str, str], Dict[str, List[bool]]] = {}
+    for arm in ("arm_a", "arm_b", "arm_c"):
+        for row in dataset[arm]:
+            grouped.setdefault((row["model"], row["intent_id"]), {}) \
+                .setdefault(arm, []).append(bool(row["pass"]))
+
+    rules = {
+        "all": all,
+        "any": any,
+        "majority": lambda outcomes: sum(outcomes) * 2 > len(outcomes),
+    }
+    out: Dict[str, Any] = {}
+    for rule_name, rule in rules.items():
+        arm_passes = {arm: [] for arm in ("arm_a", "arm_b", "arm_c")}
+        for key in sorted(grouped):
+            for arm in arm_passes:
+                arm_passes[arm].append(bool(rule(grouped[key][arm])))
+        out[rule_name] = {
+            "arm_b_vs_arm_a": mcnemar_exact(arm_passes["arm_a"], arm_passes["arm_b"]),
+            "arm_c_vs_arm_b": mcnemar_exact(arm_passes["arm_b"], arm_passes["arm_c"]),
+            "arm_c_vs_arm_a": mcnemar_exact(arm_passes["arm_a"], arm_passes["arm_c"]),
+        }
+    return out
 
 
 def render_markdown_report(report: Dict[str, Any]) -> str:
@@ -444,12 +546,14 @@ def render_markdown_report(report: Dict[str, Any]) -> str:
         "## 2. Paired Hypothesis Testing",
         "",
         "McNemar's test is applied only after exact cell matching across all arms.",
-        "The significance column judges the Holm step-down adjusted p-value over the",
-        "3-contrast family (raw p-values shown alongside) so the family-wise error",
-        "rate stays at alpha=0.05.",
+        "The exact two-sided test is the pre-registered primary (#1395); with few",
+        "discordant pairs the asymptotic chi-square is not trustworthy and is kept",
+        "only for continuity. The significance column judges the Holm step-down",
+        "adjusted EXACT p-value over the 3-contrast family (raw values shown",
+        "alongside) so the family-wise error rate stays at alpha=0.05.",
         "",
-        "| Contrast | Discordant Pairs (b/c) | $\\chi^2$ (df=1) | Two-Tailed $p$-value | Holm $p$-value | Odds Ratio | Significant ($\\alpha=0.05$) |",
-        "| :--- | :---: | :---: | :---: | :---: | :---: | :---: |",
+        "| Contrast | Discordant (b/c) | Exact two-tailed $p$ | Holm exact $p$ | $\\chi^2$ (df=1) | $\\chi^2$ $p$ | Holm $\\chi^2$ $p$ | Significant (exact Holm, $\\alpha=0.05$) |",
+        "| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |",
     ])
 
     for pair, res in c.items():
@@ -458,22 +562,53 @@ def render_markdown_report(report: Dict[str, Any]) -> str:
         holm_str = (
             f"{res['p_value_holm']:.4e}" if res["p_value_holm"] < 0.001 else f"{res['p_value_holm']:.4f}"
         )
-        sig_str = "**YES** (holm p < 0.05)" if res["significant"] else "NO"
-        md.append(
-            f"| **{label}** | {res['b']} / {res['c']} | {res['chi2']} | {p_str} | {holm_str} | {res['odds_ratio']} | {sig_str} |"
+        exact = res["p_value_exact"]
+        exact_str = f"{exact:.4e}" if exact < 0.001 else f"{exact:.4f}"
+        exact_holm = res["p_value_holm_exact"]
+        exact_holm_str = (
+            f"{exact_holm:.4e}" if exact_holm < 0.001 else f"{exact_holm:.4f}"
         )
+        sig_str = "**YES** (exact Holm p < 0.05)" if res["significant_exact"] else "NO"
+        md.append(
+            f"| **{label}** | {res['b']} / {res['c']} | {exact_str} | "
+            f"{exact_holm_str} | {res['chi2']} | {p_str} | {holm_str} | {sig_str} |"
+        )
+
+    sensitivity = report.get("intent_level_sensitivity") or {}
+    if sensitivity:
+        md.extend([
+            "",
+            "## 3. Intent-level sensitivity (seed-clustered)",
+            "",
+            "Descriptive sensitivity only: each intent is collapsed to one binary",
+            "outcome across its seeds and the exact test is repeated with N = number",
+            "of intents. `all` = passed every seed, `any` = passed at least one,",
+            "`majority` = passed more than half. The cell-level exact test above",
+            "remains the pre-registered primary.",
+            "",
+            "| Rule | A vs B (b/c, exact p) | B vs C (b/c, exact p) | A vs C (b/c, exact p) |",
+            "| :--- | :---: | :---: | :---: |",
+        ])
+        for rule_name, comps in sensitivity.items():
+            cells = []
+            for pair in ("arm_b_vs_arm_a", "arm_c_vs_arm_b", "arm_c_vs_arm_a"):
+                res = comps[pair]
+                p = res["p_value_exact"]
+                p_str = f"{p:.4e}" if p < 0.001 else f"{p:.4f}"
+                cells.append(f"{res['b']}/{res['c']}, {p_str}")
+            md.append(f"| {rule_name} | " + " | ".join(cells) + " |")
 
     if synthetic:
         md.extend([
             "",
-            "## 3. Interpretation",
+            "## 4. Interpretation",
             "",
             "- Fixture-only output; no scientific conclusion is supported.",
         ])
     else:
         md.extend([
             "",
-            "## 3. Interpretation",
+            "## 4. Interpretation",
             "",
             "- Results are descriptive for the matched cells listed in the source files.",
             "- Significance does not establish generalization beyond the sampled intents, models, seeds, and execution environment.",

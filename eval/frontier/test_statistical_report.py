@@ -12,7 +12,9 @@ from statistical_report import (
     erfc_approx,
     generate_synthetic_benchmark_dataset,
     holm_adjust_p_values,
+    intent_level_sensitivity,
     load_benchmark_results,
+    mcnemar_exact,
     mcnemar_test,
     pass_at_k,
     render_markdown_report,
@@ -286,6 +288,68 @@ class ArmFeedbackToggleTests(unittest.TestCase):
         self.assertNotIn("--ai-contract-feedback", shared)
         # The flag appears exactly once, inside the full-contract branch.
         self.assertEqual(source.count('"--ai-contract-feedback"'), 1)
+
+
+class ExactMcNemarTests(unittest.TestCase):
+    """Known-value oracles for the exact (binomial) McNemar test (#1395)."""
+
+    def _paired(self, first_only, second_only):
+        # b = first_only/second pass? Build (arm1, arm2) pairs:
+        # first_only pairs are (True, False) -> c; second_only are (False, True) -> b.
+        arm1 = [True] * first_only + [False] * second_only
+        arm2 = [False] * first_only + [True] * second_only
+        return arm1, arm2
+
+    def test_known_two_sided_exact_values(self):
+        # Prior non-governed run: B vs C had 12 vs 2 discordant pairs.
+        res = mcnemar_exact(*self._paired(first_only=12, second_only=2))
+        self.assertEqual((res["b"], res["c"], res["discordant"]), (2, 12, 14))
+        self.assertAlmostEqual(res["p_value_exact"], 0.012939, places=6)
+
+        # 1 vs 9: 2*(C(10,0)+C(10,1))/2^10 = 22/1024.
+        res = mcnemar_exact(*self._paired(first_only=1, second_only=9))
+        self.assertAlmostEqual(res["p_value_exact"], 22 / 1024, places=12)
+
+        # 0 vs 28: 2/2^28.
+        res = mcnemar_exact(*self._paired(first_only=0, second_only=28))
+        self.assertAlmostEqual(res["p_value_exact"], 2 / (2 ** 28), places=15)
+
+    def test_symmetric_and_degenerate_cases(self):
+        # Equal discordant counts cannot reject.
+        res = mcnemar_exact(*self._paired(first_only=3, second_only=3))
+        self.assertEqual(res["p_value_exact"], 1.0)
+        # No discordant pairs -> p = 1.
+        res = mcnemar_exact([True, False], [True, False])
+        self.assertEqual(res["p_value_exact"], 1.0)
+
+    def test_analyze_arms_reports_exact_and_holm_family(self):
+        report = analyze_arms(generate_synthetic_benchmark_dataset(6))
+        for comparison in report["comparisons"].values():
+            self.assertIn("p_value_exact", comparison)
+            self.assertIn("p_value_holm_exact", comparison)
+            self.assertIsInstance(comparison["significant_exact"], bool)
+            self.assertGreaterEqual(comparison["p_value_holm_exact"],
+                                    comparison["p_value_exact"])
+        self.assertEqual(set(report["intent_level_sensitivity"]),
+                         {"all", "any", "majority"})
+
+    def test_intent_level_sensitivity_collapses_seeds(self):
+        dataset = {"evidence_mode": "measured_results", "inferential": True,
+                   "source_files": [], "arm_a": [], "arm_b": [], "arm_c": []}
+        # Two intents x two seeds: B always passes, C always fails, A always fails.
+        for intent in ("i1", "i2"):
+            for seed in (1, 2):
+                for arm, passed in (("arm_a", False), ("arm_b", True), ("arm_c", False)):
+                    dataset[arm].append({
+                        "model": "m", "intent_id": intent, "seed": seed, "pass": passed,
+                    })
+        sensitivity = intent_level_sensitivity(dataset)
+        for rule in ("all", "any", "majority"):
+            comparison = sensitivity[rule]["arm_c_vs_arm_b"]
+            # b = B-fail/C-pass, c = B-pass/C-fail: B always passes, C never does.
+            self.assertEqual((comparison["b"], comparison["c"]), (0, 2))
+            # N reduces to the number of intents (2): p = 2*(1/4) = 0.5.
+            self.assertAlmostEqual(comparison["p_value_exact"], 0.5, places=12)
 
 
 if __name__ == "__main__":
