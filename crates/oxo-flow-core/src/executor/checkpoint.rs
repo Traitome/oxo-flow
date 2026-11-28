@@ -1714,9 +1714,10 @@ impl CheckpointState {
                         self.resource_usage.insert(
                             record.rule.clone(),
                             ResourceUsage::source_only(ResourceSource::unknown(
-                                "the latest attempt ended without a resource measurement (no \
-                                 sampler or accounting store observed it, or it never spawned); \
-                                 measurements from an earlier attempt are not this attempt's",
+                                "the latest terminal record carried no resource measurement (the \
+                                 attempt never spawned, the collector's values were not attached, \
+                                 or none observed it); measurements from an earlier attempt are \
+                                 not this attempt's",
                             )),
                         );
                     }

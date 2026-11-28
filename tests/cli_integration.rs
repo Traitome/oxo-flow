@@ -11052,9 +11052,6 @@ fn cli_report_acct_without_jobid_column() {
     );
 }
 
-/// When a JobName repeats, the batch row (JobID without a `.`/`_` step
-/// separator) wins even if the step row appears first in the file; array-task
-/// IDs like `12345_0` count as step rows.
 /// Issue #1445 L1: array elements and the allocation row of one submission
 /// merge into a single record — elapsed/state from the allocation row, and
 /// `CPUTime`/`MaxRSS` as the MAX over every row (the step/array values
