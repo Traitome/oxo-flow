@@ -110,7 +110,7 @@ gate-passing workflow that uses the correct Bismark/Bowtie2 backend.
 | Harness commit | `c12557dc4c0b8c665a4c76330fb0b0e0318a69f3` (original pre-rebase `f4b6c9793bf2f7c5932facef549efef2997baab6`) |
 | Intent fixture | `eval/frontier/intents.json`, SHA-256 `76136532e308464bed29827e001b6d894840c5d2e7bdd8925f24361bde75bd51` |
 | Binary | `target/debug/oxo-flow` (built from base `e7170492`), SHA-256 `989740b6362e41e1c6aeb5925d555c0be69a9e52b335f982039fd13214c76b8e` |
-| Provider | operator `~/.oxo-flow/ai_config.json`: `provider = openai`, OpenAI-compatible endpoint (host/URL/key not committed) |
+| Provider | operator `~/.oxo-flow/ai_config.json`: `provider = openai`, OpenAI-compatible proxy endpoint (host/URL/key not committed) |
 | Model | alias `DeepSeek`; endpoint-reported `model: "DeepSeek"` (backend version opaque) |
 | Arms | A `unconstrained`, B `syntax-only`, C `full-contract` |
 | Arm C toggle | `--ai-contract-feedback` (argv recorded per run) |
