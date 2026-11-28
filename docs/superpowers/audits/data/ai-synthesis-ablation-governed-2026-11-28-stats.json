@@ -1,0 +1,201 @@
+{
+  "evidence_mode": "measured_results",
+  "inferential": true,
+  "source_files": [
+    "eval/frontier/results/governed-2026-11-28/results.json"
+  ],
+  "paired_cells": 108,
+  "interpretation": null,
+  "metrics": {
+    "arm_a": {
+      "name": "Arm A (Unconstrained Baseline)",
+      "total_samples": 108,
+      "pass_count": 0,
+      "pass_rate": 0.0,
+      "pass_at_1": 0.0,
+      "pass_rate_95_ci": [
+        0.0,
+        0.0
+      ],
+      "mean_tokens": 3506.6,
+      "tokens_95_ci": [
+        3003.1,
+        4003.9
+      ],
+      "mean_cost_usd": 0.00368,
+      "cost_95_ci": [
+        0.00313,
+        0.00422
+      ]
+    },
+    "arm_b": {
+      "name": "Arm B (Syntax + Structural Feedback Only)",
+      "total_samples": 108,
+      "pass_count": 92,
+      "pass_rate": 0.8519,
+      "pass_at_1": 0.8519,
+      "pass_rate_95_ci": [
+        0.787,
+        0.9167
+      ],
+      "mean_tokens": 69169.7,
+      "tokens_95_ci": [
+        62039.2,
+        76980.2
+      ],
+      "mean_cost_usd": 0.02934,
+      "cost_95_ci": [
+        0.02602,
+        0.03292
+      ]
+    },
+    "arm_c": {
+      "name": "Arm C (BioTypes + Scientific Preflight + Deep-Check)",
+      "total_samples": 108,
+      "pass_count": 49,
+      "pass_rate": 0.4537,
+      "pass_at_1": 0.4537,
+      "pass_rate_95_ci": [
+        0.3611,
+        0.5463
+      ],
+      "mean_tokens": 60127.1,
+      "tokens_95_ci": [
+        44765.3,
+        75025.3
+      ],
+      "mean_cost_usd": 0.0258,
+      "cost_95_ci": [
+        0.01919,
+        0.03237
+      ]
+    }
+  },
+  "comparisons": {
+    "arm_b_vs_arm_a": {
+      "a": 0,
+      "b": 92,
+      "c": 0,
+      "d": 16,
+      "chi2": 90.0109,
+      "p_value": 2.40906342408448e-21,
+      "odds_ratio": "inf",
+      "significant": true,
+      "p_value_exact": 4.0389678347315804e-28,
+      "discordant": 92,
+      "p_value_holm": 0.0,
+      "p_value_holm_exact": 0.0,
+      "significant_exact": true
+    },
+    "arm_c_vs_arm_b": {
+      "a": 47,
+      "b": 2,
+      "c": 45,
+      "d": 14,
+      "chi2": 37.5319,
+      "p_value": 9.028019453459348e-10,
+      "odds_ratio": 0.044,
+      "significant": true,
+      "p_value_exact": 1.6044054973463062e-11,
+      "discordant": 47,
+      "p_value_holm": 0.0,
+      "p_value_holm_exact": 0.0,
+      "significant_exact": true
+    },
+    "arm_c_vs_arm_a": {
+      "a": 0,
+      "b": 49,
+      "c": 0,
+      "d": 59,
+      "chi2": 47.0204,
+      "p_value": 7.067472170142582e-12,
+      "odds_ratio": "inf",
+      "significant": true,
+      "p_value_exact": 3.552713678800501e-15,
+      "discordant": 49,
+      "p_value_holm": 0.0,
+      "p_value_holm_exact": 0.0,
+      "significant_exact": true
+    }
+  },
+  "intent_level_sensitivity": {
+    "all": {
+      "arm_b_vs_arm_a": {
+        "a": 0,
+        "b": 26,
+        "c": 0,
+        "d": 10,
+        "discordant": 26,
+        "p_value_exact": 2.9802322387695312e-08
+      },
+      "arm_c_vs_arm_b": {
+        "a": 14,
+        "b": 2,
+        "c": 12,
+        "d": 8,
+        "discordant": 14,
+        "p_value_exact": 0.012939453125
+      },
+      "arm_c_vs_arm_a": {
+        "a": 0,
+        "b": 16,
+        "c": 0,
+        "d": 20,
+        "discordant": 16,
+        "p_value_exact": 3.0517578125e-05
+      }
+    },
+    "any": {
+      "arm_b_vs_arm_a": {
+        "a": 0,
+        "b": 34,
+        "c": 0,
+        "d": 2,
+        "discordant": 34,
+        "p_value_exact": 1.1641532182693481e-10
+      },
+      "arm_c_vs_arm_b": {
+        "a": 17,
+        "b": 0,
+        "c": 17,
+        "d": 2,
+        "discordant": 17,
+        "p_value_exact": 1.52587890625e-05
+      },
+      "arm_c_vs_arm_a": {
+        "a": 0,
+        "b": 17,
+        "c": 0,
+        "d": 19,
+        "discordant": 17,
+        "p_value_exact": 1.52587890625e-05
+      }
+    },
+    "majority": {
+      "arm_b_vs_arm_a": {
+        "a": 0,
+        "b": 32,
+        "c": 0,
+        "d": 4,
+        "discordant": 32,
+        "p_value_exact": 4.656612873077393e-10
+      },
+      "arm_c_vs_arm_b": {
+        "a": 16,
+        "b": 0,
+        "c": 16,
+        "d": 4,
+        "discordant": 16,
+        "p_value_exact": 3.0517578125e-05
+      },
+      "arm_c_vs_arm_a": {
+        "a": 0,
+        "b": 16,
+        "c": 0,
+        "d": 20,
+        "discordant": 16,
+        "p_value_exact": 3.0517578125e-05
+      }
+    }
+  }
+}

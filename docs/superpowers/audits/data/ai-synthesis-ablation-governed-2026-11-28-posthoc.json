@@ -1,0 +1,1060 @@
+{
+  "campaign": "20261128-004949",
+  "subsets": {
+    "all36": {
+      "comparisons": {
+        "arm_b_vs_arm_a": {
+          "a": 0,
+          "b": 92,
+          "c": 0,
+          "chi2": 90.0109,
+          "d": 16,
+          "discordant": 92,
+          "odds_ratio": "inf",
+          "p_value": 2.40906342408448e-21,
+          "p_value_exact": 4.0389678347315804e-28,
+          "p_value_holm": 0.0,
+          "p_value_holm_exact": 0.0,
+          "significant": true,
+          "significant_exact": true
+        },
+        "arm_c_vs_arm_a": {
+          "a": 0,
+          "b": 49,
+          "c": 0,
+          "chi2": 47.0204,
+          "d": 59,
+          "discordant": 49,
+          "odds_ratio": "inf",
+          "p_value": 7.067472170142582e-12,
+          "p_value_exact": 3.552713678800501e-15,
+          "p_value_holm": 0.0,
+          "p_value_holm_exact": 0.0,
+          "significant": true,
+          "significant_exact": true
+        },
+        "arm_c_vs_arm_b": {
+          "a": 47,
+          "b": 2,
+          "c": 45,
+          "chi2": 37.5319,
+          "d": 14,
+          "discordant": 47,
+          "odds_ratio": 0.044,
+          "p_value": 9.028019453459348e-10,
+          "p_value_exact": 1.6044054973463062e-11,
+          "p_value_holm": 0.0,
+          "p_value_holm_exact": 0.0,
+          "significant": true,
+          "significant_exact": true
+        }
+      },
+      "intent_level_sensitivity": {
+        "all": {
+          "arm_b_vs_arm_a": {
+            "a": 0,
+            "b": 26,
+            "c": 0,
+            "d": 10,
+            "discordant": 26,
+            "p_value_exact": 2.9802322387695312e-08
+          },
+          "arm_c_vs_arm_a": {
+            "a": 0,
+            "b": 16,
+            "c": 0,
+            "d": 20,
+            "discordant": 16,
+            "p_value_exact": 3.0517578125e-05
+          },
+          "arm_c_vs_arm_b": {
+            "a": 14,
+            "b": 2,
+            "c": 12,
+            "d": 8,
+            "discordant": 14,
+            "p_value_exact": 0.012939453125
+          }
+        },
+        "any": {
+          "arm_b_vs_arm_a": {
+            "a": 0,
+            "b": 34,
+            "c": 0,
+            "d": 2,
+            "discordant": 34,
+            "p_value_exact": 1.1641532182693481e-10
+          },
+          "arm_c_vs_arm_a": {
+            "a": 0,
+            "b": 17,
+            "c": 0,
+            "d": 19,
+            "discordant": 17,
+            "p_value_exact": 1.52587890625e-05
+          },
+          "arm_c_vs_arm_b": {
+            "a": 17,
+            "b": 0,
+            "c": 17,
+            "d": 2,
+            "discordant": 17,
+            "p_value_exact": 1.52587890625e-05
+          }
+        },
+        "majority": {
+          "arm_b_vs_arm_a": {
+            "a": 0,
+            "b": 32,
+            "c": 0,
+            "d": 4,
+            "discordant": 32,
+            "p_value_exact": 4.656612873077393e-10
+          },
+          "arm_c_vs_arm_a": {
+            "a": 0,
+            "b": 16,
+            "c": 0,
+            "d": 20,
+            "discordant": 16,
+            "p_value_exact": 3.0517578125e-05
+          },
+          "arm_c_vs_arm_b": {
+            "a": 16,
+            "b": 0,
+            "c": 16,
+            "d": 4,
+            "discordant": 16,
+            "p_value_exact": 3.0517578125e-05
+          }
+        }
+      },
+      "intents": [
+        "amplicon-dada2",
+        "assembly-flye-polish",
+        "assembly-spades",
+        "atacseq",
+        "chipseq-broad",
+        "chipseq-macs2",
+        "cnv-cnvkit",
+        "cutandtag-epigenomics",
+        "gatk-cohort-joint-genotyping",
+        "germline-gatk",
+        "germline-variant",
+        "hic-cooler",
+        "longread-structural-variants",
+        "metag-assembly",
+        "metagenome-humann-pathways",
+        "metagenomics-kraken2",
+        "qc-fastp-multiqc",
+        "qc-fastq-screen",
+        "qc-fastqc",
+        "qc-nanoq",
+        "qc-vague",
+        "rnaseq-de-deseq2",
+        "rnaseq-hisat2",
+        "rnaseq-salmon",
+        "rnaseq-star",
+        "rnaseq-star-salmon-quant",
+        "rnaseq-vague",
+        "scrna-starsolo",
+        "single-cell-multiome",
+        "somatic-mutect2",
+        "somatic-tumor-normal",
+        "spatial-visium",
+        "trim-cutadapt",
+        "variant-annotate",
+        "variant-vague",
+        "wgbs-bismark"
+      ],
+      "metrics": {
+        "arm_a": {
+          "cost_95_ci": [
+            0.00313,
+            0.00422
+          ],
+          "mean_cost_usd": 0.00368,
+          "mean_tokens": 3506.6,
+          "name": "Arm A (Unconstrained Baseline)",
+          "pass_at_1": 0.0,
+          "pass_count": 0,
+          "pass_rate": 0.0,
+          "pass_rate_95_ci": [
+            0.0,
+            0.0
+          ],
+          "tokens_95_ci": [
+            3003.1,
+            4003.9
+          ],
+          "total_samples": 108
+        },
+        "arm_b": {
+          "cost_95_ci": [
+            0.02602,
+            0.03292
+          ],
+          "mean_cost_usd": 0.02934,
+          "mean_tokens": 69169.7,
+          "name": "Arm B (Syntax + Structural Feedback Only)",
+          "pass_at_1": 0.8519,
+          "pass_count": 92,
+          "pass_rate": 0.8519,
+          "pass_rate_95_ci": [
+            0.787,
+            0.9167
+          ],
+          "tokens_95_ci": [
+            62039.2,
+            76980.2
+          ],
+          "total_samples": 108
+        },
+        "arm_c": {
+          "cost_95_ci": [
+            0.01919,
+            0.03237
+          ],
+          "mean_cost_usd": 0.0258,
+          "mean_tokens": 60127.1,
+          "name": "Arm C (BioTypes + Scientific Preflight + Deep-Check)",
+          "pass_at_1": 0.4537,
+          "pass_count": 49,
+          "pass_rate": 0.4537,
+          "pass_rate_95_ci": [
+            0.3611,
+            0.5463
+          ],
+          "tokens_95_ci": [
+            44765.3,
+            75025.3
+          ],
+          "total_samples": 108
+        }
+      },
+      "n_cells_per_arm": 108,
+      "n_intents": 36,
+      "tiers": {
+        "full-contract": {
+          "easy": {
+            "n": 15,
+            "pass": 12
+          },
+          "hard": {
+            "n": 51,
+            "pass": 18
+          },
+          "medium": {
+            "n": 42,
+            "pass": 19
+          }
+        },
+        "syntax-only": {
+          "easy": {
+            "n": 15,
+            "pass": 13
+          },
+          "hard": {
+            "n": 51,
+            "pass": 41
+          },
+          "medium": {
+            "n": 42,
+            "pass": 38
+          }
+        },
+        "unconstrained": {
+          "easy": {
+            "n": 15,
+            "pass": 0
+          },
+          "hard": {
+            "n": 51,
+            "pass": 0
+          },
+          "medium": {
+            "n": 42,
+            "pass": 0
+          }
+        }
+      }
+    },
+    "sound15": {
+      "comparisons": {
+        "arm_b_vs_arm_a": {
+          "a": 0,
+          "b": 36,
+          "c": 0,
+          "chi2": 34.0278,
+          "d": 9,
+          "discordant": 36,
+          "odds_ratio": "inf",
+          "p_value": 5.450389669136861e-09,
+          "p_value_exact": 2.9103830456733704e-11,
+          "p_value_holm": 0.0,
+          "p_value_holm_exact": 0.0,
+          "significant": true,
+          "significant_exact": true
+        },
+        "arm_c_vs_arm_a": {
+          "a": 0,
+          "b": 25,
+          "c": 0,
+          "chi2": 23.04,
+          "d": 20,
+          "discordant": 25,
+          "odds_ratio": "inf",
+          "p_value": 1.5887054128727614e-06,
+          "p_value_exact": 5.960464477539063e-08,
+          "p_value_holm": 3e-06,
+          "p_value_holm_exact": 0.0,
+          "significant": true,
+          "significant_exact": true
+        },
+        "arm_c_vs_arm_b": {
+          "a": 24,
+          "b": 1,
+          "c": 12,
+          "chi2": 7.6923,
+          "d": 8,
+          "discordant": 13,
+          "odds_ratio": 0.083,
+          "p_value": 0.005545783201646307,
+          "p_value_exact": 0.00341796875,
+          "p_value_holm": 0.005546,
+          "p_value_holm_exact": 0.003418,
+          "significant": true,
+          "significant_exact": true
+        }
+      },
+      "intent_level_sensitivity": {
+        "all": {
+          "arm_b_vs_arm_a": {
+            "a": 0,
+            "b": 11,
+            "c": 0,
+            "d": 4,
+            "discordant": 11,
+            "p_value_exact": 0.0009765625
+          },
+          "arm_c_vs_arm_a": {
+            "a": 0,
+            "b": 8,
+            "c": 0,
+            "d": 7,
+            "discordant": 8,
+            "p_value_exact": 0.0078125
+          },
+          "arm_c_vs_arm_b": {
+            "a": 7,
+            "b": 1,
+            "c": 4,
+            "d": 3,
+            "discordant": 5,
+            "p_value_exact": 0.375
+          }
+        },
+        "any": {
+          "arm_b_vs_arm_a": {
+            "a": 0,
+            "b": 13,
+            "c": 0,
+            "d": 2,
+            "discordant": 13,
+            "p_value_exact": 0.000244140625
+          },
+          "arm_c_vs_arm_a": {
+            "a": 0,
+            "b": 9,
+            "c": 0,
+            "d": 6,
+            "discordant": 9,
+            "p_value_exact": 0.00390625
+          },
+          "arm_c_vs_arm_b": {
+            "a": 9,
+            "b": 0,
+            "c": 4,
+            "d": 2,
+            "discordant": 4,
+            "p_value_exact": 0.125
+          }
+        },
+        "majority": {
+          "arm_b_vs_arm_a": {
+            "a": 0,
+            "b": 12,
+            "c": 0,
+            "d": 3,
+            "discordant": 12,
+            "p_value_exact": 0.00048828125
+          },
+          "arm_c_vs_arm_a": {
+            "a": 0,
+            "b": 8,
+            "c": 0,
+            "d": 7,
+            "discordant": 8,
+            "p_value_exact": 0.0078125
+          },
+          "arm_c_vs_arm_b": {
+            "a": 8,
+            "b": 0,
+            "c": 4,
+            "d": 3,
+            "discordant": 4,
+            "p_value_exact": 0.125
+          }
+        }
+      },
+      "intents": [
+        "assembly-flye-polish",
+        "assembly-spades",
+        "atacseq",
+        "chipseq-macs2",
+        "germline-variant",
+        "metagenomics-kraken2",
+        "qc-fastp-multiqc",
+        "qc-fastqc",
+        "qc-nanoq",
+        "rnaseq-hisat2",
+        "rnaseq-salmon",
+        "rnaseq-star",
+        "single-cell-multiome",
+        "somatic-mutect2",
+        "spatial-visium"
+      ],
+      "metrics": {
+        "arm_a": {
+          "cost_95_ci": [
+            0.00282,
+            0.00449
+          ],
+          "mean_cost_usd": 0.00364,
+          "mean_tokens": 3460.3,
+          "name": "Arm A (Unconstrained Baseline)",
+          "pass_at_1": 0.0,
+          "pass_count": 0,
+          "pass_rate": 0.0,
+          "pass_rate_95_ci": [
+            0.0,
+            0.0
+          ],
+          "tokens_95_ci": [
+            2688.8,
+            4231.3
+          ],
+          "total_samples": 45
+        },
+        "arm_b": {
+          "cost_95_ci": [
+            0.02168,
+            0.03119
+          ],
+          "mean_cost_usd": 0.02612,
+          "mean_tokens": 65171.8,
+          "name": "Arm B (Syntax + Structural Feedback Only)",
+          "pass_at_1": 0.8,
+          "pass_count": 36,
+          "pass_rate": 0.8,
+          "pass_rate_95_ci": [
+            0.6667,
+            0.9111
+          ],
+          "tokens_95_ci": [
+            55016.1,
+            76776.4
+          ],
+          "total_samples": 45
+        },
+        "arm_c": {
+          "cost_95_ci": [
+            0.01508,
+            0.03074
+          ],
+          "mean_cost_usd": 0.02296,
+          "mean_tokens": 55592.1,
+          "name": "Arm C (BioTypes + Scientific Preflight + Deep-Check)",
+          "pass_at_1": 0.5556,
+          "pass_count": 25,
+          "pass_rate": 0.5556,
+          "pass_rate_95_ci": [
+            0.4,
+            0.6889
+          ],
+          "tokens_95_ci": [
+            36489.4,
+            74414.6
+          ],
+          "total_samples": 45
+        }
+      },
+      "n_cells_per_arm": 45,
+      "n_intents": 15,
+      "tiers": {
+        "full-contract": {
+          "easy": {
+            "n": 9,
+            "pass": 9
+          },
+          "hard": {
+            "n": 18,
+            "pass": 3
+          },
+          "medium": {
+            "n": 18,
+            "pass": 13
+          }
+        },
+        "syntax-only": {
+          "easy": {
+            "n": 9,
+            "pass": 9
+          },
+          "hard": {
+            "n": 18,
+            "pass": 10
+          },
+          "medium": {
+            "n": 18,
+            "pass": 17
+          }
+        },
+        "unconstrained": {
+          "easy": {
+            "n": 9,
+            "pass": 0
+          },
+          "hard": {
+            "n": 18,
+            "pass": 0
+          },
+          "medium": {
+            "n": 18,
+            "pass": 0
+          }
+        }
+      }
+    },
+    "specified33": {
+      "comparisons": {
+        "arm_b_vs_arm_a": {
+          "a": 0,
+          "b": 86,
+          "c": 0,
+          "chi2": 84.0116,
+          "d": 13,
+          "discordant": 86,
+          "odds_ratio": "inf",
+          "p_value": 4.9950282199135704e-20,
+          "p_value_exact": 2.5849394142282115e-26,
+          "p_value_holm": 0.0,
+          "p_value_holm_exact": 0.0,
+          "significant": true,
+          "significant_exact": true
+        },
+        "arm_c_vs_arm_a": {
+          "a": 0,
+          "b": 49,
+          "c": 0,
+          "chi2": 47.0204,
+          "d": 50,
+          "discordant": 49,
+          "odds_ratio": "inf",
+          "p_value": 7.067472170142582e-12,
+          "p_value_exact": 3.552713678800501e-15,
+          "p_value_holm": 0.0,
+          "p_value_holm_exact": 0.0,
+          "significant": true,
+          "significant_exact": true
+        },
+        "arm_c_vs_arm_b": {
+          "a": 47,
+          "b": 2,
+          "c": 39,
+          "chi2": 31.6098,
+          "d": 11,
+          "discordant": 41,
+          "odds_ratio": 0.051,
+          "p_value": 1.8899256585069448e-08,
+          "p_value_exact": 7.839844329282641e-10,
+          "p_value_holm": 0.0,
+          "p_value_holm_exact": 0.0,
+          "significant": true,
+          "significant_exact": true
+        }
+      },
+      "intent_level_sensitivity": {
+        "all": {
+          "arm_b_vs_arm_a": {
+            "a": 0,
+            "b": 25,
+            "c": 0,
+            "d": 8,
+            "discordant": 25,
+            "p_value_exact": 5.960464477539063e-08
+          },
+          "arm_c_vs_arm_a": {
+            "a": 0,
+            "b": 16,
+            "c": 0,
+            "d": 17,
+            "discordant": 16,
+            "p_value_exact": 3.0517578125e-05
+          },
+          "arm_c_vs_arm_b": {
+            "a": 14,
+            "b": 2,
+            "c": 11,
+            "d": 6,
+            "discordant": 13,
+            "p_value_exact": 0.0224609375
+          }
+        },
+        "any": {
+          "arm_b_vs_arm_a": {
+            "a": 0,
+            "b": 31,
+            "c": 0,
+            "d": 2,
+            "discordant": 31,
+            "p_value_exact": 9.313225746154785e-10
+          },
+          "arm_c_vs_arm_a": {
+            "a": 0,
+            "b": 17,
+            "c": 0,
+            "d": 16,
+            "discordant": 17,
+            "p_value_exact": 1.52587890625e-05
+          },
+          "arm_c_vs_arm_b": {
+            "a": 17,
+            "b": 0,
+            "c": 14,
+            "d": 2,
+            "discordant": 14,
+            "p_value_exact": 0.0001220703125
+          }
+        },
+        "majority": {
+          "arm_b_vs_arm_a": {
+            "a": 0,
+            "b": 30,
+            "c": 0,
+            "d": 3,
+            "discordant": 30,
+            "p_value_exact": 1.862645149230957e-09
+          },
+          "arm_c_vs_arm_a": {
+            "a": 0,
+            "b": 16,
+            "c": 0,
+            "d": 17,
+            "discordant": 16,
+            "p_value_exact": 3.0517578125e-05
+          },
+          "arm_c_vs_arm_b": {
+            "a": 16,
+            "b": 0,
+            "c": 14,
+            "d": 3,
+            "discordant": 14,
+            "p_value_exact": 0.0001220703125
+          }
+        }
+      },
+      "intents": [
+        "amplicon-dada2",
+        "assembly-flye-polish",
+        "assembly-spades",
+        "atacseq",
+        "chipseq-broad",
+        "chipseq-macs2",
+        "cnv-cnvkit",
+        "cutandtag-epigenomics",
+        "gatk-cohort-joint-genotyping",
+        "germline-gatk",
+        "germline-variant",
+        "hic-cooler",
+        "longread-structural-variants",
+        "metag-assembly",
+        "metagenome-humann-pathways",
+        "metagenomics-kraken2",
+        "qc-fastp-multiqc",
+        "qc-fastq-screen",
+        "qc-fastqc",
+        "qc-nanoq",
+        "rnaseq-de-deseq2",
+        "rnaseq-hisat2",
+        "rnaseq-salmon",
+        "rnaseq-star",
+        "rnaseq-star-salmon-quant",
+        "scrna-starsolo",
+        "single-cell-multiome",
+        "somatic-mutect2",
+        "somatic-tumor-normal",
+        "spatial-visium",
+        "trim-cutadapt",
+        "variant-annotate",
+        "wgbs-bismark"
+      ],
+      "metrics": {
+        "arm_a": {
+          "cost_95_ci": [
+            0.00321,
+            0.00438
+          ],
+          "mean_cost_usd": 0.00379,
+          "mean_tokens": 3606.4,
+          "name": "Arm A (Unconstrained Baseline)",
+          "pass_at_1": 0.0,
+          "pass_count": 0,
+          "pass_rate": 0.0,
+          "pass_rate_95_ci": [
+            0.0,
+            0.0
+          ],
+          "tokens_95_ci": [
+            3073.1,
+            4143.4
+          ],
+          "total_samples": 99
+        },
+        "arm_b": {
+          "cost_95_ci": [
+            0.02707,
+            0.03393
+          ],
+          "mean_cost_usd": 0.03037,
+          "mean_tokens": 71610.5,
+          "name": "Arm B (Syntax + Structural Feedback Only)",
+          "pass_at_1": 0.8687,
+          "pass_count": 86,
+          "pass_rate": 0.8687,
+          "pass_rate_95_ci": [
+            0.798,
+            0.9293
+          ],
+          "tokens_95_ci": [
+            64348.2,
+            79185.3
+          ],
+          "total_samples": 99
+        },
+        "arm_c": {
+          "cost_95_ci": [
+            0.02078,
+            0.03529
+          ],
+          "mean_cost_usd": 0.02815,
+          "mean_tokens": 65593.2,
+          "name": "Arm C (BioTypes + Scientific Preflight + Deep-Check)",
+          "pass_at_1": 0.4949,
+          "pass_count": 49,
+          "pass_rate": 0.4949,
+          "pass_rate_95_ci": [
+            0.3939,
+            0.5859
+          ],
+          "tokens_95_ci": [
+            49185.7,
+            81750.8
+          ],
+          "total_samples": 99
+        }
+      },
+      "n_cells_per_arm": 99,
+      "n_intents": 33,
+      "tiers": {
+        "full-contract": {
+          "easy": {
+            "n": 12,
+            "pass": 12
+          },
+          "hard": {
+            "n": 51,
+            "pass": 18
+          },
+          "medium": {
+            "n": 36,
+            "pass": 19
+          }
+        },
+        "syntax-only": {
+          "easy": {
+            "n": 12,
+            "pass": 12
+          },
+          "hard": {
+            "n": 51,
+            "pass": 41
+          },
+          "medium": {
+            "n": 36,
+            "pass": 33
+          }
+        },
+        "unconstrained": {
+          "easy": {
+            "n": 12,
+            "pass": 0
+          },
+          "hard": {
+            "n": 51,
+            "pass": 0
+          },
+          "medium": {
+            "n": 36,
+            "pass": 0
+          }
+        }
+      }
+    },
+    "vague3": {
+      "comparisons": {
+        "arm_b_vs_arm_a": {
+          "a": 0,
+          "b": 6,
+          "c": 0,
+          "chi2": 4.1667,
+          "d": 3,
+          "discordant": 6,
+          "odds_ratio": "inf",
+          "p_value": 0.04122669847007823,
+          "p_value_exact": 0.03125,
+          "p_value_holm": 0.12368,
+          "p_value_holm_exact": 0.09375,
+          "significant": false,
+          "significant_exact": false
+        },
+        "arm_c_vs_arm_a": {
+          "a": 0,
+          "b": 0,
+          "c": 0,
+          "chi2": 0.0,
+          "d": 9,
+          "discordant": 0,
+          "odds_ratio": 1.0,
+          "p_value": 1.0,
+          "p_value_exact": 1.0,
+          "p_value_holm": 1.0,
+          "p_value_holm_exact": 1.0,
+          "significant": false,
+          "significant_exact": false
+        },
+        "arm_c_vs_arm_b": {
+          "a": 0,
+          "b": 0,
+          "c": 6,
+          "chi2": 4.1667,
+          "d": 3,
+          "discordant": 6,
+          "odds_ratio": 0.0,
+          "p_value": 0.04122669847007823,
+          "p_value_exact": 0.03125,
+          "p_value_holm": 0.12368,
+          "p_value_holm_exact": 0.09375,
+          "significant": false,
+          "significant_exact": false
+        }
+      },
+      "intent_level_sensitivity": {
+        "all": {
+          "arm_b_vs_arm_a": {
+            "a": 0,
+            "b": 1,
+            "c": 0,
+            "d": 2,
+            "discordant": 1,
+            "p_value_exact": 1.0
+          },
+          "arm_c_vs_arm_a": {
+            "a": 0,
+            "b": 0,
+            "c": 0,
+            "d": 3,
+            "discordant": 0,
+            "p_value_exact": 1.0
+          },
+          "arm_c_vs_arm_b": {
+            "a": 0,
+            "b": 0,
+            "c": 1,
+            "d": 2,
+            "discordant": 1,
+            "p_value_exact": 1.0
+          }
+        },
+        "any": {
+          "arm_b_vs_arm_a": {
+            "a": 0,
+            "b": 3,
+            "c": 0,
+            "d": 0,
+            "discordant": 3,
+            "p_value_exact": 0.25
+          },
+          "arm_c_vs_arm_a": {
+            "a": 0,
+            "b": 0,
+            "c": 0,
+            "d": 3,
+            "discordant": 0,
+            "p_value_exact": 1.0
+          },
+          "arm_c_vs_arm_b": {
+            "a": 0,
+            "b": 0,
+            "c": 3,
+            "d": 0,
+            "discordant": 3,
+            "p_value_exact": 0.25
+          }
+        },
+        "majority": {
+          "arm_b_vs_arm_a": {
+            "a": 0,
+            "b": 2,
+            "c": 0,
+            "d": 1,
+            "discordant": 2,
+            "p_value_exact": 0.5
+          },
+          "arm_c_vs_arm_a": {
+            "a": 0,
+            "b": 0,
+            "c": 0,
+            "d": 3,
+            "discordant": 0,
+            "p_value_exact": 1.0
+          },
+          "arm_c_vs_arm_b": {
+            "a": 0,
+            "b": 0,
+            "c": 2,
+            "d": 1,
+            "discordant": 2,
+            "p_value_exact": 0.5
+          }
+        }
+      },
+      "intents": [
+        "qc-vague",
+        "rnaseq-vague",
+        "variant-vague"
+      ],
+      "metrics": {
+        "arm_a": {
+          "cost_95_ci": [
+            0.00211,
+            0.00276
+          ],
+          "mean_cost_usd": 0.00248,
+          "mean_tokens": 2409.0,
+          "name": "Arm A (Unconstrained Baseline)",
+          "pass_at_1": 0.0,
+          "pass_count": 0,
+          "pass_rate": 0.0,
+          "pass_rate_95_ci": [
+            0.0,
+            0.0
+          ],
+          "tokens_95_ci": [
+            2068.6,
+            2661.2
+          ],
+          "total_samples": 9
+        },
+        "arm_b": {
+          "cost_95_ci": [
+            0.00746,
+            0.03047
+          ],
+          "mean_cost_usd": 0.01806,
+          "mean_tokens": 42320.3,
+          "name": "Arm B (Syntax + Structural Feedback Only)",
+          "pass_at_1": 0.6667,
+          "pass_count": 6,
+          "pass_rate": 0.6667,
+          "pass_rate_95_ci": [
+            0.3333,
+            1.0
+          ],
+          "tokens_95_ci": [
+            17406.8,
+            70102.4
+          ],
+          "total_samples": 9
+        },
+        "arm_c": {
+          "cost_95_ci": [
+            0.0,
+            0.0
+          ],
+          "mean_cost_usd": 0.0,
+          "mean_tokens": 0.0,
+          "name": "Arm C (BioTypes + Scientific Preflight + Deep-Check)",
+          "pass_at_1": 0.0,
+          "pass_count": 0,
+          "pass_rate": 0.0,
+          "pass_rate_95_ci": [
+            0.0,
+            0.0
+          ],
+          "tokens_95_ci": [
+            0.0,
+            0.0
+          ],
+          "total_samples": 9
+        }
+      },
+      "n_cells_per_arm": 9,
+      "n_intents": 3,
+      "tiers": {
+        "full-contract": {
+          "easy": {
+            "n": 3,
+            "pass": 0
+          },
+          "hard": {
+            "n": 0,
+            "pass": 0
+          },
+          "medium": {
+            "n": 6,
+            "pass": 0
+          }
+        },
+        "syntax-only": {
+          "easy": {
+            "n": 3,
+            "pass": 1
+          },
+          "hard": {
+            "n": 0,
+            "pass": 0
+          },
+          "medium": {
+            "n": 6,
+            "pass": 5
+          }
+        },
+        "unconstrained": {
+          "easy": {
+            "n": 3,
+            "pass": 0
+          },
+          "hard": {
+            "n": 0,
+            "pass": 0
+          },
+          "medium": {
+            "n": 6,
+            "pass": 0
+          }
+        }
+      }
+    }
+  }
+}

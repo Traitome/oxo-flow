@@ -1,0 +1,1027 @@
+{
+  "campaign": "20261128-004949",
+  "container_dialect": [
+    {
+      "error": null,
+      "intent_id": "spatial-visium",
+      "seed": 1,
+      "success": false,
+      "variant": "syntax-only"
+    },
+    {
+      "error": null,
+      "intent_id": "spatial-visium",
+      "seed": 2,
+      "success": false,
+      "variant": "syntax-only"
+    },
+    {
+      "error": null,
+      "intent_id": "spatial-visium",
+      "seed": 3,
+      "success": false,
+      "variant": "syntax-only"
+    },
+    {
+      "error": null,
+      "intent_id": "single-cell-multiome",
+      "seed": 1,
+      "success": false,
+      "variant": "syntax-only"
+    },
+    {
+      "error": null,
+      "intent_id": "single-cell-multiome",
+      "seed": 2,
+      "success": false,
+      "variant": "syntax-only"
+    },
+    {
+      "error": null,
+      "intent_id": "single-cell-multiome",
+      "seed": 3,
+      "success": false,
+      "variant": "syntax-only"
+    }
+  ],
+  "contract_feedback": {
+    "c_successes": 49,
+    "c_successes_with_type_sci_d00_markers": 44,
+    "total_markers": 199
+  },
+  "failure_classification": {
+    "full-contract": {
+      "gate_failures": [],
+      "non_transport_generation_failures": [],
+      "transport_examples": [
+        [
+          "provider error: AI request failed after 3 attempts: error sending request for url (<provider-endpoint>",
+          59
+        ]
+      ]
+    },
+    "syntax-only": {
+      "gate_failures": [
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 69458,
+          "intent_id": "somatic-tumor-normal",
+          "output_tokens": 16551,
+          "seed": 3
+        },
+        {
+          "container_dialect": true,
+          "error": null,
+          "input_tokens": 100773,
+          "intent_id": "spatial-visium",
+          "output_tokens": 14290,
+          "seed": 1
+        },
+        {
+          "container_dialect": true,
+          "error": null,
+          "input_tokens": 86800,
+          "intent_id": "spatial-visium",
+          "output_tokens": 28043,
+          "seed": 2
+        },
+        {
+          "container_dialect": true,
+          "error": null,
+          "input_tokens": 78439,
+          "intent_id": "spatial-visium",
+          "output_tokens": 17645,
+          "seed": 3
+        },
+        {
+          "container_dialect": true,
+          "error": null,
+          "input_tokens": 157727,
+          "intent_id": "single-cell-multiome",
+          "output_tokens": 40716,
+          "seed": 1
+        },
+        {
+          "container_dialect": true,
+          "error": null,
+          "input_tokens": 101671,
+          "intent_id": "single-cell-multiome",
+          "output_tokens": 13542,
+          "seed": 2
+        },
+        {
+          "container_dialect": true,
+          "error": null,
+          "input_tokens": 129792,
+          "intent_id": "single-cell-multiome",
+          "output_tokens": 22191,
+          "seed": 3
+        }
+      ],
+      "non_transport_generation_failures": [],
+      "transport_examples": [
+        [
+          "provider error: AI request failed after 3 attempts: error sending request for url (<provider-endpoint>",
+          9
+        ]
+      ]
+    },
+    "unconstrained": {
+      "gate_failures": [
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 225,
+          "intent_id": "qc-fastp-multiqc",
+          "output_tokens": 2363,
+          "seed": 2
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 225,
+          "intent_id": "qc-fastp-multiqc",
+          "output_tokens": 1789,
+          "seed": 3
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 217,
+          "intent_id": "qc-fastqc",
+          "output_tokens": 2035,
+          "seed": 1
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 217,
+          "intent_id": "qc-fastqc",
+          "output_tokens": 1371,
+          "seed": 2
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 217,
+          "intent_id": "qc-fastqc",
+          "output_tokens": 1751,
+          "seed": 3
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 215,
+          "intent_id": "trim-cutadapt",
+          "output_tokens": 4226,
+          "seed": 1
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 215,
+          "intent_id": "trim-cutadapt",
+          "output_tokens": 7126,
+          "seed": 2
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 215,
+          "intent_id": "trim-cutadapt",
+          "output_tokens": 2089,
+          "seed": 3
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 231,
+          "intent_id": "qc-fastq-screen",
+          "output_tokens": 1279,
+          "seed": 2
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 231,
+          "intent_id": "qc-fastq-screen",
+          "output_tokens": 1416,
+          "seed": 3
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 221,
+          "intent_id": "qc-nanoq",
+          "output_tokens": 1167,
+          "seed": 1
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 221,
+          "intent_id": "qc-nanoq",
+          "output_tokens": 1139,
+          "seed": 2
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 221,
+          "intent_id": "qc-nanoq",
+          "output_tokens": 1840,
+          "seed": 3
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 245,
+          "intent_id": "rnaseq-star",
+          "output_tokens": 6887,
+          "seed": 1
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 245,
+          "intent_id": "rnaseq-star",
+          "output_tokens": 6982,
+          "seed": 2
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 245,
+          "intent_id": "rnaseq-star",
+          "output_tokens": 5490,
+          "seed": 3
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 245,
+          "intent_id": "rnaseq-hisat2",
+          "output_tokens": 2145,
+          "seed": 1
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 245,
+          "intent_id": "rnaseq-hisat2",
+          "output_tokens": 5263,
+          "seed": 2
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 245,
+          "intent_id": "rnaseq-hisat2",
+          "output_tokens": 5240,
+          "seed": 3
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 235,
+          "intent_id": "rnaseq-salmon",
+          "output_tokens": 4358,
+          "seed": 1
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 235,
+          "intent_id": "rnaseq-salmon",
+          "output_tokens": 4491,
+          "seed": 2
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 235,
+          "intent_id": "rnaseq-salmon",
+          "output_tokens": 3339,
+          "seed": 3
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 253,
+          "intent_id": "rnaseq-de-deseq2",
+          "output_tokens": 2033,
+          "seed": 1
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 253,
+          "intent_id": "rnaseq-de-deseq2",
+          "output_tokens": 2048,
+          "seed": 2
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 253,
+          "intent_id": "rnaseq-de-deseq2",
+          "output_tokens": 1874,
+          "seed": 3
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 261,
+          "intent_id": "scrna-starsolo",
+          "output_tokens": 1876,
+          "seed": 1
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 261,
+          "intent_id": "scrna-starsolo",
+          "output_tokens": 2115,
+          "seed": 2
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 261,
+          "intent_id": "scrna-starsolo",
+          "output_tokens": 2000,
+          "seed": 3
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 247,
+          "intent_id": "germline-variant",
+          "output_tokens": 2142,
+          "seed": 1
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 247,
+          "intent_id": "germline-variant",
+          "output_tokens": 8192,
+          "seed": 2
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 247,
+          "intent_id": "germline-variant",
+          "output_tokens": 1469,
+          "seed": 3
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 275,
+          "intent_id": "germline-gatk",
+          "output_tokens": 3375,
+          "seed": 2
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 275,
+          "intent_id": "germline-gatk",
+          "output_tokens": 7590,
+          "seed": 3
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 255,
+          "intent_id": "somatic-tumor-normal",
+          "output_tokens": 2905,
+          "seed": 1
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 255,
+          "intent_id": "somatic-tumor-normal",
+          "output_tokens": 6930,
+          "seed": 3
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 277,
+          "intent_id": "somatic-mutect2",
+          "output_tokens": 4320,
+          "seed": 2
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 261,
+          "intent_id": "cnv-cnvkit",
+          "output_tokens": 2970,
+          "seed": 2
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 243,
+          "intent_id": "variant-annotate",
+          "output_tokens": 3075,
+          "seed": 1
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 243,
+          "intent_id": "variant-annotate",
+          "output_tokens": 1797,
+          "seed": 2
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 243,
+          "intent_id": "variant-annotate",
+          "output_tokens": 1441,
+          "seed": 3
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 249,
+          "intent_id": "chipseq-macs2",
+          "output_tokens": 2836,
+          "seed": 1
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 249,
+          "intent_id": "chipseq-macs2",
+          "output_tokens": 2203,
+          "seed": 2
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 249,
+          "intent_id": "chipseq-macs2",
+          "output_tokens": 2688,
+          "seed": 3
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 265,
+          "intent_id": "chipseq-broad",
+          "output_tokens": 5820,
+          "seed": 1
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 265,
+          "intent_id": "chipseq-broad",
+          "output_tokens": 2553,
+          "seed": 2
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 265,
+          "intent_id": "chipseq-broad",
+          "output_tokens": 2570,
+          "seed": 3
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 257,
+          "intent_id": "atacseq",
+          "output_tokens": 2607,
+          "seed": 2
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 257,
+          "intent_id": "atacseq",
+          "output_tokens": 2304,
+          "seed": 3
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 273,
+          "intent_id": "wgbs-bismark",
+          "output_tokens": 6950,
+          "seed": 1
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 273,
+          "intent_id": "wgbs-bismark",
+          "output_tokens": 2447,
+          "seed": 2
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 273,
+          "intent_id": "wgbs-bismark",
+          "output_tokens": 2340,
+          "seed": 3
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 249,
+          "intent_id": "amplicon-dada2",
+          "output_tokens": 1481,
+          "seed": 1
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 249,
+          "intent_id": "amplicon-dada2",
+          "output_tokens": 2555,
+          "seed": 2
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 251,
+          "intent_id": "metagenomics-kraken2",
+          "output_tokens": 4872,
+          "seed": 1
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 227,
+          "intent_id": "assembly-spades",
+          "output_tokens": 1404,
+          "seed": 1
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 247,
+          "intent_id": "spatial-visium",
+          "output_tokens": 1906,
+          "seed": 2
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 247,
+          "intent_id": "spatial-visium",
+          "output_tokens": 7880,
+          "seed": 3
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 247,
+          "intent_id": "single-cell-multiome",
+          "output_tokens": 3170,
+          "seed": 1
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 247,
+          "intent_id": "single-cell-multiome",
+          "output_tokens": 2782,
+          "seed": 2
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 247,
+          "intent_id": "single-cell-multiome",
+          "output_tokens": 5555,
+          "seed": 3
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 261,
+          "intent_id": "metagenome-humann-pathways",
+          "output_tokens": 1785,
+          "seed": 1
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 261,
+          "intent_id": "metagenome-humann-pathways",
+          "output_tokens": 1649,
+          "seed": 2
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 261,
+          "intent_id": "metagenome-humann-pathways",
+          "output_tokens": 2628,
+          "seed": 3
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 285,
+          "intent_id": "longread-structural-variants",
+          "output_tokens": 1560,
+          "seed": 1
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 285,
+          "intent_id": "longread-structural-variants",
+          "output_tokens": 1923,
+          "seed": 2
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 285,
+          "intent_id": "longread-structural-variants",
+          "output_tokens": 2895,
+          "seed": 3
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 287,
+          "intent_id": "gatk-cohort-joint-genotyping",
+          "output_tokens": 3409,
+          "seed": 2
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 287,
+          "intent_id": "gatk-cohort-joint-genotyping",
+          "output_tokens": 3852,
+          "seed": 3
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 295,
+          "intent_id": "cutandtag-epigenomics",
+          "output_tokens": 3080,
+          "seed": 2
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 295,
+          "intent_id": "cutandtag-epigenomics",
+          "output_tokens": 2927,
+          "seed": 3
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 259,
+          "intent_id": "rnaseq-star-salmon-quant",
+          "output_tokens": 1844,
+          "seed": 2
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 259,
+          "intent_id": "rnaseq-star-salmon-quant",
+          "output_tokens": 2652,
+          "seed": 3
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 205,
+          "intent_id": "qc-vague",
+          "output_tokens": 1740,
+          "seed": 1
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 205,
+          "intent_id": "qc-vague",
+          "output_tokens": 1171,
+          "seed": 2
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 205,
+          "intent_id": "qc-vague",
+          "output_tokens": 2554,
+          "seed": 3
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 209,
+          "intent_id": "rnaseq-vague",
+          "output_tokens": 2166,
+          "seed": 1
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 209,
+          "intent_id": "rnaseq-vague",
+          "output_tokens": 2289,
+          "seed": 2
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 209,
+          "intent_id": "rnaseq-vague",
+          "output_tokens": 2497,
+          "seed": 3
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 203,
+          "intent_id": "variant-vague",
+          "output_tokens": 2375,
+          "seed": 1
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 203,
+          "intent_id": "variant-vague",
+          "output_tokens": 2463,
+          "seed": 2
+        },
+        {
+          "container_dialect": false,
+          "error": null,
+          "input_tokens": 203,
+          "intent_id": "variant-vague",
+          "output_tokens": 2575,
+          "seed": 3
+        }
+      ],
+      "non_transport_generation_failures": [
+        {
+          "error": "no TOML found in response",
+          "input_tokens": 225,
+          "intent_id": "qc-fastp-multiqc",
+          "output_tokens": 8192,
+          "seed": 1
+        },
+        {
+          "error": "no TOML found in response",
+          "input_tokens": 231,
+          "intent_id": "qc-fastq-screen",
+          "output_tokens": 8192,
+          "seed": 1
+        },
+        {
+          "error": "no TOML found in response",
+          "input_tokens": 275,
+          "intent_id": "germline-gatk",
+          "output_tokens": 8192,
+          "seed": 1
+        },
+        {
+          "error": "no TOML found in response",
+          "input_tokens": 255,
+          "intent_id": "somatic-tumor-normal",
+          "output_tokens": 8192,
+          "seed": 2
+        },
+        {
+          "error": "no TOML found in response",
+          "input_tokens": 277,
+          "intent_id": "somatic-mutect2",
+          "output_tokens": 8192,
+          "seed": 1
+        },
+        {
+          "error": "no TOML found in response",
+          "input_tokens": 277,
+          "intent_id": "somatic-mutect2",
+          "output_tokens": 8192,
+          "seed": 3
+        },
+        {
+          "error": "no TOML found in response",
+          "input_tokens": 261,
+          "intent_id": "cnv-cnvkit",
+          "output_tokens": 8192,
+          "seed": 1
+        },
+        {
+          "error": "no TOML found in response",
+          "input_tokens": 261,
+          "intent_id": "cnv-cnvkit",
+          "output_tokens": 8192,
+          "seed": 3
+        },
+        {
+          "error": "no TOML found in response",
+          "input_tokens": 257,
+          "intent_id": "atacseq",
+          "output_tokens": 8192,
+          "seed": 1
+        },
+        {
+          "error": "no TOML found in response",
+          "input_tokens": 249,
+          "intent_id": "amplicon-dada2",
+          "output_tokens": 8192,
+          "seed": 3
+        },
+        {
+          "error": "no TOML found in response",
+          "input_tokens": 287,
+          "intent_id": "gatk-cohort-joint-genotyping",
+          "output_tokens": 8192,
+          "seed": 1
+        },
+        {
+          "error": "no TOML found in response",
+          "input_tokens": 295,
+          "intent_id": "cutandtag-epigenomics",
+          "output_tokens": 8192,
+          "seed": 1
+        },
+        {
+          "error": "no TOML found in response",
+          "input_tokens": 259,
+          "intent_id": "rnaseq-star-salmon-quant",
+          "output_tokens": 8192,
+          "seed": 1
+        }
+      ],
+      "transport_examples": [
+        [
+          "Remote end closed connection without response",
+          14
+        ]
+      ]
+    }
+  },
+  "outage": {
+    "arm": "full-contract",
+    "contiguous_tail": true,
+    "first_failure_start": "2026-11-28T00:04:48.835486Z",
+    "last_failure_start": "2026-11-28T00:12:39.285557Z",
+    "last_success_start": "2026-11-27T23:59:46.138729Z",
+    "note": "All C cells after the last success failed at the transport layer; every failure lasted ~7.1 s with zero input/output tokens.",
+    "transport_failures": 59
+  },
+  "per_protocol_intents_included": [
+    "chipseq-macs2",
+    "cnv-cnvkit",
+    "germline-gatk",
+    "germline-variant",
+    "qc-fastp-multiqc",
+    "qc-fastq-screen",
+    "qc-fastqc",
+    "qc-nanoq",
+    "rnaseq-de-deseq2",
+    "rnaseq-hisat2",
+    "rnaseq-salmon",
+    "rnaseq-star",
+    "scrna-starsolo",
+    "somatic-mutect2",
+    "somatic-tumor-normal",
+    "trim-cutadapt",
+    "variant-annotate"
+  ],
+  "per_protocol_matched": {
+    "b_only_pass": 0,
+    "b_success": 47,
+    "c_only_pass": 1,
+    "c_success": 48,
+    "edwards_chi2": 0.0,
+    "edwards_p": 1.0,
+    "exact_p": 1.0,
+    "intents": [
+      "chipseq-macs2",
+      "cnv-cnvkit",
+      "germline-gatk",
+      "germline-variant",
+      "qc-fastp-multiqc",
+      "qc-fastq-screen",
+      "qc-fastqc",
+      "qc-nanoq",
+      "rnaseq-de-deseq2",
+      "rnaseq-hisat2",
+      "rnaseq-salmon",
+      "rnaseq-star",
+      "scrna-starsolo",
+      "somatic-mutect2",
+      "somatic-tumor-normal",
+      "trim-cutadapt",
+      "variant-annotate"
+    ],
+    "n_cells": 48
+  },
+  "success_cost": {
+    "full-contract": {
+      "input_tokens_median": 103359,
+      "input_tokens_total": 5312429,
+      "n": 49,
+      "output_tokens_median": 21673,
+      "output_tokens_total": 1181293,
+      "tool_calls_total": 783,
+      "wall_max_s": 456.7,
+      "wall_median_s": 172.0
+    },
+    "syntax-only": {
+      "input_tokens_median": 55434.0,
+      "input_tokens_total": 5432104,
+      "n": 92,
+      "output_tokens_median": 10736.0,
+      "output_tokens_total": 1160585,
+      "tool_calls_total": 1454,
+      "wall_max_s": 554.8,
+      "wall_median_s": 98.69999999999999
+    }
+  },
+  "totals": {
+    "full-contract": {
+      "cost_usd": 2.7869,
+      "gate_failures": 0,
+      "generated": 49,
+      "generation_failure_errors": [
+        [
+          "template exited 1",
+          59
+        ]
+      ],
+      "generation_failures": 59,
+      "input_tokens": 5312429,
+      "n": 108,
+      "non_transport_generation_failures": 0,
+      "output_tokens": 1181293,
+      "success": 49,
+      "transport_failures": 59,
+      "wall_max_s": 456.7,
+      "wall_mean_s": 89.4
+    },
+    "syntax-only": {
+      "cost_usd": 3.1688,
+      "gate_failures": 7,
+      "generated": 99,
+      "generation_failure_errors": [
+        [
+          "template exited 1",
+          9
+        ]
+      ],
+      "generation_failures": 9,
+      "input_tokens": 6156764,
+      "n": 108,
+      "non_transport_generation_failures": 0,
+      "output_tokens": 1313563,
+      "success": 92,
+      "transport_failures": 9,
+      "wall_max_s": 554.8,
+      "wall_mean_s": 120.9
+    },
+    "unconstrained": {
+      "cost_usd": 0.3975,
+      "gate_failures": 81,
+      "generated": 81,
+      "generation_failure_errors": [
+        [
+          "Remote end closed connection without response",
+          14
+        ],
+        [
+          "no TOML found in response",
+          13
+        ]
+      ],
+      "generation_failures": 27,
+      "input_tokens": 23322,
+      "n": 108,
+      "non_transport_generation_failures": 13,
+      "output_tokens": 355391,
+      "success": 0,
+      "transport_failures": 14,
+      "wall_max_s": 106.2,
+      "wall_mean_s": 32.5
+    }
+  }
+}
