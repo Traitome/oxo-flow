@@ -1,16 +1,18 @@
-# Governed cross-architecture reproduction campaign (#1166 / #1397)
+# Governed pre-sign-off cross-architecture reproduction campaign (#1166 / #1397)
 
-> **Status: governed campaign executed under PR-06 §C4 (amendment 6).**
-> The pre-registration values were frozen and committed before the first run
+> **Status: governed pre-sign-off campaign executed under PR-06 §C4
+> (amendment 6).** The pre-registration values were frozen and committed before the first run
 > (freeze commit `dd5dcd44ee91a2c93bfd24c29f189d8de32e87d5`, 2026-11-28
 > 00:52:56 +08:00 / 2026-11-27T16:52:56Z). Two harness revisions followed
 > before the final analyzable run; the manifest lineage and the
 > attempt-1/attempt-2 timeline are in §2.1. The campaign measures **native
 > x86_64** against **native aarch64** through one shared multi-arch
 > manifest-list digest, with an excluded negative control that must differ.
-> PR-05 C4 independent reviewer sign-off remains **PENDING**; per PR-05 this
-> result is a governed decision under the frozen rule, not a publication-ready
-> confirmatory result.
+> PR-05 C4 independent reviewer sign-off remains **PENDING**; per PR-05 §2
+> (amendment 11) this result is a **governed pre-sign-off measurement**
+> under the frozen rule — not a confirmatory result and not
+> publication-ready. Promotion to confirmatory requires an approving C4
+> disposition; it is not automatic and sign-off may instead invalidate the data.
 
 ## 1. Question
 
@@ -35,12 +37,12 @@ environment is the same and only the CPU architecture differs.
 | Parameter-freeze timestamp | 2026-11-28T00:52:56+08:00 (`2026-11-27T16:52:56Z`) |
 | Freeze-time manifest SHA-256 | `0eaca24be6d00f5ab369f1fb6769131bfeed336107128e76b26ccb6c4ff63908` |
 | Final-run manifest SHA-256 | `770ae8f2769f112cd308249ea94882dee2b8c6e7a7e383550d790c229c2a75bf` (commit `56b109c17b95e4c610a874aaf63fc0ae583a57a6`, 2026-11-27T17:00:43Z) |
-| Current committed manifest SHA-256 | `739e5f07fc4082a747a9e715ed2a67dd0004665eab7ce439199d72438ae8c215` (post-merge revision of the post-run hardened manifest; it keeps the executed scientific hashes and the merged 1.0.4 governance entries — see `governance.merge_note`; the pre-merge hardening revision was `4f11b490…`) |
-| `MANIFEST.sha256` | `7e3984771249522314d360a617132609c741daae96b8d11cd1f2e8615121bbfe` (merged 1.0.4; the pre-merge #1166 branch manifest was `b07721b8…`) |
+| Current committed manifest SHA-256 | `de907e76ef3ffbe794fa6314af30c1306fb88c9ea1bd523baee68f924bd92bd5` (post-merge revision of the post-run hardened manifest; it keeps the executed scientific hashes, the merged 1.0.4 governance entries, and the amendment-11 rebinding to the PR-05-only 1.0.5 manifest — see `governance.merge_note`; the previous post-merge revision was `739e5f07…`, the pre-merge hardening revision `4f11b490…`) |
+| `MANIFEST.sha256` | `7f27300563fcf2baaa82e07a9c68b67b3b757f44493917d6e9b6568b5c11d108` (merged 1.0.5: PR-01–PR-04/PR-06 byte-identical to 1.0.4, PR-05 v1.1.0; the merged 1.0.4 manifest was `7e398477…`, the pre-merge #1166 branch manifest `b07721b8…`) |
 | Pre-run/final-run manifest | `docs/superpowers/audits/data/crossarch-1397/preregistration.json` |
 
-The amendment log entry 6 records the value changes and that **no confirmatory
-outcome was examined** before the parameter freeze. The two earlier #1166
+The amendment log entry 6 records the value changes and that **no outcome
+of this corpus was examined** before the parameter freeze. The two earlier #1166
 observations (the OS-confounded 2026-11-19 field observation and the
 2026-11-20 native-amd64-versus-qemu-emulated-arm64 container observation) are
 report-local operational measurements; they are not this corpus and did not
@@ -59,12 +61,22 @@ freeze-time and final-run manifests carry the **same scientific hashes**
 status text changed. The current file is the post-run review-hardened
 revision (amendment log entry 10), which adds sealed-hash/host-arch/tool/
 env-lock checks without changing the scientific values or the observed
-hashes. The #1166 branch governance was merged with main’s #1163 1.0.3
-text into the **1.0.4** manifest `7e3984771249522314d360a617132609c741daae96b8d11cd1f2e8615121bbfe`;
+hashes, further rebound by governance-only
+amendment 11: PR-05 v1.1.0 recomputed `MANIFEST.sha256` to 1.0.5
+(`7f273005…`) with PR-01–PR-04 and PR-06 byte-identical, so
+`governance.manifest_sha256` now names 1.0.5 while the executed scientific
+seal and the freeze/final-run hashes are unchanged. The committed run-time
+analysis output (`docs/superpowers/audits/data/crossarch-1397/crossarch-results.json`)
+still records the 1.0.4 governance hash; it is the historical output of the
+run, and the rebinding is recorded in the preregistration manifest and
+here. The #1166 branch
+governance was merged with main’s #1163 1.0.3 text into the **1.0.4**
+manifest `7e3984771249522314d360a617132609c741daae96b8d11cd1f2e8615121bbfe`;
 the branch’s freeze-time (`0eaca24b`) and final-run (`770ae8f2`) manifests
 remain historical records computed against the pre-merge branch manifest
 `b07721b8…`. Amendment 6 is the #1166 parameter freeze; amendments 7–10
-are the #1166 harness/status/tooling entries.
+are the #1166 harness/status/tooling entries; amendment 11 is the PR-05
+pre-sign-off status rebinding.
 
 ### 2.2 Frozen values
 
@@ -99,10 +111,12 @@ file before the run. The executed-time sealed hashes are:
 The manifest's `files` map was the **executed/final-run seal** at commit
 `56b109c1`; its corpus, workflow, harness, and analysis-script entries still
 carry those executed-time values. Its two governance-file entries were updated
-at merge time to the **merged 1.0.4** files the analysis binds on disk —
-`PR-06` = `94a29848…` (the executed-time PR-06 was `e3e098c5…`, v1.0.2, the
-campaign rule version) and `MANIFEST.sha256` = `7e398477…` (the pre-merge
-branch manifest was `b07721b8…`); `governance.merge_note` records this. The
+at merge time to the merged 1.0.4 files and rebound by amendment 11 to the
+current 1.0.5 files the analysis binds on disk —
+`PR-06` = `94a29848…` (unchanged; the executed-time PR-06 was `e3e098c5…`,
+v1.0.2, the campaign rule version) and `MANIFEST.sha256` = `7f273005…`
+(1.0.5; the merged 1.0.4 value was `7e398477…`, the pre-merge branch
+manifest `b07721b8…`); `governance.merge_note` records this. The
 post-run hardened analysis/arm/orchestrator/test hashes are in
 `post_run_hardening`; the scientific corpus/workflow hashes are unchanged from
 the freeze-time manifest.
@@ -395,9 +409,11 @@ and they are excluded from the provenance denominator.
 - **Toolchain held constant.** Both arms share one image digest and identical
   in-container tool versions. The environment-lock matrix with *differing*
   tool versions across architectures is unmeasured.
-- **No independent reviewer sign-off.** PR-05 C4 remains PENDING. Per PR-05,
-  this is a governed decision under the frozen rule, not a publication-ready
-  confirmatory result. No independent replication or external review exists.
+- **No independent reviewer sign-off.** PR-05 C4 remains PENDING. Per PR-05
+  §2 (amendment 11), this is a governed pre-sign-off measurement under the
+  frozen rule, not a confirmatory result and not publication-ready; promotion
+  to confirmatory requires an approving C4 disposition. No independent replication
+  or external review exists.
 - **No third architecture.** RISC-V and other architectures are out of scope.
 - **Only the `docker` backend.** `system`, `singularity`, `conda`, `pixi`,
   and the cluster/scheduler path remain out of scope.
@@ -421,9 +437,12 @@ and they are excluded from the provenance denominator.
   the same scientific hashes. Attempt-2 produced checkpoint/output evidence
   but was not analyzed as the campaign result; both the interrupted staging
   attempt and attempt-2 are preserved and disclosed. The current file is the
-  post-merge revision of the post-run review-hardened manifest (`739e5f07…`);
-  its governance-file entries are the merged 1.0.4 hashes (see
-  `governance.merge_note`).
+  post-merge revision of the post-run review-hardened manifest
+  (`de907e76…`; previous post-merge revision `739e5f07…`), rebinding
+  `governance.manifest_sha256` to the PR-05-only 1.0.5 manifest
+  (`7f273005…`; the merged 1.0.4 value was `7e398477…`). Its governance-file
+  entries are the current hashes; PR-01–PR-04/PR-06 are byte-identical to
+  1.0.4.
 - **Native-execution assertion.** The hardened analysis requires each arm's
   normalized host architecture to equal its container architecture; an
   emulated arm on an x86 host would now be INVALID, not silently accepted.
@@ -439,9 +458,11 @@ all bioinformatics tools or hardware.
 
 - Final-run / review-hardened manifest: `docs/superpowers/audits/data/crossarch-1397/preregistration.json`
   (freeze-time `0eaca24b…`, final-run `770ae8f2…`, current post-merge revision
-  `739e5f07…`; the pre-merge post-run hardening revision was `4f11b490…`).
+  `de907e76…` — previous post-merge revision `739e5f07…`, pre-merge post-run
+  hardening revision `4f11b490…`).
   The freeze/final-run manifests are pre-merge branch records computed against
-  `b07721b8…`; the merged governance text is the 1.0.4 manifest `7e398477…`.
+  `b07721b8…`; the merged governance text is now the 1.0.5 manifest
+  `7f273005…` (the merged 1.0.4 value was `7e398477…`).
 - Frozen corpus: `scripts/cross-arch-provenance-governed-corpus.json`,
   `scripts/cross-arch-provenance-governed-a.oxoflow`,
   `scripts/cross-arch-provenance-governed-b.oxoflow`.

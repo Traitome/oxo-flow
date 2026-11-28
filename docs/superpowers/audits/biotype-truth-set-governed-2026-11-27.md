@@ -1,8 +1,14 @@
-# BioType governed truth-set campaign — POSITIVE (#1163 / #1396)
+# BioType governed pre-sign-off campaign — POSITIVE (pre-sign-off) (#1163 / #1396)
 
-> **Status: GOVERNED POSITIVE on the 83-case post-freeze expected-reject
-> set, with a disclosed control-provenance deviation and independent
-> reanalysis / PR-05 sign-off still PENDING.** The frozen pre-registration
+> **Status: GOVERNED PRE-SIGN-OFF MEASUREMENT, POSITIVE (pre-sign-off), on
+> the 83-case post-freeze expected-reject set, with a disclosed
+> control-provenance deviation and independent reanalysis / PR-05 C1
+> sign-off still PENDING.** This is not a confirmatory result and not
+> publication-ready. Under PR-05 §2 (amendment 11) a result collected
+> under the frozen pre-registration before sign-off is a governed
+> pre-sign-off measurement: promotion to confirmatory requires an approving
+> C1 disposition, is not automatic, and sign-off may instead invalidate
+> the data. The frozen pre-registration
 > (PR-06 amendment 2, 2026-11-27) fixed `τ_FA = 0.05` and `N_min = 73`
 > **before** any expected-reject case was authored or run. On the sealed
 > 116-case corpus the false-accept rate over expected-reject cases was
@@ -23,8 +29,8 @@
 >
 > The 54-case operational set measured on 2026-11-20/22 was observed while
 > `τ_FA` was UNDECIDED. It is **exploratory/exposure**, is not pooled with
-> this corpus, and is reported separately in §8. The governed claim is
-> bounded to the sealed corpus and the exact `τ_FA`; it is **static
+> this corpus, and is reported separately in §8. The governed pre-sign-off
+> claim is bounded to the sealed corpus and the exact `τ_FA`; it is **static
 > `validate`-surface validation only, single arm** — not execution
 > evidence, not biological truth, and not a Gate 3 pass.
 >
@@ -89,7 +95,7 @@ case body was edited after an outcome was seen.
 
 The amendment commit precedes the corpus commit, which precedes the seal,
 which precedes the run. The pre-run manifest's hash and the analysis
-script's hash were fixed before the first confirmatory execution.
+script's hash were fixed before the first governed execution.
 Amendment 4 and the supplement were added after independent review and do
 not change the primary chain or its outcome.
 
@@ -247,7 +253,7 @@ bisection; verified against the pilot report's known bounds, e.g.
 | Frozen `N_min` | `73` |
 | `N` (primary) | `83 ≥ 73` |
 | Non-verdicts | `0` |
-| **Governed category (PR-06 §C1)** | **POSITIVE** |
+| **Governed pre-sign-off category (PR-06 §C1)** | **POSITIVE (pre-sign-off)** |
 
 The exact upper bound is `1 − 0.025^(1/83) = 0.043471…`, i.e. `4.3471%`,
 comfortably at or below `τ_FA = 0.05`; the lower bound is `0`.
@@ -304,7 +310,7 @@ amendment entry records the exposure state explicitly.
 
 ### 8.1 Pilot-disjointness audit and sensitivity
 
-Amendment 2 excludes a confirmatory case that re-asserts a contract
+Amendment 2 excludes a governed (pre-sign-off) case that re-asserts a contract
 boundary already asserted by the pilot. The rule is applied at the
 **coverage-cell** level: a case's cell is its format, violated dimension,
 value pair, edge direction, construct class (plain / `transform` /
@@ -380,7 +386,7 @@ enforced per-case and total deadlines. Seal:
 `757891a4…2fc3`, commit `0204c1e4`); results:
 `data/biotype-truthset-governed-supplement-results.json`.
 
-**The supplement is not part of the pre-registered confirmatory set**: it
+**The supplement is not part of the pre-registered governed set**: it
 was authored after the primary outcome, it is descriptive, and it never
 enters the FA denominator. It does not retroactively satisfy the ≥30
 held-out authored-control floor (24), which PR-05 must adjudicate.
@@ -442,12 +448,14 @@ and is unaffected here.
 - **Independent reanalysis PENDING.** PR-01 §0 rule 5 requires an
   independent analyst to reproduce the primary endpoint from the raw
   per-case data and the sealed script. That record does not yet exist, so
-  the result is a governed campaign result, not a publication-ready
-  package.
+  the result is a governed pre-sign-off measurement, not a confirmatory
+  result or a publication-ready package.
 - **PR-05 sign-off PENDING.** The independent reviewer record for #1163 is
   still incomplete. Task 4.0 and ledger Gate 3 remain unpassed; Gate 3
   additionally requires independent biological validation, matched
   same-host comparisons, and reproduction on an independent environment.
+  Promotion of this pre-sign-off measurement to confirmatory requires an
+  approving C1 disposition under §2.3 (PR-05 amendment 11).
 - **Single arm** (macOS arm64, rustc 1.98.0). No cross-platform or
   cross-version contrast is claimed.
 - **Author independence.** The corpus was authored by the maintainer's
@@ -486,8 +494,8 @@ and is unaffected here.
 
 ## 12. Documentation changes accompanying this report
 
-- `README.md` §Research program / BioTypes: the governed POSITIVE result
-  is added beside the pilot's operational result; the pilot stays labelled
+- `README.md` §Research program / BioTypes: the governed pre-sign-off
+  POSITIVE result is added beside the pilot's operational result; the pilot stays labelled
   exploratory, the authored/exposed control split and the bounded claim are
   stated, and the static-only/single-arm boundary points to §11.
 - `ROADMAP.md` (BioTypes maturity row): the truth-set exit criterion moves
@@ -495,13 +503,14 @@ and is unaffected here.
   provenance, static-only/single-arm boundary, Gate 3, and publication
   readiness remain open.
 - `docs/guide/src/vision.md`: "broad truth-set validation outstanding" is
-  replaced with the governed result, its control composition, and its
+  replaced with the governed pre-sign-off result, its control composition, and its
   static-only/single-arm boundary.
 - `docs/superpowers/audits/industrial-scientific-audit-ledger.md`:
   WF-04 and §7 wave 7 record the campaign, its commit bindings, the
   erratum, and the remaining independent-reanalysis/sign-off gaps.
 - `docs/superpowers/preregistration/README.md` §3 and `AMENDMENTS.md`
-  entries 3–5: the #1163 confirmatory-data status, the control-provenance
+  entries 3–5: the #1163 data status (relabeled "governed pre-sign-off
+  data" by amendment 11), the control-provenance
   erratum, the post-hoc supplement, and the PR-04 held-out caveat are
   recorded.
 - `docs/superpowers/audits/biotype-truthset-governed-erratum-2026-11-28.md`:

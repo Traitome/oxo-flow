@@ -405,6 +405,54 @@
         { "path": "docs/guide/src/how-to/deploy-modes.md", "contains": "{first}" },
         { "path": "AGENTS.md", "contains": "{first}" }
       ]
+    },
+    {
+      "id": "preregistration.pre_signoff_vocabulary",
+      "description": "While PR-05 sign-off is PENDING, #1163/#1166 are reported as governed pre-sign-off measurements: the status surfaces use the pre-sign-off vocabulary and must not revive the old unqualified 'confirmatory data/result' labels. A literal absence assertion on the word 'confirmatory' is deliberately not used because the mandated vocabulary requires the negated form ('not confirmatory') and PR-05 itself must define the term; the gate asserts the affirmative old labels are absent instead.",
+      "checks": [
+        {
+          "path": "docs/superpowers/preregistration/README.md",
+          "contains": ["#1163 governed pre-sign-off data", "#1166 governed pre-sign-off data", "POSITIVE (pre-sign-off)", "PR-05 is 1.1.0"],
+          "not_contains": ["#1163 confirmatory data", "#1166 confirmatory data", "collected governed confirmatory data", "governed confirmatory data"]
+        },
+        {
+          "path": "docs/superpowers/preregistration/PR-05-reviewer-signoff.md",
+          "contains": ["Governed pre-sign-off data collection", "governed pre-sign-off measurement", "PRE-SIGN-OFF DATA SEEN", "No automatic promotion"]
+        },
+        {
+          "path": "README.md",
+          "contains": ["Governed pre-sign-off measurement (2026-11-27, #1396)", "POSITIVE (pre-sign-off)"],
+          "not_contains": ["governed confirmatory data", "publication-ready confirmatory result"]
+        },
+        {
+          "path": "ROADMAP.md",
+          "contains": ["governed pre-sign-off 83-case", "Governed pre-sign-off campaign measured", "POSITIVE (pre-sign-off)"]
+        },
+        {
+          "path": "docs/guide/src/vision.md",
+          "contains": ["governed pre-sign-off measurement", "POSITIVE (pre-sign-off)"]
+        },
+        {
+          "path": "docs/superpowers/audits/biotype-truth-set-governed-2026-11-27.md",
+          "contains": ["GOVERNED PRE-SIGN-OFF MEASUREMENT", "not a confirmatory result"],
+          "not_contains": ["Status: GOVERNED POSITIVE"]
+        },
+        {
+          "path": "docs/superpowers/audits/cross-arch-provenance-governed-2026-11-27.md",
+          "contains": ["Governed pre-sign-off cross-architecture reproduction campaign", "governed pre-sign-off measurement"],
+          "not_contains": ["Status: governed campaign executed"]
+        },
+        {
+          "path": "docs/superpowers/audits/industrial-scientific-audit-ledger.md",
+          "contains": ["governed pre-sign-off data", "POSITIVE (pre-sign-off)"]
+        },
+        {
+          "path": "docs/superpowers/audits/industrial-scientific-audit-ledger.md",
+          "row_starts_with": "| WF-04 |",
+          "row_contains": ["governed pre-sign-off measurement", "POSITIVE (pre-sign-off)", "not confirmatory"],
+          "row_not_contains": ["governed 83-case expected-reject truth set **POSITIVE**"]
+        }
+      ]
     }
   ]
 }
