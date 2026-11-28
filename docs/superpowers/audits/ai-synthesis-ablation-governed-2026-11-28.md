@@ -462,10 +462,12 @@ error sending request for url (<provider-endpoint>)
 
 with **0 input tokens, 0 output tokens, 0 tool calls, 2 session
 messages, and a ~7.1 s wall time**. The CLI log shows the three attempts
-and the 2 s / 5 s backoff. The harness records only
-`error: "template exited 1"`; the provider cause lives in the AI session
-archive and CLI log. This is the "CLI error not classified by the
-harness" mechanism.
+and the 2 s / 5 s backoff. The harness's `rounds` field is null for every
+run (it is not recorded); round/tool-call evidence comes from the
+session archive (`messages`, `tool_calls`) and the CLI log. The harness
+records only `error: "template exited 1"`; the provider cause lives in
+the AI session archive and CLI log. This is the "CLI error not
+classified by the harness" mechanism.
 
 The failures are one contiguous tail:
 
