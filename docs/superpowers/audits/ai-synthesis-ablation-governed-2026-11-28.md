@@ -376,14 +376,15 @@ required tool name.
 | B `syntax-only` | 99 | 92 | 102 | **92** | **85.2%** | [78.7%, 91.7%] | 6,156,764 | 1,313,563 | 7,470,327 | $3.1688 | 120.9 s / 554.8 s |
 | C `full-contract` | 49 | 49 | 58 | **49** | **45.4%** | [36.1%, 54.6%] | 5,312,429 | 1,181,293 | 6,493,722 | $2.7869 | 89.4 s / 456.7 s |
 
-- Arm A's 81 generated workflows all fail at parse time (E017 wrong
-  dialect); 27 cells produced no workflow (14 provider connection drops,
-  13 truncations at the frozen 8,192-token Arm A cap).
+- Arm A's 81 generated workflows all fail at parse time (74 E017, 7
+  other TOML syntax errors); 27 cells produced no workflow (14 provider
+  connection drops, 13 truncations at the frozen 8,192-token Arm A cap).
 - Arm B's 7 generated-but-unsuccessful cells are 6
   proprietary-tool/container-dialect cells plus one E010 hard-coded
   absolute-path cell (§4.5).
 - Arm C's 59 non-successes are all provider transport failures; C has
-  **zero** generated-but-unsuccessful cells.
+  **zero** gate-unsuccessful cells, but 10 of its 49 gate successes
+  ended in a failed AI session (§4.5).
 - Cost is the harness's static price-table estimate, not a bill.
 
 ### 4.2 Tiers
@@ -466,8 +467,10 @@ The gate-level comparison is null; the session-level comparison is not.
 The one gate-level discordant cell is `somatic-tumor-normal` seed 3,
 where B failed E010 on a hard-coded absolute path and C passed. The
 nine session-level B-only cells are C gate successes whose generation
-loop failed (nine max-round exhaustions and the `chipseq-macs2` seed 1
-transport ending); see §4.5.
+loop failed: **eight max-round exhaustions and the `chipseq-macs2` seed 1
+transport ending**. The ninth max-round cell (`germline-variant` seed 3)
+is outside the matched set because B transport-failed in that cell; the
+full-108 count of nine max-round successes is reported in §4.5.
 
 ### 4.4 Intent-level sensitivity (frozen all-36; exact test, N = 36 intents)
 
@@ -527,6 +530,12 @@ C's 49 gate successes ended with a failed AI session:
 | :--- | :---: | :---: | :---: |
 | B | 92 | 92 | 0 |
 | C | 49 | 39 | **10** |
+
+Across all 108 C cells the session distribution is **39 Success / 69
+Failed** (59 transport + the 10 gate-success session failures); B is 99
+Success / 9 transport Failed. The matched 48-cell subset therefore has
+**8 max-round + 1 transport** session failures (the ninth max-round cell
+is outside it because B transport-failed there).
 
 The 10 C cells are:
 

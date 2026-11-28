@@ -5,7 +5,10 @@
 > not include an intent-validity gate). The per-intent verdict list is
 > authoritative; it contains 18 SOUND (15 specified + 3 vague), even
 > though the supplied summary header said 17. Reproduced verbatim
-> otherwise, with the count line corrected to the list.
+> otherwise, with the count line corrected to the list. Line references
+> in the audit (e.g., `run_eval.py:508-529`, `run_eval.py:378-386`)
+> refer to the snapshot examined during the review; current line numbers
+> may differ.
 
 Verdict counts: 18 SOUND (incl. 3 vague), 10 AMBIGUOUS, 6 GATE-UNFAIR, 1 FLAWED, 1 DUPLICATE.
 
