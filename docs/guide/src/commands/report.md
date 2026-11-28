@@ -600,12 +600,16 @@ timed-out re-execution renders its own recorded start/finish duration and its
 `rules_executed` / the `--acct` executed set even if an earlier invocation
 left a synthetic marker. An old success's wall/CPU never describes the
 failed attempt, and the run totals sum only the current attempt. A terminal
-re-execution that recorded **no** measurement — it failed before spawning
+attempt that recorded **no** measurement and whose entry belongs to an
+earlier invocation — a re-execution that failed before spawning
 (output-directory creation, environment setup, the security gate) — replaces
-the rule's resource record with an explicit unknown/source-only entry: its
-CPU, memory, and I/O are absent with a source note, never the earlier
-attempt's numbers, and a `cpu_second_rate`/`gb_second_rate` budget treats
-that metric as unknown rather than pricing the stale value.
+that entry with an explicit unknown/source-only record: its CPU, memory, and
+I/O are absent with a source note, never the earlier attempt's numbers, and a
+`cpu_second_rate`/`gb_second_rate` budget treats that metric as unknown
+rather than pricing the stale value. A measurement the current invocation
+already recorded is kept even when a later bookkeeping step (checkpoint
+re-entry, `output_pattern` discovery) fails the rule: the work really was
+performed and observed in this run.
 
 No supported backend reports GPU-seconds, user/system CPU split, a
 control-plane peak-memory metric, or a price, so `gpu_seconds`,
@@ -760,9 +764,11 @@ information as the JSON `*_complete` flags).
 
 On **local** runs the **Benchmarks** table's CPU column shows **sampled**
 CPU seconds: the executor's sampler sums the cumulative CPU time of every
-process in the rule's subtree at 200 ms ticks — the rule's own process, its
-threads, and its child processes (the shell's real work is usually the
-child). Peak memory is sampled the same way over the same subtree.
+process in the rule's subtree at 200 ms ticks — the rule's own process (its
+threads are already included in that process's time), plus its child
+processes (the shell's real work is usually the child). Peak memory is
+sampled the same way over the same subtree; a process is counted once, its
+threads are not summed separately.
 
 On **cluster** runs both columns come from the scheduler's accounting store
 instead, read once as each job settles, and cover every step of the job.

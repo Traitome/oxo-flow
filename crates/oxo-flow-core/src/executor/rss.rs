@@ -28,6 +28,12 @@
 //! while the sampled processes were alive. That is sufficient for
 //! bottleneck detection (sustained pressure), and is documented in the
 //! diagnostics API.
+//!
+//! All three metrics share one subtree walk, so a process that LEAVES the
+//! tree stops being attributed: a child orphaned when the root exits, or one
+//! that daemonizes (double fork + parent exit), is re-parented away from the
+//! tracked root and its later CPU/RSS/I-O are not counted. Only processes
+//! reachable from the tracked root at sample time are measured.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -105,16 +111,14 @@ impl RssSampler {
                         .build()
                         .expect("rss sampler runtime");
                     runtime.block_on(async move {
-                        // One `System` is reused across ticks: sysinfo
-                        // computes `Process::cpu_usage()` only from the
-                        // delta between two refreshes of the *same*
-                        // instance (a fresh instance per tick would always
-                        // report 0). Dead processes are dropped each
-                        // refresh so the table stays bounded over long runs.
-                        // sysinfo 0.40 made construction fallible; a failure
-                        // here disables peak-RSS metering for the whole run
-                        // (degrade, not panic — same stance as the thread
-                        // spawn failure right below).
+                        // One `System` is reused across ticks so the process
+                        // table (and each entry's cumulative CPU counters)
+                        // is refreshed in place; dead processes are dropped
+                        // each refresh so the table stays bounded over long
+                        // runs. sysinfo 0.40 made construction fallible; a
+                        // failure here disables peak-RSS metering for the
+                        // whole run (degrade, not panic — same stance as the
+                        // thread spawn failure right below).
                         let Ok(mut system) = sysinfo::System::new() else {
                             tracing::warn!("sysinfo init failed — peak-RSS metering disabled");
                             return;
@@ -163,10 +167,10 @@ impl RssSampler {
                             system.refresh_processes(ProcessesToUpdate::All, true);
                             // One shared parent→children map per tick (built
                             // once, O(P)), plus one shared subtree walk per
-                            // root. The old shape called `subtree_rss_bytes`
-                            // per tracked child, each re-scanning the whole
-                            // process table in a fixpoint loop —
-                            // O(ticks × rules × passes × P) (#268 item 4).
+                            // root. The old shape re-scanned the whole
+                            // process table per tracked child in a fixpoint
+                            // loop — O(ticks × rules × passes × P)
+                            // (#268 item 4).
                             let mut children_of: HashMap<u32, Vec<u32>> = HashMap::new();
                             for (pid, proc) in system.processes() {
                                 if let Some(parent) = proc.parent() {
@@ -179,8 +183,20 @@ impl RssSampler {
                             for (pid, tp) in &snapshot {
                                 // CPU, RSS, and (on Linux) I/O all describe
                                 // the same subtree: walk it once per root and
-                                // share it (issue #1445 L1).
-                                let live = subtree_pids(&children_of, *pid);
+                                // share it (issue #1445 L1). Thread entries
+                                // are removed from the shared list — sysinfo's
+                                // Linux backend lists each thread as its own
+                                // process entry parented by the process, and a
+                                // thread shares the process's address space
+                                // and I/O accounting, so counting leader +
+                                // threads would inflate RSS (~N×) and I/O
+                                // (~2×). The leader's entries already carry
+                                // the group totals (issue #1445 L1 review).
+                                let live = live_subtree_pids(&children_of, *pid, |child| {
+                                    system
+                                        .process(sysinfo::Pid::from_u32(child))
+                                        .is_some_and(|proc| proc.thread_kind().is_some())
+                                });
                                 // CPU: sum each process's cumulative CPU-time
                                 // delta over the subtree. A process that exits
                                 // stops being visible, so only deltas observed
@@ -203,14 +219,6 @@ impl RssSampler {
                                         // A dead-but-retained entry must not
                                         // inflate the total.
                                         if !proc.exists() {
-                                            continue;
-                                        }
-                                        // Linux lists each thread as its own
-                                        // process entry whose parent is the
-                                        // process; thread time is already part
-                                        // of the process's utime+stime, so
-                                        // counting both would double-count.
-                                        if proc.thread_kind().is_some() {
                                             continue;
                                         }
                                         observed = true;
@@ -246,10 +254,16 @@ impl RssSampler {
                                     }
                                     tp.seen.store(true, Ordering::SeqCst);
                                 }
-                                tp.peak.fetch_max(
-                                    subtree_rss_bytes(&children_of, &system, *pid),
-                                    Ordering::Relaxed,
-                                );
+                                // Peak RSS: the summed `statm` of the
+                                // (thread-filtered) subtree in bytes.
+                                let subtree_rss: u64 = live
+                                    .iter()
+                                    .filter_map(|child| {
+                                        system.process(sysinfo::Pid::from_u32(*child))
+                                    })
+                                    .map(sysinfo::Process::memory)
+                                    .sum();
+                                tp.peak.fetch_max(subtree_rss, Ordering::Relaxed);
                                 #[cfg(target_os = "linux")]
                                 {
                                     let per_root = io_last.entry(*pid).or_default();
@@ -361,9 +375,11 @@ impl RssHandle {
     /// #1445 L1), so a rule whose real work happens in a shell's child — the
     /// common bioinformatics shape — is attributed its CPU, not just the
     /// shell's. Sub-interval CPU bursts and the final interval before a
-    /// process exits are missed, like the RSS/I-O samples. `None` when the
-    /// sampler never observed any process of the subtree alive during a tick
-    /// (e.g. it exited before the first refresh).
+    /// process exits are missed, like the RSS/I-O samples; a process that
+    /// leaves the subtree (orphaned, or daemonized via a double fork) stops
+    /// being counted. `None` when the sampler never observed any process of
+    /// the subtree alive during a tick (e.g. it exited before the first
+    /// refresh).
     pub fn cpu_seconds(&self) -> Option<f64> {
         // SeqCst pairs with the seen-store in the sampler: once `seen` is
         // observable, this tick's cpu_micros delta is observable too (a
@@ -403,11 +419,12 @@ impl Drop for RssHandle {
     }
 }
 
-/// Summed RSS (bytes) of `root` and all its live descendants.
+/// All pids of `root`'s process subtree, thread entries included.
 ///
 /// `children_of` is the parent→children map over the CURRENT process table,
 /// built once per tick by the caller and shared by every tracked root: the
-/// walk is then O(subtree) instead of a full-table fixpoint per rule.
+/// walk is then O(subtree) instead of a full-table fixpoint per rule. The
+/// sampler filters thread entries with [`live_subtree_pids`] before measuring.
 fn subtree_pids(children_of: &HashMap<u32, Vec<u32>>, root: u32) -> Vec<u32> {
     let mut pids = Vec::new();
     let mut stack = vec![root];
@@ -445,33 +462,47 @@ fn read_proc_io(pid: u32) -> Option<(u64, u64)> {
     Some((read?, write?))
 }
 
-fn subtree_rss_bytes(
+/// Subtree pids of `root` with sysinfo's user-space THREAD entries removed.
+///
+/// `is_thread` reports sysinfo's thread classification (meaningful only on
+/// Linux, where `with_tasks()` lists every thread as its own process entry
+/// parented by the process). A thread shares the process's address space and
+/// I/O accounting, so counting the leader AND its threads inflates peak RSS
+/// (~N× for N threads) and disk I/O (~2×); the leader's entries already
+/// carry the group totals. Traversal still walks THROUGH a thread entry:
+/// a process forked by a non-leader thread is parented to that thread and is
+/// a real process that must be measured (issue #1445 L1 review).
+fn live_subtree_pids(
     children_of: &HashMap<u32, Vec<u32>>,
-    system: &sysinfo::System,
     root: u32,
-) -> u64 {
-    // Iterate the descendant closure over an explicit stack (a recursive
-    // visit would need the same map anyway).
-    let mut total = 0u64;
-    let mut stack = vec![root];
-    let mut visited = std::collections::HashSet::new();
-    while let Some(pid) = stack.pop() {
-        if !visited.insert(pid) {
-            continue;
-        }
-        if let Some(proc) = system.process(sysinfo::Pid::from_u32(pid)) {
-            total += proc.memory();
-        }
-        if let Some(children) = children_of.get(&pid) {
-            stack.extend_from_slice(children);
-        }
-    }
-    total
+    is_thread: impl Fn(u32) -> bool,
+) -> Vec<u32> {
+    subtree_pids(children_of, root)
+        .into_iter()
+        .filter(|pid| !is_thread(*pid))
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The shared subtree walk must exclude thread entries while still
+    /// reaching processes forked BY a non-leader thread (their parent is the
+    /// thread, not the process leader).
+    #[test]
+    fn live_subtree_excludes_threads_but_keeps_their_children() {
+        let mut children_of: HashMap<u32, Vec<u32>> = HashMap::new();
+        children_of.insert(10, vec![11, 12]);
+        children_of.insert(12, vec![13]); // 13 forked by thread 12
+        let mut live = live_subtree_pids(&children_of, 10, |pid| pid == 12);
+        live.sort_unstable();
+        assert_eq!(
+            live,
+            vec![10, 11, 13],
+            "the thread entry is not measured, but its child process is"
+        );
+    }
 
     /// Spawn a memory-eater child — ~64 MiB allocated and held for ~1.2 s,
     /// RSS the sampler must see. Prefers `perl` (present on macOS and Linux
@@ -584,6 +615,62 @@ mod tests {
             assert!(
                 cpu >= 0.3,
                 "expected the child's CPU to be attributed to the rule subtree, got {cpu:.3} s"
+            );
+        });
+    }
+
+    /// Issue #1445 L1 review (MEDIUM): a multi-threaded child must be
+    /// counted ONCE in the peak RSS. sysinfo's Linux backend lists every
+    /// thread as its own process entry parented by the process, and a
+    /// thread's `statm` reports the shared address space — summing leader +
+    /// threads inflated the peak ~N× for N threads. The child here holds
+    /// ~96 MiB across 8 threads: the process is ~100-150 MiB, while the
+    /// per-thread sum is ~9× that.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn sampler_counts_a_multithreaded_child_rss_once() {
+        if std::process::Command::new("python3")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            eprintln!("skipped: python3 not available");
+            return;
+        }
+        // The trailing `:` keeps the shell from exec-replacing itself, so
+        // the tracked root is the shell and the threaded process is its
+        // child (the shape real rules have).
+        let script = concat!(
+            "python3 -c 'import threading, time\n",
+            "payload = bytearray(96 * 1024 * 1024)\n",
+            "def hold():\n",
+            "    time.sleep(1.5)\n",
+            "threads = [threading.Thread(target=hold) for _ in range(8)]\n",
+            "for t in threads: t.start()\n",
+            "for t in threads: t.join()'; :"
+        );
+        let mut child = match std::process::Command::new("sh")
+            .args(["-c", script])
+            .spawn()
+        {
+            Ok(c) => c,
+            Err(_) => {
+                eprintln!("skipped: no POSIX shell");
+                return;
+            }
+        };
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async {
+            let sampler = RssSampler::new();
+            let handle = sampler.track(child.id());
+            assert!(child.wait().unwrap().success());
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            let peak_mb = handle.finish() / (1024 * 1024);
+            // One process (~100 MiB + interpreter baseline). A per-thread
+            // sum lands around 9× that; 400 MiB separates the two cleanly.
+            assert!(
+                (40..=400).contains(&peak_mb),
+                "expected the threaded child's RSS to be counted once, got {peak_mb} MiB"
             );
         });
     }

@@ -446,12 +446,12 @@ pub struct BenchmarkRecord {
     /// detection.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub memory_limit_mb: Option<u64>,
-    /// CPU time in seconds — sampled over the rule's process subtree (its
-    /// own process, its threads, and its child processes) by the local
-    /// executor (issue #83 P1-13, issue #1445 L1), reported by the
-    /// accounting store on the cluster path, where it DOES span every step
-    /// of the job. `None` for legacy checkpoints and whenever the source did
-    /// not report it.
+    /// CPU time in seconds — sampled over the rule's process subtree by the
+    /// local executor (each process's time already covers its own threads;
+    /// child processes are included — issue #83 P1-13, issue #1445 L1),
+    /// reported by the accounting store on the cluster path, where it DOES
+    /// span every step of the job. `None` for legacy checkpoints and
+    /// whenever the source did not report it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cpu_seconds: Option<f64>,
     /// Number of retry attempts before success (0 = first attempt succeeded).
@@ -1660,12 +1660,16 @@ impl CheckpointState {
     /// rule, any real attempt clears the marker.
     ///
     /// Every TERMINAL attempt owns `resource_usage` (issue #1445 L1). A
-    /// terminal record with no measurements (the CLI's pre-spawn/staging/
-    /// security failure path builds `JobRecord { resources: None }`) replaces
-    /// the entry with an explicit unknown/source-only record instead of
-    /// leaving an earlier attempt's values behind: the ledger reported the
-    /// previous attempt's CPU/RSS/source as this attempt's, and cost accrual
-    /// priced them. Unknown is never zero — and never a stale number either.
+    /// terminal record with no measurements replaces an entry preserved from
+    /// an EARLIER invocation (the CLI's pre-spawn/staging/security failure
+    /// path builds `JobRecord { resources: None }`) with an explicit
+    /// unknown/source-only record instead of leaving that attempt's
+    /// values behind: the ledger reported its CPU/RSS/source as this
+    /// attempt's, and cost accrual priced them. A measurement recorded by
+    /// THIS invocation is never discarded by a later unmeasured terminal
+    /// record (the post-completion re-entry/output_pattern bookkeeping
+    /// failure): the work really happened here. Unknown is never zero — and
+    /// never a stale number either.
     pub fn record_run(&mut self, record: &JobRecord, tail_bytes: usize) {
         match record.status {
             crate::executor::JobStatus::Skipped => {
@@ -1690,15 +1694,42 @@ impl CheckpointState {
             | crate::executor::JobStatus::Failed
             | crate::executor::JobStatus::Cancelled
             | crate::executor::JobStatus::TimedOut => {
-                self.skipped_attempts.remove(&record.rule);
-                let usage = record.resources.clone().unwrap_or_else(|| {
-                    ResourceUsage::source_only(ResourceSource::unknown(
-                        "the latest attempt ended without a resource measurement (it failed \
-                         before spawning, or no sampler/accounting store observed it); \
-                         measurements from an earlier attempt are not this attempt's",
-                    ))
-                });
-                self.resource_usage.insert(record.rule.clone(), usage);
+                // Was this rule's recorded state preserved from an earlier
+                // invocation? `begin_execution_pass` marks every previously
+                // recorded rule; a terminal attempt of THIS invocation
+                // clears the mark.
+                let was_preserved = self.skipped_attempts.remove(&record.rule).is_some();
+                match &record.resources {
+                    Some(usage) => {
+                        self.resource_usage
+                            .insert(record.rule.clone(), usage.clone());
+                    }
+                    // The attempt measured nothing and the entry (if any)
+                    // belongs to an earlier invocation or does not exist:
+                    // replace it with an explicit unknown record. The
+                    // pre-spawn failure path is the common case; cancelled
+                    // attempts the sampler never observed and legacy
+                    // entries take the same route.
+                    None if was_preserved || !self.resource_usage.contains_key(&record.rule) => {
+                        self.resource_usage.insert(
+                            record.rule.clone(),
+                            ResourceUsage::source_only(ResourceSource::unknown(
+                                "the latest attempt ended without a resource measurement (no \
+                                 sampler or accounting store observed it, or it never spawned); \
+                                 measurements from an earlier attempt are not this attempt's",
+                            )),
+                        );
+                    }
+                    // This invocation already recorded the rule's
+                    // measurements (the executor's Success record) and a
+                    // LATER terminal record for the same rule carries none —
+                    // the CLI's post-completion re-entry / output_pattern
+                    // bookkeeping failure. Keeping the measurement is the
+                    // truth: this run performed and observed the work, and
+                    // discarding it would drop real CPU/RSS/I-O from the
+                    // ledger and turn cost accrual unknown.
+                    None => {}
+                }
             }
             crate::executor::JobStatus::Pending | crate::executor::JobStatus::Running => {
                 // Submit-time placeholders carry no measurement; a live

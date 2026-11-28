@@ -11055,8 +11055,13 @@ fn cli_report_acct_without_jobid_column() {
 /// When a JobName repeats, the batch row (JobID without a `.`/`_` step
 /// separator) wins even if the step row appears first in the file; array-task
 /// IDs like `12345_0` count as step rows.
+/// Issue #1445 L1: array elements and the allocation row of one submission
+/// merge into a single record — elapsed/state from the allocation row, and
+/// `CPUTime`/`MaxRSS` as the MAX over every row (the step/array values
+/// exceed the allocation row's here, so a first-row or batch-preference
+/// merge cannot pass this).
 #[test]
-fn cli_report_acct_array_task_prefers_batch_row() {
+fn cli_report_acct_array_rows_merge_with_max_over_rows() {
     let dir = tempfile::tempdir().unwrap();
     let wf = write_workflow(
         dir.path(),
@@ -11066,7 +11071,8 @@ fn cli_report_acct_array_task_prefers_batch_row() {
     fs::write(
         &csv,
         "JobID,JobName,State,Elapsed,CPUTime,MaxRSS\n\
-         12345_0,align,RUNNING,00:01:00,00:01:00,1M\n\
+         12345_0,align,COMPLETED,00:01:00,00:01:00,1M\n\
+         12345_1,align,COMPLETED,00:03:00,00:05:00,4M\n\
          12345,align,COMPLETED,00:02:30,00:02:00,2048K\n",
     )
     .unwrap();
@@ -11088,9 +11094,11 @@ fn cli_report_acct_array_task_prefers_batch_row() {
         .iter()
         .find(|s| s["id"] == "resource-accounting")
         .unwrap_or_else(|| panic!("no resource-accounting section in report"));
+    // Elapsed/state from the allocation row (150 s, COMPLETED); CPU from
+    // the 5-minute array step; RSS from the 4 MiB array step.
     assert_eq!(
         section["content"]["rows"],
-        serde_json::json!([["align", "COMPLETED", "150", "120", "2"]])
+        serde_json::json!([["align", "COMPLETED", "150", "300", "4"]])
     );
 }
 

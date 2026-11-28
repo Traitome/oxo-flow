@@ -1837,7 +1837,11 @@ fn select_latest_attempt(rows: Vec<AcctRow>) -> Option<AcctRow> {
 /// falls back to the max reported value rather than a fabricated zero, and
 /// every metric stays `None` when no row reported it.
 fn merge_attempt(base: &str, rows: &[AcctRow]) -> AcctRow {
-    let allocation = rows.iter().find(|row| row.jobid == base);
+    // With no JobID at all (`base` empty) there is no allocation row — every
+    // row is just an observation, so state/elapsed fall back below.
+    let allocation = (!base.is_empty())
+        .then(|| rows.iter().find(|row| row.jobid == base))
+        .flatten();
     let state = allocation
         .map(|row| row.state.as_str())
         .filter(|state| !state.is_empty())
@@ -2563,6 +2567,73 @@ mod tests {
             Some(700),
             "MaxRSS is populated on step rows; take the max over the attempt's rows"
         );
+    }
+
+    /// Issue #1445 L1 review: the grouping boundaries the merge implements
+    /// must be pinned — non-numeric job ids (file-order fallback), a blank
+    /// JobID alongside real ids (ignored), array elements sharing a base id
+    /// (one record, max over rows), and an export with no JobID at all
+    /// (single attempt, max over rows).
+    #[test]
+    fn acct_merge_handles_non_numeric_blank_and_array_ids() {
+        let dir = tempfile::tempdir().unwrap();
+        let csv = dir.path().join("sacct.csv");
+        std::fs::write(
+            &csv,
+            "JobID,JobName,State,Elapsed,CPUTime,MaxRSS\n\
+             jobA,nonnum,FAILED,00:00:01,00:00:01,10M\n\
+             jobB,nonnum,COMPLETED,00:00:09,00:00:09,90M\n\
+             ,blank,COMPLETED,00:00:30,00:00:30,999M\n\
+             777,blank,COMPLETED,00:00:02,00:00:02,20M\n\
+             12345_0,array,COMPLETED,00:01:00,00:01:00,100M\n\
+             12345_1,array,COMPLETED,00:03:00,00:03:00,300M\n\
+             ,nojobid,COMPLETED,00:00:04,00:00:04,5M\n\
+             ,nojobid,COMPLETED,00:00:06,00:00:06,50M\n",
+        )
+        .unwrap();
+
+        let rows = super::parse_acct_csv(&csv).unwrap();
+        let names = ["array", "blank", "nojobid", "nonnum"];
+        let merged = super::merge_acct_rows(rows, &names.map(str::to_string));
+        assert_eq!(merged.len(), names.len(), "one record per rule");
+        let by_rule = |name: &str| {
+            merged
+                .iter()
+                .find(|row| row.rule == name)
+                .unwrap_or_else(|| panic!("no record for {name}"))
+        };
+
+        // Non-numeric ids: no numeric ordering exists, so the last
+        // submission in file order is the latest.
+        let nonnum = by_rule("nonnum");
+        assert_eq!(nonnum.jobid, "jobB");
+        assert_eq!(nonnum.state, "COMPLETED");
+        assert_eq!(nonnum.elapsed_secs, Some(9.0));
+        assert_eq!(nonnum.max_rss_mb, Some(90));
+
+        // A blank JobID cell names no submission; with real ids present it
+        // is ignored rather than merged into another attempt.
+        let blank = by_rule("blank");
+        assert_eq!(blank.jobid, "777");
+        assert_eq!(blank.max_rss_mb, Some(20));
+        assert_eq!(blank.elapsed_secs, Some(2.0));
+
+        // Array elements share their base id: one submission, no allocation
+        // row, so state/elapsed fall back to the rows themselves and every
+        // metric is the max over rows.
+        let array = by_rule("array");
+        assert_eq!(array.jobid, "12345_0");
+        assert_eq!(array.state, "COMPLETED");
+        assert_eq!(array.elapsed_secs, Some(180.0));
+        assert_eq!(array.cpu_secs, Some(180.0));
+        assert_eq!(array.max_rss_mb, Some(300));
+
+        // Without any JobID every row belongs to the single attempt.
+        let nojobid = by_rule("nojobid");
+        assert_eq!(nojobid.jobid, "");
+        assert_eq!(nojobid.elapsed_secs, Some(6.0));
+        assert_eq!(nojobid.cpu_secs, Some(6.0));
+        assert_eq!(nojobid.max_rss_mb, Some(50));
     }
 
     /// Issue #1445 L1: with the batch/allocation `MaxRSS` cells empty (the

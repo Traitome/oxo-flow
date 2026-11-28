@@ -280,12 +280,12 @@ The Benchmarks table's CPU column reports CPU seconds from whichever
 source ran the rule, and the two differ:
 
 - **Local runs** report **sampled** CPU seconds — the executor's sampler
-  sums the cumulative CPU time of every process in the rule's subtree (its
-  own process, its threads, and its child processes) at 200 ms ticks. Peak
-  memory is sampled peak RSS over the same subtree. These are measurements
-  of live processes, not scheduler allocations, so they are documented —
-  here and in the `report` command reference — as sampled rather than
-  exact.
+  sums the cumulative CPU time of every process in the rule's subtree (the
+  process's own time already covers all its threads; child processes are
+  included) at 200 ms ticks. Peak memory is sampled peak RSS over the same
+  subtree, each process counted once. These are measurements of live
+  processes, not scheduler allocations, so they are documented — here and in
+  the `report` command reference — as sampled rather than exact.
 - **Cluster runs** report what the scheduler's own accounting store
   recorded (`sacct`/`qstat -x -f`/`qacct`/`bacct`), read once as each job
   settles.
